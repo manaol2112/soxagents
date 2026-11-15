@@ -1,0 +1,640 @@
+{
+ "_": "The grammar of a formatted text section (docs/design-workpaper.md, section 3.3), by example. Read by the web's tests (rich-text-model: parse(text) deep-equals blocks; plain(text) equals plain) and the server's (workpaper_marks.plain(text) equals plain). A run is {t, b?, i?, u?}; a paragraph is its lines; a list is its items. Synthetic text only.",
+ "cases": [
+  {
+   "name": "empty",
+   "text": "",
+   "blocks": [],
+   "plain": ""
+  },
+  {
+   "name": "one paragraph",
+   "text": "HR records each termination.",
+   "blocks": [
+    {
+     "type": "p",
+     "lines": [
+      [
+       {
+        "t": "HR records each termination."
+       }
+      ]
+     ]
+    }
+   ],
+   "plain": "HR records each termination."
+  },
+  {
+   "name": "a line break and two paragraphs",
+   "text": "First line\nsecond line\n\nSecond paragraph.",
+   "blocks": [
+    {
+     "type": "p",
+     "lines": [
+      [
+       {
+        "t": "First line"
+       }
+      ],
+      [
+       {
+        "t": "second line"
+       }
+      ]
+     ]
+    },
+    {
+     "type": "p",
+     "lines": [
+      [
+       {
+        "t": "Second paragraph."
+       }
+      ]
+     ]
+    }
+   ],
+   "plain": "First line\nsecond line\n\nSecond paragraph."
+  },
+  {
+   "name": "bold, italic and underline",
+   "text": "A **bold** word, an ''italic'' one and an ++underlined++ one.",
+   "blocks": [
+    {
+     "type": "p",
+     "lines": [
+      [
+       {
+        "t": "A "
+       },
+       {
+        "t": "bold",
+        "b": true
+       },
+       {
+        "t": " word, an "
+       },
+       {
+        "t": "italic",
+        "i": true
+       },
+       {
+        "t": " one and an "
+       },
+       {
+        "t": "underlined",
+        "u": true
+       },
+       {
+        "t": " one."
+       }
+      ]
+     ]
+    }
+   ],
+   "plain": "A bold word, an italic one and an underlined one."
+  },
+  {
+   "name": "nested marks",
+   "text": "**bold and ''both'' and ++all ''three''++**",
+   "blocks": [
+    {
+     "type": "p",
+     "lines": [
+      [
+       {
+        "t": "bold and ",
+        "b": true
+       },
+       {
+        "t": "both",
+        "b": true,
+        "i": true
+       },
+       {
+        "t": " and ",
+        "b": true
+       },
+       {
+        "t": "all ",
+        "b": true,
+        "u": true
+       },
+       {
+        "t": "three",
+        "b": true,
+        "i": true,
+        "u": true
+       }
+      ]
+     ]
+    }
+   ],
+   "plain": "bold and both and all three"
+  },
+  {
+   "name": "adjacent runs of different marks",
+   "text": "**a**''b''++c++",
+   "blocks": [
+    {
+     "type": "p",
+     "lines": [
+      [
+       {
+        "t": "a",
+        "b": true
+       },
+       {
+        "t": "b",
+        "i": true
+       },
+       {
+        "t": "c",
+        "u": true
+       }
+      ]
+     ]
+    }
+   ],
+   "plain": "abc"
+  },
+  {
+   "name": "a bold run then a bold and italic run",
+   "text": "**a** **''b''**",
+   "blocks": [
+    {
+     "type": "p",
+     "lines": [
+      [
+       {
+        "t": "a",
+        "b": true
+       },
+       {
+        "t": " "
+       },
+       {
+        "t": "b",
+        "b": true,
+        "i": true
+       }
+      ]
+     ]
+    }
+   ],
+   "plain": "a b"
+  },
+  {
+   "name": "the same mark twice in a line",
+   "text": "**a** and **b**",
+   "blocks": [
+    {
+     "type": "p",
+     "lines": [
+      [
+       {
+        "t": "a",
+        "b": true
+       },
+       {
+        "t": " and "
+       },
+       {
+        "t": "b",
+        "b": true
+       }
+      ]
+     ]
+    }
+   ],
+   "plain": "a and b"
+  },
+  {
+   "name": "a mark that cannot open is plain",
+   "text": "5 ** 3 and a lone ** here",
+   "blocks": [
+    {
+     "type": "p",
+     "lines": [
+      [
+       {
+        "t": "5 ** 3 and a lone ** here"
+       }
+      ]
+     ]
+    }
+   ],
+   "plain": "5 ** 3 and a lone ** here"
+  },
+  {
+   "name": "a mark with no partner is plain",
+   "text": "**no closer and ''none here either",
+   "blocks": [
+    {
+     "type": "p",
+     "lines": [
+      [
+       {
+        "t": "**no closer and ''none here either"
+       }
+      ]
+     ]
+    }
+   ],
+   "plain": "**no closer and ''none here either"
+  },
+  {
+   "name": "a closer after a space does not close",
+   "text": "**bold **not closed",
+   "blocks": [
+    {
+     "type": "p",
+     "lines": [
+      [
+       {
+        "t": "**bold **not closed"
+       }
+      ]
+     ]
+    }
+   ],
+   "plain": "**bold **not closed"
+  },
+  {
+   "name": "nothing between the marks",
+   "text": "**** and ++++",
+   "blocks": [
+    {
+     "type": "p",
+     "lines": [
+      [
+       {
+        "t": "**** and ++++"
+       }
+      ]
+     ]
+    }
+   ],
+   "plain": "**** and ++++"
+  },
+  {
+   "name": "a mark does not span lines",
+   "text": "**starts here\nends here**",
+   "blocks": [
+    {
+     "type": "p",
+     "lines": [
+      [
+       {
+        "t": "**starts here"
+       }
+      ],
+      [
+       {
+        "t": "ends here**"
+       }
+      ]
+     ]
+    }
+   ],
+   "plain": "**starts here\nends here**"
+  },
+  {
+   "name": "escaped marks are plain",
+   "text": "Typed \\*\\*stars\\*\\*, C\\+\\+ and it\\'\\'s",
+   "blocks": [
+    {
+     "type": "p",
+     "lines": [
+      [
+       {
+        "t": "Typed **stars**, C++ and it''s"
+       }
+      ]
+     ]
+    }
+   ],
+   "plain": "Typed **stars**, C++ and it''s"
+  },
+  {
+   "name": "a backslash is itself unless it escapes",
+   "text": "C:\\Users\\dlee and C:\\\\.ssh and a\\\\*b",
+   "blocks": [
+    {
+     "type": "p",
+     "lines": [
+      [
+       {
+        "t": "C:\\Users\\dlee and C:\\.ssh and a\\*b"
+       }
+      ]
+     ]
+    }
+   ],
+   "plain": "C:\\Users\\dlee and C:\\.ssh and a\\*b"
+  },
+  {
+   "name": "single characters are never marks",
+   "text": "5 * 3 + 2, the users' role, a+b, x*y*z",
+   "blocks": [
+    {
+     "type": "p",
+     "lines": [
+      [
+       {
+        "t": "5 * 3 + 2, the users' role, a+b, x*y*z"
+       }
+      ]
+     ]
+    }
+   ],
+   "plain": "5 * 3 + 2, the users' role, a+b, x*y*z"
+  },
+  {
+   "name": "underscores are never marks",
+   "text": "acme_prod, __init__ and user_id",
+   "blocks": [
+    {
+     "type": "p",
+     "lines": [
+      [
+       {
+        "t": "acme_prod, __init__ and user_id"
+       }
+      ]
+     ]
+    }
+   ],
+   "plain": "acme_prod, __init__ and user_id"
+  },
+  {
+   "name": "a bulleted list after a paragraph",
+   "text": "Steps:\n\n- first\n- **second**\n- third",
+   "blocks": [
+    {
+     "type": "p",
+     "lines": [
+      [
+       {
+        "t": "Steps:"
+       }
+      ]
+     ]
+    },
+    {
+     "type": "ul",
+     "items": [
+      [
+       {
+        "t": "first"
+       }
+      ],
+      [
+       {
+        "t": "second",
+        "b": true
+       }
+      ],
+      [
+       {
+        "t": "third"
+       }
+      ]
+     ]
+    }
+   ],
+   "plain": "Steps:\n\n- first\n- second\n- third"
+  },
+  {
+   "name": "a numbered list",
+   "text": "1. one\n2. ++two++\n3. three",
+   "blocks": [
+    {
+     "type": "ol",
+     "items": [
+      [
+       {
+        "t": "one"
+       }
+      ],
+      [
+       {
+        "t": "two",
+        "u": true
+       }
+      ],
+      [
+       {
+        "t": "three"
+       }
+      ]
+     ]
+    }
+   ],
+   "plain": "1. one\n2. two\n3. three"
+  },
+  {
+   "name": "a numbered list is numbered from one",
+   "text": "3. three\n7. seven",
+   "blocks": [
+    {
+     "type": "ol",
+     "items": [
+      [
+       {
+        "t": "three"
+       }
+      ],
+      [
+       {
+        "t": "seven"
+       }
+      ]
+     ]
+    }
+   ],
+   "plain": "1. three\n2. seven"
+  },
+  {
+   "name": "escaped list starters are plain",
+   "text": "\\- not a list\n\n1\\. not a list",
+   "blocks": [
+    {
+     "type": "p",
+     "lines": [
+      [
+       {
+        "t": "- not a list"
+       }
+      ]
+     ]
+    },
+    {
+     "type": "p",
+     "lines": [
+      [
+       {
+        "t": "1. not a list"
+       }
+      ]
+     ]
+    }
+   ],
+   "plain": "- not a list\n\n1. not a list"
+  },
+  {
+   "name": "a block that is not all items is a paragraph",
+   "text": "- one\nplain line",
+   "blocks": [
+    {
+     "type": "p",
+     "lines": [
+      [
+       {
+        "t": "- one"
+       }
+      ],
+      [
+       {
+        "t": "plain line"
+       }
+      ]
+     ]
+    }
+   ],
+   "plain": "- one\nplain line"
+  },
+  {
+   "name": "a dash with nothing after it is not an item",
+   "text": "- \n- x",
+   "blocks": [
+    {
+     "type": "p",
+     "lines": [
+      [
+       {
+        "t": "-"
+       }
+      ],
+      [
+       {
+        "t": "- x"
+       }
+      ]
+     ]
+    }
+   ],
+   "plain": "-\n- x"
+  },
+  {
+   "name": "citations are kept as typed",
+   "text": "Access is removed [^1] within **1 business day** [^2].",
+   "blocks": [
+    {
+     "type": "p",
+     "lines": [
+      [
+       {
+        "t": "Access is removed [^1] within "
+       },
+       {
+        "t": "1 business day",
+        "b": true
+       },
+       {
+        "t": " [^2]."
+       }
+      ]
+     ]
+    }
+   ],
+   "plain": "Access is removed [^1] within 1 business day [^2]."
+  },
+  {
+   "name": "other line endings and many blank lines",
+   "text": "a\r\nb\r\n\r\n\r\n\r\nc\n   \nd",
+   "blocks": [
+    {
+     "type": "p",
+     "lines": [
+      [
+       {
+        "t": "a"
+       }
+      ],
+      [
+       {
+        "t": "b"
+       }
+      ]
+     ]
+    },
+    {
+     "type": "p",
+     "lines": [
+      [
+       {
+        "t": "c"
+       }
+      ]
+     ]
+    },
+    {
+     "type": "p",
+     "lines": [
+      [
+       {
+        "t": "d"
+       }
+      ]
+     ]
+    }
+   ],
+   "plain": "a\nb\n\nc\n\nd"
+  },
+  {
+   "name": "blank lines around the text, and spaces around a line",
+   "text": "\n\n  first  \n   - an item\n\n",
+   "blocks": [
+    {
+     "type": "p",
+     "lines": [
+      [
+       {
+        "t": "first"
+       }
+      ],
+      [
+       {
+        "t": "- an item"
+       }
+      ]
+     ]
+    }
+   ],
+   "plain": "first\n- an item"
+  },
+  {
+   "name": "an indented list is a list",
+   "text": "  - one\n  - two",
+   "blocks": [
+    {
+     "type": "ul",
+     "items": [
+      [
+       {
+        "t": "one"
+       }
+      ],
+      [
+       {
+        "t": "two"
+       }
+      ]
+     ]
+    }
+   ],
+   "plain": "- one\n- two"
+  }
+ ]
+}

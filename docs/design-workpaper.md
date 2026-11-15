@@ -180,6 +180,172 @@ The views load on their own (one request, an outline while it loads, a plain sen
 "Try again" when it fails), and load again after the fold saves something. Thumbnails and
 the evidence beside the workpaper load only when shown.
 
+## 3.2 Editing a section where it is (product owner, 16 November 2026)
+
+Old: "Edit" on a section of a view opened the fold at the bottom of the page, at the
+card's editor (one text box; a table typed one row per line with "|" between cells; a
+form post that loaded the whole page again). New: "Edit" turns the section into its
+editor where it sits in the Document view, and saves in the background. The server is not
+changed: a save is the existing `POST …/workpapers/{id}/sections/{key}` (`based_on`, and
+`text` or `rows`), with its rules, its new version and its audit event.
+
+- **What is edited.** The workpaper's own stored section, as the card's editor edits it
+  (`papers`, the D&I workpaper's `sections`), never the assembled view:
+  - *Understanding of the control* and *Conclusion*: the section's text, in one text box.
+    Citation marks (`[^1]`) are shown as stored.
+  - *Walkthrough* and *Information produced by the entity*: the section's own columns and
+    rows as a grid of cells, with "Add a step" / "Add a report" and a remove button per
+    row. A cell is one line (a line break is a space, as the server cleans it). The
+    Document's "When" and "Ref" columns are read by the server from what the cells say, so
+    they are not edited: the grid says so.
+  - *Attributes tested*: the preparer's note of each attribute, one box per attribute in
+    its row. The attribute, its result and its references come from the records and stay
+    as they are. On save the note goes to the "Notes" cell of the attribute's row in the
+    stored section (the row is found as the server finds it: by the attribute's wording
+    after a letter or alone, or by its letter alone); an attribute with no row gets one
+    ("A. wording", the note). Every other row and cell is sent back unchanged.
+- **Where "Edit" opens in place.** Only where the stored section is on the page, is the
+  version the views show (`workpaper.id` and `currentVersion` match the card's), has the
+  kind the editor needs (text, or a table; for the attributes a table with a "Notes"
+  column), and the section is editable (`editableSections`, the existing rule).
+  Otherwise "Edit" opens the fold as before. From the Matrix and the Evidence views,
+  "Edit" shows the Document view with that section's editor open.
+- **One section at a time.** While an editor is open the other "Edit" links are off.
+  "Cancel" (or Escape) closes it; where something was changed it asks first ("Discard
+  your changes?"). Leaving the page with unsaved changes asks too.
+- **Saving.** "Save" is off until something changed and while a limit is passed (text
+  12,000 characters; 300 rows; a cell 1,000 characters; nothing that reads as a
+  credential), with the reason said beside it. One press sends one request through
+  `POST /workspace/workpapers/section` (JSON; it answers `{status, detail}` and never
+  redirects). The editor stays, read-only, saying "Saving…", until the server confirms
+  and the views have read the workpaper again; only then does it close and say "Saved as
+  a new version of the draft." Nothing is shown as saved before that. A refusal keeps the
+  editor open with what was typed and says why in one sentence (the server's own for a
+  409 or 422: the workpaper changed, is prepared, or is being drafted). After a save the
+  page's records are read again in the background (`router.refresh()`), so the fold's
+  card and its version are current; no page is loaded again.
+- **The fold** keeps today's card unchanged, with its own plain editor: it is the way to
+  edit a section the Document does not show, and what "Edit" falls back to.
+- **Phone and keyboard.** The grid scrolls sideways inside its own frame, as the tables
+  do. The editor's first box takes the focus when it opens; the focus returns to the
+  section's "Edit" link when it closes. Motion is short and off under reduced motion.
+
+Files: `apps/web/src/section-edit-model.ts` (pure: what an editor starts from, the draft,
+the limits, the rows a save sends, the write the route validates),
+`apps/web/src/section-editor.tsx` (the three editors and their bar),
+`apps/web/app/workspace/workpapers/section/route.ts`.
+
+## 3.3 Formatting in a text section (product owner, 16 November 2026)
+
+"The textbox where I can edit the documentation, can that have a text formatting? … bold,
+italic, underline, and anything possible." Decided with the product owner: formatting is
+seen as it is typed (not marks in a plain box), which adds one editor component to the web
+app (TipTap 3.32.2, pinned: `@tiptap/react`, `@tiptap/pm`, `@tiptap/starter-kit`).
+
+- **Where.** The text sections edited in place (Understanding of the control, Conclusion).
+  A table cell and a preparer's note stay one plain line.
+- **What.** Bold, italic, underline, a bulleted list, a numbered list, a line break inside
+  a paragraph, undo and redo, "Clear formatting". Nothing else of the component is on
+  (no heading, link, code, quote, strike, rule, image): a section's structure is the
+  workpaper's own. Shortcuts as people know them (Ctrl/Cmd+B, I, U).
+- **How it is stored.** In the section's existing `text`, as plain text with marks. No
+  HTML is stored or sent (the server's `clean_text` removes markup), no schema changes,
+  and a reader that knows nothing of the marks still shows readable text.
+  - Lines are read without the spaces around them. Blocks are separated by a blank
+    line. A block whose every line is `- ` and some text is a bulleted list; `1. `,
+    `2. `, … and some text, a numbered list (one item per line, numbered from one
+    whatever was written); any other block is a paragraph, and a line break inside it is
+    a line break.
+  - Inside a line: `**bold**`, `''italic''` (two apostrophes), `++underline++`, nested
+    as needed. Each mark is two characters of its own, so no mark is part of another and
+    a single `*`, `+` or `'` is never one (nor is `_`: identifiers stay as they are). A
+    mark opens only directly before a character that is not a space, and closes at the
+    next such mark in the line that stands directly after one, with something between
+    them; a mark with no partner in its line is plain text.
+  - `\` directly before `*`, `+`, `'`, `\`, `-` or `.` makes that character plain, and
+    is itself not shown; any other `\` is a backslash (a Windows path stays as typed).
+    The editor writes the `\` where a person typed two such characters together, or a
+    line that would otherwise read as a list item, so what is typed is what is read back.
+  - A citation mark (`[^1]`) is plain text in the editor and is kept as typed.
+- **How it is read.** Everywhere the web shows a text section it shows the formatting
+  (the three views, the print, the workpaper card in the fold, for both stages): built as
+  elements from the parsed text, never by setting HTML. The card's own plain editor shows
+  the marks as text. The Excel export writes the text without the marks (a list item
+  keeps its `- ` or number): `workpaper_marks.plain`.
+- **Pasting.** Pasted content keeps only what the editor allows (the formats above);
+  everything else arrives as plain text. Nothing pasted is run or stored as markup.
+- **Limits.** The 12,000 characters are counted on the text as stored, marks included.
+- **One grammar, two readers.** `apps/web/src/rich-text-model.ts` (parse, the editor's
+  document to text and back, pure) and `services/api/ai_workforce_api/workpaper_marks.py`
+  (`plain`) read the same grammar; the shared cases are in
+  `tests/fixtures/rich-text/cases.json`, read by both sides' tests.
+
+## 3.4 Autosave, and leaving with changes (product owner, 16 November 2026)
+
+"I want to automatically save the updates that the user has typed in or edited. If the
+user is leaving or moving to other pages, the system should ask if he/she wanted to save
+the changes." Decided with the product owner: what is typed is kept automatically as a
+**working copy** on the server; a version is added to the workpaper's history only when
+the person saves (the "Save" button, or "Save" when asked on leaving).
+
+**The working copy (server).** Migration 0164, `workpaper_section_drafts`: one row per
+workpaper, section and person (`workpaper_id`, `section_key`, `user_id` unique), with
+`organization_id`, `project_id`, `based_on` (the version it was started from), `content`
+(`{"text": …}` or `{"rows": …}`, the body a save sends), `created_at`, `updated_at`. It is
+a person's unfinished typing, not a record of the audit: it is replaced as they type and
+deleted when saved or discarded, it is never read by the views, the export, the agents or
+another person, and it is not in the audit trail (the save that follows is, as today).
+
+- `GET  …/workpapers/{id}/drafts`: the caller's own working copies of that workpaper:
+  `[{section, based_on, text | rows, updated_at}]`.
+- `PUT  …/workpapers/{id}/sections/{key}/draft` `{based_on, text | rows}`: keeps it
+  (insert or replace). Same permission as an edit (TASK_UPDATE, a person, an open
+  engagement), same cleaning and limits as an edit, and only while the workpaper is a
+  draft that is not being drafted and the section exists with that kind; refused with a
+  409 and a sentence otherwise. `based_on` is stored as sent (1 to the current version).
+  Answers `{updated_at}`.
+- `DELETE …/workpapers/{id}/sections/{key}/draft`: discards the caller's own; 204 whether
+  or not there was one.
+- The existing section edit (`POST …/sections/{key}`), in its own transaction, also
+  deletes the caller's working copy of that section. Preparing a workpaper deletes every
+  working copy of it (nothing unfinished is carried past preparation).
+- A working copy never changes the workpaper, its version or its `version` counter.
+
+**In the page.**
+- While an editor is open and something was changed, the working copy is sent 1.5 s
+  after the last change (one request at a time; the latest text wins; a failed one is
+  tried again on the next change and every 15 s). The bar says where it stands, and never
+  says "saved" of a working copy as if it were the workpaper:
+  "Keeping your changes…", "Changes kept at 10:42. Not in the workpaper until you save.",
+  "Your changes are not kept yet: the server could not be reached."
+- "Save" is as in 3.2 (a version, confirmed by the server before it reads as saved).
+- "Cancel" closes the editor; where something was changed it asks first, and discards the
+  working copy.
+- Opening "Edit" on a section that has a working copy opens the editor with it and says
+  "Your changes from 14 Nov 10:42 are restored." with "Discard them". Where the workpaper
+  has changed since the working copy was started (`based_on` is not the current version)
+  it also says "This section may have changed since. Saving replaces it with what is
+  here." A section with a working copy and no open editor shows "Unsaved changes" beside
+  its link, which reads "Continue editing".
+- **Leaving.** With changes not yet saved to the workpaper, going elsewhere in the app (a
+  link, another step, another control, closing the panel) first asks, in a dialog:
+  "Save your changes to *Understanding of the control*?" with
+  **Save** (saves a version as in 3.2, then goes on once the server confirmed; a refusal
+  keeps the person here with the reason),
+  **Leave without saving** (the working copy is kept and is there on return), and
+  **Keep editing**. Closing or reloading the tab cannot show the app's own dialog: the
+  browser's own prompt appears only while the latest changes are not yet kept, and the
+  working copy is sent as the page goes.
+- Guarded: links (`<a>`, `next/link`) and the controls page's own navigation
+  (`useGuardedRouter` in the step switcher, the panel's close, the control switcher, the
+  toolbar and the overview). The browser's Back button is not asked about: the working
+  copy is kept and is there on return.
+
+Files: server `workpaper_drafts.py` (routes registered with the workpaper service),
+`workpaper_marks.py`, migration 0164; web `rich-text-model.ts`, `rich-text.tsx`,
+`rich-editor.tsx`, `working-copy-model.ts`, `leave-guard.ts`, `leave-dialog.tsx`,
+`apps/web/app/workspace/workpapers/draft/route.ts`.
+
 ## 4. Tests
 
 Server: the assembly from synthetic records (each attribute state, the evidence numbering
