@@ -27,6 +27,15 @@ data, and the choice is remembered in that browser:
   right the evidence a selected reference points to, with its annotations
   (docs/evidence-annotations.md) and the basis of the one in view.
 
+In every view an attribute's result is marked as a workpaper marks it (product owner,
+15 November 2026; it was the state's words in a pill): `✓` shown, `✗` an exception (the
+check's or one a person recorded), `!` not shown or shown in part, `–` not concluded or not
+tested yet, `N/A` not applicable to this instance. The state's words stay the mark's title
+and accessible name, and a key under the attributes explains each symbol in use. Only a
+check's own "Shown" is a check mark: "Shown, auditor's judgment" and "Evidence not
+available, accepted" stay in words, so a person's judgment never reads as the check's pass
+(docs/evidence-assurance.md, section 10.13), and so does a state the page does not know.
+
 In every view a statement carries the reference of the evidence it rests on (`E1`, `E2`, …,
 in the order of the evidence index), and selecting a reference opens that file at that
 passage. Nothing in a view is a decision: preparing, reopening and signing stay the

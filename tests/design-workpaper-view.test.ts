@@ -299,6 +299,31 @@ describe("nothing in a view is a decision", () => {
   });
 });
 
+describe("an attribute's result, as a workpaper marks it", () => {
+  it("shows the symbol with the state's words as its name, in all three views", () => {
+    // Product owner, 15 November 2026. Old: <StatePill {...stateOf(attribute)} />, the
+    // words in a pill. New: the symbol, never colour or symbol alone.
+    const mark = component(view, "Result");
+    assert.match(mark, /if \(result\.symbol === ""\) \{\s*return <StatePill/);
+    assert.match(mark, /title=\{result\.words\}/);
+    assert.match(mark, /<span aria-hidden="true">\{result\.symbol\}<\/span>/);
+    assert.match(mark, /<span className="sr-only">\{result\.words\}<\/span>/);
+    assert.equal(
+      count(view, /<Result result=\{resultOf\(attribute\)\} \/>/g),
+      2,
+    );
+    assert.equal(count(view, /<Result result=\{row\.result\} \/>/g), 1);
+    assert.equal(count(view, /<StatePill \{\.\.\.stateOf\(/g), 0);
+    // Each view says what its symbols mean, from the model's key.
+    assert.equal(
+      count(view, /<ResultKey attributes=\{paper\.attributes\} \/>/g),
+      3,
+    );
+    assert.match(component(view, "ResultKey"), /resultKey\(attributes\)/);
+    assert.match(css, /\.dw-result \{[^}]*color: var\(--dw-c\);/);
+  });
+});
+
 describe("print or save as PDF", () => {
   it("prints only the sheet", () => {
     const body = component(view, "DesignWorkpaper");
