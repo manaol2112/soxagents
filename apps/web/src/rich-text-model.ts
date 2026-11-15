@@ -151,8 +151,9 @@ export function parseLine(line: string): Run[] {
   return joined(read(0, all.length, {}));
 }
 
-const BULLET = /^- (.+)$/;
-const NUMBER = /^\d{1,9}\. (.+)$/;
+// Any character may follow, a line separator included: the server reads it so too.
+const BULLET = /^- ([\s\S]+)$/;
+const NUMBER = /^\d+\. ([\s\S]+)$/;
 
 /** The text as blocks: paragraphs and lists, each line or item as its runs. */
 export function parseRich(text: string): Block[] {
@@ -274,7 +275,7 @@ function lineText(runs: readonly Run[]): string {
     .join("")
     .trim();
   // A typed line that would read as a list item is made plain.
-  return made.replace(/^-(?= )/, "\\-").replace(/^(\d{1,9})\.(?= )/, "$1\\.");
+  return made.replace(/^-(?= )/, "\\-").replace(/^(\d+)\.(?= )/, "$1\\.");
 }
 
 /** Blocks as stored text: the reverse of parseRich. Empty lines, items and blocks are

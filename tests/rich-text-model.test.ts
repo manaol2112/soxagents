@@ -262,6 +262,17 @@ describe("what a person types is what is read back", () => {
     assert.equal(textFromDoc(docFromText("")), "");
   });
 
+  it("reads a list as the server does where the two were found to differ", () => {
+    // Found by reading 60,000 made-up texts with both readers (15 November 2026): a
+    // number of any length starts a numbered item, and a line separator inside an item
+    // is part of it.
+    assert.equal(plainText("0000000000. a"), "1. a");
+    assert.equal(plainText("10000000000. b\n2. c"), "1. b\n2. c");
+    assert.equal(plainText("- \u2028x"), "- x");
+    assert.equal(plainText("- a\u2028b"), "- a\u2028b");
+    assert.equal(textFromDoc(docFromText("12345678901. typed")), "1. typed");
+  });
+
   it("stays fast on text made to be slow", () => {
     const started = Date.now();
     for (const text of [
