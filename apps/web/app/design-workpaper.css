@@ -27,32 +27,32 @@
 }
 
 /* A tone: its strong colour, its soft fill and its edge. */
-:is(.dw-tile, .dw-verdict, .dw-cell, .dw-dot, .dw-result).is-success {
+:is(.dw-tile, .dw-verdict, .dw-cell, .dw-dot).is-success {
   --dw-c: var(--success);
   --dw-soft: var(--success-soft);
 }
 
-:is(.dw-tile, .dw-verdict, .dw-cell, .dw-dot, .dw-result).is-warning {
+:is(.dw-tile, .dw-verdict, .dw-cell, .dw-dot).is-warning {
   --dw-c: var(--warning);
   --dw-soft: var(--warning-soft);
 }
 
-:is(.dw-tile, .dw-verdict, .dw-cell, .dw-dot, .dw-result).is-danger {
+:is(.dw-tile, .dw-verdict, .dw-cell, .dw-dot).is-danger {
   --dw-c: var(--danger);
   --dw-soft: var(--danger-soft);
 }
 
-:is(.dw-tile, .dw-verdict, .dw-cell, .dw-dot, .dw-result).is-info {
+:is(.dw-tile, .dw-verdict, .dw-cell, .dw-dot).is-info {
   --dw-c: var(--info);
   --dw-soft: var(--info-soft);
 }
 
-:is(.dw-tile, .dw-verdict, .dw-cell, .dw-dot, .dw-result).is-ai {
+:is(.dw-tile, .dw-verdict, .dw-cell, .dw-dot).is-ai {
   --dw-c: var(--ai);
   --dw-soft: var(--ai-soft);
 }
 
-:is(.dw-tile, .dw-verdict, .dw-cell, .dw-dot, .dw-result).is-neutral {
+:is(.dw-tile, .dw-verdict, .dw-cell, .dw-dot).is-neutral {
   --dw-c: var(--neutral);
   --dw-soft: var(--neutral-soft);
 }
@@ -667,8 +667,9 @@ button.dw-edit:focus-visible:not(:disabled) {
   width: 7.25rem;
 }
 
+/* Wide enough for "No exceptions noted" on one line. */
 .dw-table .is-state {
-  width: 9rem;
+  width: 10.75rem;
 }
 
 .dw-table .is-tm {
@@ -1009,8 +1010,8 @@ button.dw-edit:focus-visible:not(:disabled) {
 }
 
 .dw-grid .is-state {
-  width: 9rem;
-  min-width: 9rem;
+  width: 10.75rem;
+  min-width: 10.75rem;
 }
 
 .dw-grid .is-state .pill {
@@ -1106,41 +1107,6 @@ button.dw-cell:focus-visible:not(:disabled) {
   align-items: center;
   padding: 0.625rem 1.25rem 1rem;
   color: var(--text-secondary);
-  font-size: var(--fs-sm);
-}
-
-/* An attribute's result as a workpaper marks it: the symbol in its tone, never colour
-   alone (its words are its title and its accessible name, and the key says them). */
-
-.dw-result {
-  display: inline-block;
-  min-width: 1.25rem;
-  color: var(--dw-c);
-  font-size: var(--fs-lg);
-  font-weight: 700;
-  line-height: 1.25;
-}
-
-.dw-result.is-neutral {
-  color: var(--text-secondary);
-}
-
-.dw-result.is-text {
-  font-size: var(--fs-sm);
-  letter-spacing: 0.02em;
-}
-
-.dw-key.is-results {
-  padding: 0.5rem 0 0;
-}
-
-.dw-card > .dw-key.is-results {
-  margin-top: -0.5rem;
-  padding: 0 1.25rem 1rem;
-}
-
-.dw-key .dw-result {
-  min-width: 0;
   font-size: var(--fs-sm);
 }
 

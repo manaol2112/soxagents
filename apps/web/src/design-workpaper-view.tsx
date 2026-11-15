@@ -39,19 +39,17 @@ import {
   previewUrl,
   type RefChip,
   type Reference,
-  type ResultMark,
   recordKey,
   refChip,
   refChips,
   rememberedView,
   rememberView,
   reportInspected,
-  resultKey,
-  resultOf,
   type Selection,
   sectionKeyFor,
   staleProblem,
   startingSelection,
+  stateOf,
   strayLine,
   TIMELINE_ACROSS_MOST,
   tickmarkLegend,
@@ -779,47 +777,6 @@ function StatePill({ words, tone }: { words: string; tone: string }) {
   return <span className={`pill tone-${tone}`}>{words}</span>;
 }
 
-/** An attribute's result as a workpaper marks it: the symbol, with the state's words as
- * its title and its accessible name; in words where the result has no symbol. */
-function Result({ result }: { result: ResultMark }) {
-  if (result.symbol === "") {
-    return <StatePill words={result.words} tone={result.tone} />;
-  }
-  return (
-    <span
-      className={`dw-result is-${result.tone}${result.symbol.length > 1 ? " is-text" : ""}`}
-      title={result.words}
-    >
-      <span aria-hidden="true">{result.symbol}</span>
-      <span className="sr-only">{result.words}</span>
-    </span>
-  );
-}
-
-/** What the result symbols on the page mean: nothing where none is in use. */
-function ResultKey({ attributes }: { attributes: Paper["attributes"] }) {
-  const key = resultKey(attributes);
-  if (key.length === 0) {
-    return null;
-  }
-  return (
-    <p className="dw-key is-results">
-      <span className="dw-quiet">Result:</span>
-      {key.map((item) => (
-        <span key={item.symbol}>
-          <b
-            className={`dw-result is-${item.tone}${item.symbol.length > 1 ? " is-text" : ""}`}
-            aria-hidden="true"
-          >
-            {item.symbol}
-          </b>
-          {item.meaning}
-        </span>
-      ))}
-    </p>
-  );
-}
-
 /** "Edit" on a section a preparer may edit: it opens the existing editor in the fold. */
 function EditLink({
   section,
@@ -1164,7 +1121,7 @@ function DocumentSheet({
                         />
                       </td>
                       <td className="is-state">
-                        <Result result={resultOf(attribute)} />
+                        <StatePill {...stateOf(attribute)} />
                       </td>
                       <td className="is-tm">
                         {mark.symbol !== "" ? (
@@ -1183,7 +1140,6 @@ function DocumentSheet({
             </table>
           </div>
         )}
-        <ResultKey attributes={paper.attributes} />
       </Section>
 
       <Section
@@ -1644,7 +1600,7 @@ function MatrixBoard({
                         );
                       })}
                       <td className="is-state">
-                        <Result result={row.result} />
+                        <StatePill {...row.state} />
                       </td>
                       <td className="is-basis">{row.basis}</td>
                     </tr>
@@ -1667,7 +1623,6 @@ function MatrixBoard({
                 </span>
               </p>
             ) : null}
-            <ResultKey attributes={paper.attributes} />
           </>
         )}
       </section>
@@ -1960,12 +1915,11 @@ function EvidenceSplit({
                         from={`attribute-${attribute.id}`}
                       />
                     </div>
-                    <Result result={resultOf(attribute)} />
+                    <StatePill {...stateOf(attribute)} />
                   </li>
                 ))}
               </ul>
             )}
-            <ResultKey attributes={paper.attributes} />
           </section>
 
           <section>

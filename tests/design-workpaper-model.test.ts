@@ -5,11 +5,11 @@ import { describe, it } from "node:test";
 import {
   ATTRIBUTE_STATES,
   ATTRIBUTE_WITHOUT_TEXT,
-  type AttributeState,
   conclusionOf,
   type DesignWorkpaper,
   designWorkpaperPath,
   designWorkpaperQuery,
+  EXCEPTIONS_NOTED,
   editableSections,
   evidenceLine,
   evidenceTitle,
@@ -22,6 +22,7 @@ import {
   MARK_WORDS,
   matrixOf,
   matterWords,
+  NO_EXCEPTIONS_NOTED,
   openMatters,
   PROPOSED_BY_AGENT,
   paragraphs,
@@ -32,8 +33,6 @@ import {
   refChips,
   rememberedView,
   rememberView,
-  resultKey,
-  resultOf,
   sectionKeyFor,
   staleProblem,
   startingSelection,
@@ -1153,15 +1152,25 @@ describe("what the page holds even when an answer disagrees with itself", () => 
 
   it("words a known state itself, and an unknown one never as a known state", () => {
     // Whatever words come beside a state this page knows, the page's own are shown.
+    // Rewritten 15 November 2026 (product owner): the Result reads as a workpaper says
+    // it. Old: "Exception shown" and "Shown". New: "Exceptions noted" and "No exceptions
+    // noted". The other states keep their words, and "No exceptions noted" is still said
+    // of SHOWN alone.
     for (const [state, words, tone] of [
-      ["EXCEPTION", "Exception shown", "danger"],
-      ["SHOWN", "Shown", "success"],
+      ["EXCEPTION", "Exceptions noted", "danger"],
+      ["SHOWN", "No exceptions noted", "success"],
       ["SHOWN_IN_PART", "Shown in part", "warning"],
       ["NOT_SHOWN", "Not shown", "warning"],
       ["NOT_CONCLUDED", "Not concluded", "info"],
       ["NOT_TESTED", "Not tested yet", "neutral"],
     ] as const) {
-      for (const stateWords of ["", "Shown", "Effective", "All good"]) {
+      for (const stateWords of [
+        "",
+        "Shown",
+        "No exceptions noted",
+        "Effective",
+        "All good",
+      ]) {
         assert.deepEqual(stateOf({ state, stateWords }), { words, tone });
       }
     }
@@ -1179,6 +1188,10 @@ describe("what the page holds even when an answer disagrees with itself", () => 
       " SHOWN ",
       "Shown in part",
       "Exception shown",
+      "No exceptions noted",
+      "no exceptions noted",
+      "Exceptions noted",
+      "Exception recorded by the auditor",
       "",
     ]) {
       assert.deepEqual(stateOf({ state: "OTHER", stateWords }), {
@@ -1199,82 +1212,16 @@ describe("what the page holds even when an answer disagrees with itself", () => 
     assert.equal(tile?.value, "2 of 4 shown");
     assert.equal(tile?.tone, "neutral");
     assert.equal(matrixOf(paper).rows[0]?.state.words, "Not stated");
-  });
-
-  it("marks a result as a workpaper does: a check for shown, an x for an exception", () => {
-    // Product owner, 15 November 2026: the Result column showed the state's words in a
-    // pill ("Shown"); it now shows a symbol, with the same words as its title and its
-    // accessible name. The words themselves (stateOf) are unchanged.
-    for (const [state, symbol, words, tone] of [
-      ["SHOWN", "✓", "Shown", "success"],
-      ["EXCEPTION", "✗", "Exception shown", "danger"],
-      [
-        "EXCEPTION_RECORDED",
-        "✗",
-        "Exception recorded by the auditor",
-        "danger",
-      ],
-      ["SHOWN_IN_PART", "!", "Shown in part", "warning"],
-      ["NOT_SHOWN", "!", "Not shown", "warning"],
-      // "–" is neutral wherever it is drawn, as its key is (the pill was info).
-      ["NOT_CONCLUDED", "–", "Not concluded", "neutral"],
-      ["NOT_TESTED", "–", "Not tested yet", "neutral"],
-      ["NOT_APPLICABLE", "N/A", "Not applicable to this instance", "neutral"],
-    ] as const) {
-      assert.deepEqual(resultOf({ state, stateWords: "Shown" }), {
-        symbol,
-        words,
-        tone,
-      });
-    }
-    // Only a check's own "Shown" is a check mark: a person's judgment keeps its words,
-    // and so does a state this page does not know, even one said to be "Shown".
-    for (const state of [
-      "SHOWN_ON_REVIEW",
-      "NOT_AVAILABLE",
-      "OTHER",
-    ] as const) {
-      const made = resultOf({ state, stateWords: "Shown" });
-      assert.equal(made.symbol, "", state);
-      assert.notEqual(made.words, "Shown", state);
-      assert.notEqual(made.tone, "success", state);
-    }
-    for (const state of ATTRIBUTE_STATES) {
-      const made = resultOf({ state, stateWords: "" });
-      assert.equal(made.symbol === "✓", state === "SHOWN", state);
+    // "No exceptions noted" is said of SHOWN alone, and "Exceptions noted" only of an
+    // exception: never of what was not shown, not tested, or settled by a person.
+    for (const state of [...ATTRIBUTE_STATES, "OTHER"] as const) {
+      const { words } = stateOf({ state, stateWords: "No exceptions noted" });
+      assert.equal(words === NO_EXCEPTIONS_NOTED, state === "SHOWN", state);
       assert.equal(
-        made.symbol === "✗",
+        words === EXCEPTIONS_NOTED,
         state === "EXCEPTION" || state === "EXCEPTION_RECORDED",
         state,
       );
-    }
-    assert.equal(matrixOf(parsed({})).rows[0]?.result.symbol, "✓");
-  });
-
-  it("explains every symbol on the page, and none that is not", () => {
-    const of = (...states: AttributeState[]) =>
-      resultKey(states.map((state) => ({ state, stateWords: "" })));
-    assert.deepEqual(of(), []);
-    assert.deepEqual(of("SHOWN_ON_REVIEW", "NOT_AVAILABLE", "OTHER"), []);
-    assert.deepEqual(of("NOT_TESTED", "SHOWN", "SHOWN", "EXCEPTION_RECORDED"), [
-      { symbol: "✓", meaning: "Shown", tone: "success" },
-      { symbol: "✗", meaning: "Exception", tone: "danger" },
-      {
-        symbol: "–",
-        meaning: "Not concluded or not tested yet",
-        tone: "neutral",
-      },
-    ]);
-    assert.deepEqual(
-      of("NOT_SHOWN", "SHOWN_IN_PART", "NOT_APPLICABLE").map(
-        (item) => item.symbol,
-      ),
-      ["!", "N/A"],
-    );
-    // Every symbol a result can carry has its meaning.
-    for (const state of ATTRIBUTE_STATES) {
-      const { symbol } = resultOf({ state, stateWords: "" });
-      assert.equal(of(state).length, symbol === "" ? 0 : 1, state);
     }
   });
 

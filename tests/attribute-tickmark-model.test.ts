@@ -1451,8 +1451,10 @@ describe("the workpaper's exception recorded by the auditor (review fix 9b)", ()
     const [first] = paper.attributes;
     assert.ok(first !== undefined);
     assert.equal(first.state, "EXCEPTION_RECORDED");
+    // Rewritten 15 November 2026 (product owner): was "Exception recorded by the
+    // auditor"; the Result now reads "Exceptions noted". Still never as shown.
     assert.deepEqual(stateOf(first), {
-      words: "Exception recorded by the auditor",
+      words: "Exceptions noted",
       tone: "danger",
     });
     assert.equal(first.tickmark, "NONE");

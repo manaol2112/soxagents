@@ -674,9 +674,17 @@ export function previewUrl(scope: WorkpaperScope, fileId: string): string {
 
 /* Words -------------------------------------------------------------------------------- */
 
+/** The Result of an attribute, as a workpaper says it (product owner, 15 November 2026):
+ * "No exceptions noted" where the check shows it, "Exceptions noted" for an exception,
+ * the check's or one a person recorded. They were "Shown", "Exception shown" and
+ * "Exception recorded by the auditor". Every other state keeps its own words: nothing
+ * is said to have no exception that was not shown. */
+export const NO_EXCEPTIONS_NOTED = "No exceptions noted";
+export const EXCEPTIONS_NOTED = "Exceptions noted";
+
 const STATE_WORDS: Record<AttributeState, { words: string; tone: Tone }> = {
-  EXCEPTION: { words: "Exception shown", tone: "danger" },
-  SHOWN: { words: "Shown", tone: "success" },
+  EXCEPTION: { words: EXCEPTIONS_NOTED, tone: "danger" },
+  SHOWN: { words: NO_EXCEPTIONS_NOTED, tone: "success" },
   SHOWN_IN_PART: { words: "Shown in part", tone: "warning" },
   NOT_SHOWN: { words: "Not shown", tone: "warning" },
   NOT_CONCLUDED: { words: "Not concluded", tone: "info" },
@@ -685,24 +693,29 @@ const STATE_WORDS: Record<AttributeState, { words: string; tone: Tone }> = {
   SHOWN_ON_REVIEW: { words: "Shown, auditor's judgment", tone: "neutral" },
   NOT_APPLICABLE: { words: "Not applicable to this instance", tone: "neutral" },
   NOT_AVAILABLE: { words: "Evidence not available, accepted", tone: "neutral" },
-  // An exception a person recorded: never "Shown", whatever the check found.
-  EXCEPTION_RECORDED: {
-    words: "Exception recorded by the auditor",
-    tone: "danger",
-  },
+  // An exception a person recorded: never "No exceptions noted", whatever the check
+  // found. Who recorded it is said in the attribute's own sentence.
+  EXCEPTION_RECORDED: { words: EXCEPTIONS_NOTED, tone: "danger" },
   OTHER: { words: "Not stated", tone: "neutral" },
 };
 
+/** The words of a known state: this page's, and the server's own for the states this
+ * page words differently ("Shown", "Exception shown"). */
 const KNOWN_STATE_WORDS = new Set(
-  ATTRIBUTE_STATES.map((state) => STATE_WORDS[state].words.toLowerCase()),
+  [
+    ...ATTRIBUTE_STATES.map((state) => STATE_WORDS[state].words),
+    "Shown",
+    "Exception shown",
+    "Exception recorded by the auditor",
+  ].map((words) => words.toLowerCase()),
 );
 
 /**
  * An attribute's state in words, with its tone. A state this page knows is worded by
- * this page, whatever words the answer carries beside it, so "Shown" is only ever said of
- * SHOWN. A state it does not know is shown in the server's words, in a neutral tone,
- * unless those words are a known state's (an unknown state must not read as "Shown"): it
- * is then "Not stated".
+ * this page, whatever words the answer carries beside it, so "No exceptions noted" is
+ * only ever said of SHOWN. A state it does not know is shown in the server's words, in a
+ * neutral tone, unless those words are a known state's (an unknown state must not read
+ * as "Shown" or "No exceptions noted"): it is then "Not stated".
  */
 export function stateOf(attribute: Pick<Attribute, "state" | "stateWords">): {
   words: string;
@@ -720,65 +733,6 @@ export function stateOf(attribute: Pick<Attribute, "state" | "stateWords">): {
         : said,
     tone: "neutral",
   };
-}
-
-/** An attribute's result as a workpaper marks it: a symbol, with the state's words as its
- * title and its accessible name. `symbol` is "" where the result stays in words. */
-export type ResultMark = { symbol: string; words: string; tone: Tone };
-
-/**
- * The symbol of each result (product owner, 2026-11-15: a check for a pass and an x for
- * a fail, as a workpaper documents it). Only a check's own "Shown" is a check mark: a
- * person's judgment ("Shown, auditor's judgment", "Evidence not available, accepted")
- * stays in its own words, so it never reads as the check's pass (section 10.13), and so
- * does a state this page does not know.
- */
-const RESULT_SYMBOLS: Partial<Record<AttributeState, string>> = {
-  SHOWN: "✓",
-  EXCEPTION: "✗",
-  EXCEPTION_RECORDED: "✗",
-  SHOWN_IN_PART: "!",
-  NOT_SHOWN: "!",
-  NOT_CONCLUDED: "–",
-  NOT_TESTED: "–",
-  NOT_APPLICABLE: "N/A",
-};
-
-/** What each symbol means, in the order a reader looks for them. */
-const RESULT_KEY: ReadonlyArray<{
-  symbol: string;
-  meaning: string;
-  tone: Tone;
-}> = [
-  { symbol: "✓", meaning: "Shown", tone: "success" },
-  { symbol: "✗", meaning: "Exception", tone: "danger" },
-  { symbol: "!", meaning: "Not shown, or shown in part", tone: "warning" },
-  { symbol: "–", meaning: "Not concluded or not tested yet", tone: "neutral" },
-  {
-    symbol: "N/A",
-    meaning: "Not applicable to this instance",
-    tone: "neutral",
-  },
-];
-
-/** A symbol has one tone wherever it is drawn (the key's), so a mark and its key never
- * differ; a result in words keeps its state's tone. */
-export function resultOf(
-  attribute: Pick<Attribute, "state" | "stateWords">,
-): ResultMark {
-  const said = stateOf(attribute);
-  const symbol = RESULT_SYMBOLS[attribute.state] ?? "";
-  const key = RESULT_KEY.find((item) => item.symbol === symbol);
-  return { symbol, words: said.words, tone: key?.tone ?? said.tone };
-}
-
-/** The result symbols in use on the attributes, for the key under them: a symbol is
- * never left unexplained, and none is explained that is not on the page. */
-export function resultKey(
-  attributes: ReadonlyArray<Pick<Attribute, "state" | "stateWords">>,
-): Array<{ symbol: string; meaning: string; tone: Tone }> {
-  const used = new Set(attributes.map((item) => resultOf(item).symbol));
-  return RESULT_KEY.filter((item) => used.has(item.symbol));
 }
 
 /** What a file does for an attribute, as a symbol with its word: never colour alone. */
@@ -1270,8 +1224,6 @@ export type MatrixRow = {
   code: string;
   text: string;
   state: { words: string; tone: Tone };
-  /** The state as the Result column marks it. */
-  result: ResultMark;
   basis: string;
   /** '' or "Exception on a file not listed": an exception that has no column. */
   stray: string;
@@ -1298,7 +1250,6 @@ export function matrixOf(
       code: attribute.code,
       text: attribute.text,
       state: stateOf(attribute),
-      result: resultOf(attribute),
       basis: attribute.basis,
       stray: strayLine(attribute),
       cells: paper.evidence.map((entry): MatrixCell => {
