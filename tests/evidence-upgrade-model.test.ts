@@ -529,7 +529,15 @@ describe("the screen", () => {
       view,
       /entry\.key === "upgrade" && checks\.pending\s*\? \{ \.\.\.entry, unavailable: UPGRADE_WAIT \}\s*: entry,/,
     );
-    assert.match(view, /unavailable: locked \? LOCKED : entry\.unavailable/);
+    // Changed 14 November 2026 (second review of section 10.12, item 7). Old: the lock's
+    // reason was always the upload's sentence (LOCKED). New: the upload's sentence only
+    // where an upload is the cause, "Saving. One moment." during any other write; still
+    // said, never a silent refusal.
+    assert.match(view, /unavailable: locked \? lockedWhy : entry\.unavailable/);
+    assert.match(
+      view,
+      /const lockedWhy = settling === plan \? LOCKED : SAVING;/,
+    );
     // The row's action: off while a call is out (the list's other check actions too).
     assert.match(view, /disabled=\{locked \|\| checks\.pending\}/);
     assert.match(
@@ -539,7 +547,7 @@ describe("the screen", () => {
     // The dialog: the list-wide state is passed in; Confirm is off and the reason said.
     assert.match(
       view,
-      /waiting=\{\s*locked\s*\? LOCKED\s*: checks\.pending && checks\.busy !== item\.id\s*\? UPGRADE_WAIT\s*: null\s*\}/,
+      /waiting=\{\s*locked\s*\? lockedWhy\s*: checks\.pending && checks\.busy !== item\.id\s*\? UPGRADE_WAIT\s*: null\s*\}/,
     );
     assert.match(view, /disabled=\{busy \|\| waiting !== null\}/);
     assert.match(

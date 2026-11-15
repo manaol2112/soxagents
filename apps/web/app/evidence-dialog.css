@@ -1624,6 +1624,21 @@
   font-size: 12.5px;
 }
 
+/* A D&I request's file: Download annotated copy and Add annotation sit before the expand icon. */
+.ed-view-head:has(> .ed-view-notes:not(:empty)) {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+}
+
+.ed-view-head > .ed-view-notes {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.ed-view-head > .ed-view-notes:empty {
+  display: none;
+}
+
 .ed-view-expand {
   display: inline-grid;
   width: 34px;

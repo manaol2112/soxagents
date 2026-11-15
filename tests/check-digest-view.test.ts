@@ -130,9 +130,13 @@ describe("the first screen of a finished check", () => {
     // the caveats' words. The screen has no such sentence of its own.
     has(
       summary,
-      `) : digest.calm !== "" ? ( // Nothing waits on the person: what the check itself says of that, which is // "nothing needs your attention" only where nothing says otherwise. <p className="cdg-calm">{digest.calm}</p> ) : null}`,
+      `) : calm !== "" ? ( // Nothing waits on the person: what the check itself says of that, which is // "nothing needs your attention" only where nothing says otherwise. <p className="cdg-calm">{calm}</p> ) : null}`,
       "the calm line is the model's",
     );
+    // Second review, item 2(b): where the model has nothing else to say, its calm line is
+    // what the accept note cautions, which the footer already says beside Accept; the
+    // screen does not say it twice. A person with no footer reads it here.
+    has(view, 'const calm = digest.calm === caution ? "" : digest.calm;');
     assert.equal(count(digest, /digest\.calm\b/g), 2);
     assert.equal(/DIGEST_NOTHING\b/.test(digest), false);
     assert.equal(/Nothing needs your attention/.test(digest), false);
@@ -146,9 +150,15 @@ describe("the first screen of a finished check", () => {
       model,
       /if \(fine && caveats\.length === 0\) \{\s*return DIGEST_NOTHING;\s*\}/,
     );
+    // Second review, item 2(b): calm only where every attribute asked for is one
+    // accepting marks as evidenced, the accept note's own rule.
     assert.match(
       model,
-      /calm: attention\.length > 0 \? "" : calmOf\(check, quiet, asked\.length\),/,
+      /calm: attention\.length > 0 \? "" : calmOf\(check, quiet, asked, acceptNote\),/,
+    );
+    has(
+      model,
+      'const fine = (review === null || review.state === "SUFFICIENT") && asked.length > 0 && asked.every((row) => row.line.evidenced);',
     );
   });
   it("leads with the review's own outcome, large, and one sentence; a check without a review has the sentence alone", () => {
@@ -175,7 +185,7 @@ describe("the first screen of a finished check", () => {
   it("shows the result only for a finished check, and leaves every other standing its one line", () => {
     assert.match(
       check,
-      /const digest = checkDigest\(check, findings \?\? \[\], files, extras\);/,
+      /const digest = checkDigest\(\s*check,\s*findings \?\? \[\],\s*files,\s*extras,\s*acceptNote,?\s*\);/,
     );
     assert.equal(count(list, /checkDigest\(/g), 1);
     inOrder(check, [
@@ -238,9 +248,10 @@ describe("the first screen of a finished check", () => {
       row,
       /const \[filesOpen, setFilesOpen\] = useState<boolean \| null>\(null\);/,
     );
+    // Second review, item 3: and while a form is open in the list, whatever else.
     has(
       row,
-      "const filesShown = filesOpen ?? (flagged.length > 0 || unread.length > 0 || beingRead.length > 0);",
+      "const filesShown = fileForm !== null || (filesOpen ?? (flagged.length > 0 || unread.length > 0 || beingRead.length > 0));",
     );
     assert.match(
       reviewedBody,
@@ -261,7 +272,6 @@ describe("the first screen of a finished check", () => {
       "{request}",
       "<dt>Evidence</dt>",
       "{fileList}",
-      "{preview}",
       "{check}",
       "{traceView}",
       "{agentSaid}",
@@ -355,7 +365,7 @@ describe("the first screen of a finished check", () => {
     );
     inOrder(details, [
       "{about}",
-      "<CheckReview ids={ids} review={check.review} files={files} />",
+      "<CheckReview review={check.review} onOpen={onOpen} />",
       "Not asked for by this request",
       "{fileLines(check.leftOut, false)}",
       "{fileLines(check.confirm, false)}",
@@ -466,8 +476,11 @@ describe("audit integrity of the first screen", () => {
       'said("CAVEAT:COMPLETENESS", caveat.label)',
       'said("CAVEAT:READ_IN_PART", QUIET_READ_IN_PART)',
       'said("CAVEAT:LEFT_OUT", filesLeftOut(leftOut))',
-      // And the row's own: a file that could not be read.
-      '.filter((extra) => extra.caveat && extraWords(extra) !== "")',
+      // A note on a file's type with no action (second review, item 2c).
+      'said("CAVEAT:TYPE", typesUnconfirmed(typed))',
+      // And the row's own (a file that could not be read, a trace), unless the check
+      // already names the same file.
+      'extra.caveat && extraWords(extra) !== "" && !(extra.fileId !== undefined && named.has(extra.fileId)),',
     ]) {
       has(model, said);
     }
@@ -502,9 +515,11 @@ describe("audit integrity of the first screen", () => {
     }
     // Neutral has no colour of its own: support the check does not say how is not green.
     assert.equal(/\.is-neutral button\.cdg-quiet-open/.test(css), false);
-    assert.match(
+    // Second review, item 2(b): shown is what accepting marks as evidenced (or a
+    // document shows), never support that is not whole.
+    has(
       model,
-      /const shown = row\.line\.state === "SUPPORTED" && row\.line\.shows !== null;/,
+      'const shown = row.line.state === "SUPPORTED" && (row.line.evidenced || row.line.shows === "DESIGN");',
     );
   });
   it("lists every item the model gives, each in its words: a bold line, its state and a quiet line, a flag, one control", () => {
@@ -592,26 +607,44 @@ describe("audit integrity of the first screen", () => {
     assert.equal(count(row, /\{traceView\}/g), 2);
     has(row, "{traceShown || tracePending ? null : traceView}");
     // A file with something to settle: an item whose button opens the files on it.
+    // Second review, item 3: from the fact itself (fileLine's own rule), not the drawn
+    // flag, which is gone while its form is open.
     has(
       row,
-      "const flagged = item.files.filter( (file) => (lines.get(file.fileId)?.flag ?? null) !== null, );",
+      "const flagged = item.files.filter( (file) => canAct && files.find((each) => each.id === file.fileId)?.applicationUnknown === true && applications.length > 1, );",
+    );
+    // Item 4: the row's own file items have their own prefix, and name their file.
+    has(list, 'const EXTRA_FILE = "ROW_FILE:";');
+    // A file the check left out is not counted again as unread.
+    has(
+      row,
+      'const unread = item.files.filter( (file) => file.readStatus === "FAILED" && !leftOutIds.has(file.fileId), );',
+    );
+    // Item 2a: a trace that asks nothing still says what must not be lost.
+    has(row, 'key: "TRACE:FAILED", mark: "", headline: TRACE_WORDS.failed,');
+    has(
+      row,
+      ': traced && trace !== null && trace.status === "CONFIRMED" ? tracePoints(trace) : []),',
     );
     has(
       row,
-      "...flagged.map((file) => ({ key: `@{EXTRA_FILE}@{file.fileId}`, mark: fileRef(rowFiles, file.fileId), headline: FILE_WORDS.application, context: FILE_WORDS.applicationOf(file.name), label: FILE_WORDS.view, caveat: false, })),",
+      "...flagged.map((file) => ({ key: `@{EXTRA_FILE}@{file.fileId}`, mark: fileRef(rowFiles, file.fileId), headline: FILE_WORDS.application, context: FILE_WORDS.applicationOf(file.name), label: FILE_WORDS.view, caveat: false, fileId: file.fileId, })),",
     );
     // What is only to be known of a file is a caveat on the quiet line.
     has(
       row,
-      'const unread = item.files.filter((file) => file.readStatus === "FAILED");',
+      'const unread = item.files.filter( (file) => file.readStatus === "FAILED" && !leftOutIds.has(file.fileId), );',
     );
     has(
       row,
       'key: "FILES:UNREAD", mark: "", headline: FILE_WORDS.unread(unread.length),',
     );
-    assert.equal(count(row, /caveat: true,/g), 2);
+    // The row's caveats: a file that could not be read, one still being read, a trace
+    // that failed to load (second review, item 2a).
+    assert.equal(count(row, /caveat: true,/g), 3);
+    has(list, "function tracePoints(trace: Trace): DigestExtra[] {");
     // The model places them; the row hands them over and answers the buttons.
-    has(check, "checkDigest(check, findings ?? [], files, extras)");
+    has(check, "checkDigest(check, findings ?? [], files, extras, acceptNote)");
     has(row, "extras={extras} onView={viewExtra}");
     has(
       row,
@@ -651,15 +684,15 @@ describe("audit integrity of the first screen", () => {
     // met", "Not shown"); that word labels only what the model lists as absent.
     has(
       table,
-      '...elements( "AGAINST", (element) => element.tone === "danger" && element.absent.length === 0, ),',
+      '...elements( "AGAINST", (element) => element.deviation || (element.tone === "danger" && element.absent.length === 0), ),',
     );
     has(
       table,
-      "line.elements.filter(only).map((element) => ({ key: `@{kind}:@{element.key}`, kind, label: element.result, text: element.text, lacks: [], }));",
+      "line.elements.filter(only).map((element) => ({ key: `@{kind}:@{element.key}`, kind, label: element.result, text: element.text, lacks: [], passages: element.passages, }));",
     );
     has(
       table,
-      '...absentOf(line) .filter((gap) => !told.has(lackKey(gap))) .map((gap) => ({ key: `MISSING:@{gap}`, kind: "MISSING" as const, label: MISSING, text: gap, lacks: [], })),',
+      '...absentOf(line) .filter((gap) => !told.has(lackKey(gap))) .map((gap) => ({ key: `MISSING:@{gap}`, kind: "MISSING" as const, label: MISSING, text: gap, lacks: [], passages: [], })),',
     );
     assert.equal(count(table, /label: MISSING,/g), 1);
     // Without elements, only a supported attribute has a Shown row.
@@ -669,7 +702,7 @@ describe("audit integrity of the first screen", () => {
     );
     assert.equal(count(table, /label: STATUS_SHOWN,/g), 1);
     // The table draws each row once, by its own label; a row is green only as SHOWN.
-    assert.equal(count(attribute, /table\.map\(\(each, at\) => \{/g), 1);
+    assert.equal(count(attribute, /table\.map\(\(each\) => \{/g), 1);
     has(
       attribute,
       "<span className={`cdg-row-key is-@{ROW_TONE[each.kind]}`}>",
@@ -711,16 +744,9 @@ describe("audit integrity of the first screen", () => {
       attribute,
       '{each.lacks.map((gap) => ( // What of this element is missing: under it, and nowhere else. <p key={gap} className="cdg-row-lack"> <span className="cdg-row-key is-danger"> <UiIcon name="x" size={12} /> {MISSING} </span> {gap} </p> ))}',
     );
-    // It rests on the evidence like a shown row: the first such row quotes the passage,
-    // and each carries the file's reference and "View".
-    has(
-      attribute,
-      'const rests = table.findIndex((each) => each.kind !== "MISSING");',
-    );
-    has(
-      attribute,
-      'each.kind === "MISSING" ? null : evidenceOf(first, at === rests ? (first?.quote ?? "") : "");',
-    );
+    // It rests on the evidence like a shown row: it quotes, names and opens its own
+    // element's first passage (second review, item 1).
+    has(table, "passages: element.passages, }), );");
     // Its mark and colour are the warning's, never the success's.
     has(digest, 'PART: "warning",');
     assert.match(
@@ -926,23 +952,36 @@ describe("what the result sends", () => {
   });
 
   it("turns the action off, with the reason, where nothing is ticked or the row cannot ask", () => {
+    // Second review, item 7: the lock's reason is the upload's only where an upload is
+    // the cause; during any other write, "Saving. One moment."
     assert.match(
       row,
-      /const followUpOff = locked\s*\? LOCKED\s*: \(menuEntries\.find\(\(each\) => each\.key === "follow-up"\)\?\.unavailable \?\?\s*null\);/,
+      /const followUpOff = locked\s*\? lockedWhy\s*: \(menuEntries\.find\(\(each\) => each\.key === "follow-up"\)\?\.unavailable \?\?\s*null\);/,
     );
+    has(list, 'const SAVING = "Saving. One moment.";');
+    has(list, "const lockedWhy = settling === plan ? LOCKED : SAVING;");
+    assert.equal(/locked\s*\?\s*LOCKED\b/.test(list), false);
     // The menu is built from the same entries: one reason, said in both places.
     assert.equal(count(list, /rowMenu\(row, \{/g), 1);
     assert.match(
       view,
       /const askOff =\s*asking === null\s*\? null\s*: wanted === 0\s*\? DIGEST_NONE_TICKED\s*: asking\.unavailable \|\| null;/,
     );
-    assert.match(
-      summary,
-      /disabled=\{askOff !== null\}\s+aria-describedby=\{hint !== "" \? `\$\{id\}-hint` : undefined\}/,
+    // Each sentence beside the actions is said once, and each button is described by
+    // its own (second review, item 7: the upload's sentence was said twice, and
+    // described Accept twice).
+    has(
+      view,
+      'const hints = [...askSays, acceptSays].filter( (part, at, all) => part !== "" && all.indexOf(part) === at, );',
     );
-    assert.match(
+    has(summary, "disabled={askOff !== null} aria-describedby={askDescribed}");
+    has(
+      view,
+      'const askDescribed = askSays.map(hintId).join(" ") || undefined;',
+    );
+    has(
       summary,
-      /\{hint !== "" \? \(\s*<span className="cdg-foot-hint" id=\{`\$\{id\}-hint`\}>\s*\{hint\}/,
+      '<span className="cdg-foot-hint"> {hints.map((part, at) => ( <span key={part} id={hintId(part)}>',
     );
     // Where the check recommends nothing, there is nothing to ask for here.
     assert.match(
@@ -954,7 +993,7 @@ describe("what the result sends", () => {
   it("accepts through the row's existing Accept: the same handler, one click, primary", () => {
     has(
       summary,
-      '<button type="button" className="btn" disabled={accept.off !== null} aria-describedby={ accept.off !== null ? `@{id}-accepting @{id}-hint` : `@{id}-accepting` } onClick={accept.onAccept} > {accept.busy ? "Accepting…" : DIGEST_ACCEPT} </button>',
+      '<button type="button" className="btn" disabled={accept.off !== null} aria-describedby={ acceptSays !== "" ? `@{id}-accepting @{hintId(acceptSays)}` : `@{id}-accepting` } onClick={accept.onAccept} > {accept.busy ? "Accepting…" : DIGEST_ACCEPT} </button>',
     );
     // Superseded after the independent review (item 6 of the fixes). Old: `busy` was
     // `action.busy === judge-<id>`, which is also the key a follow-up, an insufficient
@@ -962,7 +1001,7 @@ describe("what the result sends", () => {
     // was being saved. New: only the accept itself (no form of the row is open).
     has(
       row,
-      "accept={ canAct && row.canAccept ? { onAccept: () => void accept(), // Only the accept itself: a follow-up, an insufficient or a reopen // being recorded runs under the same key, with its form open. busy: asking === null && action.busy === `judge-@{item.id}`, off: locked ? LOCKED : asking !== null ? ASKING_FIRST : null, } : null }",
+      "accept={ canAct && row.canAccept ? { onAccept: () => void accept(), // Only the accept itself: a follow-up, an insufficient or a reopen // being recorded runs under the same key, with its form open. busy: asking === null && action.busy === `judge-@{item.id}`, off: locked ? lockedWhy : asking !== null ? ASKING_FIRST : null, } : null }",
     );
     assert.equal(count(list, /async function accept\(\)/g), 1);
     assert.equal(count(list, /sufficiency: "ACCEPTED"/g), 1);
@@ -973,7 +1012,8 @@ describe("what the result sends", () => {
     );
     // Why it cannot be pressed is said in words on the screen and to a screen reader
     // (item 10 of the fixes: before, only a `title` on a disabled button).
-    has(view, 'accept?.off ?? "",');
+    has(view, 'const acceptSays = accept?.off ?? "";');
+    has(view, "const hints = [...askSays, acceptSays]");
     assert.equal(/title=\{accept\.off/.test(digest), false);
     // One primary button a view: Accept on the first screen, the way on in an
     // attribute. Everything else is outlined, quiet or a link.
@@ -1200,7 +1240,7 @@ describe("one attribute at a time", () => {
       'className="cdg-sources"',
       '<ul className="cdg-rows">',
       "{each.label}",
-      '<q className="cdg-quote">{quoted.quote}</q>',
+      '<q className="cdg-quote">{own.quote}</q>',
       "{view(evidence, DIGEST_VIEW)}",
       "{over.map((part, at) => (",
       '<div className="de-views">',
@@ -1218,14 +1258,18 @@ describe("one attribute at a time", () => {
       'const over = line.readings.length > 0 || line.state === "JUDGMENT" ? [line.judgment ?? "", line.summary] .map(flat) .filter((part, at, all) => part !== "" && all.indexOf(part) === at) : [];',
     );
     has(attribute, 'over.includes(flat(line.summary)) ? "" : line.summary,');
-    // The first verified passage is quoted on the first row that rests on the evidence;
-    // the rest are behind "More about this attribute", with the elements in full, what
-    // is left to other requests, and the check's own sentence.
+    // Each row quotes its own element's first passage (second review, item 1); every other
+    // passage of the attribute and its elements, each once, is behind "More about this
+    // attribute", with the elements in full, what is left to other requests, and the
+    // check's own sentence.
     has(
       attribute,
-      'const rests = table.findIndex((each) => each.kind !== "MISSING");',
+      "const quoted = new Set( table.flatMap((each) => each.passages[0] === undefined ? [] : [passageKey(each.passages[0])], ), );",
     );
-    has(attribute, "const quoted = rests >= 0 ? line.passages[0] : undefined;");
+    has(
+      attribute,
+      "const further = [ ...line.passages, ...line.elements.flatMap((element) => element.passages), ].filter(",
+    );
     const more = attribute.slice(attribute.indexOf("{DIGEST_MORE}"));
     inOrder(more, [
       "sentence.map(",
@@ -1288,15 +1332,15 @@ describe("one attribute at a time", () => {
     has(box, "<AskGroup key={ask.key} ask={ask} ticks={ticks} full={full} />");
   });
 
-  it("opens the evidence a row rests on in one click: the file with its annotations, on the one that marks the row's passage", () => {
+  it("opens the evidence a row rests on in one click, in the evidence reviewer, on the annotation that marks the row's passage", () => {
     // Asked by the product owner on the attribute view, 14 November 2026: "Is there a
-    // way to quickly view the annotations for the shown?" Before, only the first Shown
-    // row had a link, and it opened the plain preview with nothing marked on an image.
-    // Every row that rests on the evidence (something shown, or found against) carries
-    // the file's reference and "View"; a row of something absent carries none.
+    // way to quickly view the annotations for the shown?", then: "I want the evidence
+    // reviewer to be the one that has annotations, not the old viewer." Every row that
+    // rests on the evidence carries its own element's file reference and "View"; a row
+    // of something absent carries none.
     has(
       attribute,
-      'const evidence = each.kind === "MISSING" ? null : evidenceOf(first, at === rests ? (first?.quote ?? "") : "");',
+      'const own = each.passages[0]; const evidence = evidenceOf(own, own?.quote ?? "");',
     );
     has(
       attribute,
@@ -1319,65 +1363,91 @@ describe("one attribute at a time", () => {
     has(attribute, '<span aria-hidden="true">{`@{DIGEST_EVIDENCE}:`}</span>');
     has(attribute, "{view(evidence, ref)}");
     assert.equal(count(attribute, /view\(evidence, /g), 2);
-    // The digest opens nothing itself: the row's own preview does.
-    assert.equal(
-      /EvidencePreview|PreviewButton|PassageOpen/.test(digest),
-      false,
-    );
+  });
+
+  it("opens every file of a D&I request in the evidence reviewer, never in the standalone preview", () => {
+    // Item 9 (product owner, 14 November 2026). In design-evidence.tsx and
+    // check-digest.tsx no opener is the standalone preview any more: the file's name,
+    // its menu's "Annotations", a row's "View", "Evidence: E3" and a passage's "Open in
+    // the file" each open the reviewer (`onDialog`, the dialog's own open state).
+    for (const source of [list, digest]) {
+      assert.equal(
+        /EvidencePreview|PreviewButton|PassageOpen|setAnnotating/.test(source),
+        false,
+      );
+    }
     has(
       row,
-      "onEvidence={(evidence) => { const file = rowFiles.find((each) => each.id === evidence.fileId); if (file !== undefined) { setAnnotating({ id: file.id, fileName: file.name, evidence }); } }}",
+      'const openFile = (fileId: string, annotation?: AnnotationAsk) => onDialog({ mode: "review", fileId, ...(item.phase === "DESIGN" ? { requirementId: item.id, ...(annotation === undefined ? {} : { annotation }), } : {}), });',
     );
-    // It is the dialog the file menu's "Annotations" opens: one preview, the same
-    // request, with the row's passage to open on.
-    assert.equal(count(row, /<EvidencePreview\b/g), 1);
-    assert.equal(count(row, /setAnnotating\(\{/g), 2);
+    // The file menu's "Annotations", and the check's openers, are that one way.
+    has(row, 'label: "Annotations", onSelect: () => openFile(file.fileId),');
+    has(row, "onOpen={openFile}");
     has(
-      row,
-      "startAnnotationFor: { attributeId: annotating.evidence.attributeId, quote: annotating.evidence.quote, },",
+      check,
+      "onEvidence={(evidence) => onOpen(evidence.fileId, { attributeId: evidence.attributeId, quote: evidence.quote, }) }",
     );
-    // A file without annotations shows the passage marked, as "Open in the file" does:
-    // the same citation and the same heading.
+    has(check, "<CheckReview review={check.review} onOpen={onOpen} />");
+    const line = component(list, "PassageLine");
     has(
-      row,
-      "citations: [ passageCitation( annotating.evidence.passage, rowFiles, annotating.evidence.letter, ), ], sourcesTitle: PASSAGE_SOURCES,",
+      line,
+      '<button type="button" className="de-link" onClick={() => onOpen(fileId, { attributeId, quote: passage.quote }) } > Open in the file </button>',
+    );
+    // The file's name is the reviewer as it always was, with the request it serves.
+    has(row, 'onDialog({ mode: "review", fileId: file.fileId,');
+    // The reviewer's open state carries the annotation to select; nothing else.
+    const dialog = read("apps/web/src/evidence-dialog.tsx");
+    has(dialog, "annotation?: AnnotationAsk;");
+    // Its Preview, for a file of that D&I request, is the annotation viewer with its
+    // review, in place of the plain viewer; a spreadsheet's table stays; any other
+    // file, or a file of no D&I request, is as it was.
+    has(
+      dialog,
+      ") : notes !== undefined ? ( // A file of a D&I request: its annotations and their review, in // place of the plain viewer (product owner, 14 November 2026). <AnnotatedPreview",
     );
     has(
-      list,
-      "citations={[passageCitation(passage, files, cited)]} sourcesTitle={PASSAGE_SOURCES}",
+      dialog,
+      'const notesOf = (shownId: string) => open.mode === "review" && open.requirementId !== undefined && (shownId === open.fileId || insight?.file.requirementId === open.requirementId) ? { controlId: ids.controlId, requirementId: open.requirementId } : undefined;',
     );
-    // The preview resolves the passage once its annotations are here, with the model's
-    // matcher; `startAnnotationId` keeps working, and without either nothing changes.
-    has(preview, "startAnnotationFor?: AnnotationAsk | undefined;");
-    has(preview, "const first = annotationFor(loadedSet, startAnnotationFor);");
+    inOrder(dialog, [
+      '{tab === "preview" ? (',
+      "table ? (",
+      "<DataTable",
+      "<AnnotatedPreview",
+      "<EvidenceViewer",
+    ]);
+    // The expand icon keeps the full-size view of the same thing.
+    has(
+      dialog,
+      "annotations={notesOf(insight.file.id)} startAnnotationFor={askOf(insight.file.id)}",
+    );
+    // The inline viewer: the existing one, with its review, and the same pick.
     has(
       preview,
-      "const pick = asked ?? (found !== null && found.fileId === file?.id ? found.pick : null);",
+      "const pick = useAnnotationPick( notes.set, file.id, undefined, startAnnotationFor, );",
+    );
+    has(preview, "act={notes.act}");
+    has(preview, "inline");
+    // The matcher runs once each file's annotations are here; `startAnnotationId` keeps
+    // working, and without either nothing is selected.
+    has(preview, "const first = annotationFor(set, startAnnotationFor);");
+    has(
+      preview,
+      "return ( asked ?? (found !== null && found.fileId === fileId ? found.pick : null) );",
     );
     has(
       preview,
-      "const asked = useMemo( () => (startAnnotationId === undefined ? null : { id: startAnnotationId }), [startAnnotationId], );",
+      "if ( startAnnotationFor === undefined || set === null || foundFor === set.fileId ) { return; }",
     );
-    // Found once for each file's annotations: reading them again after a review does not
-    // select it a second time.
-    has(
-      preview,
-      "if ( startAnnotationFor === undefined || loadedSet === null || foundFor === loadedSet.fileId ) { return; }",
-    );
-    // Closing gives the focus back to what opened it, as the preview always has.
-    has(
-      preview,
-      "const previous = document.activeElement as HTMLElement | null;",
-    );
-    has(preview, "previous?.focus();");
     // Opening it writes nothing.
     const opened = preview.slice(
-      preview.indexOf("const [found, setFound]"),
-      preview.indexOf("useEffect(() => {\n    const previous"),
+      preview.indexOf("function useAnnotationPick("),
+      preview.indexOf("export function AnnotatedPreview("),
     );
     assert.ok(opened.length > 200);
     assert.equal(/fetch\(|notes\.act|method:/.test(opened), false);
   });
+
   it("moves the focus to the attribute's heading, and back to its item on return", () => {
     assert.match(
       attribute,
@@ -1467,7 +1537,7 @@ describe("controls and names", () => {
     assert.equal(count(digest, /aria-expanded=/g), 4);
     // A reference that is only sometimes there names something that is there then:
     // Accept's reason is in the hint whenever Accept is off.
-    has(view, 'accept?.off ?? "",');
+    has(view, 'const acceptSays = accept?.off ?? "";');
     // What a closed disclosure names is in the page while closed: hidden, not absent.
     for (const [opened, name] of [
       ["detailsOpen", "details"],

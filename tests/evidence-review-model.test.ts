@@ -1731,9 +1731,12 @@ describe("the screen's own files, for the review", () => {
   };
 
   it("renders the review only where the check has one: a finished engine 2 run", () => {
+    // Changed 14 November 2026 (item 9): its passages open in the evidence reviewer
+    // through the row's one opener (`onOpen`), so it takes that rather than the ids and
+    // files the standalone preview needed.
     assert.match(
       list,
-      /\{check\.review !== null \? \(\s*<CheckReview ids=\{ids\} review=\{check\.review\} files=\{files\} \/>\s*\) : null\}/,
+      /\{check\.review !== null \? \(\s*<CheckReview review=\{check\.review\} onOpen=\{onOpen\} \/>\s*\) : null\}/,
     );
     assert.equal(list.match(/<CheckReview\b/g)?.length, 1);
     // Superseded by section 10.12, items 1, 3 and 6. Old: the review was read first,
@@ -1963,30 +1966,30 @@ describe("the screen's own files, for the review", () => {
       attribute,
       /\{further\.map\(\(each\) => passage\(each, row\.letter\)\)\}/,
     );
+    // Changed 14 November 2026 (item 9). Old: a passage opened in the standalone
+    // preview (PassageOpen, PreviewButton), marked as a citation for its letter. New: in
+    // the evidence reviewer, on the annotation that marks it for its attribute; still
+    // one PassageLine for an attribute's passage and a consideration's.
     assert.match(
       list,
-      /passage=\{\(passage, letter\) => \(\s*<PassageLine\b[\s\S]{0,260}label=\{letter\}/,
+      /passage=\{\(passage, letter\) => \(\s*<PassageLine\b[\s\S]{0,320}onOpen=\{onOpen\}/,
     );
-    // The quoted passage's row opens its file with its annotations through the row's
-    // own preview (product owner, 14 November 2026: one click from a Shown row to the
-    // annotated evidence); a file without annotations shows the same marked passage as
-    // "Open in the file".
     assert.match(attribute, /onClick=\{\(\) => onEvidence\(evidence\)\}/);
-    assert.match(list, /onEvidence=\{onEvidence\}/);
     assert.match(
       list,
-      /citations=\{\[passageCitation\(passage, files, cited\)\]\}/,
+      /onEvidence=\{\(evidence\) =>\s*onOpen\(evidence\.fileId, \{/,
+    );
+    assert.equal(
+      /<PreviewButton\b|<EvidencePreview\b|PassageOpen/.test(list),
+      false,
     );
     assert.match(
-      list,
-      /citations: \[\s*passageCitation\(\s*annotating\.evidence\.passage,/,
+      component(list, "PassageLine"),
+      /onOpen\(fileId, \{ attributeId, quote: passage\.quote \}\)/,
     );
-    // One viewer link, used by both: a passage opens the same way wherever it is.
-    assert.equal(list.match(/<PreviewButton\b/g)?.length, 1);
-    assert.match(component(list, "PassageLine"), /<PassageOpen\b/);
     assert.equal(/PassageLine|PassageOpen|PreviewButton/.test(digest), false);
     assert.match(component(list, "CheckReview"), /<PassageLine\b/);
-    assert.match(component(list, "PassageLine"), /label="Open in the file"/);
+    assert.match(component(list, "PassageLine"), />\s*Open in the file\s*</);
   });
 
   it("folds considerations and the files by default, and opens within the motion budget", () => {

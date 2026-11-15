@@ -41,6 +41,7 @@ import {
   QUIET_SHOWN_DESIGN,
   SENTENCE_MIN,
   STATUS_IN_PART,
+  STATUS_IN_PART_DESIGN,
   STATUS_JUDGMENT,
   STATUS_NOT_ADDRESSED,
   STATUS_NOT_SHOWN,
@@ -48,9 +49,11 @@ import {
   STATUS_SHOWN_DESIGN,
   STATUS_SUPPORTED,
   tickedToStart,
+  typesUnconfirmed,
   VERDICT_NO_RESULT,
   verdictAttention,
   verdictDesign,
+  verdictInPart,
   verdictShown,
   verdictUnsaid,
 } from "../apps/web/src/check-digest-model.ts";
@@ -58,7 +61,10 @@ import { lettersSpan } from "../apps/web/src/design-evidence-model.ts";
 import {
   type AttributeLine,
   type AttributeState,
+  acceptNoteParts,
+  assuranceRow,
   COMPLETENESS_WORDS,
+  ELEMENT_DEVIATION,
   type Lettered,
   notChecked,
   OUTCOME_WORDS,
@@ -4146,5 +4152,313 @@ describe("a file's sentence is said once (section 10.12, item 2)", () => {
         ],
       ],
     );
+  });
+});
+
+describe("the second review of the first screen (14 November 2026)", () => {
+  // Found by the second independent review of section 10.12. Each test here fails on
+  // the model as it was committed in bde9691.
+
+  /** The row as the screen gets it: the check, its evidenced rule tightened by what the
+   * other requests send, and its note beside Accept. */
+  const fromRow = (
+    over: Record<string, unknown>,
+    keyed?: ReadonlySet<string>,
+    extras: readonly DigestExtra[] = [],
+    files: RowFile[] = [TICKET],
+  ) => {
+    const made = assuranceRow({
+      requirementId: REQUEST,
+      files,
+      assurance: parseAssurance({ requests: [entry(over)] }),
+      attributes: lettered,
+      span: (letters) =>
+        lettersSpan(
+          letters,
+          lettered.map((each) => each.letter),
+        ),
+      ...(keyed === undefined ? {} : { keyed }),
+    });
+    assert.ok(made !== null);
+    const result = checkDigest(made.check, [], files, extras, made.acceptNote);
+    assert.ok(result !== null);
+    return { digest: result, note: made.acceptNote };
+  };
+  const shownWithout = (rests: boolean) =>
+    attribute({
+      elements: [
+        element("condition", "Access is approved", "MET"),
+        {
+          ...element("pass", "Approved before the grant", "MET"),
+          passages: rests ? [passage()] : [],
+        },
+      ],
+    });
+
+  it("item 2b: counts as shown, and is calm about, only what accepting marks as evidenced", () => {
+    // Engine 1, an element shown without a passage of its own: the accept note says no
+    // attribute is evidenced, so nothing on the first screen says it is shown.
+    const made = fromRow(first({ attributes: [shownWithout(false)] }));
+    assert.match(made.note, /^Accepting marks no attribute as evidenced/);
+    assert.equal(
+      made.digest.verdict,
+      `${verdictShown(0, 1)} ${verdictInPart(1)}`,
+    );
+    assert.deepEqual(row(made.digest, "A").status, {
+      label: STATUS_IN_PART,
+      icon: STATE_WORDS.PARTLY.icon,
+      tone: STATE_WORDS.PARTLY.tone,
+    });
+    assert.deepEqual(quietTexts(made.digest), ["A shown in part"]);
+    assert.notEqual(made.digest.calm, DIGEST_NOTHING);
+    // Where nothing else says it, the calm line is what the accept note cautions.
+    assert.equal(made.digest.calm, acceptNoteParts(made.note).caution);
+    // Sent without its elements where another request sends them (the probe m5).
+    const keyed = fromRow(first({ attributes: [SHOWN] }), new Set([A]));
+    assert.equal(
+      keyed.digest.verdict,
+      `${verdictShown(0, 1)} ${verdictInPart(1)}`,
+    );
+    assert.notEqual(keyed.digest.calm, DIGEST_NOTHING);
+    // Whole: shown, and calm.
+    for (const whole of [shownWithout(true), SHOWN]) {
+      const made = fromRow(first({ attributes: [whole] }));
+      assert.match(made.note, /^Accepting marks attribute A as evidenced\./);
+      assert.equal(made.digest.verdict, verdictShown(1, 1));
+      assert.equal(made.digest.calm, DIGEST_NOTHING);
+      assert.deepEqual(quietTexts(made.digest), [`A ${QUIET_SHOWN}`]);
+    }
+  });
+
+  it("item 2b: never says nothing needs attention beside what is not evidenced, for either engine", () => {
+    const notWhole = [
+      attribute({ shows: "DESIGN" }),
+      attribute({ shows: null }),
+      shownWithout(false),
+    ];
+    for (const one of notWhole) {
+      for (const over of [
+        first({ attributes: [one] }),
+        { attributes: [one], review: quietReview({ overall: "SUFFICIENT" }) },
+      ]) {
+        const made = fromRow(over);
+        assert.equal(
+          made.digest.attention.length,
+          0,
+          JSON.stringify(one.shows),
+        );
+        assert.notEqual(made.digest.calm, DIGEST_NOTHING, JSON.stringify(over));
+        assert.notEqual(made.digest.calm, "");
+      }
+    }
+    // Engine 1, design only: the note's caution, since there is no caveat and no review.
+    const design = fromRow(
+      first({ attributes: [attribute({ shows: "DESIGN" })] }),
+    );
+    assert.equal(design.digest.calm, design.note);
+    assert.match(
+      design.digest.calm,
+      /design documented, implementation not yet shown/,
+    );
+  });
+
+  it("item 2c: a note on a file's type with no action is a caveat on the first screen", () => {
+    const made = digest({
+      attributes: [SHOWN],
+      review: quietReview({
+        overall: "SUFFICIENT",
+        confirmations: [
+          {
+            file_id: FILE,
+            code: "OTHER",
+            reason: "The reader took the ticket for a system record.",
+          },
+        ],
+      }),
+    });
+    assert.equal(made.attention.length, 0);
+    assert.ok(quietTexts(made).includes(typesUnconfirmed(1)));
+    assert.equal(typesUnconfirmed(1), "1 file's type not confirmed");
+    assert.equal(typesUnconfirmed(2), "2 files' types not confirmed");
+    assert.notEqual(made.calm, DIGEST_NOTHING);
+  });
+
+  it("item 2a: a caveat of the screen's own (the sample trace) keeps the first screen from calm", () => {
+    const calm = digest({
+      attributes: [SHOWN],
+      review: quietReview({ overall: "SUFFICIENT" }),
+    });
+    assert.equal(calm.calm, DIGEST_NOTHING);
+    for (const words of [
+      "The sample trace could not be loaded",
+      "1 point to settle in the sample",
+    ]) {
+      const made = digest(
+        { attributes: [SHOWN], review: quietReview({ overall: "SUFFICIENT" }) },
+        [TICKET],
+        [],
+        lettered,
+        [
+          {
+            key: "TRACE",
+            mark: "",
+            headline: words,
+            context: "",
+            label: "",
+            caveat: true,
+          },
+        ],
+      );
+      assert.ok(quietTexts(made).includes(words), words);
+      assert.notEqual(made.calm, DIGEST_NOTHING, words);
+    }
+  });
+
+  it("item 6: an exception a record shows (a deviation) leads with its own sentence, not a gap", () => {
+    const elements = [
+      {
+        key: "a1",
+        text: "The approver is not the person the access is for",
+        result: "NOT_MET",
+        passages: [passage()],
+        absent: [] as string[],
+        deviation: true,
+      },
+      {
+        ...element("a2", "A second approval", "NOT_MET", [
+          "The second approval.",
+        ]),
+        deviation: false,
+      },
+    ];
+    const deviation = attribute({
+      verdict: "ISSUE",
+      result: "NOT_MET",
+      shows: null,
+      assessment: "NOT_DEMONSTRATED",
+      summary: "Both readings find the requester approved their own access.",
+      passages: [passage()],
+      elements,
+    });
+    const made = digest({ attributes: [deviation], review: quietReview() });
+    const [one] = made.attention;
+    assert.equal(
+      one?.headline,
+      "Both readings find the requester approved their own access.",
+    );
+    // What is missing besides is counted after the exception's sentence.
+    assert.equal(one?.more, 1);
+    assert.equal(one?.status?.label, "Not met");
+    assert.equal(row(made, "A").line.elements[0]?.result, ELEMENT_DEVIATION);
+    // Without the deviation, the same attribute reads as the gap it then is.
+    const gap = digest({
+      attributes: [
+        {
+          ...deviation,
+          elements: elements.map((each) => ({ ...each, deviation: false })),
+        },
+      ],
+      review: quietReview(),
+    });
+    assert.equal(
+      gap.attention[0]?.headline,
+      `${MISSING}: The second approval.`,
+    );
+  });
+
+  it("design-only support in part is never worded as shown by an instance", () => {
+    const half = attribute({
+      verdict: "PARTLY_SUPPORTED",
+      result: "SHOWN_IN_PART",
+      shows: "DESIGN",
+      assessment: "PARTIALLY_SUPPORTED",
+      elements: [
+        {
+          ...element("a1", "Access disabled, with who did it", "PARTLY_MET"),
+          passages: [passage()],
+          absent: ["Who disabled the account."],
+        },
+        {
+          ...element("a2", "Matched by employee ID", "PARTLY_MET"),
+          passages: [passage()],
+          absent: ["The employee ID on the account view."],
+        },
+      ],
+    });
+    const made = digest({ attributes: [half], review: quietReview() });
+    assert.equal(row(made, "A").status.label, STATUS_IN_PART_DESIGN);
+    assert.equal(STATUS_IN_PART_DESIGN, "Shown in part, in design");
+    assert.equal(made.attention[0]?.status?.label, STATUS_IN_PART_DESIGN);
+    assert.equal(made.verdict, `${verdictShown(0, 1)} ${verdictAttention(1)}`);
+  });
+
+  it("item 4: says one file once: its flag on the file's own item, never a second item or caveat, every key once", () => {
+    const flag: DigestExtra = {
+      key: `ROW_FILE:${SECOND}`,
+      mark: "E2",
+      headline: "Set the application this file comes from.",
+      context: "Access_listing.xlsx names no application yet.",
+      label: "Show the file",
+      caveat: false,
+      fileId: SECOND,
+    };
+    const unread: DigestExtra = {
+      key: "FILES:UNREAD",
+      mark: "",
+      headline: "1 file could not be read",
+      context: "",
+      label: "",
+      caveat: true,
+      fileId: SECOND,
+    };
+    const made = digest(
+      {
+        attributes: [SHOWN, NOT_SHOWN],
+        held_files: [{ file_id: SECOND, code: "UNREADABLE", reason: "" }],
+      },
+      [TICKET, SHEET],
+      [],
+      lettered,
+      [flag, unread],
+    );
+    const items = made.attention.filter((each) => each.mark === "E2");
+    assert.equal(items.length, 1);
+    assert.equal(items[0]?.key, `FILE:${SECOND}`);
+    assert.equal(items[0]?.control.type, "ACT");
+    assert.ok(items[0]?.context.startsWith(flag.headline), items[0]?.context);
+    assert.equal(
+      made.attention.some((each) => each.key === flag.key),
+      false,
+    );
+    assert.equal(quietTexts(made).includes(unread.headline), false);
+    const keys = made.attention.map((each) => each.key);
+    assert.equal(new Set(keys).size, keys.length);
+    // A flag on a file the check has no item for is an item of its own.
+    const alone = digest(
+      { attributes: [SHOWN, NOT_SHOWN] },
+      [TICKET, SHEET],
+      [],
+      lettered,
+      [flag],
+    );
+    assert.equal(
+      alone.attention.filter((each) => each.key === flag.key).length,
+      1,
+    );
+    // Keys stay one each whatever the screen passes.
+    const { fileId: _file, ...noFile } = flag;
+    const twice = digest(
+      { attributes: [SHOWN, NOT_SHOWN] },
+      [TICKET, SHEET],
+      [],
+      lettered,
+      [
+        { ...noFile, key: `ATTRIBUTE:${C}` },
+        { ...noFile, key: "same" },
+        { ...noFile, key: "same" },
+      ],
+    );
+    const all = twice.attention.map((each) => each.key);
+    assert.equal(new Set(all).size, all.length, JSON.stringify(all));
   });
 });

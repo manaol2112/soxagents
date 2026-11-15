@@ -10,6 +10,7 @@ import {
 } from "./analysis-model";
 import { AutoRefresh } from "./auto-refresh";
 import type { ControlFiles } from "./engagement-model";
+import type { AnnotationAsk } from "./evidence-annotations-model";
 import { FileChanges } from "./evidence-change";
 import {
   addableItems,
@@ -47,7 +48,11 @@ import {
 import type { EvidenceMappingRun } from "./evidence-mapping-model";
 import type { EvidencePlan } from "./evidence-plan-model";
 import { Problem, usePlanAction } from "./evidence-plan-view";
-import { EvidenceViewer, PreviewButton } from "./evidence-preview";
+import {
+  AnnotatedPreview,
+  EvidenceViewer,
+  PreviewButton,
+} from "./evidence-preview";
 import type { EvidenceCitation } from "./evidence-preview-model";
 import { formatBytes, formatDate } from "./format";
 import { DataTable } from "./population-table";
@@ -64,9 +69,12 @@ export type DialogOpen =
   | {
       mode: "review";
       fileId: string;
-      /** The D&I request the file was opened from: its full preview shows the file's
-       * annotations for that request (docs/evidence-annotations.md). */
+      /** The D&I request the file was opened from: its Preview shows the file's
+       * annotations for that request, with their review (docs/evidence-annotations.md). */
       requirementId?: string;
+      /** What the file was opened to see: the annotation that marks this passage for
+       * this attribute is selected once the annotations are read (annotationFor). */
+      annotation?: AnnotationAsk;
     };
 
 type Tab = "preview" | "data" | "details";
@@ -193,6 +201,8 @@ export function EvidenceDialog({
   const [withdrawn, setWithdrawn] = useState<string | null>(null);
   const [addingMore, setAddingMore] = useState(false);
   const [size, setSize] = useState<number | null>(null);
+  // Where the annotated Preview puts the file's own actions (download the annotated copy).
+  const [notesSlot, setNotesSlot] = useState<HTMLElement | null>(null);
   const dialog = useDialogAction(ids);
   const plan$ = usePlanAction(ids);
   const findingsAction = useFindingsAction(ids);
@@ -226,6 +236,44 @@ export function EvidenceDialog({
           : "ready";
   const kind: EvidenceKind | null =
     analysis?.confirmedKind ?? analysis?.classification?.kind ?? null;
+  // A file of the D&I request the reviewer was opened for is read with its annotations
+  // and their review; any other file, as before.
+  const notesOf = (shownId: string) =>
+    open.mode === "review" &&
+    open.requirementId !== undefined &&
+    (shownId === open.fileId ||
+      insight?.file.requirementId === open.requirementId)
+      ? { controlId: ids.controlId, requirementId: open.requirementId }
+      : undefined;
+  // The annotation the file was opened to see, on the file it was opened on.
+  const askOf = (shownId: string) =>
+    open.mode === "review" && shownId === open.fileId
+      ? open.annotation
+      : undefined;
+  const notes = insight === null ? undefined : notesOf(insight.file.id);
+  // The passage the file was opened to see is marked where the viewer can mark it, so a
+  // file with no annotation for it still opens on it.
+  const asked = insight === null ? undefined : askOf(insight.file.id);
+  const citations =
+    insight === null
+      ? []
+      : [
+          ...citationsOf(insight, focused),
+          ...(asked === undefined || asked.quote === ""
+            ? []
+            : [
+                {
+                  fileId: insight.file.id,
+                  fileName: insight.file.fileName,
+                  quote: asked.quote,
+                  found: true,
+                  location: "",
+                  page: null,
+                  box: null,
+                  label: "",
+                },
+              ]),
+        ];
   const table =
     analysis !== null && analysis.rows !== null && analysis.columns.length > 0;
   const population = read === "ready" && kind === "population" && table;
@@ -723,23 +771,16 @@ export function EvidenceDialog({
                   </strong>
                   <small>{docMeta}</small>
                 </span>
+                <span className="ed-view-notes" ref={setNotesSlot} />
                 <PreviewButton
                   organizationId={ids.organizationId}
                   projectId={ids.projectId}
                   files={[
                     { id: insight.file.id, fileName: insight.file.fileName },
                   ]}
-                  citations={citationsOf(insight, focused)}
-                  annotations={
-                    open.mode === "review" &&
-                    open.requirementId !== undefined &&
-                    open.fileId === insight.file.id
-                      ? {
-                          controlId: ids.controlId,
-                          requirementId: open.requirementId,
-                        }
-                      : undefined
-                  }
+                  citations={citations}
+                  annotations={notesOf(insight.file.id)}
+                  startAnnotationFor={askOf(insight.file.id)}
                   label={<UiIcon name="expand" size={16} />}
                   className="ed-view-expand"
                 />
@@ -759,6 +800,23 @@ export function EvidenceDialog({
                       onCancel={() => undefined}
                       onAll={() => setTab("data")}
                     />
+                  ) : notes !== undefined ? (
+                    // A file of a D&I request: its annotations and their review, in
+                    // place of the plain viewer (product owner, 14 November 2026).
+                    <AnnotatedPreview
+                      key={`${insight.file.id}-${analysis?.status ?? ""}-${analysis?.version ?? 0}`}
+                      organizationId={ids.organizationId}
+                      projectId={ids.projectId}
+                      file={{
+                        id: insight.file.id,
+                        fileName: insight.file.fileName,
+                      }}
+                      annotations={notes}
+                      citations={citations}
+                      focused={focused}
+                      startAnnotationFor={askOf(insight.file.id)}
+                      headSlot={notesSlot}
+                    />
                   ) : (
                     <EvidenceViewer
                       key={`${insight.file.id}-${analysis?.status ?? ""}-${analysis?.version ?? 0}`}
@@ -768,7 +826,7 @@ export function EvidenceDialog({
                         id: insight.file.id,
                         fileName: insight.file.fileName,
                       }}
-                      citations={citationsOf(insight, focused)}
+                      citations={citations}
                       focused={focused}
                     />
                   )

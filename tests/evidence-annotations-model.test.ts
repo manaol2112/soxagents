@@ -7,6 +7,8 @@ import {
   type Annotation,
   type AnnotationScope,
   type AnnotationSet,
+  ASK_CONTAINED_CHARACTERS,
+  ASK_CONTAINED_WORDS,
   annotatedCopyName,
   annotationCitations,
   annotationFields,
@@ -861,12 +863,117 @@ describe("the annotation a row's passage opens on", () => {
       numberFor("account disabled on: 09/30/2026  11:59:00 pm pt.", A),
       5,
     );
-    // The quote decides, even for an annotation that names another attribute or none.
+    // Changed after the second review of section 10.12 (item 5). Old: the quote
+    // decided even for an annotation of another attribute, so A's row opened on D's
+    // sign-on (6) and C's on the system line (1). New: where the file has an annotation
+    // of this attribute, one of another attribute is never chosen; the attribute's own
+    // first annotation that shows it is.
     assert.equal(
       numberFor("Last Successful Signon 09/30/2026 04:47:31 PM PT", A),
+      4,
+    );
+    assert.equal(numberFor("Workday · acme_prod (Production)", C), 5);
+    // Where no annotation names the attribute, only the passage's own words are taken.
+    assert.equal(
+      numberFor("Last Successful Signon 09/30/2026 04:47:31 PM PT", B),
       6,
     );
-    assert.equal(numberFor("Workday · acme_prod (Production)", C), 1);
+    assert.equal(numberFor("Workday · acme_prod (Production)", B), 1);
+  });
+
+  it("never opens on another attribute's annotation where the file has one of this attribute", () => {
+    // The second review of section 10.12, item 5: containment ran before "names the
+    // attribute" and took any annotation whose short quote (a date, "Yes", a system's
+    // name) appears in the passage. The rendered case: attribute A's row opened on B's
+    // "Effective date · 09/30/2026".
+    const date = read({
+      ...ANSWER,
+      annotations: [
+        sent(1, {
+          kind: "IDENTIFIES",
+          label: "Effective date",
+          quote: "09/30/2026",
+          attribute_ids: [B],
+          codes: ["B"],
+        }),
+        sent(2, {}),
+      ],
+    });
+    assert.equal(
+      numberFor("Account Disabled On 09/30/2026 11:59:00 PM PT", A, date),
+      2,
+    );
+    // A one-word annotation of another attribute, held by the passage: not taken.
+    const word = read({
+      ...ANSWER,
+      annotations: [
+        sent(1, {
+          kind: "SOURCE",
+          quote: "Workday",
+          attribute_ids: [],
+          codes: [],
+        }),
+        sent(2, {}),
+      ],
+    });
+    assert.equal(
+      numberFor("Workday account jreyes: Disabled On 09/30/2026", A, word),
+      2,
+    );
+    // An exact quote of another attribute's, beside one of this attribute's: this one's.
+    const exact = read({
+      ...ANSWER,
+      annotations: [
+        sent(1, {
+          quote: "Account Disabled On 09/30/2026",
+          attribute_ids: [C],
+          codes: ["C"],
+        }),
+        sent(2, { quote: "Something else" }),
+      ],
+    });
+    assert.equal(numberFor("Account Disabled On 09/30/2026", A, exact), 2);
+  });
+
+  it("takes containment only among this attribute's annotations, and only where the shorter side says something by itself", () => {
+    assert.equal(ASK_CONTAINED_WORDS, 3);
+    assert.equal(ASK_CONTAINED_CHARACTERS, 20);
+    const two = read({
+      ...ANSWER,
+      annotations: [
+        sent(1, { kind: "IDENTIFIES", quote: "MFA Enabled Yes" }),
+        sent(2, { quote: "Account Disabled Yes" }),
+      ],
+    });
+    // "Yes" is held by both, and says nothing by itself: the first that shows A.
+    assert.equal(numberFor("Yes", A, two), 2);
+    // Three words held whole: taken.
+    assert.equal(numberFor("Account Disabled Yes, since 09/30", A, two), 2);
+    // Two short words: not enough.
+    const short = read({
+      ...ANSWER,
+      annotations: [
+        sent(1, { kind: "IDENTIFIES", quote: "Row 14" }),
+        sent(2, { quote: "Employee 104582 disabled" }),
+      ],
+    });
+    assert.equal(numberFor("Row 14", A, short), 1);
+    assert.equal(numberFor("Listing row 14 of 212", A, short), 2);
+    // Twenty characters or more in two words: taken.
+    const long = read({
+      ...ANSWER,
+      annotations: [
+        sent(1, {
+          kind: "IDENTIFIES",
+          quote: "Supercalifragilistic expialidocious",
+        }),
+        sent(2, { quote: "Account Disabled Yes" }),
+      ],
+    });
+    assert.equal(
+      numberFor("before Supercalifragilistic expialidocious after", A, long),
+      1,
+    );
   });
 
   it("among annotations with the same words, takes one that names the attribute, else the first", () => {
@@ -892,6 +999,7 @@ describe("the annotation a row's passage opens on", () => {
     });
     assert.equal(numberFor("status disabled", A, twice), 2);
     assert.equal(numberFor("status disabled", C, twice), 1);
+    // None names D: the passage's own words, the first listed.
     assert.equal(numberFor("status disabled", D, twice), 1);
   });
 
@@ -1774,7 +1882,20 @@ describe("the screen's own files", () => {
       /const annotated =\s*notes\.set !== null && \(notes\.set\.annotations\.length > 0 \|\| adding\)\s*\? notes\.set\s*: null;/,
     );
     assert.match(preview, /\{annotated !== null \? \(\s*<AnnotatedEvidence\b/);
-    assert.equal(preview.match(/<AnnotatedEvidence\b/g)?.length, 1);
+    // Changed 14 November 2026 (item 9: "I want the evidence reviewer to be the one that
+    // has annotations"). Old: one AnnotatedEvidence, in the standalone dialog. New: two,
+    // that dialog's and the reviewer's inline Preview (AnnotatedPreview), the same viewer
+    // with the same review, drawn only with annotations in hand.
+    assert.equal(preview.match(/<AnnotatedEvidence\b/g)?.length, 2);
+    const inline = component(preview, "AnnotatedPreview");
+    assert.match(
+      inline,
+      /const annotated =\s*notes\.set !== null && \(notes\.set\.annotations\.length > 0 \|\| adding\)\s*\? notes\.set\s*: null;/,
+    );
+    assert.match(
+      inline,
+      /if \(annotated === null\) \{[\s\S]*?<EvidenceViewer\b/,
+    );
     // Today's preview is all still there: the viewer, the cited passages, their words.
     for (const kept of [
       '<div className="preview-stage">',
@@ -1800,8 +1921,10 @@ describe("the screen's own files", () => {
       hook,
       /status === 404 \|\| status === 403 \? "absent" : "failed"/,
     );
-    // Only the D&I list hands the preview a request: its file menu, and the evidence
-    // dialog's full preview of a file opened from one of its rows.
+    // Only the D&I list hands a request on: since item 9 (14 November 2026) every opener
+    // of the D&I list opens the evidence reviewer with the request (no standalone
+    // preview is drawn in the list any more), and the reviewer shows the annotations,
+    // inline and in its full view.
     const callers = [
       "sheet-view",
       "controls-view",
@@ -1814,13 +1937,14 @@ describe("the screen's own files", () => {
       const source = readFileSync(`apps/web/src/${name}.tsx`, "utf8");
       assert.ok(!/annotations=\{/.test(source), name);
     }
+    assert.equal(/<EvidencePreview\b|<PreviewButton\b/.test(list), false);
     assert.match(
       list,
-      /<EvidencePreview[\s\S]{0,300}annotations=\{\{\s*controlId: ids\.controlId,\s*requirementId: item\.id,\s*\}\}/,
+      /item\.phase === "DESIGN"\s*\? \{\s*requirementId: item\.id,\s*\.\.\.\(annotation === undefined \? \{\} : \{ annotation \}\),\s*\}/,
     );
     assert.match(
       list,
-      /item\.phase === "DESIGN"\s*\? \[\s*\{\s*label: "Annotations",/,
+      /item\.phase === "DESIGN"\s*\? \[\s*\{\s*label: "Annotations",\s*onSelect: \(\) => openFile\(file\.fileId\),/,
     );
     assert.match(
       list,
@@ -1828,7 +1952,22 @@ describe("the screen's own files", () => {
     );
     assert.match(
       dialog,
-      /open\.mode === "review" &&\s*open\.requirementId !== undefined &&\s*open\.fileId === insight\.file\.id/,
+      /open\.mode === "review" &&\s*open\.requirementId !== undefined &&\s*\(shownId === open\.fileId \|\|\s*insight\?\.file\.requirementId === open\.requirementId\)/,
+    );
+    // The reviewer's head holds the annotated view's actions before the expand icon, on
+    // one line: a fourth column only while the slot holds something.
+    assert.match(
+      dialog,
+      /<span className="ed-view-notes" ref=\{setNotesSlot\} \/>\s*<PreviewButton\b/,
+    );
+    const head = readFileSync("apps/web/app/evidence-dialog.css", "utf8");
+    assert.match(
+      head,
+      /\.ed-view-head:has\(> \.ed-view-notes:not\(:empty\)\) \{\s*grid-template-columns: auto minmax\(0, 1fr\) auto auto;\s*\}/,
+    );
+    assert.match(
+      head,
+      /\.ed-view-head > \.ed-view-notes:empty \{\s*display: none;\s*\}/,
     );
   });
 

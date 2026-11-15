@@ -22,6 +22,7 @@ import {
   attributeCoverage,
   checkPollDelay,
   DESIGN_ONLY,
+  ELEMENT_DEVIATION,
   type EvidenceAssurance,
   elementWords,
   issueDecided,
@@ -1931,29 +1932,212 @@ describe("an attribute's elements", () => {
         },
       ],
     }).attributes;
-    assert.deepEqual(line?.elements, [
+    // Changed 14 November 2026 (second review of section 10.12, item 1). Old: an element
+    // line was its key, text, result, tone and absent. New: it also carries its own
+    // verified passages and whether it is an exception the records show, so a row of the
+    // attribute view quotes what that element rests on and never another's.
+    const quoted = {
+      quote: "approved by the line manager",
+      fileId: FILE,
+      location: "Page 3",
+      page: 3,
+      fileLabel: "",
+      opens: true,
+    };
+    assert.deepEqual(
+      line?.elements.map((each) => ({
+        ...each,
+        passages: each.passages.map((shown) => ({
+          quote: shown.quote,
+          fileId: shown.fileId,
+          location: shown.location,
+          page: shown.page,
+          fileLabel: shown.fileLabel,
+          opens: shown.opens,
+        })),
+      })),
+      [
+        {
+          key: "condition",
+          text: "Access is approved",
+          result: "Shown",
+          tone: "success",
+          absent: [],
+          passages: [quoted],
+          deviation: false,
+        },
+        {
+          key: "pass",
+          text: "Approved before the grant",
+          result: "Not shown",
+          tone: "danger",
+          absent: ["No record of the approval"],
+          passages: [],
+          deviation: false,
+        },
+        {
+          key: "exception",
+          text: "No self-approval",
+          result: "Your judgment needed",
+          tone: "warning",
+          absent: [],
+          passages: [],
+          deviation: false,
+        },
+      ],
+    );
+  });
+
+  it("keeps each element's own passages: none is lent to another element", () => {
+    // The second review of section 10.12, item 1: the attribute view quoted the
+    // attribute's first passage under its first row, whichever element it was for (an
+    // exception's record under a "Shown" row).
+    const [line] = check(
       {
-        key: "condition",
-        text: "Access is approved",
-        result: "Shown",
-        tone: "success",
-        absent: [],
+        attributes: [
+          {
+            ...ISSUE,
+            elements: [
+              {
+                key: "a1",
+                text: "Approved before the grant",
+                result: "MET",
+                passages: [{ ...passage(SECOND), quote: "Approved 12 Sep" }],
+                absent: [],
+              },
+              {
+                key: "a2",
+                text: "Not approved by the requester",
+                result: "NOT_MET",
+                passages: [
+                  {
+                    ...passage(THIRD),
+                    quote: "Requested for R. Diaz, approver R. Diaz",
+                  },
+                ],
+                absent: [],
+                deviation: true,
+              },
+              {
+                key: "a3",
+                text: "Approved in the system",
+                result: "MET",
+                passages: [],
+                absent: [],
+              },
+            ],
+            passages: [
+              {
+                ...passage(THIRD),
+                quote: "Requested for R. Diaz, approver R. Diaz",
+              },
+            ],
+            absent: [],
+          },
+        ],
       },
-      {
-        key: "pass",
-        text: "Approved before the grant",
-        result: "Not shown",
-        tone: "danger",
-        absent: ["No record of the approval"],
-      },
-      {
-        key: "exception",
-        text: "No self-approval",
-        result: "Your judgment needed",
-        tone: "warning",
-        absent: [],
-      },
+      [POLICY_FILE, TICKET, LOG],
+    ).attributes;
+    assert.deepEqual(
+      line?.elements.map((each) => [
+        each.key,
+        each.passages.map((shown) => [shown.quote, shown.fileId]),
+      ]),
+      [
+        ["a1", [["Approved 12 Sep", SECOND]]],
+        ["a2", [["Requested for R. Diaz, approver R. Diaz", THIRD]]],
+        ["a3", []],
+      ],
+    );
+  });
+
+  it("reads an exception the records show (a deviation) only where the server's own rule holds", () => {
+    // The second review, item 6: the parser dropped the server's `deviation`, so an
+    // exception shown by a record with no comparison in code read as a gap.
+    const read = (over: Record<string, unknown>) => {
+      const [line] = check({
+        attributes: [
+          {
+            ...ISSUE,
+            elements: [
+              {
+                key: "a1",
+                text: "Not approved by the requester",
+                result: "NOT_MET",
+                passages: [passage()],
+                absent: [],
+                deviation: true,
+                ...over,
+              },
+            ],
+          },
+        ],
+      }).attributes;
+      return [line?.elements[0]?.deviation, line?.elements[0]?.result];
+    };
+    assert.deepEqual(read({}), [true, ELEMENT_DEVIATION]);
+    assert.equal(ELEMENT_DEVIATION, "Not met");
+    // Never on another result, without a passage, or beside something named absent.
+    assert.deepEqual(read({ result: "CONTRADICTED" }), [
+      false,
+      "Contradicted in the evidence",
     ]);
+    assert.deepEqual(read({ result: "MET" }), [false, "Shown"]);
+    assert.deepEqual(read({ passages: [] }), [false, "Not shown"]);
+    assert.deepEqual(read({ absent: ["The approval"] }), [false, "Not shown"]);
+    assert.deepEqual(read({ deviation: "yes" }), [false, "Not shown"]);
+    assert.deepEqual(read({ deviation: undefined }), [false, "Not shown"]);
+  });
+
+  it("marks evidenced only what an instance's records show whole: one rule for the note, the count and the calm line", () => {
+    // The second review of section 10.12, item 2(b): the first screen counted an
+    // attribute shown by its state alone, while the accept note held it to its
+    // elements, so "1 of 1 attribute is shown" sat over "Accepting marks no attribute as
+    // evidenced".
+    const line = (over: Record<string, unknown>, keyed?: Set<string>) => {
+      const row = assuranceRow({
+        requirementId: POLICY,
+        files: [POLICY_FILE],
+        assurance: parsed([entry({ attributes: [attribute(over)] })]),
+        attributes: lettered,
+        span,
+        ...(keyed === undefined ? {} : { keyed }),
+      });
+      return {
+        evidenced: row?.check.attributes[0]?.evidenced,
+        note: row?.acceptNote ?? "",
+      };
+    };
+    const met = (key: string, rests = true) =>
+      element(key, `Element ${key}`, "MET", rests);
+    // Whole: sent without elements, or every element shown under its own passage.
+    for (const over of [{}, { elements: [met("a1"), met("a2")] }]) {
+      const made = line(over);
+      assert.equal(made.evidenced, true, JSON.stringify(over));
+      assert.match(made.note, /^Accepting marks attribute A as evidenced\./);
+    }
+    // Not whole: an element shown without a passage of its own; shown only in design;
+    // the check not saying how; sent without elements where another request sends them.
+    for (const [over, keyed] of [
+      [{ elements: [met("a1"), met("a2", false)] }, undefined],
+      [{ shows: "DESIGN" }, undefined],
+      [{ shows: null }, undefined],
+      [{}, new Set([A])],
+    ] as const) {
+      const made = line(over, keyed);
+      assert.equal(made.evidenced, false, JSON.stringify(over));
+      assert.match(made.note, /^Accepting marks no attribute as evidenced/);
+    }
+    // requestCheck alone applies the same rule, short of what other requests send.
+    const [alone] = check({
+      attributes: [attribute({ elements: [met("a1"), met("a2", false)] })],
+    }).attributes;
+    assert.equal(alone?.evidenced, false);
+    // Nothing but supported can be evidenced.
+    for (const each of [ISSUE, UNSETTLED]) {
+      const [other] = check({ attributes: [each] }).attributes;
+      assert.equal(other?.evidenced, false);
+    }
   });
 
   it("an issue whose result is not met keeps the summary that names the exception", () => {

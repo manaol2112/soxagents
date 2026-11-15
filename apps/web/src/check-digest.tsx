@@ -537,7 +537,14 @@ type TableRow = {
   text: string;
   /** What of the row's own element is missing, said under it and nowhere else. */
   lacks: string[];
+  /** The passages the row's own element rests on: the row quotes, names and opens only
+   * these, never another element's. */
+  passages: ShownPassage[];
 };
+
+/** A passage known from another: its file, where it is, and its words. */
+const passageKey = (shown: ShownPassage) =>
+  `${shown.fileId ?? ""}|${shown.location}|${shown.quote}`;
 
 /** How one absent thing is known from another: its words, whatever its case or its
  * closing stop (as the model's own list tells them apart). */
@@ -560,6 +567,7 @@ function tableOf(line: AttributeLine): TableRow[] {
       label: element.result,
       text: element.text,
       lacks: [],
+      passages: element.passages,
     }));
   const shown = elements("SHOWN", (element) => element.tone === "success");
   const said = flat(line.summary) || flat(line.label);
@@ -582,6 +590,7 @@ function tableOf(line: AttributeLine): TableRow[] {
           told.add(key);
           return true;
         }),
+        passages: element.passages,
       }),
     );
   return [
@@ -597,15 +606,21 @@ function tableOf(line: AttributeLine): TableRow[] {
             label: STATUS_SHOWN,
             text: said,
             lacks: [],
+            // Sent without its elements, the attribute is its one element: its own
+            // passages are this row's.
+            passages: line.passages,
           },
         ]
       : shown),
     ...part,
-    // An element the check found against, where it names nothing absent of its own, is
-    // a row in its own result's words: never the word for what is absent.
+    // An element the check found against, where it names nothing absent of its own (an
+    // exception a record shows among them), is a row in its own result's words, with the
+    // record it rests on: never the word for what is absent.
     ...elements(
       "AGAINST",
-      (element) => element.tone === "danger" && element.absent.length === 0,
+      (element) =>
+        element.deviation ||
+        (element.tone === "danger" && element.absent.length === 0),
     ),
     // What is absent and belongs to no row above.
     ...absentOf(line)
@@ -616,6 +631,7 @@ function tableOf(line: AttributeLine): TableRow[] {
         label: MISSING,
         text: gap,
         lacks: [],
+        passages: [],
       })),
   ];
 }
@@ -648,11 +664,21 @@ function Attribute({
   const [more, setMore] = useState(false);
   const { line } = row;
   const table = tableOf(line);
-  // The first verified passage is quoted on the first row that rests on the evidence
-  // (something shown, or something found against); the rest on request.
-  const rests = table.findIndex((each) => each.kind !== "MISSING");
-  const quoted = rests >= 0 ? line.passages[0] : undefined;
-  const further = quoted === undefined ? line.passages : line.passages.slice(1);
+  // Each row quotes the first passage its own element rests on; every other passage of
+  // the attribute and of its elements, each once, is on request.
+  const quoted = new Set(
+    table.flatMap((each) =>
+      each.passages[0] === undefined ? [] : [passageKey(each.passages[0])],
+    ),
+  );
+  const further = [
+    ...line.passages,
+    ...line.elements.flatMap((element) => element.passages),
+  ].filter(
+    (shown, at, all) =>
+      !quoted.has(passageKey(shown)) &&
+      all.findIndex((each) => passageKey(each) === passageKey(shown)) === at,
+  );
   const nameOf = (shown: ShownPassage) =>
     files.find((file) => file.id === shown.fileId)?.name ?? shown.fileLabel;
   /** What "View" opens for a passage: its file, with its annotations, where the row's
@@ -773,20 +799,17 @@ function Attribute({
       </p>
       {table.length > 0 ? (
         <ul className="cdg-rows">
-          {table.map((each, at) => {
-            // A row that rests on the evidence opens it: its own passage where it
-            // quotes one, otherwise the file of the attribute's first verified passage.
-            const first = line.passages[0];
-            const evidence =
-              each.kind === "MISSING"
-                ? null
-                : evidenceOf(first, at === rests ? (first?.quote ?? "") : "");
+          {table.map((each) => {
+            // A row quotes, names and opens only the passage its own element rests on:
+            // no quote, no reference and no View where it has none.
+            const own = each.passages[0];
+            const evidence = evidenceOf(own, own?.quote ?? "");
             const ref =
               evidence === null ? "" : fileRef(files, evidence.fileId);
             const where =
-              first === undefined
+              own === undefined
                 ? ""
-                : [nameOf(first), first.location]
+                : [nameOf(own), own.location]
                     .filter((part) => part !== "")
                     .join(", ");
             return (
@@ -797,8 +820,8 @@ function Attribute({
                 </span>
                 <div className="cdg-row-text">
                   <p>{each.text}</p>
-                  {at === rests && quoted !== undefined ? (
-                    <q className="cdg-quote">{quoted.quote}</q>
+                  {own !== undefined ? (
+                    <q className="cdg-quote">{own.quote}</q>
                   ) : null}
                   {each.lacks.map((gap) => (
                     // What of this element is missing: under it, and nowhere else.
@@ -818,7 +841,7 @@ function Attribute({
                     </span>
                     {view(evidence, DIGEST_VIEW)}
                   </span>
-                ) : at === rests && quoted !== undefined && where !== "" ? (
+                ) : own !== undefined && where !== "" ? (
                   <span className="cdg-row-ref">
                     <span>{where}</span>
                   </span>
@@ -926,7 +949,7 @@ function Attribute({
             {further.length > 0 ? (
               <div className="cdg-group">
                 <span className="cdg-cap">
-                  {quoted === undefined
+                  {quoted.size === 0
                     ? "What the readings rest on"
                     : "Further passages"}
                 </span>
@@ -1117,20 +1140,28 @@ export function CheckDigestView({
       : wanted === 0
         ? DIGEST_NONE_TICKED
         : asking.unavailable || null;
-  const hint = [
+  // What is said beside the two actions, each sentence once: why asking the owner cannot
+  // be pressed, or what does not fit one follow-up; the follow-ups not listed; and why
+  // Accept cannot be pressed (said, not left to a tooltip). The same reason for both is
+  // one sentence that describes both.
+  const askSays = [
     askOff ??
       (asking !== null && fits < wanted ? `${digestFits(fits, wanted)}.` : ""),
     // Follow-ups the check did not list are said beside the action that asks.
     asking !== null ? digest.asksMore : "",
-    // Why Accept cannot be pressed now: said, not left to a tooltip.
-    accept?.off ?? "",
-  ]
-    .filter((part) => part !== "")
-    .join(" ");
+  ].filter((part) => part !== "");
+  const acceptSays = accept?.off ?? "";
+  const hints = [...askSays, acceptSays].filter(
+    (part, at, all) => part !== "" && all.indexOf(part) === at,
+  );
+  const hintId = (part: string) => `${id}-hint-${hints.indexOf(part)}`;
+  const askDescribed = askSays.map(hintId).join(" ") || undefined;
   // The row's warning about accepting. What cautions is always read; only the sentence
   // in favour ("Accepting marks attribute A as evidenced.") waits behind "more".
   const warning = accept !== null ? flat(acceptNote) : "";
   const { favour, caution } = acceptNoteParts(warning);
+  // Where nothing waits, the calm line is not the footer's own caution said again.
+  const calm = digest.calm === caution ? "" : digest.calm;
 
   return (
     <div className="cdg" ref={root}>
@@ -1184,10 +1215,10 @@ export function CheckDigestView({
               ))}
             </ul>
           </section>
-        ) : digest.calm !== "" ? (
+        ) : calm !== "" ? (
           // Nothing waits on the person: what the check itself says of that, which is
           // "nothing needs your attention" only where nothing says otherwise.
-          <p className="cdg-calm">{digest.calm}</p>
+          <p className="cdg-calm">{calm}</p>
         ) : null}
         {under}
         <div className="cdg-quiet">
@@ -1224,6 +1255,10 @@ export function CheckDigestView({
             className="cdg-link cdg-all"
             aria-expanded={detailsOpen}
             aria-controls={`${id}-details`}
+            aria-describedby={
+              digest.details.any ? `${id}-details-holds` : undefined
+            }
+            title={digest.details.any ? digest.details.summary : undefined}
             onClick={() => {
               setDetailsOpen((value) => !value);
               setDetailsSeen(true);
@@ -1232,6 +1267,13 @@ export function CheckDigestView({
             {DIGEST_ALL_DETAILS}
             <UiIcon name="chevron" size={12} />
           </button>
+          {digest.details.any ? (
+            // What "All details" holds, as the model names it: the button's description,
+            // not more words on the first screen.
+            <span className="sr-only" id={`${id}-details-holds`}>
+              {digest.details.summary}
+            </span>
+          ) : null}
         </div>
         <div id={`${id}-details`} className="cdg-details" hidden={!detailsOpen}>
           {detailsSeen ? (
@@ -1286,9 +1328,14 @@ export function CheckDigestView({
               {warning === "" ? DIGEST_NOTHING_SENT : warning}
             </span>
             <div className="cdg-foot-acts">
-              {hint !== "" ? (
-                <span className="cdg-foot-hint" id={`${id}-hint`}>
-                  {hint}
+              {hints.length > 0 ? (
+                <span className="cdg-foot-hint">
+                  {hints.map((part, at) => (
+                    <span key={part} id={hintId(part)}>
+                      {at > 0 ? " " : ""}
+                      {part}
+                    </span>
+                  ))}
                 </span>
               ) : null}
               {asking !== null ? (
@@ -1296,7 +1343,7 @@ export function CheckDigestView({
                   type="button"
                   className="btn btn-secondary"
                   disabled={askOff !== null}
-                  aria-describedby={hint !== "" ? `${id}-hint` : undefined}
+                  aria-describedby={askDescribed}
                   onClick={() => asking.onAsk(text)}
                 >
                   {digestAskFor(wanted)}
@@ -1308,8 +1355,8 @@ export function CheckDigestView({
                   className="btn"
                   disabled={accept.off !== null}
                   aria-describedby={
-                    accept.off !== null
-                      ? `${id}-accepting ${id}-hint`
+                    acceptSays !== ""
+                      ? `${id}-accepting ${hintId(acceptSays)}`
                       : `${id}-accepting`
                   }
                   onClick={accept.onAccept}

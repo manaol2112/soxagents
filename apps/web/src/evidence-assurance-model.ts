@@ -132,6 +132,10 @@ export type AssuredElement = {
   result: ElementResult | null;
   passages: Passage[];
   absent: string[];
+  /** Both readings rest its NOT_MET on the same record, naming nothing absent: the
+   * records show an exception, not a gap (a self-approval plainly in a ticket; section
+   * 3, rule 5). Never set on any other result. */
+  deviation: boolean;
 };
 
 /** Where an attribute the request asks for stands (section 10.6). */
@@ -463,22 +467,32 @@ function parseElement(
   if (key === "" || text === "") {
     return null;
   }
+  const result =
+    RESULTS.find(
+      (item): item is ElementResult =>
+        item === value.result && item !== "SHOWN_IN_PART",
+    ) ?? null;
+  const passages = (Array.isArray(value.passages) ? value.passages : [])
+    .map((item) => parsePassage(item, only))
+    .filter((item): item is Passage => item !== null)
+    .slice(0, 6);
+  const absent =
+    typeof value.absent === "string"
+      ? strings([value.absent], 1)
+      : strings(value.absent, 6);
   return {
     key,
     text,
-    result:
-      RESULTS.find(
-        (item): item is ElementResult =>
-          item === value.result && item !== "SHOWN_IN_PART",
-      ) ?? null,
-    passages: (Array.isArray(value.passages) ? value.passages : [])
-      .map((item) => parsePassage(item, only))
-      .filter((item): item is Passage => item !== null)
-      .slice(0, 6),
-    absent:
-      typeof value.absent === "string"
-        ? strings([value.absent], 1)
-        : strings(value.absent, 6),
+    result,
+    passages,
+    absent,
+    // An exception the records show: only a NOT_MET that rests on a passage and names
+    // nothing absent is one (the server's own rule); anything else claiming it is not.
+    deviation:
+      value.deviation === true &&
+      result === "NOT_MET" &&
+      passages.length > 0 &&
+      absent.length === 0,
   };
 }
 
@@ -1184,6 +1198,10 @@ export function elementWords(result: ElementResult | null): string {
   return result === null ? "Your judgment needed" : ELEMENT_WORDS[result];
 }
 
+/** An element the records show an exception on: not met, never "not shown", which would
+ * read as a gap when the record is there and says otherwise. */
+export const ELEMENT_DEVIATION = "Not met";
+
 const ELEMENT_TONES: Record<ElementResult, Tone> = {
   MET: "success",
   PARTLY_MET: "warning",
@@ -1232,14 +1250,21 @@ export type ShownPassage = Passage & {
   opens: boolean;
 };
 
-/** An element as an opened attribute lists it: its text and its result in words. */
+/** An element as an opened attribute lists it: its text and its result in words, and
+ * the passages it rests on. */
 export type ElementLine = {
   key: string;
   text: string;
-  /** "Shown", "Not shown", "Not in these files", "Your judgment needed". */
+  /** "Shown", "Not shown", "Not met" (an exception), "Not in these files", "Your
+   * judgment needed". */
   result: string;
   tone: Tone;
   absent: string[];
+  /** Its own verified passages: what a row of the element quotes, never another
+   * element's. */
+  passages: ShownPassage[];
+  /** The records show an exception on it (AssuredElement.deviation). */
+  deviation: boolean;
 };
 
 /** A comparison made in code, as an opened attribute lists it: its sentence, and
@@ -1311,9 +1336,27 @@ export type AttributeLine = {
   open: boolean;
   /** The comparisons made in code for the attribute (engine 2); empty otherwise. */
   checks: CheckLine[];
+  /** Accepting the row marks it as evidenced: supported by the records of an instance,
+   * with every element shown under a verified passage of its own (or, sent without its
+   * elements, supported whole where no other request of the control sends them:
+   * assuranceRow). The one rule the accept note, the verdict's count and the first
+   * screen's calm line all read. */
+  evidenced: boolean;
 };
 
 export type Lettered = { id: string; letter: string; text: string };
+
+/** Whether the records of an instance show the attribute whole, as this request's check
+ * alone can tell it (assuranceRow adds what the other requests send). */
+function evidencedBy(item: AssuredAttribute, state: AttributeState): boolean {
+  return (
+    state === "SUPPORTED" &&
+    item.shows === "IMPLEMENTATION" &&
+    item.elements.every(
+      (element) => element.result === "MET" && element.passages.length > 0,
+    )
+  );
+}
 
 function labelOf(item: AssuredAttribute, state: AttributeState): string {
   const words = STATE_WORDS[state];
@@ -1376,10 +1419,17 @@ function attributeLine(
     elements: item.elements.map((element) => ({
       key: element.key,
       text: element.text,
-      result: elementWords(element.result),
+      result: element.deviation
+        ? ELEMENT_DEVIATION
+        : elementWords(element.result),
       tone: element.result === null ? "warning" : ELEMENT_TONES[element.result],
       absent: element.absent,
+      passages: element.passages.map((passage) =>
+        shownPassage(passage, files, many),
+      ),
+      deviation: element.deviation,
     })),
+    evidenced: evidencedBy(item, state),
     inPart:
       state !== "PARTLY"
         ? null
@@ -2516,13 +2566,27 @@ export function assuranceRow(input: {
   if (request === null) {
     return null;
   }
-  const check = requestCheck(
+  const own = requestCheck(
     request,
     input.attributes,
     input.files,
     input.span,
     input.reading === undefined ? {} : { reading: input.reading },
   );
+  // An attribute this request sends without its elements, where another request of the
+  // control sends them, is not shown whole by this one.
+  const facts = elementFacts(request);
+  const unkeyed = (line: AttributeLine) =>
+    input.keyed?.has(line.attributeId) === true &&
+    (
+      facts.find((each) => each.attributeId === line.attributeId)?.all ?? []
+    ).every((element) => element.key === "");
+  const check: RequestCheck = {
+    ...own,
+    attributes: own.attributes.map((line) =>
+      line.evidenced && unkeyed(line) ? { ...line, evidenced: false } : line,
+    ),
+  };
   const order = input.attributes.map((item) => item.letter);
   const at = (letter: string) =>
     order.indexOf(letter) < 0 ? order.length : order.indexOf(letter);
@@ -2557,23 +2621,11 @@ export function assuranceRow(input: {
       .filter((line) => groupOf(line) === key && line.attributeId !== "")
       .map((line) => line.attributeId);
   const left = check.leftOut.length;
-  const facts = elementFacts(request);
   // Supported from an instance's records, with every element shown under a verified
-  // passage: accepting marks it evidenced. Support whose elements are not all shown so
-  // reads as shown in part.
-  const whole = (letter: string) => {
-    const line = check.attributes.find((each) => each.letter === letter);
-    const fact = facts.find((each) => each.attributeId === line?.attributeId);
-    if (fact === undefined) {
-      return false;
-    }
-    const shown = new Set(fact.implementation);
-    const unkeyed = fact.all.every((element) => element.key === "");
-    if (unkeyed && input.keyed?.has(fact.attributeId) === true) {
-      return false;
-    }
-    return fact.all.every((element) => shown.has(element.key));
-  };
+  // passage: accepting marks it evidenced (AttributeLine.evidenced). Support whose
+  // elements are not all shown so reads as shown in part.
+  const whole = (letter: string) =>
+    check.attributes.find((each) => each.letter === letter)?.evidenced === true;
   const implemented = lettersOf("IMPLEMENTED");
   return {
     standing: check.standing,

@@ -8,6 +8,7 @@
 import {
   type AttributeLine,
   type AttributeState,
+  acceptNoteParts,
   type CheckAction,
   CODE_CHECK_WORDS,
   type FollowUpLine,
@@ -151,6 +152,9 @@ export type DigestExtra = {
   /** The button's words. */
   label: string;
   caveat: boolean;
+  /** The row's file it is about, where it is about one: a file the check already has an
+   * item for is said once, on that item. */
+  fileId?: string;
 };
 
 // The words, said here once: the view and the tests read them from here.
@@ -165,6 +169,9 @@ export const STATUS_SUPPORTED = "Supported";
 /** Only of an attribute this request shows in part and leaves the rest to others: never
  * of an open issue (section 10.12). */
 export const STATUS_IN_PART = "Shown in part";
+/** Shown in part, by what a document requires only: never as by the records of an
+ * instance. */
+export const STATUS_IN_PART_DESIGN = "Shown in part, in design";
 export const STATUS_NOT_SHOWN = "Not shown";
 export const STATUS_JUDGMENT = "Your judgment";
 export const STATUS_NOT_ADDRESSED = "Not addressed";
@@ -236,6 +243,12 @@ const counted = (count: number, one: string, many = `${one}s`) =>
 /** "1 file left out", "2 files left out": files left out that have no action. */
 export const filesLeftOut = (count: number) =>
   `${counted(count, "file")} left out`;
+/** "1 file's type not confirmed": files read as the type they seem to be, with no action
+ * this person is offered to confirm it. */
+export const typesUnconfirmed = (count: number) =>
+  count === 1
+    ? "1 file's type not confirmed"
+    : `${count} files' types not confirmed`;
 
 /** "1 of 4 attributes is shown.": of the attributes the request asks for, those shown by
  * the records of an instance. One shown only in design, and one the check supports
@@ -244,6 +257,9 @@ export const verdictShown = (shown: number, asked: number) =>
   `${shown} of ${counted(asked, "attribute")} ${shown === 1 || asked === 1 ? "is" : "are"} shown.`;
 /** "1 shown in design.", said apart. */
 export const verdictDesign = (count: number) => `${count} shown in design.`;
+/** "1 shown in part.", said apart: supported by an instance's records, but not every one
+ * of its elements is shown under a passage of its own, so accepting does not mark it. */
+export const verdictInPart = (count: number) => `${count} shown in part.`;
 /** "1 supported, the check does not say how.", said apart: it is not counted as shown. */
 export const verdictUnsaid = (count: number) =>
   `${count} supported, the check does not say how.`;
@@ -392,8 +408,15 @@ function issueWords(label: string): string {
 function statusWords(line: AttributeLine): string {
   const own = flat(line.label);
   const words: Record<AttributeState, string> = {
-    SUPPORTED: line.shows === "DESIGN" ? STATUS_SHOWN_DESIGN : STATUS_SHOWN,
-    PARTLY: STATUS_IN_PART,
+    // Shown only where accepting marks it evidenced (the accept note's rule); support by
+    // an instance's records that is not whole is shown in part.
+    SUPPORTED:
+      line.shows === "DESIGN"
+        ? STATUS_SHOWN_DESIGN
+        : line.evidenced
+          ? STATUS_SHOWN
+          : STATUS_IN_PART,
+    PARTLY: line.shows === "DESIGN" ? STATUS_IN_PART_DESIGN : STATUS_IN_PART,
     ISSUE: issueWords(line.label),
     JUDGMENT: STATUS_JUDGMENT,
     // A decided issue, and a result that waits on a file, keep the line's own words.
@@ -409,6 +432,19 @@ function statusWords(line: AttributeLine): string {
 export function attributeStatus(line: AttributeLine): DigestPill {
   if (line.state === "SUPPORTED" && line.shows === null) {
     return { label: STATUS_SUPPORTED, icon: line.icon, tone: "neutral" };
+  }
+  // Support by an instance's records that accepting does not mark (not every element
+  // shown under its own passage): a part's words and mark, never a success.
+  if (
+    line.state === "SUPPORTED" &&
+    line.shows === "IMPLEMENTATION" &&
+    !line.evidenced
+  ) {
+    return {
+      label: STATUS_IN_PART,
+      icon: STATE_WORDS.PARTLY.icon,
+      tone: STATE_WORDS.PARTLY.tone,
+    };
   }
   const label = statusWords(line);
   return line.state !== "SUPPORTED" && line.tone === "success"
@@ -444,12 +480,14 @@ const NOT_PASSED: readonly string[] = [
 ];
 
 /** An issue the records themselves show, open or decided: a comparison on it did not
- * pass, or its own label says the evidence contradicts it. Read from what the line
+ * pass, an element of it is an exception both readings rest on the same record (a
+ * deviation), or its own label says the evidence contradicts it. Read from what the line
  * carries, never guessed from what is absent. */
 function exception(line: AttributeLine): boolean {
   return (
     (line.state === "ISSUE" || line.state === "DECIDED") &&
     (line.checks.some((check) => NOT_PASSED.includes(check.result)) ||
+      line.elements.some((element) => element.deviation) ||
       /\bcontradict/i.test(line.label))
   );
 }
@@ -608,33 +646,51 @@ function attentionOf(
             : { type: "NONE" },
       attributeKey: row.key,
     }));
+  // The row's own items about a file, by the file: where the check has an item for the
+  // same file, the two are one item (the check's action first, the row's words with it).
+  const rowFile = new Map(
+    extras
+      .filter((extra) => !extra.caveat && extra.fileId !== undefined)
+      .map((extra) => [extra.fileId, extra]),
+  );
+  const merged = new Set<string>();
   const files = (
     kind: "CONFIRM_TYPE" | "FILE",
     headline: string,
     lines: RequestCheck["leftOut"],
   ): AttentionItem[] =>
-    lines.flatMap((item, at) =>
-      item.action === null
-        ? []
-        : [
-            {
-              key: `${kind}:${item.fileId || at}`,
-              kind: "FILE",
-              mark: fileRef(rowFiles, item.fileId),
-              headline,
-              more: 0,
-              context: needDetail(item.line),
-              flag: "",
-              status: null,
-              control: {
-                type: "ACT",
-                action: item.action,
-                label: item.action.label,
-              },
-              attributeKey: null,
-            },
-          ],
-    );
+    lines.flatMap((item, at) => {
+      if (item.action === null) {
+        return [];
+      }
+      const also = rowFile.get(item.fileId);
+      if (also !== undefined) {
+        merged.add(also.key);
+      }
+      return [
+        {
+          key: `${kind}:${item.fileId || at}`,
+          kind: "FILE",
+          mark: fileRef(rowFiles, item.fileId),
+          headline,
+          more: 0,
+          context: [
+            also === undefined ? "" : extraWords(also),
+            needDetail(item.line),
+          ]
+            .filter((part) => part !== "")
+            .join(" "),
+          flag: "",
+          status: null,
+          control: {
+            type: "ACT",
+            action: item.action,
+            label: item.action.label,
+          },
+          attributeKey: null,
+        },
+      ];
+    });
   // A follow-up that names no attribute, and one that names only attributes with no
   // item above: its tick is on the first screen too, so nothing is asked unseen.
   const listed = new Set(
@@ -667,8 +723,15 @@ function attentionOf(
       };
     });
   // What the screen itself has for the person: the item's button reveals it.
+  const fileItems = [
+    ...files("CONFIRM_TYPE", NEED_CONFIRM_TITLE, check.confirm),
+    ...files("FILE", NEED_FILE_TITLE, check.leftOut),
+  ];
   const other: AttentionItem[] = extras
-    .filter((extra) => !extra.caveat && extraWords(extra) !== "")
+    .filter(
+      (extra) =>
+        !extra.caveat && extraWords(extra) !== "" && !merged.has(extra.key),
+    )
     .map((extra) => ({
       key: extra.key,
       kind: "OTHER",
@@ -681,13 +744,17 @@ function attentionOf(
       control: { type: "VIEW", label: flat(extra.label) },
       attributeKey: null,
     }));
-  return [
-    ...attributes,
-    ...files("CONFIRM_TYPE", NEED_CONFIRM_TITLE, check.confirm),
-    ...files("FILE", NEED_FILE_TITLE, check.leftOut),
-    ...other,
-    ...general,
-  ];
+  // Each item once, by its key: a key that came twice (from what the screen passed) is
+  // told apart, never drawn twice under one.
+  const seen = new Set<string>();
+  return [...attributes, ...fileItems, ...other, ...general].map((item) => {
+    let key = item.key;
+    for (let at = 2; seen.has(key); at += 1) {
+      key = `${item.key}#${at}`;
+    }
+    seen.add(key);
+    return key === item.key ? item : { ...item, key };
+  });
 }
 
 // What is fine, and what must not be lost
@@ -708,8 +775,11 @@ function quietOf(
   const attributes: QuietItem[] = rows
     .filter((row) => !row.attention)
     .map((row) => {
-      // Shown by the records of an instance, or by what a document requires.
-      const shown = row.line.state === "SUPPORTED" && row.line.shows !== null;
+      // Shown by the records of an instance (whole, as accepting marks it), or by what a
+      // document requires.
+      const shown =
+        row.line.state === "SUPPORTED" &&
+        (row.line.evidenced || row.line.shows === "DESIGN");
       const words = !shown
         ? small(row.status.label)
         : row.line.shows === "DESIGN"
@@ -735,6 +805,12 @@ function quietOf(
     attributeKey: null,
   });
   const leftOut = actionless(check.leftOut);
+  const typed = actionless(check.confirm);
+  // What the check already says of a file stands for it: the row's own caveat about the
+  // same file is not said a second time.
+  const named = new Set(
+    [...check.leftOut, ...check.confirm].map((item) => item.fileId),
+  );
   const partSaid =
     caveat?.label.toLowerCase().includes(QUIET_READ_IN_PART.toLowerCase()) ??
     false;
@@ -746,9 +822,15 @@ function quietOf(
       ? [said("CAVEAT:READ_IN_PART", QUIET_READ_IN_PART)]
       : []),
     ...(leftOut > 0 ? [said("CAVEAT:LEFT_OUT", filesLeftOut(leftOut))] : []),
+    ...(typed > 0 ? [said("CAVEAT:TYPE", typesUnconfirmed(typed))] : []),
     // The screen's own caveats, in its words.
     ...extras
-      .filter((extra) => extra.caveat && extraWords(extra) !== "")
+      .filter(
+        (extra) =>
+          extra.caveat &&
+          extraWords(extra) !== "" &&
+          !(extra.fileId !== undefined && named.has(extra.fileId)),
+      )
       .map((extra) => said(extra.key, extraWords(extra))),
   ];
 }
@@ -763,23 +845,29 @@ function twoSentences(text: string): string {
 
 /** What the first screen says where nothing needs attention. "Nothing needs your
  * attention." only where nothing says otherwise: the outcome is a success (or the check
- * has no review, and has a result for what the request asks for) and there is no
- * caveat of any kind. Otherwise the review's own explanation; without one, the
- * caveats' own words. */
+ * has no review), every attribute the request asks for is one accepting marks as
+ * evidenced (AttributeLine.evidenced, the accept note's own rule), and there is no caveat
+ * of any kind. Otherwise the review's own explanation; without one, the caveats' own
+ * words; without those, what the accept note cautions. */
 function calmOf(
   check: RequestCheck,
   quiet: readonly QuietItem[],
-  asked: number,
+  asked: readonly DigestAttribute[],
+  note: string,
 ): string {
   const review = check.review;
   const caveats = quiet.filter((item) => item.kind === "CAVEAT");
-  const fine = review === null ? asked > 0 : review.state === "SUFFICIENT";
+  const fine =
+    (review === null || review.state === "SUFFICIENT") &&
+    asked.length > 0 &&
+    asked.every((row) => row.line.evidenced);
   if (fine && caveats.length === 0) {
     return DIGEST_NOTHING;
   }
   return (
     twoSentences(review?.explanation ?? "") ||
-    caveats.map((item) => closed(flat(item.text))).join(" ")
+    caveats.map((item) => closed(flat(item.text))).join(" ") ||
+    acceptNoteParts(note).caution
   );
 }
 
@@ -839,6 +927,9 @@ export function checkDigest(
   findings: readonly DigestFinding[],
   files: readonly DigestFile[],
   extras: readonly DigestExtra[] = [],
+  /** The row's note beside Accept (assuranceRow.acceptNote): what the calm line says
+   * where nothing else does. */
+  acceptNote = "",
 ): CheckDigest | null {
   if (check.standing !== "REVIEWED") {
     return null;
@@ -902,6 +993,10 @@ export function checkDigest(
   const supported = asked.filter((row) => row.line.state === "SUPPORTED");
   const shows = (how: AttributeLine["shows"]) =>
     supported.filter((row) => row.line.shows === how).length;
+  // Shown is what accepting marks as evidenced; support by an instance's records that
+  // is not whole is said apart, as the accept note says it.
+  const evidenced = asked.filter((row) => row.line.evidenced).length;
+  const inPart = shows("IMPLEMENTATION") - evidenced;
   return {
     // The review's own words: a proposal, never said as more than it says.
     outcome:
@@ -911,8 +1006,9 @@ export function checkDigest(
     caveat,
     verdict: [
       asked.length > 0
-        ? verdictShown(shows("IMPLEMENTATION"), asked.length)
+        ? verdictShown(evidenced, asked.length)
         : VERDICT_NO_RESULT,
+      inPart > 0 ? verdictInPart(inPart) : "",
       shows("DESIGN") > 0 ? verdictDesign(shows("DESIGN")) : "",
       shows(null) > 0 ? verdictUnsaid(shows(null)) : "",
       attention.length > 0 ? verdictAttention(attention.length) : "",
@@ -921,7 +1017,7 @@ export function checkDigest(
       .join(" "),
     attention,
     quiet,
-    calm: attention.length > 0 ? "" : calmOf(check, quiet, asked.length),
+    calm: attention.length > 0 ? "" : calmOf(check, quiet, asked, acceptNote),
     steps: [
       ...attributes.filter((row) => row.attention),
       ...attributes.filter((row) => !row.attention),

@@ -1794,7 +1794,17 @@ describe("what the independent review found (12 November 2026)", () => {
     );
     const screen = read("design-evidence.tsx");
     assert.match(screen, /addEventListener\(REQUESTS_CHANGED_EVENT/);
-    assert.match(screen, /unavailable: locked \? LOCKED : entry\.unavailable/);
+    // Changed 14 November 2026 (second review of section 10.12, item 7). Old: a lock
+    // always said the upload's sentence (LOCKED), during any write. New: the upload's
+    // sentence only where an upload is the cause, "Saving. One moment." otherwise.
+    assert.match(
+      screen,
+      /unavailable: locked \? lockedWhy : entry\.unavailable/,
+    );
+    assert.match(
+      screen,
+      /const lockedWhy = settling === plan \? LOCKED : SAVING;/,
+    );
     assert.match(screen, /onDropCapture=\{/);
     assert.match(screen, /Add a file that fits no request/);
     assert.match(screen, /label: group\.line\.preview/);

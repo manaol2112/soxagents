@@ -251,6 +251,7 @@ button.de-head-toggle::after {
 .de-head-split .dq-letters {
   position: relative;
   z-index: 1;
+  cursor: pointer;
 }
 
 button.de-head-toggle:focus-visible:not(:disabled) {

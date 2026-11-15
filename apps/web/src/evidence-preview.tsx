@@ -11,6 +11,7 @@ import {
 } from "./evidence-annotations";
 import {
   type AnnotationAsk,
+  type AnnotationSet,
   annotationFor,
 } from "./evidence-annotations-model";
 import {
@@ -115,6 +116,170 @@ export function EvidenceViewer({
   );
 }
 
+/**
+ * The annotation to open on: one asked for by its id, or the one that marks a passage
+ * for an attribute (annotationFor), found once for each file's annotations as they
+ * arrive, so reading them again after a review does not select it a second time.
+ */
+function useAnnotationPick(
+  set: AnnotationSet | null,
+  fileId: string | undefined,
+  startAnnotationId: string | undefined,
+  startAnnotationFor: AnnotationAsk | undefined,
+): { id: string } | null {
+  const asked = useMemo(
+    () => (startAnnotationId === undefined ? null : { id: startAnnotationId }),
+    [startAnnotationId],
+  );
+  const [found, setFound] = useState<{
+    fileId: string;
+    pick: { id: string } | null;
+  } | null>(null);
+  const foundFor = found?.fileId;
+  useEffect(() => {
+    if (
+      startAnnotationFor === undefined ||
+      set === null ||
+      foundFor === set.fileId
+    ) {
+      return;
+    }
+    const first = annotationFor(set, startAnnotationFor);
+    setFound({
+      fileId: set.fileId,
+      pick: first === null ? null : { id: first.id },
+    });
+  }, [startAnnotationFor, set, foundFor]);
+  return (
+    asked ?? (found !== null && found.fileId === fileId ? found.pick : null)
+  );
+}
+
+/**
+ * A file of a D&I request, shown in a page or a dialog's panel with its annotations (the
+ * evidence reviewer's Preview, docs/evidence-annotations.md): the annotation viewer and
+ * its review actions where the file has annotations, or one is being added; otherwise the
+ * file as every file is shown. The file's own actions go to `headSlot`.
+ */
+export function AnnotatedPreview({
+  organizationId,
+  projectId,
+  file,
+  annotations,
+  citations = [],
+  focused = null,
+  startAnnotationFor,
+  headSlot,
+  returnFocus,
+}: {
+  organizationId: string;
+  projectId: string;
+  file: PreviewFile;
+  annotations: { controlId: string; requirementId: string };
+  citations?: EvidenceCitation[];
+  focused?: EvidenceCitation | null;
+  startAnnotationFor?: AnnotationAsk | undefined;
+  headSlot: HTMLElement | null;
+  returnFocus?: (() => HTMLElement | null) | undefined;
+}) {
+  const { controlId, requirementId } = annotations;
+  const scope = useMemo(
+    () => ({
+      organizationId,
+      projectId,
+      controlId,
+      requirementId,
+      fileId: file.id,
+    }),
+    [organizationId, projectId, controlId, requirementId, file.id],
+  );
+  const notes = useEvidenceAnnotations(scope);
+  const [adding, setAdding] = useState(false);
+  const leaveAdding = useCallback(() => setAdding(false), []);
+  const pick = useAnnotationPick(
+    notes.set,
+    file.id,
+    undefined,
+    startAnnotationFor,
+  );
+  const query = fileQuery(organizationId, projectId);
+  const url = `/workspace/evidence-files/${file.id}/preview?${query}`;
+  const annotated =
+    notes.set !== null && (notes.set.annotations.length > 0 || adding)
+      ? notes.set
+      : null;
+  if (notes.status === "loading") {
+    return (
+      <div className="preview-annotated is-loading">
+        <AnnotationsLoading />
+      </div>
+    );
+  }
+  if (annotated === null) {
+    return (
+      <>
+        {notes.set?.canEdit === true &&
+        previewKind(file.fileName) !== "text" ? (
+          <p className="preview-annotated-add">
+            <button
+              type="button"
+              className="btn-secondary btn-sm"
+              onClick={() => setAdding(true)}
+            >
+              Add annotation
+            </button>
+          </p>
+        ) : null}
+        <EvidenceViewer
+          organizationId={organizationId}
+          projectId={projectId}
+          file={file}
+          citations={citations}
+          focused={focused}
+        />
+        {notes.status === "failed" ? (
+          <p className="preview-note">
+            The annotations could not be loaded. The file is shown without them.
+          </p>
+        ) : null}
+      </>
+    );
+  }
+  return (
+    <div className="preview-annotated">
+      <AnnotatedEvidence
+        key={file.id}
+        file={file}
+        url={url}
+        set={annotated}
+        busy={notes.busy}
+        act={notes.act}
+        headSlot={headSlot}
+        startAdding={adding}
+        onEmpty={leaveAdding}
+        pick={pick}
+        inline
+        returnFocus={returnFocus}
+        pdf={(input) => (
+          <PdfViewer
+            url={url}
+            citations={input.citations}
+            focused={input.focused}
+            marks={input.marks}
+          />
+        )}
+        text={(input) => (
+          <TextViewer
+            url={`/workspace/evidence-files/${file.id}/reading?${query}`}
+            citations={input.citations}
+            focused={input.focused}
+          />
+        )}
+      />
+    </div>
+  );
+}
+
 /** The evidence preview, for a caller that decides when it is open. */
 export function EvidencePreview(
   props: Omit<Props, "label" | "className"> & {
@@ -175,34 +340,12 @@ function PreviewDialog({
   // "Add annotation" on a file that has none yet.
   const [adding, setAdding] = useState(false);
   const leaveAdding = useCallback(() => setAdding(false), []);
-  const asked = useMemo(
-    () => (startAnnotationId === undefined ? null : { id: startAnnotationId }),
-    [startAnnotationId],
+  const pick = useAnnotationPick(
+    notes.set,
+    file?.id,
+    startAnnotationId,
+    startAnnotationFor,
   );
-  // The annotation a passage asks for, found once for each file's annotations as they
-  // arrive: reading them again after a review does not select it a second time.
-  const [found, setFound] = useState<{
-    fileId: string;
-    pick: { id: string } | null;
-  } | null>(null);
-  const loadedSet = notes.set;
-  const foundFor = found?.fileId;
-  useEffect(() => {
-    if (
-      startAnnotationFor === undefined ||
-      loadedSet === null ||
-      foundFor === loadedSet.fileId
-    ) {
-      return;
-    }
-    const first = annotationFor(loadedSet, startAnnotationFor);
-    setFound({
-      fileId: loadedSet.fileId,
-      pick: first === null ? null : { id: first.id },
-    });
-  }, [startAnnotationFor, loadedSet, foundFor]);
-  const pick =
-    asked ?? (found !== null && found.fileId === file?.id ? found.pick : null);
 
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;

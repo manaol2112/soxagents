@@ -894,51 +894,64 @@ export function quoteKey(quote: string): string {
  * before what only identifies or sources it. */
 const ASK_FIRST: readonly AnnotationKind[] = ["SHOWS", "EXCEPTION"];
 
+/** The least a quote may be for one to be taken as holding the other: three words or
+ * twenty characters on the shorter side, so that a lone "Yes", a date or a system's name
+ * never matches a passage it merely appears in. */
+export const ASK_CONTAINED_WORDS = 3;
+export const ASK_CONTAINED_CHARACTERS = 20;
+
+/** Whether one quote holds the other, as whole words, where the shorter is long enough to
+ * say something by itself. */
+function holds(one: string, other: string): boolean {
+  const [shorter, longer] =
+    one.length <= other.length ? [one, other] : [other, one];
+  const long =
+    shorter.split(" ").length >= ASK_CONTAINED_WORDS ||
+    shorter.length >= ASK_CONTAINED_CHARACTERS;
+  return long && ` ${longer} `.includes(` ${shorter} `);
+}
+
 /**
- * The annotation a reference opens on, or null where the file has none for it. First the
- * annotation whose quote is the passage's (one naming the attribute before one that does
- * not, then the first listed); else one whose quote holds the passage or is held by it,
- * chosen the same way; else the first listed annotation naming the attribute that shows
- * it or an exception to it, and without one, the first listed that names it at all. It
- * only chooses what is put in view: it confirms, edits and sends nothing.
+ * The annotation a reference opens on, or null where there is none for it. Where any
+ * annotation of the file names the attribute, only those are considered, in this order:
+ * the one whose quote is the passage's; one whose quote holds the passage or is held by
+ * it, where the shorter of the two says something by itself (ASK_CONTAINED_*); the first
+ * listed that shows the attribute or an exception to it; the first listed that names it.
+ * An annotation of another attribute is never chosen over one of this attribute. Where
+ * none names it, only an annotation whose quote is the passage's own words is; else none.
+ * It only chooses what is put in view: it confirms, edits and sends nothing.
  */
 export function annotationFor(
   set: AnnotationSet,
   ask: AnnotationAsk,
 ): Annotation | null {
-  const names = (annotation: Annotation) =>
-    ask.attributeId !== "" && annotation.attributeIds.includes(ask.attributeId);
-  const firstOf = (found: Annotation[]) =>
-    found.find(names) ?? found[0] ?? null;
   const wanted = quoteKey(ask.quote);
+  const keyOf = (annotation: Annotation) => quoteKey(annotation.quote);
+  const naming =
+    ask.attributeId === ""
+      ? []
+      : set.annotations.filter((annotation) =>
+          annotation.attributeIds.includes(ask.attributeId),
+        );
+  if (naming.length === 0) {
+    return wanted === ""
+      ? null
+      : (set.annotations.find((annotation) => keyOf(annotation) === wanted) ??
+          null);
+  }
   if (wanted !== "") {
-    const keyed = set.annotations.map((annotation) => ({
-      annotation,
-      key: quoteKey(annotation.quote),
-    }));
-    const same = firstOf(
-      keyed
-        .filter((each) => each.key === wanted)
-        .map((each) => each.annotation),
-    );
-    if (same !== null) {
+    const same = naming.find((annotation) => keyOf(annotation) === wanted);
+    if (same !== undefined) {
       return same;
     }
-    const within = firstOf(
-      keyed
-        .filter(
-          (each) =>
-            each.key !== "" &&
-            (` ${each.key} `.includes(` ${wanted} `) ||
-              ` ${wanted} `.includes(` ${each.key} `)),
-        )
-        .map((each) => each.annotation),
-    );
-    if (within !== null) {
+    const within = naming.find((annotation) => {
+      const key = keyOf(annotation);
+      return key !== "" && holds(key, wanted);
+    });
+    if (within !== undefined) {
       return within;
     }
   }
-  const naming = set.annotations.filter(names);
   return (
     naming.find((annotation) => ASK_FIRST.includes(annotation.kind)) ??
     naming[0] ??

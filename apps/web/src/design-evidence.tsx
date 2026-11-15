@@ -16,7 +16,6 @@ import {
   CheckDigestView,
   type DigestAcceptAction,
   type DigestAskAction,
-  type DigestEvidence,
 } from "./check-digest";
 import { checkDigest, type DigestExtra, fileRef } from "./check-digest-model";
 import { ControlSend } from "./control-send";
@@ -36,6 +35,7 @@ import {
   useRequestAction,
 } from "./design-requests";
 import type { RequestRow as RequestsRow } from "./design-requests-model";
+import type { AnnotationAsk } from "./evidence-annotations-model";
 import {
   assuranceProblem,
   type CheckAction,
@@ -83,7 +83,6 @@ import {
   Problem,
   usePlanAction,
 } from "./evidence-plan-view";
-import { EvidencePreview, PreviewButton } from "./evidence-preview";
 import { formatOf, wordingOf } from "./evidence-requests-model";
 import {
   carriesFiles,
@@ -105,7 +104,7 @@ import {
 } from "./policy-evidence-model";
 import { PolicyCheck, PolicyOnFile, usePolicyEvidence } from "./policy-on-file";
 import { RowMenu, type RowMenuItem } from "./row-menu";
-import { traceHeading, tracesSample } from "./sample-trace-model";
+import { type Trace, traceHeading, tracesSample } from "./sample-trace-model";
 import { SampleTrace, useSampleTrace } from "./sample-trace-view";
 import { type IconName, UiIcon } from "./ui-icon";
 
@@ -120,6 +119,8 @@ type Ids = {
 /** Why nothing is offered right after an upload: rows may have moved to another
  * request, so the plan is read again first. */
 const LOCKED = "The list is being read again after the upload. One moment.";
+/** Why nothing is offered while a write of the list is on its way (not an upload). */
+const SAVING = "Saving. One moment.";
 
 /** Why Accept is off while the row's own form is open (a follow-up, a reason): one
  * decision at a time. */
@@ -130,11 +131,17 @@ const ASKING_FIRST = "Record or cancel the form under the result first.";
  * asks for, and what a file hides behind "N files". The check's own model places each
  * (check-digest-model, DigestExtra): an item under "Needs attention", or a caveat. */
 const EXTRA_TRACE = "TRACE";
-const EXTRA_FILE = "FILE:";
+const EXTRA_FILE = "ROW_FILE:";
 const TRACE_WORDS = {
   PROPOSED: "Confirm the sample the agent proposed.",
   CHOOSE: "Pick the sample this request walks through.",
   view: "Review the sample",
+  /** On the quiet line: what must not be lost of a trace that asks nothing. */
+  failed: "The sample trace could not be loaded",
+  points: (count: number) =>
+    `${count} point${count === 1 ? "" : "s"} to settle in the sample`,
+  late: (count: number) =>
+    `${count} date${count === 1 ? "" : "s"} in the sample past the control's limit`,
 } as const;
 const FILE_WORDS = {
   application: "Set the application this file comes from.",
@@ -145,6 +152,32 @@ const FILE_WORDS = {
   reading: (count: number) =>
     `${count} file${count === 1 ? " is" : "s are"} still being read`,
 } as const;
+
+/** A confirmed sample's points still to settle, or its dates past the control's limit:
+ * a caveat on the quiet line, so the first screen is never calm beside them. */
+function tracePoints(trace: Trace): DigestExtra[] {
+  const late = trace.files.flatMap((file) =>
+    file.dates.filter((when) => when.over),
+  ).length;
+  const said =
+    trace.observations.length > 0
+      ? TRACE_WORDS.points(trace.observations.length)
+      : late > 0
+        ? TRACE_WORDS.late(late)
+        : "";
+  return said === ""
+    ? []
+    : [
+        {
+          key: "TRACE:POINTS",
+          mark: "",
+          headline: said,
+          context: "",
+          label: "",
+          caveat: true,
+        },
+      ];
+}
 
 type ListDialog =
   | { mode: "add" }
@@ -495,6 +528,9 @@ export function DesignEvidence({
     return () => window.clearTimeout(timer);
   }, [settling]);
   const locked = action.pending || list.pending || settling === plan;
+  // Said wherever the lock holds something back: the upload's own sentence only where an
+  // upload is the cause.
+  const lockedWhy = settling === plan ? LOCKED : SAVING;
   // The review pane closed because the requests changed under it (evidence in hand
   // split one): the server's sentence is shown here, over the groups as they now are.
   const [changed, setChanged] = useState<string | null>(null);
@@ -606,7 +642,7 @@ export function DesignEvidence({
                 {
                   label: "Add a file that fits no request",
                   icon: "upload",
-                  unavailable: locked ? LOCKED : null,
+                  unavailable: locked ? lockedWhy : null,
                   onSelect: () => setEvidence({ mode: "add", itemId: null }),
                 },
                 {
@@ -755,6 +791,7 @@ export function DesignEvidence({
                       canAct={canAct}
                       action={action}
                       locked={locked}
+                      lockedWhy={lockedWhy}
                       onUpload={(picked) => wizard.startNew(row.id, picked)}
                       files={files}
                       applications={applications}
@@ -1104,6 +1141,7 @@ function Row({
   canAct,
   action,
   locked,
+  lockedWhy,
   onUpload,
   files,
   applications,
@@ -1130,6 +1168,8 @@ function Row({
   canAct: boolean;
   action: Action;
   locked: boolean;
+  /** Why it is locked, in words: the upload's, or a write being saved. */
+  lockedWhy: string;
   /** Opens the evidence wizard on this request (the person's choice stands; the agent
    * only suggests a better fit), with files dropped on the row queued. */
   onUpload: (picked?: Picked[]) => void;
@@ -1172,14 +1212,20 @@ function Row({
   } | null>(null);
   // A change to one of its files, confirmed by the server.
   const [fileDone, setFileDone] = useState<string | null>(null);
-  // The file whose annotations are open in the preview (its menu's "Annotations").
-  // From a row of a finished check's attribute ("View"), it opens on the annotation
-  // that marks the row's passage (`evidence`).
-  const [annotating, setAnnotating] = useState<{
-    id: string;
-    fileName: string;
-    evidence?: DigestEvidence;
-  } | null>(null);
+  /** A file of the request, in the evidence reviewer (product owner, 14 November 2026:
+   * "I want the evidence reviewer to be the one that has annotations"): on a D&I request
+   * with its annotations and their review, on the annotation asked for where one is. */
+  const openFile = (fileId: string, annotation?: AnnotationAsk) =>
+    onDialog({
+      mode: "review",
+      fileId,
+      ...(item.phase === "DESIGN"
+        ? {
+            requirementId: item.id,
+            ...(annotation === undefined ? {} : { annotation }),
+          }
+        : {}),
+    });
   // The assurance chain's check of the request, and the findings its issues are.
   const assured = row.assurance;
   const findingsAction = useFindingsAction(ids);
@@ -1404,7 +1450,7 @@ function Row({
   /** Why "Ask a follow-up" cannot be used on this row now, in its menu's own words;
    * null when it can. */
   const followUpOff = locked
-    ? LOCKED
+    ? lockedWhy
     : (menuEntries.find((each) => each.key === "follow-up")?.unavailable ??
       null);
   const menuFor = (): RowMenuItem[] => {
@@ -1445,7 +1491,7 @@ function Row({
           label: entry.label,
           icon: MENU_ICONS[entry.key],
           // After an upload nothing is offered until the plan is read again.
-          unavailable: locked ? LOCKED : entry.unavailable,
+          unavailable: locked ? lockedWhy : entry.unavailable,
           ...(entry.danger === true ? { danger: true } : {}),
           onSelect: run[entry.key],
         }))
@@ -1640,11 +1686,7 @@ function Row({
                 ? [
                     {
                       label: "Annotations",
-                      onSelect: () =>
-                        setAnnotating({
-                          id: file.fileId,
-                          fileName: file.name,
-                        }),
+                      onSelect: () => openFile(file.fileId),
                     },
                   ]
                 : []),
@@ -1710,57 +1752,28 @@ function Row({
       )}
     </>
   );
-  const preview = (
-    <>
-      {annotating !== null ? (
-        <EvidencePreview
-          organizationId={ids.organizationId}
-          projectId={ids.projectId}
-          title={item.title}
-          annotations={{
-            controlId: ids.controlId,
-            requirementId: item.id,
-          }}
-          // From the file's menu: that file, with its annotations. From a row of an
-          // attribute ("View"): the row's files, opened on that one, on the annotation
-          // that marks the row's passage; a file without annotations shows the passage
-          // marked, as "Open in the file" does.
-          {...(annotating.evidence === undefined
-            ? { files: [{ id: annotating.id, fileName: annotating.fileName }] }
-            : {
-                files: rowFiles.map((file) => ({
-                  id: file.id,
-                  fileName: file.name,
-                })),
-                startFileId: annotating.id,
-                citations: [
-                  passageCitation(
-                    annotating.evidence.passage,
-                    rowFiles,
-                    annotating.evidence.letter,
-                  ),
-                ],
-                sourcesTitle: PASSAGE_SOURCES,
-                startAnnotationFor: {
-                  attributeId: annotating.evidence.attributeId,
-                  quote: annotating.evidence.quote,
-                },
-              })}
-          onClose={() => setAnnotating(null)}
-        />
-      ) : null}
-    </>
-  );
   // What of the row waits on the person beside the check, for its first screen.
   const tracePending =
     traced &&
     !traceFailed &&
     trace !== null &&
     (trace.status === "PROPOSED" || trace.status === "CHOOSE");
+  // A file whose application a person has still to set, from the fact itself (fileLine's
+  // own rule): its flag is not drawn while its form is open, but nothing is saved yet.
   const flagged = item.files.filter(
-    (file) => (lines.get(file.fileId)?.flag ?? null) !== null,
+    (file) =>
+      canAct &&
+      files.find((each) => each.id === file.fileId)?.applicationUnknown ===
+        true &&
+      applications.length > 1,
   );
-  const unread = item.files.filter((file) => file.readStatus === "FAILED");
+  // A file the check left out is said there; it is not counted again here.
+  const leftOutIds = new Set(
+    (assured?.check.leftOut ?? []).map((each) => each.fileId),
+  );
+  const unread = item.files.filter(
+    (file) => file.readStatus === "FAILED" && !leftOutIds.has(file.fileId),
+  );
   const beingRead = item.files.filter(
     (file) => file.readStatus === "PENDING" || file.readStatus === "WORKING",
   );
@@ -1790,7 +1803,24 @@ function Row({
               },
             ]
           : []),
+        // What a trace that asks nothing still says: on the quiet line, never calm.
+        ...(traced && traceFailed
+          ? [
+              {
+                key: "TRACE:FAILED",
+                mark: "",
+                headline: TRACE_WORDS.failed,
+                context: "",
+                label: "",
+                caveat: true,
+              },
+            ]
+          : traced && trace !== null && trace.status === "CONFIRMED"
+            ? tracePoints(trace)
+            : []),
         // A file whose application a person has still to set: its item shows the file.
+        // Where the check already has an item for the file, the two are one (the model
+        // merges them by the file).
         ...flagged.map((file) => ({
           key: `${EXTRA_FILE}${file.fileId}`,
           mark: fileRef(rowFiles, file.fileId),
@@ -1798,6 +1828,7 @@ function Row({
           context: FILE_WORDS.applicationOf(file.name),
           label: FILE_WORDS.view,
           caveat: false,
+          fileId: file.fileId,
         })),
         // What is only to be known of the files, on the quiet line.
         ...(unread.length > 0
@@ -1826,10 +1857,11 @@ function Row({
           : []),
       ];
   // The files are listed without being asked for only while one has something to
-  // settle or could not be read.
+  // settle or could not be read, and always while a form is open in the list.
   const filesShown =
-    filesOpen ??
-    (flagged.length > 0 || unread.length > 0 || beingRead.length > 0);
+    fileForm !== null ||
+    (filesOpen ??
+      (flagged.length > 0 || unread.length > 0 || beingRead.length > 0));
   /** An item's "Review the sample" or "Show the file": what it is about is put in view,
    * in place, with the focus on it. */
   const viewExtra = (key: string) => {
@@ -2052,7 +2084,6 @@ function Row({
   const check =
     assured !== null && row.reading === 0 ? (
       <CheckOfRequest
-        ids={ids}
         check={assured.check}
         files={rowFiles}
         offer={offer}
@@ -2092,12 +2123,7 @@ function Row({
             </div>
           ) : null
         }
-        onEvidence={(evidence) => {
-          const file = rowFiles.find((each) => each.id === evidence.fileId);
-          if (file !== undefined) {
-            setAnnotating({ id: file.id, fileName: file.name, evidence });
-          }
-        }}
+        onOpen={openFile}
         ask={
           canAct
             ? {
@@ -2114,7 +2140,7 @@ function Row({
                 // Only the accept itself: a follow-up, an insufficient or a reopen
                 // being recorded runs under the same key, with its form open.
                 busy: asking === null && action.busy === `judge-${item.id}`,
-                off: locked ? LOCKED : asking !== null ? ASKING_FIRST : null,
+                off: locked ? lockedWhy : asking !== null ? ASKING_FIRST : null,
               }
             : null
         }
@@ -2200,7 +2226,12 @@ function Row({
               </span>
             ) : null}
           </span>
-          <span className="de-head-meta" id={`${id}-meta`}>
+          {/* The letters sit over the title's box so each keeps its own words for the
+              pointer; a press on them opens the row, as a press anywhere on the head
+              does. The title's button is the keyboard's way, and names all of it. */}
+          {/* biome-ignore lint/a11y/noStaticElementInteractions: a pointer convenience over the title's own button, which the keyboard uses. */}
+          {/* biome-ignore lint/a11y/useKeyWithClickEvents: the title's button is the keyboard's way to open the row. */}
+          <span className="de-head-meta" id={`${id}-meta`} onClick={onToggle}>
             {meta}
           </span>
         </div>
@@ -2270,7 +2301,6 @@ function Row({
           >
             {filesShown || item.files.length === 0 ? fileList : null}
           </div>
-          {preview}
           {check}
           {decided}
           {forms}
@@ -2285,7 +2315,6 @@ function Row({
                 <dt>Evidence</dt>
                 <dd className="de-evidence">
                   {fileList}
-                  {preview}
                   {check}
                   {traceView}
                   {agentSaid}
@@ -2379,7 +2408,7 @@ function Row({
           // The list is busy with another call: confirming waits, and says why.
           waiting={
             locked
-              ? LOCKED
+              ? lockedWhy
               : checks.pending && checks.busy !== item.id
                 ? UPGRADE_WAIT
                 : null
@@ -2531,7 +2560,6 @@ function UpgradeDialog({
  * Nothing of a check is shown before it ends.
  */
 function CheckOfRequest({
-  ids,
   check,
   files,
   offer,
@@ -2550,12 +2578,11 @@ function CheckOfRequest({
   extras,
   onView,
   under,
-  onEvidence,
+  onOpen,
   ask,
   accept,
   acceptNote,
 }: {
-  ids: Ids;
   check: RequestCheck;
   /** The row's in-force files. */
   files: RowFile[];
@@ -2585,8 +2612,8 @@ function CheckOfRequest({
   onView: (key: string) => void;
   /** What the row has put in view for such an item, under the list. */
   under: ReactNode;
-  /** Opens a row's evidence in the row's preview, on the annotation that marks it. */
-  onEvidence: (evidence: DigestEvidence) => void;
+  /** Opens a file of the row in the evidence reviewer, on the annotation asked for. */
+  onOpen: (fileId: string, annotation?: AnnotationAsk) => void;
   /** The row's follow-up form, the path its menu's "Ask a follow-up" takes, and why it
    * cannot be used now; null for a person who may not act. */
   ask: DigestAskAction | null;
@@ -2597,7 +2624,7 @@ function CheckOfRequest({
 }) {
   const action = offer(check.action);
   // The finished check as its first screen; null while it is anything else.
-  const digest = checkDigest(check, findings ?? [], files, extras);
+  const digest = checkDigest(check, findings ?? [], files, extras, acceptNote);
   const actButton = (act: CheckAction, about: string) => (
     <button
       type="button"
@@ -2699,7 +2726,7 @@ function CheckOfRequest({
     <>
       {about}
       {check.review !== null ? (
-        <CheckReview ids={ids} review={check.review} files={files} />
+        <CheckReview review={check.review} onOpen={onOpen} />
       ) : null}
       {check.notAsked.length > 0 ? (
         // Attributes the request does not ask for and the evidence does not bear on:
@@ -2766,13 +2793,20 @@ function CheckOfRequest({
         passage={(passage, letter) => (
           <PassageLine
             key={`${passage.fileId ?? ""}-${passage.location}-${passage.quote}`}
-            ids={ids}
             passage={passage}
-            files={files}
-            label={letter}
+            attributeId={
+              check.attributes.find((line) => line.letter === letter)
+                ?.attributeId ?? ""
+            }
+            onOpen={onOpen}
           />
         )}
-        onEvidence={onEvidence}
+        onEvidence={(evidence) =>
+          onOpen(evidence.fileId, {
+            attributeId: evidence.attributeId,
+            quote: evidence.quote,
+          })
+        }
         finding={(line) => {
           if (line.findingId === null) {
             return null;
@@ -2821,78 +2855,20 @@ function CheckOfRequest({
   );
 }
 
-/** Over the passages the preview marks in a file. */
-const PASSAGE_SOURCES = "What the readings rest on";
-
-/** A passage as the preview marks it in its file. */
-function passageCitation(
-  passage: ShownPassage,
-  files: RowFile[],
-  /** What the passage is cited for in the viewer: an attribute's letter, or "". */
-  cited: string,
-) {
-  return {
-    fileId: passage.fileId ?? "",
-    fileName: files.find((file) => file.id === passage.fileId)?.name ?? "",
-    quote: passage.quote,
-    found: true,
-    location: passage.location,
-    page: passage.page,
-    box: null,
-    label: cited,
-  };
-}
-
-/** The link that opens a passage in its file, with the passage marked; null where the
- * viewer cannot open it there. */
-function PassageOpen({
-  ids,
-  passage,
-  files,
-  cited,
-  label,
-}: {
-  ids: Ids;
-  passage: ShownPassage;
-  /** The row's in-force files: a passage opens in its own. */
-  files: RowFile[];
-  /** What the passage is cited for in the viewer: an attribute's letter, or "". */
-  cited: string;
-  /** The link's words. */
-  label: ReactNode;
-}) {
-  return passage.opens && passage.fileId !== null ? (
-    <PreviewButton
-      organizationId={ids.organizationId}
-      projectId={ids.projectId}
-      files={files.map((file) => ({
-        id: file.id,
-        fileName: file.name,
-      }))}
-      startFileId={passage.fileId}
-      citations={[passageCitation(passage, files, cited)]}
-      sourcesTitle={PASSAGE_SOURCES}
-      label={label}
-      className="de-link"
-    />
-  ) : null;
-}
-
-/** A file's own words with where they sit, opening in the file where the viewer can:
- * the same line under an attribute and under a consideration of the review. */
+/** A file's own words with where they sit, opening in the evidence reviewer on the
+ * annotation that marks them where the file can be shown: the same line under an
+ * attribute and under a consideration of the review. */
 function PassageLine({
-  ids,
   passage,
-  files,
-  label,
+  attributeId,
+  onOpen,
 }: {
-  ids: Ids;
   passage: ShownPassage;
-  /** The row's in-force files: a passage opens in its own. */
-  files: RowFile[];
-  /** What the passage is cited for in the viewer: an attribute's letter, or "". */
-  label: string;
+  /** The attribute the passage is cited for; "" for a consideration's. */
+  attributeId: string;
+  onOpen: (fileId: string, annotation?: AnnotationAsk) => void;
 }) {
+  const fileId = passage.fileId;
   return (
     <li>
       <q>{passage.quote}</q>
@@ -2903,13 +2879,17 @@ function PassageLine({
         <span>
           {passage.location !== "" ? passage.location : "In the file"}
         </span>
-        <PassageOpen
-          ids={ids}
-          passage={passage}
-          files={files}
-          cited={label}
-          label="Open in the file"
-        />
+        {passage.opens && fileId !== null ? (
+          <button
+            type="button"
+            className="de-link"
+            onClick={() =>
+              onOpen(fileId, { attributeId, quote: passage.quote })
+            }
+          >
+            Open in the file
+          </button>
+        ) : null}
       </span>
     </li>
   );
@@ -2926,14 +2906,12 @@ function PassageLine({
  * passage in its file. Accept and the findings' decisions stay on the row.
  */
 function CheckReview({
-  ids,
   review,
-  files,
+  onOpen,
 }: {
-  ids: Ids;
   review: ReviewView;
-  /** The row's in-force files: a passage opens in its own. */
-  files: RowFile[];
+  /** Opens a passage's file in the evidence reviewer. */
+  onOpen: (fileId: string, annotation?: AnnotationAsk) => void;
 }) {
   const id = useId();
   return (
@@ -3000,10 +2978,9 @@ function CheckReview({
                       {item.passages.map((passage) => (
                         <PassageLine
                           key={`${passage.fileId ?? ""}-${passage.location}-${passage.quote}`}
-                          ids={ids}
                           passage={passage}
-                          files={files}
-                          label=""
+                          attributeId=""
+                          onOpen={onOpen}
                         />
                       ))}
                     </ul>
