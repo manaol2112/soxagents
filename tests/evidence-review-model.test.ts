@@ -1409,17 +1409,33 @@ describe("the review on the request's row", () => {
     // what engine 2 records (its assessment CONTRADICTED, here the failed comparison on
     // D), which an engine 1 run has not, exactly as the server reads it; it decides only
     // which tickmarks are offered. Everything the row shows is still the same.
+    // Changed again 14 November 2026 (review fix 2, with the server at 2b3887f). Old: the
+    // page worked `contradicted` out itself, from engine 2's assessment, so the two
+    // engines differed on D. New: it is the server's own `contradicted` on each
+    // attribute (attribute_dispositions.contradicted, for a run of either engine), read
+    // as sent: the same answer reads the same for both engines, and only the
+    // comparisons differ, as before the tickmarks.
+    const sent = { ...DEVIATION, contradicted: true };
+    const first = row({
+      engine_version: 1,
+      attributes: [attribute(), NOT_SHOWN, sent],
+    });
+    const second = row({ attributes: [attribute(), NOT_SHOWN, sent] });
     assert.deepEqual(
-      two?.check.attributes.map(
-        ({ checks: _checks, contradicted: _contradicted, ...line }) => line,
-      ),
-      one?.check.attributes.map(
-        ({ checks: _checks, contradicted: _contradicted, ...line }) => line,
-      ),
+      second?.check.attributes.map(({ checks: _checks, ...line }) => line),
+      first?.check.attributes.map(({ checks: _checks, ...line }) => line),
     );
+    for (const made of [first, second]) {
+      assert.equal(
+        made?.check.attributes.find((line) => line.letter === "D")
+          ?.contradicted,
+        true,
+      );
+    }
+    // Without the server's answer, never a contradiction, whatever the assessment.
     assert.equal(
       two?.check.attributes.find((line) => line.letter === "D")?.contradicted,
-      true,
+      false,
     );
   });
 

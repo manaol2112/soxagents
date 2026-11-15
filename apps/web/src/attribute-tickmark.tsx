@@ -5,8 +5,9 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   type AnnotationChoice,
   annotationChoices,
+  annotationOf,
   draftFrom,
-  ENDING_WORDS,
+  endingLine,
   fileRef,
   recordedLine,
   TICKMARK_WORDS,
@@ -19,7 +20,6 @@ import type { AnnotationSet } from "./evidence-annotations-model";
 import {
   type AttributeLine,
   DISPOSITION_BOUNDS,
-  type Disposition,
   type DispositionKind,
   type RowFile,
 } from "./evidence-assurance-model";
@@ -50,7 +50,11 @@ export const ADD_AN_ANNOTATION = "Add an annotation";
 export const RELIED_ON_LABEL = "What you relied on instead";
 export const REOPEN_LABEL = "Why reopen it";
 export const NO_ANNOTATION =
-  "No annotation a person reviewed names this attribute yet. Add one on the evidence, then choose it here.";
+  "No annotation a person reviewed shows this attribute yet. Add one on the evidence, then choose it here.";
+export const READING_ITS_ANNOTATION = "Reading its annotation…";
+export const AN_ANNOTATION = "An annotation on the evidence.";
+export const ANNOTATIONS_UNREAD = "The annotations could not be read.";
+export const TRY_AGAIN = "Try again";
 
 /** The row's own ways to add evidence to the request. */
 export type DigestAddEvidence = {
@@ -63,78 +67,131 @@ export type DigestAddEvidence = {
   heldOff: string | null;
 };
 
+/** What anyone who can see the row may read of a tickmark: the annotations of the
+ * request's files (read only), and the one viewer on one of them. */
+export type DigestTickmarkRead = {
+  /** The annotations of the request's files, read when asked; null where they could
+   * not be read. */
+  annotations: () => Promise<AnnotationSet[] | null>;
+  /** Opens the one viewer on an annotation. */
+  openAnnotation: (fileId: string, annotationId: string) => void;
+};
+
 /** The row's own calls for a tickmark: each answers the server's refusal in one sentence,
- * or null once the server has confirmed it. */
-export type DigestTickmarkAction = {
+ * or null once the server has confirmed it. Each names the disposition the person saw
+ * standing (section 10.13, "As built (server)"): a recording what it replaces (null for
+ * none), a reopening the one it reopens, so a stale page never changes one unseen. */
+export type DigestTickmarkAction = DigestTickmarkRead & {
   /** What may be recorded on the attribute; null where nothing may. */
   offer: (line: AttributeLine) => TickmarkOffer | null;
   record: (
     attributeId: string,
     fields: Record<string, string>,
+    replaces: string | null,
   ) => Promise<string | null>;
   reopen: (
     attributeId: string,
-    version: number,
+    id: string,
     reason: string,
   ) => Promise<string | null>;
-  /** The annotations of the request's files, read when asked; null where they could
-   * not be read. */
-  annotations: () => Promise<AnnotationSet[] | null>;
-  /** Opens the evidence reviewer on a file to add an annotation for the attribute;
-   * `back` runs once it closes. */
+  /** Opens the one viewer on a file to add an annotation for the attribute; `back` runs
+   * once it closes. */
   addAnnotation: (
     fileId: string,
     attributeId: string,
     back: () => void,
   ) => void;
-  /** Opens the evidence reviewer on an annotation. */
-  openAnnotation: (fileId: string, annotationId: string) => void;
 };
 
-type Choices =
-  | { status: "idle" | "loading" | "failed"; items: AnnotationChoice[] }
-  | { status: "ready"; items: AnnotationChoice[] };
+type Choices = {
+  status: "idle" | "loading" | "failed" | "ready";
+  sets: AnnotationSet[];
+};
 
-/** A count under a text field, read politely. */
-function Count({ id, used, max }: { id: string; used: number; max: number }) {
+/**
+ * A count under a text field. It is read with the field (aria-describedby), never on
+ * every keystroke: a polite announcement only where the text crosses the limit, either
+ * way, and when the form is sent (`submits` grows).
+ */
+function Count({
+  id,
+  used,
+  max,
+  submits,
+}: {
+  id: string;
+  used: number;
+  max: number;
+  submits: number;
+}) {
+  const over = used > max;
+  const [said, setSaid] = useState("");
+  const crossed = useRef(over);
+  const now = useRef("");
+  now.current = `${used} of ${max} characters${over ? ", over the limit" : ""}.`;
+  useEffect(() => {
+    if (crossed.current === over) {
+      return;
+    }
+    crossed.current = over;
+    setSaid(
+      over
+        ? `Over the limit of ${max} characters.`
+        : `Back within the limit of ${max} characters.`,
+    );
+  }, [over, max]);
+  useEffect(() => {
+    if (submits > 0) {
+      // Said again on each send, even where nothing changed since the last.
+      setSaid(`${now.current}${submits % 2 === 0 ? "\u00a0" : ""}`);
+    }
+  }, [submits]);
   return (
-    <span
-      id={id}
-      className={`cdg-tmf-count${used > max ? " is-over" : ""}`}
-      aria-live="polite"
-    >
-      {`${used} of ${max} characters`}
-    </span>
+    <>
+      <span id={id} className={`cdg-tmf-count${over ? " is-over" : ""}`}>
+        {`${used} of ${max} characters`}
+      </span>
+      <span className="sr-only" aria-live="polite" data-cdg-count-said="">
+        {said}
+      </span>
+    </>
   );
 }
 
 const spoken = (text: string) => text.replace(/\s+/g, " ").trim().length;
 
-/** The annotation a disposition rests on, as "E2 · View", opening the reviewer on it. */
+/** The annotation a disposition rests on, as "E2 · View", opening the one viewer on it.
+ * Read once for anyone who can see the row; where it cannot be read, or is not listed,
+ * "An annotation on the evidence.", never a reading line that does not end. */
 function RestsOn({
-  disposition,
-  choices,
+  found,
+  status,
   letter,
   open,
+  retry,
 }: {
-  disposition: Disposition;
-  choices: Choices;
+  found: AnnotationChoice | null;
+  status: Choices["status"];
   letter: string;
   open: ((fileId: string, annotationId: string) => void) | null;
+  /** Reads the annotations again; null where they cannot be read here. */
+  retry: (() => void) | null;
 }) {
-  const found = choices.items.find(
-    (item) => item.id === disposition.annotationId,
-  );
-  if (found === undefined) {
-    return choices.status === "loading" || choices.status === "idle" ? (
+  if (found === null) {
+    return (
       <p className="cdg-tm-line">
         <span className="cdg-cap">Rests on</span>
-        <span className="cdg-quiet-note">Reading its annotation…</span>
-      </p>
-    ) : (
-      <p className="cdg-tm-line">
-        <span className="cdg-cap">Rests on</span>
-        <span>An annotation on the evidence.</span>
+        {retry !== null && (status === "loading" || status === "idle") ? (
+          <span className="cdg-quiet-note">{READING_ITS_ANNOTATION}</span>
+        ) : (
+          <span>{AN_ANNOTATION}</span>
+        )}
+        {retry !== null && status === "failed" ? (
+          <button type="button" className="cdg-link" onClick={retry}>
+            {TRY_AGAIN}
+            <span className="sr-only">{` reading the annotation for attribute ${letter}`}</span>
+          </button>
+        ) : null}
       </p>
     );
   }
@@ -188,13 +245,9 @@ function History({ line }: { line: AttributeLine }) {
                 {recordedLine(item.recordedBy, item.recordedAt)}
               </span>
             </p>
-            <p className="cdg-tm-ended">
-              {ENDING_WORDS[item.endedAs]}
-              {` (${recordedLine(item.endedBy, item.endedAt)})`}
-              {item.endedAs === "REOPENED" && item.endedReason !== ""
-                ? `: ${item.endedReason}`
-                : "."}
-            </p>
+            {/* How it ended, under a neutral label, with the server's own reason for
+                every ending where it gave one. */}
+            <p className="cdg-tm-ended">{endingLine(item)}</p>
             {item.reason !== "" ? (
               <p className="cdg-tm-ended">{`Reason: ${item.reason}`}</p>
             ) : null}
@@ -215,6 +268,7 @@ export function AttributeTickmark({
   files,
   tickmark,
   addEvidence,
+  read = null,
 }: {
   line: AttributeLine;
   letter: string;
@@ -223,6 +277,9 @@ export function AttributeTickmark({
   tickmark: DigestTickmarkAction | null;
   /** Null for a person who may not act. */
   addEvidence: DigestAddEvidence | null;
+  /** What anyone who can see the row may read (the annotation a tickmark rests on);
+   * null where nothing can be read. The person who may act reads through `tickmark`. */
+  read?: DigestTickmarkRead | null;
 }) {
   const id = useId();
   const standing = line.disposition;
@@ -230,6 +287,13 @@ export function AttributeTickmark({
   const [mode, setMode] = useState<"none" | "form" | "reopen">("none");
   const [draft, setDraft] = useState<TickmarkDraft>(() => draftFrom(null));
   const [tried, setTried] = useState(false);
+  // Each send of a form, so that its counts are said then (Count).
+  const [submits, setSubmits] = useState(0);
+  // The disposition the person saw standing when the form opened (its id; null for
+  // none): what a recording replaces and a reopening reopens. After a refusal the form
+  // follows what stands once the list is read again, which the person then sees.
+  const [seen, setSeen] = useState<string | null>(null);
+  const [follow, setFollow] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [done, setDone] = useState("");
@@ -237,8 +301,10 @@ export function AttributeTickmark({
   const [onFile, setOnFile] = useState(files[0]?.id ?? "");
   const [choices, setChoices] = useState<Choices>({
     status: "idle",
-    items: [],
+    sets: [],
   });
+  // What reads the annotations: the person's own calls, else what anyone may read.
+  const reader: DigestTickmarkRead | null = tickmark ?? read;
   // Where the focus goes back to when the form or the reopen closes.
   const opener = useRef<HTMLElement | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
@@ -249,27 +315,26 @@ export function AttributeTickmark({
   const latest = useRef(0);
 
   const readChoices = useCallback(async () => {
-    if (tickmark === null) {
+    if (reader === null) {
       return;
     }
     const run = ++latest.current;
-    setChoices((was) => ({ status: "loading", items: was.items }));
-    const sets = await tickmark.annotations();
+    setChoices((was) => ({ status: "loading", sets: was.sets }));
+    const sets = await reader.annotations();
     if (run !== latest.current) {
       return;
     }
     setChoices(
       sets === null
-        ? { status: "failed", items: [] }
-        : {
-            status: "ready",
-            items: annotationChoices(sets, line.attributeId, files),
-          },
+        ? { status: "failed", sets: [] }
+        : { status: "ready", sets },
     );
-  }, [tickmark, line.attributeId, files]);
+  }, [reader]);
+  const items = annotationChoices(choices.sets, line.attributeId, files);
 
   // The annotation a standing "Shown, on my review" rests on is read once, to name its
-  // file; the person's choices, once the form asks for them.
+  // file; the person's choices, once the form asks for them. A read that failed is read
+  // again only when asked ("Try again", or the form opened again).
   const wanted =
     standing?.kind === "SHOWN_ON_REVIEW" ||
     (mode === "form" && draft.kind === "SHOWN_ON_REVIEW");
@@ -279,6 +344,21 @@ export function AttributeTickmark({
       void readChoices();
     }
   }, [wanted, status, readChoices]);
+
+  // After a refusal, what stands once the list is read again is what the person sees.
+  const standingId = standing?.id ?? null;
+  useEffect(() => {
+    if (follow) {
+      setSeen(standingId);
+    }
+  }, [follow, standingId]);
+  // A reopening whose tickmark no longer stands has nothing left to reopen: the form
+  // goes, and the server's sentence stays (below).
+  useEffect(() => {
+    if (mode === "reopen" && standingId === null) {
+      setMode("none");
+    }
+  }, [mode, standingId]);
 
   // The form takes the focus when it opens: its chosen kind, else the first.
   useEffect(() => {
@@ -302,6 +382,12 @@ export function AttributeTickmark({
     setProblem(null);
     setDone("");
     setTried(false);
+    setSeen(standing?.id ?? null);
+    setFollow(false);
+    // A read that failed is tried again once the form opens again.
+    setChoices((was) =>
+      was.status === "failed" ? { status: "idle", sets: [] } : was,
+    );
     if (next === "form") {
       // "Change" starts from what stands; a kind the check no longer allows is not kept.
       const start = draftFrom(standing);
@@ -339,6 +425,7 @@ export function AttributeTickmark({
   const problems = tickmarkProblems(draft);
   const submit = async () => {
     setTried(true);
+    setSubmits((n) => n + 1);
     if (
       tickmark === null ||
       busy ||
@@ -349,15 +436,18 @@ export function AttributeTickmark({
     }
     setBusy(true);
     setProblem(null);
+    setFollow(false);
     const refused = await tickmark.record(
       line.attributeId,
       tickmarkFields({ ...draft, kind: draft.kind }),
+      seen,
     );
     setBusy(false);
     if (refused === null) {
       confirmed(TICKMARK_RECORDED);
     } else {
       setProblem(refused);
+      setFollow(true);
     }
   };
   const reopenProblem =
@@ -368,19 +458,16 @@ export function AttributeTickmark({
         : null;
   const reopen = async () => {
     setTried(true);
-    if (
-      tickmark === null ||
-      standing === null ||
-      busy ||
-      reopenProblem !== null
-    ) {
+    setSubmits((n) => n + 1);
+    if (tickmark === null || seen === null || busy || reopenProblem !== null) {
       return;
     }
     setBusy(true);
     setProblem(null);
+    setFollow(false);
     const refused = await tickmark.reopen(
       line.attributeId,
-      standing.version,
+      seen,
       reopenReason.replace(/\s+/g, " ").trim(),
     );
     setBusy(false);
@@ -388,6 +475,7 @@ export function AttributeTickmark({
       confirmed(TICKMARK_REOPENED);
     } else {
       setProblem(refused);
+      setFollow(true);
     }
   };
 
@@ -462,10 +550,11 @@ export function AttributeTickmark({
           ) : null}
           {standing.kind === "SHOWN_ON_REVIEW" ? (
             <RestsOn
-              disposition={standing}
-              choices={choices}
+              found={annotationOf(choices.sets, standing.annotationId, files)}
+              status={choices.status}
               letter={letter}
-              open={tickmark?.openAnnotation ?? null}
+              open={reader?.openAnnotation ?? null}
+              retry={reader === null ? null : () => void readChoices()}
             />
           ) : null}
           {mode === "reopen" ? (
@@ -492,6 +581,7 @@ export function AttributeTickmark({
                 id={`${id}-reopen-count`}
                 used={spoken(reopenReason)}
                 max={DISPOSITION_BOUNDS.reasonMax}
+                submits={submits}
               />
               {tried && reopenProblem !== null ? (
                 <p id={`${id}-reopen-error`} className="cdg-tmf-error">
@@ -617,19 +707,27 @@ export function AttributeTickmark({
               }
             >
               <legend>The annotation it rests on</legend>
-              {choices.status === "loading" && choices.items.length === 0 ? (
+              {(choices.status === "loading" || choices.status === "idle") &&
+              items.length === 0 ? (
                 <p className="cdg-quiet-note" role="status">
                   Reading the annotations…
                 </p>
               ) : choices.status === "failed" ? (
-                <p className="cdg-tmf-error">
-                  The annotations could not be read. Close the form and try
-                  again.
+                <p className="cdg-tmf-error cdg-tm-line">
+                  <span>{ANNOTATIONS_UNREAD}</span>
+                  <button
+                    type="button"
+                    className="cdg-link"
+                    onClick={() => void readChoices()}
+                  >
+                    {TRY_AGAIN}
+                    <span className="sr-only"> reading the annotations</span>
+                  </button>
                 </p>
-              ) : choices.items.length === 0 ? (
+              ) : items.length === 0 ? (
                 <p className="cdg-quiet-note">{NO_ANNOTATION}</p>
               ) : (
-                choices.items.map((choice) => (
+                items.map((choice) => (
                   <label key={choice.id} className="cdg-tmf-kind">
                     <input
                       type="radio"
@@ -644,6 +742,7 @@ export function AttributeTickmark({
                         {choice.label !== "" ? `: ${choice.label}` : ""}
                       </strong>
                       <span className="cdg-tmf-hint">
+                        {`${choice.kindWords}. `}
                         {choice.statement}
                         {choice.decidedBy !== ""
                           ? ` Reviewed by ${choice.decidedBy}.`
@@ -717,6 +816,7 @@ export function AttributeTickmark({
               id={`${id}-reason-count`}
               used={spoken(draft.reason)}
               max={DISPOSITION_BOUNDS.reasonMax}
+              submits={submits}
             />
             {err("reason") !== null ? (
               <p id={`${id}-reason-error`} className="cdg-tmf-error">
@@ -742,6 +842,7 @@ export function AttributeTickmark({
                 id={`${id}-relied-count`}
                 used={spoken(draft.reliedOn)}
                 max={DISPOSITION_BOUNDS.reliedOnMax}
+                submits={submits}
               />
               {err("reliedOn") !== null ? (
                 <p id={`${id}-relied-error`} className="cdg-tmf-error">
@@ -768,6 +869,15 @@ export function AttributeTickmark({
             </button>
           </div>
         </form>
+      ) : null}
+      {problem !== null &&
+      !(mode === "form" && offer !== null) &&
+      !(mode === "reopen" && standing !== null) ? (
+        // The form the refusal was said in is gone (what stands changed under it): the
+        // server's sentence stays, where the action was taken.
+        <p className="cdg-tmf-problem" role="alert">
+          {problem}
+        </p>
       ) : null}
       <History line={line} />
     </div>

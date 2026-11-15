@@ -156,9 +156,13 @@ describe("the first screen of a finished check", () => {
     );
     // Second review, item 2(b): calm only where every attribute asked for is one
     // accepting marks as evidenced, the accept note's own rule.
+    // Changed 14 November 2026 (docs/evidence-assurance.md, section 10.13, review fix 3).
+    // Old: `calm: attention.length > 0 ? "" : calmOf(check, quiet, asked, acceptNote),`.
+    // New: the same, calmOf also told whether a finding still waits on the person, so
+    // that the tickmarks' calm line is never said while one does.
     assert.match(
       model,
-      /calm: attention\.length > 0 \? "" : calmOf\(check, quiet, asked, acceptNote\),/,
+      /calm:\s*attention\.length > 0\s*\?\s*""\s*:\s*calmOf\(\s*check,\s*quiet,\s*asked,\s*acceptNote,/,
     );
     has(
       model,

@@ -111,6 +111,9 @@ export const ATTRIBUTE_STATES = [
   "SHOWN_ON_REVIEW",
   "NOT_APPLICABLE",
   "NOT_AVAILABLE",
+  // A person's exception where the attribute would otherwise read as shown (by a check,
+  // or by a closing disposition): never counted as shown, an open matter, no tickmark.
+  "EXCEPTION_RECORDED",
 ] as const;
 /** OTHER: a state this page does not know. It is shown in the server's own words, in a
  * neutral tone, and counts as neither shown nor an exception. */
@@ -666,6 +669,11 @@ const STATE_WORDS: Record<AttributeState, { words: string; tone: Tone }> = {
   SHOWN_ON_REVIEW: { words: "Shown, auditor's judgment", tone: "neutral" },
   NOT_APPLICABLE: { words: "Not applicable to this instance", tone: "neutral" },
   NOT_AVAILABLE: { words: "Evidence not available, accepted", tone: "neutral" },
+  // An exception a person recorded: never "Shown", whatever the check found.
+  EXCEPTION_RECORDED: {
+    words: "Exception recorded by the auditor",
+    tone: "danger",
+  },
   OTHER: { words: "Not stated", tone: "neutral" },
 };
 
@@ -1272,6 +1280,7 @@ const DISPOSITION_TILE_WORDS: Record<string, string> = {
   SHOWN_ON_REVIEW: "on the auditor's judgment",
   NOT_APPLICABLE: "not applicable",
   NOT_AVAILABLE: "accepted without evidence",
+  EXCEPTION_RECORDED: "exception recorded",
 };
 
 /** The counts above the matrix. Each is counted from what the server sent: nothing is
@@ -1281,6 +1290,11 @@ export function tilesOf(paper: DesignWorkpaper): Tile[] {
   const { attributes, matters, evidence } = paper;
   const shown = attributes.filter((item) => item.state === "SHOWN");
   const exceptions = attributes.filter((item) => item.state === "EXCEPTION");
+  // Recorded by a person on an attribute that would otherwise read as shown: counted
+  // apart from "shown", and said beside the exceptions a check shows.
+  const recorded = attributes.filter(
+    (item) => item.state === "EXCEPTION_RECORDED",
+  );
   const rest = new Map<string, number>();
   for (const attribute of attributes) {
     if (attribute.state !== "SHOWN" && attribute.state !== "EXCEPTION") {
@@ -1333,13 +1347,19 @@ export function tilesOf(paper: DesignWorkpaper): Tile[] {
         exceptions.length === 0
           ? "None shown"
           : plural(exceptions.length, "exception"),
-      note:
+      note: [
         exceptions.length === 0
           ? "No current check shows one"
           : codes(exceptions) === ""
             ? "See the attributes"
             : `${exceptions.length === 1 ? "Attribute" : "Attributes"} ${codes(exceptions)}`,
-      tone: exceptions.length === 0 ? "neutral" : "danger",
+        recorded.length === 0
+          ? ""
+          : `${recorded.length} recorded by the auditor${codes(recorded) === "" ? "" : ` on ${codes(recorded)}`}`,
+      ]
+        .filter((part) => part !== "")
+        .join("; "),
+      tone: exceptions.length + recorded.length === 0 ? "neutral" : "danger",
     },
     {
       key: "matters",

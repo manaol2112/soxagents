@@ -199,9 +199,11 @@ export type AssuredAttribute = {
   /** The comparisons made in code for the attribute's elements (engine 2); empty
    * otherwise. */
   checks: CodeCheck[];
-  /** The current check finds the records contradict the attribute (section 10.13, "As
-   * built": the run's assessment CONTRADICTED, worked out as the server does for a run
-   * of the first engine). Only an exception can be recorded on it then. */
+  /** The current check finds the records contradict the attribute: the server's own
+   * `contradicted` (section 10.13, "As built (server)"), by the rule recording refuses
+   * the closing kinds by, for a run of either engine. Only an exception can be recorded
+   * on it then. Read as sent and never worked out here: the list's elements carry no
+   * deviation, and a run of the first engine records no assessment. */
   contradicted: boolean;
   /** A person's disposition of the attribute on this request that stands (section
    * 10.13); null where none does, or where what the server sent is not one. */
@@ -320,31 +322,6 @@ function parseEnded(value: unknown): EndedDisposition | null {
     endedAs: ENDINGS.find((item) => item === value.ended_as) ?? "OTHER",
     endedReason: str(value.ended_reason).slice(0, DISPOSITION_BOUNDS.reasonMax),
   };
-}
-
-/** Whether the server reads the attribute as contradicted by the records: its own
- * assessment where an engine 2 run sent one, and otherwise the same table it applies to a run of the
- * first engine (attribute_dispositions.check_finds): an issue resting on a record of the
- * deviation or a contradiction, or an exception shown beside a file not read. Read from
- * what was sent, before this page's own cautious reading of it, so a contradiction the
- * server would hold is never offered the kinds it refuses. */
-function contradictedOf(value: Raw, engine: 1 | 2): boolean {
-  // An engine 1 run records no assessment (section 10.1): one sent with it is not read.
-  const said = engine === 2 ? value.assessment : undefined;
-  if (said === "CONTRADICTED") {
-    return true;
-  }
-  if (said !== null && said !== undefined) {
-    return false;
-  }
-  const deviation = (Array.isArray(value.elements) ? value.elements : []).some(
-    (element) => isRecord(element) && element.deviation === true,
-  );
-  return (
-    (value.verdict === "ISSUE" &&
-      (deviation || value.result === "CONTRADICTED")) ||
-    (value.verdict === "UNSETTLED" && deviation)
-  );
 }
 
 /** A file the gate left out of the readings; the run went ahead on the rest. */
@@ -814,7 +791,8 @@ function parseAttribute(
             .filter((item): item is CodeCheck => item !== null)
             .slice(0, REVIEW_BOUNDS.checks)
         : [],
-    contradicted: contradictedOf(value, engine),
+    // The server's own answer, nothing else: anything but true is not a contradiction.
+    contradicted: value.contradicted === true,
     disposition: parseDisposition(value.disposition),
     history: (Array.isArray(value.disposition_history)
       ? value.disposition_history
@@ -2796,6 +2774,23 @@ export function assuranceRow(input: {
   const whole = (letter: string) =>
     check.attributes.find((each) => each.letter === letter)?.evidenced === true;
   const implemented = lettersOf("IMPLEMENTED");
+  // A person's tickmarks (section 10.13), on any attribute of the check: an exception,
+  // which accepting does not settle, and a closing one on an attribute the records do not
+  // show whole, which accepting never marks as evidenced.
+  const tickmarked = (pick: (kind: DispositionKind) => boolean) =>
+    [...check.attributes, ...check.notAddressed, ...check.notAsked]
+      .filter(
+        (line) =>
+          line.disposition !== null &&
+          pick(line.disposition.kind) &&
+          line.letter !== "",
+      )
+      .map((line) => line.letter)
+      .filter((letter, index, all) => all.indexOf(letter) === index)
+      .sort((a, b) => at(a) - at(b) || a.localeCompare(b));
+  const closing = tickmarked((kind) => CLOSING_KINDS.includes(kind)).filter(
+    (letter) => !whole(letter),
+  );
   return {
     standing: check.standing,
     fact:
@@ -2823,6 +2818,8 @@ export function assuranceRow(input: {
       judged: lettersOf("JUDGMENT"),
       waiting: lettersOf("WAITING"),
       decided: lettersOf("DECIDED"),
+      excepted: tickmarked((kind) => kind === "EXCEPTION"),
+      tickmarked: closing,
       leftOut: left,
       span: input.span,
     }),
@@ -2852,6 +2849,12 @@ export function acceptNote(facts: {
   waiting?: readonly string[];
   /** Issues a person has decided. */
   decided: readonly string[];
+  /** Where a person's exception stands (section 10.13): accepting does not settle it. */
+  excepted?: readonly string[];
+  /** Where a person's closing tickmark stands on an attribute the records do not show
+   * whole: it carries the person's tickmark, never counted as evidenced, and no judgment
+   * is said to be needed there. */
+  tickmarked?: readonly string[];
   /** Files of the request the readings did not include. */
   leftOut: number;
   span: Span;
@@ -2864,7 +2867,11 @@ export function acceptNote(facts: {
     return "This evidence has not been checked against the attributes, so accepting marks no attribute as evidenced.";
   }
   const waiting = facts.waiting ?? [];
-  const open = facts.issues.length + facts.judged.length + waiting.length > 0;
+  const excepted = facts.excepted ?? [];
+  const tickmarked = facts.tickmarked ?? [];
+  // A judgment the person has already made with a closing tickmark is not asked again.
+  const judged = facts.judged.filter((letter) => !tickmarked.includes(letter));
+  const open = facts.issues.length + judged.length + waiting.length > 0;
   const many = (letters: readonly string[]) => letters.length !== 1;
   return [
     facts.implemented.length > 0
@@ -2880,8 +2887,12 @@ export function acceptNote(facts: {
     facts.issues.length > 0
       ? `Both readings found an issue on ${span(facts.issues)}.`
       : "",
-    facts.judged.length > 0
-      ? `Your judgment is needed on ${span(facts.judged)}.`
+    judged.length > 0 ? `Your judgment is needed on ${span(judged)}.` : "",
+    tickmarked.length > 0
+      ? `${span(tickmarked)} ${many(tickmarked) ? "carry" : "carries"} your tickmark, so ${many(tickmarked) ? "they are" : "it is"} not marked as evidenced.`
+      : "",
+    excepted.length > 0
+      ? `${many(excepted) ? "Exceptions are" : "An exception is"} recorded on ${span(excepted)}; accepting does not settle ${many(excepted) ? "them" : "it"}.`
       : "",
     waiting.length > 0
       ? `${span(waiting)} ${many(waiting) ? "are" : "is"} not concluded: a file of this request has not been read yet.`
@@ -2966,10 +2977,24 @@ function reasonOf(value: unknown): string | null {
     : null;
 }
 
+/** The id of the disposition the person saw standing, as a recording names it
+ * (`replaces`): a UUID, or null where they saw none. Undefined where the fields do not
+ * say it, or say something that is neither: the write is then not sent, so that a
+ * recording never replaces a tickmark its person did not see. */
+function replacesOf(fields: Fields): string | null | undefined {
+  if (fields.replaces === null) {
+    return null;
+  }
+  return typeof fields.replaces === "string" && UUID.test(fields.replaces)
+    ? fields.replaces
+    : undefined;
+}
+
 /** The body of a disposition, checked as the contract shapes it; null where it is not
  * one: a kind of the four, a reason of 10 to 1000 characters, what was relied on (600)
- * only with "Evidence not available, accepted", and an annotation with "Shown, on my
- * review" only, which needs one. */
+ * only with "Evidence not available, accepted", an annotation with "Shown, on my
+ * review" only, which needs one, and `replaces`, always said (the id seen standing, or
+ * null for none). */
 function dispositionBody(fields: Fields): Record<string, unknown> | null {
   const kind = DISPOSITION_KINDS.find((item) => item === fields.kind) ?? null;
   const reason = reasonOf(fields.reason);
@@ -2981,7 +3006,9 @@ function dispositionBody(fields: Fields): Record<string, unknown> | null {
     fields.annotation_id === undefined || fields.annotation_id === null
       ? ""
       : str(fields.annotation_id);
+  const replaces = replacesOf(fields);
   if (
+    replaces === undefined ||
     kind === null ||
     reason === null ||
     reliedOn === null ||
@@ -2997,6 +3024,7 @@ function dispositionBody(fields: Fields): Record<string, unknown> | null {
     reason,
     ...(reliedOn !== "" ? { relied_on: reliedOn } : {}),
     ...(annotation !== "" ? { annotation_id: annotation } : {}),
+    replaces,
   };
 }
 
@@ -3004,8 +3032,11 @@ function dispositionBody(fields: Fields): Record<string, unknown> | null {
  * engine" (the /workspace/evidence-assurance route): POST
  * .../evidence-assurance/{requirement_id}/rerun, or /upgrade, with no body; and behind a
  * tickmark: POST .../{requirement_id}/attributes/{attribute_id}/disposition with
- * {kind, reason, relied_on?, annotation_id?}, or .../disposition/reopen with
- * {version, reason}. Anything else is not sent. */
+ * {kind, reason, relied_on?, annotation_id?, replaces} (`replaces`: the id of the
+ * disposition the person saw standing, or null), or .../disposition/reopen with
+ * {id, reason} (`id`: the disposition the person saw standing and reopens). Each act
+ * names what the person saw, so that the server refuses it, in its own sentence, where
+ * the page is stale. Anything else is not sent. */
 export function assuranceWrite(fields: Fields): AssuranceWrite {
   const [organizationId, projectId, controlId, requirementId] = [
     "organization_id",
@@ -3035,14 +3066,13 @@ export function assuranceWrite(fields: Fields): AssuranceWrite {
     const body = dispositionBody(fields);
     return body === null ? { error: "invalid" } : { path, body };
   }
+  // The one the person saw, by its id: a standing disposition's version cannot tell it
+  // from the one that replaced it, so the version is never sent.
   const reason = reasonOf(fields.reason);
-  const version = fields.version;
-  return reason === null ||
-    typeof version !== "number" ||
-    !Number.isInteger(version) ||
-    version < 1
+  const id = fields.id;
+  return reason === null || typeof id !== "string" || !UUID.test(id)
     ? { error: "invalid" }
-    : { path: `${path}/reopen`, body: { version, reason } };
+    : { path: `${path}/reopen`, body: { id, reason } };
 }
 
 /** What a person reads when a tickmark, or reopening one, did not go through; null when

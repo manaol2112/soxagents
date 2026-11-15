@@ -57,15 +57,18 @@ describe("what the tickmark's view sends", () => {
     ]) {
       assert.equal(forbidden.test(view), false, String(forbidden));
     }
-    // It records and reopens only through the row's own handlers.
+    // It records and reopens only through the row's own handlers. Changed 14 November
+    // 2026 (review fix 1). Old: `tickmark.record(line.attributeId, fields)` and
+    // `tickmark.reopen(line.attributeId, standing.version, ...)`. New: each names the
+    // disposition the person saw standing when the form opened (`seen`): what a
+    // recording replaces (null for none), and the one a reopening reopens.
     has(
       view,
-      "const refused = await tickmark.record( line.attributeId, tickmarkFields({ ...draft, kind: draft.kind }), );",
+      "const refused = await tickmark.record( line.attributeId, tickmarkFields({ ...draft, kind: draft.kind }), seen, );",
     );
-    has(
-      view,
-      "const refused = await tickmark.reopen( line.attributeId, standing.version,",
-    );
+    has(view, "const refused = await tickmark.reopen( line.attributeId, seen,");
+    has(view, "setSeen(standing?.id ?? null);");
+    assert.equal(/standing\.version/.test(view), false);
   });
 
   it("says success only once the server has answered, and shows its refusal as it is", () => {
@@ -83,7 +86,7 @@ describe("what the tickmark's view sends", () => {
     );
     has(
       submit,
-      "if (refused === null) { confirmed(TICKMARK_RECORDED); } else { setProblem(refused); }",
+      "if (refused === null) { confirmed(TICKMARK_RECORDED); } else { setProblem(refused); setFollow(true); }",
     );
     const reopen = view.slice(
       view.indexOf("const reopen = async"),
@@ -91,7 +94,7 @@ describe("what the tickmark's view sends", () => {
     );
     has(
       reopen,
-      "if (refused === null) { confirmed(TICKMARK_REOPENED); } else { setProblem(refused); }",
+      "if (refused === null) { confirmed(TICKMARK_REOPENED); } else { setProblem(refused); setFollow(true); }",
     );
     // The refusal is said where the action was taken, as an alert.
     has(view, '<p className="cdg-tmf-problem" role="alert"> {problem} </p>');
@@ -114,6 +117,11 @@ describe("the row's tickmark calls", () => {
     );
     has(hook, 'intent: "disposition",');
     has(hook, 'intent: "reopen-disposition",');
+    // What the person saw: `replaces` on a recording, `id` on a reopening, never the
+    // version (review fix 1).
+    has(hook, "...fields, replaces, }),");
+    has(hook, "attribute_id: attributeId, id, reason, }),");
+    assert.equal(/\bversion\b/.test(hook), false);
     // Success is the server's answer; the list is then read again in place.
     has(hook, "const problem = dispositionProblem(status, detail);");
     has(
@@ -126,8 +134,14 @@ describe("the row's tickmark calls", () => {
   it("are offered only to a person who may act, as the model offers them", () => {
     has(
       list,
-      "const tickmark: DigestTickmarkAction | null = canAct && assured !== null ? {",
+      "const tickmark: DigestTickmarkAction | null = canAct && assured !== null && tickmarkRead !== null ? { ...tickmarkRead,",
     );
+    // What anyone who can see the row reads (review fix 4): the annotations, read only.
+    has(
+      list,
+      "const tickmarkRead: DigestTickmarkRead | null = assured !== null ? {",
+    );
+    has(list, "read={tickmarkRead}");
     has(list, "offer: (line) => tickmarkOffer(assured.check, line, canAct),");
     has(list, "const addEvidence: DigestAddEvidence | null = canAct ? {");
     has(list, "tickmark={tickmark} addEvidence={addEvidence}");
@@ -201,8 +215,20 @@ describe("the form", () => {
     }
     assert.ok((view.match(/<legend>/g) ?? []).length >= 2);
     assert.ok((view.match(/type="radio"/g) ?? []).length >= 2);
-    has(view, 'aria-live="polite"');
+    // Changed 14 November 2026 (review fix 9c). Old: the count itself was
+    // aria-live="polite", so every keystroke was announced. New: the count is read with
+    // its field; a polite line apart says only the crossing of the limit and a send.
     has(view, `{\`\${used} of \${max} characters\`}`);
+    const count = component(view, "Count");
+    // The visible count: no live region of its own.
+    has(count, "<span id={id} className={`cdg-tmf-count");
+    assert.equal(/className=\{`cdg-tmf-count[^>]*aria-live/.test(count), false);
+    has(
+      count,
+      '<span className="sr-only" aria-live="polite" data-cdg-count-said="">',
+    );
+    assert.equal((count.match(/aria-live/g) ?? []).length, 1);
+    has(count, "if (crossed.current === over) { return; }");
   });
 
   it("moves the focus to the form when it opens and back to what opened it when it closes", () => {

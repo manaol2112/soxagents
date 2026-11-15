@@ -5,7 +5,11 @@
  * one at a time. It arranges what the check's view model (evidence-assurance-model.ts)
  * already words, and decides nothing.
  */
-import type { AnnotationSet } from "./evidence-annotations-model.ts";
+import {
+  type AnnotationKind,
+  type AnnotationSet,
+  kindLine,
+} from "./evidence-annotations-model.ts";
 import {
   type AttributeLine,
   type AttributeState,
@@ -86,10 +90,13 @@ export type AttentionItem = {
   /** The quiet line: the attribute's wording in full (the screen clamps it), or the
    * file's sentence. */
   context: string;
-  /** "Finding to decide" where a finding on it waits on the person; "" otherwise. */
+  /** "Finding to decide" where a finding on it waits on the person; "" otherwise (and
+   * where the headline already says it). */
   flag: string;
   /** "Exception recorded" where a person's exception stands on the attribute (section
-   * 10.13): it keeps the item, and says so. Absent otherwise. */
+   * 10.13): it keeps the item, and says so. On an attribute a person's closing tickmark
+   * closes whose finding still waits, that tickmark in its own words (the headline is
+   * then "Finding to decide"). Absent otherwise. */
   tickmark?: DigestPill;
   /** The attribute's state in short words with its mark and tone; null for a file, a
    * general request or another item. */
@@ -345,16 +352,30 @@ export const verdictExceptions = (count: number) =>
 export const DIGEST_TICKMARKED =
   "Nothing else waits on you here: each attribute not shown carries a tickmark.";
 
-/** How a disposition that no longer stands ended, in words. */
+/** How a disposition that no longer stands ended, as a neutral label: why it ended is
+ * the server's own `ended_reason`, said after it for every ending (a later check names
+ * what it found; an annotation that changed says how). Never more than the ending is. */
 export const ENDING_WORDS: Record<Ending, string> = {
   REPLACED: "Replaced",
   REOPENED: "Reopened",
-  SUPERSEDED_BY_CHECK: "No longer needed: a later check found it shown",
-  OVERTAKEN_BY_CHECK:
-    "Cancelled: a later check found the records contradict it",
-  ANNOTATION_GONE: "Ended: its annotation was removed",
+  SUPERSEDED_BY_CHECK: "Ended by a later check",
+  OVERTAKEN_BY_CHECK: "Ended by a later check",
+  ANNOTATION_GONE:
+    "Ended: its annotation changed or its file is no longer in force",
   OTHER: "No longer stands",
 };
+
+/** How an ended disposition ended, in one line: the label, who or what ended it and
+ * when, and the server's reason where it gave one. */
+export function endingLine(item: {
+  endedAs: Ending;
+  endedBy: string | null;
+  endedAt: string;
+  endedReason: string;
+}): string {
+  const reason = item.endedReason.replace(/\s+/g, " ").trim();
+  return `${ENDING_WORDS[item.endedAs]} (${recordedLine(item.endedBy, item.endedAt)})${reason === "" ? "." : `: ${reason}`}`;
+}
 
 /** Said where the records contradict the attribute, beside the one kind offered. */
 export const ONLY_EXCEPTION =
@@ -394,26 +415,35 @@ export function recordedLine(
     .join(" · ");
 }
 
-/** A reviewed annotation the person may rest "Shown, on my review" on. */
+/** A reviewed annotation the person may rest "Shown, on my review" on, or the one a
+ * standing "Shown, auditor's judgment" rests on. */
 export type AnnotationChoice = {
   id: string;
   fileId: string;
   /** The file's reference among the row's files, "E2"; "" where it is not one of them. */
   ref: string;
   number: number;
+  kind: AnnotationKind;
+  /** Its kind in words, with the attributes it bears on: "Shows attribute B". */
+  kindWords: string;
   label: string;
   statement: string;
   decidedBy: string;
 };
 
-/** The annotations on the request's files that a person confirmed, edited or made
- * (CONFIRMED or EDITED) and that name the attribute: what "Shown, on my review" may rest
- * on (the server checks it again). In the row's file order, then each file's own. */
-export function annotationChoices(
+/** An annotation of the request's files, with what decides whether it may be chosen. */
+type Listed = {
+  choice: AnnotationChoice;
+  reviewed: boolean;
+  attributeIds: readonly string[];
+};
+
+/** Every annotation of the sets, in the row's file order, then each file's own; each
+ * once. */
+function annotationsIn(
   sets: readonly AnnotationSet[],
-  attributeId: string,
   files: readonly DigestFile[],
-): AnnotationChoice[] {
+): Listed[] {
   const order = (fileId: string) => {
     const at = files.findIndex((file) => file.id === fileId);
     return at < 0 ? files.length : at;
@@ -421,26 +451,64 @@ export function annotationChoices(
   return [...sets]
     .sort((a, b) => order(a.fileId) - order(b.fileId))
     .flatMap((set) =>
-      set.annotations
-        .filter(
-          (annotation) =>
-            (annotation.status === "CONFIRMED" ||
-              annotation.status === "EDITED") &&
-            annotation.attributeIds.includes(attributeId),
-        )
-        .map((annotation) => ({
-          id: annotation.id,
-          fileId: set.fileId,
-          ref: fileRef(files, set.fileId),
-          number: annotation.number,
-          label: annotation.label,
-          statement: annotation.statement,
-          decidedBy: annotation.decidedByName ?? "",
-        })),
+      set.annotations.map(
+        (annotation): Listed => ({
+          reviewed:
+            annotation.status === "CONFIRMED" || annotation.status === "EDITED",
+          attributeIds: annotation.attributeIds,
+          choice: {
+            id: annotation.id,
+            fileId: set.fileId,
+            ref: fileRef(files, set.fileId),
+            number: annotation.number,
+            kind: annotation.kind,
+            kindWords: kindLine(annotation),
+            label: annotation.label,
+            statement: annotation.statement,
+            decidedBy: annotation.decidedByName ?? "",
+          },
+        }),
+      ),
     )
     .filter(
-      (item, at, all) => all.findIndex((each) => each.id === item.id) === at,
+      (item, at, all) =>
+        all.findIndex((each) => each.choice.id === item.choice.id) === at,
     );
+}
+
+/** The annotations on the request's files that a person confirmed, edited or made
+ * (CONFIRMED or EDITED), that show the attribute (kind SHOWS: never one that marks an
+ * exception, identifies a person or names a source) and that name it: what "Shown, on my
+ * review" may rest on (the server checks it again). In the row's file order, then each
+ * file's own. */
+export function annotationChoices(
+  sets: readonly AnnotationSet[],
+  attributeId: string,
+  files: readonly DigestFile[],
+): AnnotationChoice[] {
+  return annotationsIn(sets, files)
+    .filter(
+      (item) =>
+        item.reviewed &&
+        item.choice.kind === "SHOWS" &&
+        item.attributeIds.includes(attributeId),
+    )
+    .map((item) => item.choice);
+}
+
+/** The annotation a standing "Shown, auditor's judgment" rests on, by its id, whatever
+ * its kind (one recorded before the SHOWS rule stands as it was); null where the
+ * request's files do not list it. */
+export function annotationOf(
+  sets: readonly AnnotationSet[],
+  annotationId: string | null,
+  files: readonly DigestFile[],
+): AnnotationChoice | null {
+  return annotationId === null
+    ? null
+    : (annotationsIn(sets, files).find(
+        (item) => item.choice.id === annotationId,
+      )?.choice ?? null);
 }
 
 /** A tickmark as the person drafts it. */
@@ -899,36 +967,57 @@ function attentionOf(
 ): AttentionItem[] {
   const attributes: AttentionItem[] = rows
     .filter((row) => row.attention)
-    .map((row) => ({
-      key: `ATTRIBUTE:${row.key}`,
-      kind: "ATTRIBUTE",
-      mark: row.letter,
-      headline: gistLine(row.gist),
-      more: row.gist.more,
-      context: row.text,
-      flag:
-        row.line.findingId !== null && waiting.has(row.line.findingId)
-          ? FINDING_TO_DECIDE
-          : "",
-      // A person's exception keeps the item, and says so.
-      ...(row.line.disposition?.kind === "EXCEPTION"
-        ? {
-            tickmark: {
-              label: EXCEPTION_RECORDED,
-              icon: TICKMARK_WORDS.EXCEPTION.icon,
-              tone: TICKMARK_WORDS.EXCEPTION.tone,
-            },
-          }
-        : {}),
-      status: row.status,
-      control:
-        row.line.state === "JUDGMENT"
-          ? { type: "OPEN", label: DECIDE }
-          : row.asks.length > 0
-            ? { type: "ASK", askKeys: row.asks.map((ask) => ask.key) }
-            : { type: "NONE" },
-      attributeKey: row.key,
-    }));
+    .map((row): AttentionItem => {
+      const waits =
+        row.line.findingId !== null && waiting.has(row.line.findingId);
+      const kind = row.line.disposition?.kind;
+      // A person's tickmark closes the attribute, but a finding on it still waits: the
+      // item stays, said as the finding to decide, with the tickmark beside it, and
+      // opens the attribute where the finding is decided. Nothing is asked for it.
+      if (waits && kind !== undefined && closes(row.line.disposition)) {
+        const words = TICKMARK_WORDS[kind];
+        return {
+          key: `ATTRIBUTE:${row.key}`,
+          kind: "ATTRIBUTE",
+          mark: row.letter,
+          headline: FINDING_TO_DECIDE,
+          more: 0,
+          context: row.text,
+          flag: "",
+          tickmark: { label: words.shown, icon: words.icon, tone: words.tone },
+          status: row.status,
+          control: { type: "OPEN", label: DECIDE },
+          attributeKey: row.key,
+        };
+      }
+      return {
+        key: `ATTRIBUTE:${row.key}`,
+        kind: "ATTRIBUTE",
+        mark: row.letter,
+        headline: gistLine(row.gist),
+        more: row.gist.more,
+        context: row.text,
+        flag: waits ? FINDING_TO_DECIDE : "",
+        // A person's exception keeps the item, and says so.
+        ...(kind === "EXCEPTION"
+          ? {
+              tickmark: {
+                label: EXCEPTION_RECORDED,
+                icon: TICKMARK_WORDS.EXCEPTION.icon,
+                tone: TICKMARK_WORDS.EXCEPTION.tone,
+              },
+            }
+          : {}),
+        status: row.status,
+        control:
+          row.line.state === "JUDGMENT"
+            ? { type: "OPEN", label: DECIDE }
+            : row.asks.length > 0
+              ? { type: "ASK", askKeys: row.asks.map((ask) => ask.key) }
+              : { type: "NONE" },
+        attributeKey: row.key,
+      };
+    });
   // The row's own items about a file, by the file: where the check has an item for the
   // same file, the two are one item (the check's action first, the row's words with it).
   const rowFile = new Map(
@@ -1056,7 +1145,6 @@ function quietOf(
   rows: readonly DigestAttribute[],
   caveat: DigestPill | null,
   extras: readonly DigestExtra[],
-  waiting: ReadonlySet<string>,
 ): QuietItem[] {
   // Every attribute that has no item above, in its own state's words and tone: none is
   // reachable only by stepping through the attributes.
@@ -1070,15 +1158,14 @@ function quietOf(
         (row.line.evidenced || row.line.shows === "DESIGN");
       const kind = row.line.disposition?.kind;
       // Closed by a person's tickmark, in its own words and a neutral tone: never as
-      // shown. The check's own evidenced shown stands before it.
+      // shown. The check's own evidenced shown stands before it. (One whose finding
+      // still waits is not here: it keeps its item under "Needs attention".)
       if (
         !row.line.evidenced &&
         kind !== undefined &&
         closes(row.line.disposition)
       ) {
         const words = TICKMARK_WORDS[kind];
-        const waits =
-          row.line.findingId !== null && waiting.has(row.line.findingId);
         const text =
           row.letter === ""
             ? capital(words.quiet)
@@ -1086,7 +1173,7 @@ function quietOf(
         return {
           key: `TICKMARK:${row.key}`,
           kind: "TICKMARK" as const,
-          text: `${text}${row.line.expected ? "" : QUIET_NOT_ASKED}${waits ? `, ${small(FINDING_TO_DECIDE)}` : ""}`,
+          text: `${text}${row.line.expected ? "" : QUIET_NOT_ASKED}`,
           icon: words.icon,
           tone: words.tone,
           attributeKey: row.key,
@@ -1166,6 +1253,8 @@ function calmOf(
   quiet: readonly QuietItem[],
   asked: readonly DigestAttribute[],
   note: string,
+  /** Whether a finding on an attribute still waits on the person. */
+  findingWaits: boolean,
 ): string {
   const review = check.review;
   const caveats = quiet.filter((item) => item.kind === "CAVEAT");
@@ -1183,7 +1272,10 @@ function calmOf(
   }
   // What the check did not show carries a person's tickmark: said so, with every caveat
   // after it, and never as "nothing needs your attention".
+  // Never while a finding waits on the person: something else does wait (it keeps its
+  // item, so this is said only should that ever change).
   if (
+    !findingWaits &&
     asked.length > 0 &&
     asked.some((row) => !row.line.evidenced) &&
     asked.every((row) => row.line.evidenced || closes(row.line.disposition))
@@ -1292,14 +1384,15 @@ export function checkDigest(
         // on any attribute (the records may show an exception on one the request does
         // not ask for); or one whose finding a person has still to decide.
         // A person's disposition that closes it takes it off the list (section 10.13);
-        // a person's exception keeps it there, whatever the check found.
+        // a person's exception keeps it there, whatever the check found; and a finding
+        // that waits on the person keeps it there whatever the tickmark.
         attention:
           line.disposition?.kind === "EXCEPTION" ||
+          (line.findingId !== null && waiting.has(line.findingId)) ||
           (!closes(line.disposition) &&
             ((OPEN_STATES.has(line.state) && line.expected) ||
               line.state === "ISSUE" ||
-              line.state === "JUDGMENT" ||
-              (line.findingId !== null && waiting.has(line.findingId)))),
+              line.state === "JUDGMENT")),
       };
     });
   const caveat: DigestPill | null =
@@ -1318,7 +1411,7 @@ export function checkDigest(
     files,
     extras,
   );
-  const quiet = quietOf(check, attributes, caveat, extras, waiting);
+  const quiet = quietOf(check, attributes, caveat, extras);
   // Of the attributes the request asks for: those the records of an instance show;
   // apart, those shown only by what a document requires, and those supported without
   // the check saying how.
@@ -1380,7 +1473,19 @@ export function checkDigest(
       .join(" "),
     attention,
     quiet,
-    calm: attention.length > 0 ? "" : calmOf(check, quiet, asked, acceptNote),
+    calm:
+      attention.length > 0
+        ? ""
+        : calmOf(
+            check,
+            quiet,
+            asked,
+            acceptNote,
+            attributes.some(
+              (row) =>
+                row.line.findingId !== null && waiting.has(row.line.findingId),
+            ),
+          ),
     steps: [
       ...attributes.filter((row) => row.attention),
       ...attributes.filter((row) => !row.attention),

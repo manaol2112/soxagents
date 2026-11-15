@@ -14,6 +14,7 @@ import { HeldPicker, PolicyPicker } from "./add-evidence-menu";
 import type {
   DigestAddEvidence,
   DigestTickmarkAction,
+  DigestTickmarkRead,
 } from "./attribute-tickmark";
 import { AutoRefresh } from "./auto-refresh";
 import {
@@ -350,18 +351,24 @@ function useAssuranceAction(ids: Ids) {
  * (/workspace/evidence-assurance, intents "disposition" and "reopen-disposition", which
  * assuranceWrite checks). It answers the server's refusal in one sentence, or null only
  * once the server has confirmed it; the list is then read again in place (no reload).
- * A refusal because something changed under the person (409) reads it again too.
+ * A refusal because something changed under the person (409) reads it again too, and is
+ * kept (`refused`) so that the row still says it should the list read again no longer
+ * show the attribute (the check is now out of date, or checking). Each act names the
+ * disposition the person saw: a recording the one it replaces (`replaces`, null for
+ * none), a reopening the one it reopens (`id`).
  */
 function useTickmarkAction(ids: Ids) {
   const router = useRouter();
   const [, startTransition] = useTransition();
   // A second press while the first is on its way sends nothing.
   const sending = useRef(false);
+  const [refused, setRefused] = useState<string | null>(null);
   async function send(fields: Record<string, unknown>): Promise<string | null> {
     if (sending.current) {
       return "The last tickmark is still being recorded. Wait for it, then try again.";
     }
     sending.current = true;
+    setRefused(null);
     let status = 0;
     let detail = "";
     try {
@@ -389,6 +396,9 @@ function useTickmarkAction(ids: Ids) {
     if (problem === null || status === 409) {
       startTransition(() => router.refresh());
     }
+    if (status === 409) {
+      setRefused(problem);
+    }
     return problem;
   }
   return {
@@ -396,26 +406,31 @@ function useTickmarkAction(ids: Ids) {
       requirementId: string,
       attributeId: string,
       fields: Record<string, string>,
+      replaces: string | null,
     ) =>
       send({
         intent: "disposition",
         requirement_id: requirementId,
         attribute_id: attributeId,
         ...fields,
+        replaces,
       }),
     reopen: (
       requirementId: string,
       attributeId: string,
-      version: number,
+      id: string,
       reason: string,
     ) =>
       send({
         intent: "reopen-disposition",
         requirement_id: requirementId,
         attribute_id: attributeId,
-        version,
+        id,
         reason,
       }),
+    /** The last 409 refusal, until the next act. */
+    refused,
+    clearRefused: () => setRefused(null),
   };
 }
 
@@ -2274,30 +2289,17 @@ function Row({
       ) : null}
     </>
   );
-  // A person's tickmark on an attribute of the finished check, and the row's own ways
-  // to add evidence from it (section 10.13): only for a person who may act.
-  const tickmark: DigestTickmarkAction | null =
-    canAct && assured !== null
+  // What anyone who can see the row may read of a tickmark: the annotation a "Shown,
+  // auditor's judgment" rests on (read only), and the one viewer on it.
+  const tickmarkRead: DigestTickmarkRead | null =
+    assured !== null
       ? {
-          offer: (line) => tickmarkOffer(assured.check, line, canAct),
-          record: (attributeId, fields) =>
-            tickmarks.record(item.id, attributeId, fields),
-          reopen: (attributeId, version, reason) =>
-            tickmarks.reopen(item.id, attributeId, version, reason),
           annotations: () =>
             readRequestAnnotations(
               ids,
               item.id,
               rowFiles.map((file) => file.id),
             ),
-          addAnnotation: (fileId, attributeId, back) =>
-            onView({
-              fileId,
-              files: filesOf(item),
-              requirementId: item.id,
-              add: { attributeId },
-              onClosed: back,
-            }),
           openAnnotation: (fileId, annotationId) =>
             onView({
               fileId,
@@ -2307,6 +2309,47 @@ function Row({
             }),
         }
       : null;
+  // A person's tickmark on an attribute of the finished check, and the row's own ways
+  // to add evidence from it (section 10.13): only for a person who may act.
+  const tickmark: DigestTickmarkAction | null =
+    canAct && assured !== null && tickmarkRead !== null
+      ? {
+          ...tickmarkRead,
+          offer: (line) => tickmarkOffer(assured.check, line, canAct),
+          record: (attributeId, fields, replaces) =>
+            tickmarks.record(item.id, attributeId, fields, replaces),
+          reopen: (attributeId, seen, reason) =>
+            tickmarks.reopen(item.id, attributeId, seen, reason),
+          addAnnotation: (fileId, attributeId, back) =>
+            onView({
+              fileId,
+              files: filesOf(item),
+              requirementId: item.id,
+              add: { attributeId },
+              onClosed: back,
+            }),
+        }
+      : null;
+  // A tickmark refused because the request changed (409): where the list read again no
+  // longer shows the attribute (the check is out of date, or checking), the row still
+  // says why, on its check's line; once the check is finished again, it is gone.
+  const standingNow = assured?.check.standing ?? null;
+  const lostRefusal =
+    tickmarks.refused !== null &&
+    standingNow !== null &&
+    standingNow !== "REVIEWED"
+      ? tickmarks.refused
+      : null;
+  const refusalShown = useRef(false);
+  const { clearRefused } = tickmarks;
+  useEffect(() => {
+    if (lostRefusal !== null) {
+      refusalShown.current = true;
+    } else if (refusalShown.current && standingNow === "REVIEWED") {
+      refusalShown.current = false;
+      clearRefused();
+    }
+  }, [lostRefusal, standingNow, clearRefused]);
   const unavailable = (key: MenuKey) =>
     menuEntries.find((each) => each.key === key)?.unavailable ?? null;
   const addEvidence: DigestAddEvidence | null = canAct
@@ -2386,6 +2429,8 @@ function Row({
         acceptNote={assured.acceptNote}
         tickmark={tickmark}
         addEvidence={addEvidence}
+        read={tickmarkRead}
+        refused={lostRefusal}
         picked={picked}
         onPick={(findingId, on) =>
           setPicked((current) => {
@@ -2825,6 +2870,8 @@ function CheckOfRequest({
   acceptNote,
   tickmark,
   addEvidence,
+  read,
+  refused,
 }: {
   check: RequestCheck;
   /** The row's in-force files. */
@@ -2868,6 +2915,11 @@ function CheckOfRequest({
   tickmark: DigestTickmarkAction | null;
   /** The row's own ways to add evidence; null for a person who may not act. */
   addEvidence: DigestAddEvidence | null;
+  /** What anyone who can see the row may read of a tickmark. */
+  read: DigestTickmarkRead | null;
+  /** A tickmark refused (409) whose attribute the check no longer shows: said on the
+   * check's line, so it is never lost unread; null otherwise. */
+  refused: string | null;
 }) {
   const action = offer(check.action);
   // The finished check as its first screen; null while it is anything else.
@@ -2922,6 +2974,7 @@ function CheckOfRequest({
             </span>
           </span>
         </p>
+        <Problem text={refused} />
         {leftOut}
       </div>
     );
@@ -2947,6 +3000,7 @@ function CheckOfRequest({
               )
             : null}
         </div>
+        <Problem text={refused} />
         {leftOut}
       </div>
     );
@@ -3099,6 +3153,7 @@ function CheckOfRequest({
         details={details}
         tickmark={tickmark}
         addEvidence={addEvidence}
+        read={read}
       />
     </div>
   );

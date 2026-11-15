@@ -4,13 +4,17 @@ import { describe, it } from "node:test";
 
 import {
   annotationChoices,
+  annotationOf,
   type CheckDigest,
   checkDigest,
+  DECIDE,
   DIGEST_NOTHING,
   DIGEST_TICKMARKED,
   draftFrom,
   ENDING_WORDS,
   EXCEPTION_RECORDED,
+  endingLine,
+  FINDING_TO_DECIDE,
   ONLY_EXCEPTION,
   TICKMARK_WORDS,
   tickedToStart,
@@ -35,6 +39,8 @@ import {
 import { parseAnnotations } from "../apps/web/src/evidence-annotations-model.ts";
 import {
   ASSURANCE_INTENTS,
+  acceptNote,
+  assuranceRow,
   assuranceWrite,
   DISPOSITION_KINDS,
   dispositionProblem,
@@ -111,7 +117,12 @@ const gap = (id: string, code: string, over: Record<string, unknown> = {}) =>
     ...over,
   });
 
-/** The records contradict it: an exception a record shows. */
+/** The records contradict it: an exception a record shows, as the server sends it
+ * (2b3887f): `contradicted` on the attribute. Changed 14 November 2026 (review fix 2).
+ * Old: the fixture fed an element `deviation: true`, from which the page worked the
+ * contradiction out itself; the server never sends an element's deviation (ElementBody
+ * has none), so the page could not tell a first-engine contradiction. New: the server's
+ * own `contradicted`, and no element deviation. */
 const contradicted = (over: Record<string, unknown> = {}) =>
   gap(B, "B", {
     result: "NOT_MET",
@@ -123,11 +134,11 @@ const contradicted = (over: Record<string, unknown> = {}) =>
         key: "b1",
         text: "Every account shows disabled.",
         result: "NOT_MET",
-        deviation: true,
         absent: [],
         passages: [passage()],
       },
     ],
+    contradicted: true,
     ...over,
   });
 
@@ -348,25 +359,62 @@ describe("reading a person's disposition (section 10.13)", () => {
     assert.equal(ENDING_WORDS.OTHER, "No longer stands");
   });
 
-  it("reads a contradiction as the server does: its assessment, or for the first engine the same table", () => {
+  // Changed 14 November 2026 (review fix 2). Old: "reads a contradiction as the server
+  // does: its assessment, or for the first engine the same table", worked out on the
+  // page from the run's assessment and from an element's `deviation`, which the server
+  // never sends, so a first-engine contradiction was offered the kinds the server
+  // refuses. New: only the server's own `contradicted` (attribute_dispositions
+  // .contradicted, for a run of either engine) decides; nothing is worked out here.
+  it("reads a contradiction only from the server's own contradicted, for either engine", () => {
     const [two] = attributesOf({ attributes: [contradicted()] });
     assert.equal(two?.contradicted, true);
     const [plain] = attributesOf({ attributes: [gap(A, "A")] });
     assert.equal(plain?.contradicted, false);
-    // Engine 1 sends no assessment: an issue resting on a deviation, or on the result
-    // CONTRADICTED, or an exception beside a file not read.
+    // A first-engine run with no assessment and no element deviation: the server's
+    // answer stands.
     const first = (over: Record<string, unknown>) =>
       attributesOf({
         engine_version: 1,
         attributes: [contradicted({ assessment: undefined, ...over })],
       })[0]?.contradicted;
     assert.equal(first({}), true);
-    assert.equal(
-      first({ elements: [], result: "CONTRADICTED", passages: [passage()] }),
-      true,
-    );
     assert.equal(first({ verdict: "UNSETTLED", result: null }), true);
-    assert.equal(first({ elements: [], result: "NOT_MET" }), false);
+    // Whatever the page might read into the rest, without the server's true it is not
+    // a contradiction: never derived from an assessment or an element.
+    for (const over of [
+      { contradicted: false },
+      { contradicted: undefined },
+      { contradicted: "true" },
+      {
+        contradicted: undefined,
+        elements: [
+          {
+            key: "b1",
+            text: "Every account shows disabled.",
+            result: "NOT_MET",
+            deviation: true,
+            absent: [],
+            passages: [passage()],
+          },
+        ],
+      },
+    ]) {
+      assert.equal(
+        attributesOf({ attributes: [contradicted(over)] })[0]?.contradicted,
+        false,
+        JSON.stringify(over),
+      );
+      assert.equal(first(over), false, JSON.stringify(over));
+    }
+    // And what is offered follows it alone.
+    const offered = (over: Record<string, unknown>) => {
+      const made = check({ attributes: [contradicted(over)] });
+      const found = [...made.attributes, ...made.notAddressed][0];
+      assert.ok(found !== undefined);
+      return tickmarkOffer(made, found, true)?.kinds;
+    };
+    assert.deepEqual(offered({}), ["EXCEPTION"]);
+    assert.deepEqual(offered({ contradicted: false }), [...DISPOSITION_KINDS]);
   });
 });
 
@@ -512,25 +560,71 @@ describe("the first screen with tickmarks", () => {
     assert.equal(made.quiet[0]?.text, "A shown");
   });
 
-  it("keeps a finding that waits on the person on the first screen beside the tickmark", () => {
-    const made = checkDigest(
+  // Changed 14 November 2026 (review fix 3). Old: the closing tickmark took B off
+  // "Needs attention" and the waiting finding was only a suffix on the quiet line ("B
+  // accepted without evidence, finding to decide"), while the calm line could say
+  // "Nothing else waits on you here". New: a finding that waits keeps the attribute's
+  // item, said as "Finding to decide", whatever the tickmark.
+  it("keeps a finding that waits on the person under Needs attention, whatever the tickmark", () => {
+    for (const kind of ["NOT_AVAILABLE", "NOT_APPLICABLE", "SHOWN_ON_REVIEW"]) {
+      const made = checkDigest(
+        check({
+          review: review({ overall: "SUFFICIENT" }),
+          attributes: [
+            attribute(),
+            gap(B, "B", {
+              finding_id: uuid(41),
+              finding_status: "PROPOSED",
+              disposition: disposition({
+                kind,
+                relied_on: kind === "NOT_AVAILABLE" ? "The HR report." : "",
+                annotation_id: kind === "SHOWN_ON_REVIEW" ? uuid(203) : null,
+              }),
+            }),
+          ],
+        }),
+        [{ id: uuid(41), status: "PROPOSED" }],
+        [TICKET],
+      );
+      assert.ok(made !== null);
+      const item = made.attention.find((each) => each.attributeKey === B);
+      assert.ok(item !== undefined, kind);
+      assert.equal(item.headline, FINDING_TO_DECIDE, kind);
+      assert.deepEqual(item.control, { type: "OPEN", label: DECIDE }, kind);
+      assert.equal(
+        item.tickmark?.label,
+        TICKMARK_WORDS[kind as keyof typeof TICKMARK_WORDS].shown,
+        kind,
+      );
+      assert.notEqual(item.tickmark?.tone, "success", kind);
+      // Not on the quiet line, and nothing calm while it waits.
+      assert.equal(
+        made.quiet.some((each) => each.attributeKey === B),
+        false,
+        kind,
+      );
+      assert.equal(made.calm, "", kind);
+      assert.notEqual(made.calm, DIGEST_TICKMARKED, kind);
+      assert.ok(made.verdict.endsWith("1 needs your attention."), made.verdict);
+    }
+    // Decided, it no longer waits: the tickmark closes the attribute as before.
+    const decided = checkDigest(
       check({
+        review: review({ overall: "SUFFICIENT" }),
         attributes: [
           attribute(),
           gap(B, "B", {
             finding_id: uuid(41),
-            finding_status: "PROPOSED",
+            finding_status: "DISMISSED",
             disposition: disposition(),
           }),
         ],
       }),
-      [{ id: uuid(41), status: "PROPOSED" }],
+      [{ id: uuid(41), status: "DISMISSED" }],
       [TICKET],
     );
-    assert.equal(
-      made?.quiet.find((item) => item.attributeKey === B)?.text,
-      "B accepted without evidence, finding to decide",
-    );
+    assert.equal(decided?.attention.length, 0);
+    assert.equal(decided?.calm, DIGEST_TICKMARKED);
   });
 
   it("asks nothing for an attribute a person closed: its follow-ups stay in its view, unticked, not on the first screen", () => {
@@ -772,6 +866,7 @@ describe("the write (assuranceWrite)", () => {
         kind: "NOT_AVAILABLE",
         reason: "  The ticket system was retired.  ",
         relied_on: "The HR report.",
+        replaces: null,
       }),
       {
         path: `${base}/attributes/${B}/disposition`,
@@ -779,6 +874,7 @@ describe("the write (assuranceWrite)", () => {
           kind: "NOT_AVAILABLE",
           reason: "The ticket system was retired.",
           relied_on: "The HR report.",
+          replaces: null,
         },
       },
     );
@@ -790,6 +886,7 @@ describe("the write (assuranceWrite)", () => {
         kind: "SHOWN_ON_REVIEW",
         reason: "The Okta screen shows it.",
         annotation_id: uuid(203),
+        replaces: uuid(900),
       }),
       {
         path: `${base}/attributes/${B}/disposition`,
@@ -797,9 +894,53 @@ describe("the write (assuranceWrite)", () => {
           kind: "SHOWN_ON_REVIEW",
           reason: "The Okta screen shows it.",
           annotation_id: uuid(203),
+          replaces: uuid(900),
         },
       },
     );
+  });
+
+  // Added 14 November 2026 (review fix 1): the server at 2b3887f refuses a recording
+  // that replaces a disposition the person did not see, by `replaces`.
+  it("records naming what the person saw standing: replaces, a UUID or null, always sent", () => {
+    const good = {
+      ...ids,
+      intent: "disposition",
+      attribute_id: B,
+      kind: "EXCEPTION",
+      reason: "A second account was active.",
+    };
+    // Change: the id seen standing. Tickmark: null, none seen.
+    for (const replaces of [uuid(900), null]) {
+      const write = assuranceWrite({ ...good, replaces });
+      assert.ok("path" in write);
+      assert.deepEqual(write.body, {
+        kind: "EXCEPTION",
+        reason: "A second account was active.",
+        replaces,
+      });
+    }
+    // Never left unsaid, and never anything but an id or null.
+    for (const replaces of [undefined, "", "900", 900, { id: uuid(900) }]) {
+      assert.deepEqual(
+        assuranceWrite({ ...good, replaces }),
+        { error: "invalid" },
+        JSON.stringify(replaces),
+      );
+    }
+    // Only the contract's fields go on: a version or an id from the page does not.
+    const write = assuranceWrite({
+      ...good,
+      replaces: null,
+      version: 1,
+      id: uuid(900),
+    });
+    assert.ok("path" in write);
+    assert.deepEqual(Object.keys(write.body ?? {}).sort(), [
+      "kind",
+      "reason",
+      "replaces",
+    ]);
   });
 
   it("sends nothing the server would refuse for its shape", () => {
@@ -809,6 +950,7 @@ describe("the write (assuranceWrite)", () => {
       attribute_id: B,
       kind: "NOT_APPLICABLE",
       reason: "It does not apply here.",
+      replaces: null,
     };
     assert.ok("path" in assuranceWrite(good));
     for (const bad of [
@@ -832,31 +974,40 @@ describe("the write (assuranceWrite)", () => {
     }
   });
 
-  it("reopens with {version, reason} only", () => {
+  // Changed 14 November 2026 (review fix 1). Old: "reopens with {version, reason}
+  // only"; every standing disposition has version 1, so the version could not tell the
+  // one seen from the one that replaced it, and the server at 2b3887f answers 422 to it.
+  // New: {id, reason}, `id` the disposition the person saw standing; the version is
+  // never sent.
+  it("reopens with {id, reason} only: the disposition the person saw", () => {
     assert.deepEqual(
       assuranceWrite({
         ...ids,
         intent: "reopen-disposition",
         attribute_id: B,
+        id: uuid(900),
         version: 2,
         reason: "The HR report was found.",
         kind: "EXCEPTION",
+        replaces: uuid(901),
       }),
       {
         path: `${base}/attributes/${B}/disposition/reopen`,
-        body: { version: 2, reason: "The HR report was found." },
+        body: { id: uuid(900), reason: "The HR report was found." },
       },
     );
-    for (const version of [0, 1.5, "2", null]) {
+    for (const id of [undefined, null, "", "900", 900]) {
       assert.deepEqual(
         assuranceWrite({
           ...ids,
           intent: "reopen-disposition",
           attribute_id: B,
-          version,
+          id,
+          version: 1,
           reason: "The HR report was found.",
         }),
         { error: "invalid" },
+        JSON.stringify(id),
       );
     }
   });
@@ -870,6 +1021,13 @@ describe("the write (assuranceWrite)", () => {
       ),
       "The check finds the records contradict this attribute, so only “Exception” can be recorded here.",
     );
+    // The server's stale sentences, as they are.
+    for (const stale of [
+      "This tickmark changed since the page loaded, so refresh and try again.",
+      "A tickmark was recorded on this attribute since the page loaded, so refresh and try again.",
+    ]) {
+      assert.equal(dispositionProblem(409, stale), stale);
+    }
     for (const status of [0, 403, 404, 409, 422, 500]) {
       const said = dispositionProblem(status);
       assert.ok(said !== null && said.length > 0, String(status));
@@ -1041,5 +1199,261 @@ describe("the words", () => {
       TICKMARK_WORDS.SHOWN_ON_REVIEW.shown,
       "Shown, auditor's judgment",
     );
+  });
+});
+
+// Review fixes, 14 November 2026 (docs/evidence-assurance.md, section 10.13), each with
+// the server at 2b3887f. Each failed against the page before its fix.
+
+describe("the history (review fix 6)", () => {
+  it("says the server's reason for every ending, under a neutral label of its own", () => {
+    assert.deepEqual(ENDING_WORDS, {
+      REPLACED: "Replaced",
+      REOPENED: "Reopened",
+      SUPERSEDED_BY_CHECK: "Ended by a later check",
+      OVERTAKEN_BY_CHECK: "Ended by a later check",
+      ANNOTATION_GONE:
+        "Ended: its annotation changed or its file is no longer in force",
+      OTHER: "No longer stands",
+    });
+    const [read] = attributesOf({
+      attributes: [
+        gap(A, "A", {
+          disposition_history: [
+            ended({
+              id: uuid(911),
+              ended_as: "OVERTAKEN_BY_CHECK",
+              ended_by_name: null,
+              ended_reason:
+                "A later check of the request found the records contradict this attribute.",
+            }),
+            ended({
+              id: uuid(912),
+              ended_as: "ANNOTATION_GONE",
+              ended_reason:
+                "The annotation it rests on no longer names this attribute.",
+            }),
+            ended({ id: uuid(913), ended_as: "REPLACED", ended_reason: "" }),
+            ended({ id: uuid(914) }),
+          ],
+        }),
+      ],
+    });
+    const lines = (read?.history ?? []).map((item) => endingLine(item));
+    assert.equal(lines.length, 4);
+    assert.match(
+      lines[0] ?? "",
+      /^Ended by a later check \(The check · .+\): A later check of the request found the records contradict this attribute\.$/,
+    );
+    assert.match(
+      lines[1] ?? "",
+      /^Ended: its annotation changed or its file is no longer in force \(Dana Lee · .+\): The annotation it rests on no longer names this attribute\.$/,
+    );
+    assert.match(lines[2] ?? "", /^Replaced \(Dana Lee · .+\)\.$/);
+    assert.match(
+      lines[3] ?? "",
+      /^Reopened \(Dana Lee · .+\): Recorded on the wrong attribute\.$/,
+    );
+    // No label claims more than the ending: a check that ended a tickmark never says
+    // the attribute is shown.
+    for (const words of Object.values(ENDING_WORDS)) {
+      assert.equal(/shown|contradict|removed/i.test(words), false, words);
+    }
+  });
+});
+
+describe("the accept note with tickmarks (review fix 7)", () => {
+  const row = (attributes: unknown[]) => {
+    const assurance = parseAssurance({ requests: [entry({ attributes })] });
+    const made = assuranceRow({
+      requirementId: REQUEST,
+      files: [TICKET],
+      assurance,
+      attributes: lettered,
+      span: (letters) =>
+        lettersSpan(
+          letters,
+          lettered.map((item) => item.letter),
+        ),
+    });
+    assert.ok(made !== null);
+    return made.acceptNote;
+  };
+  const judgment = (over: Record<string, unknown> = {}) =>
+    attribute({
+      attribute_id: B,
+      code: "B",
+      verdict: "UNSETTLED",
+      result: null,
+      shows: null,
+      assessment: "INDETERMINATE",
+      summary: "The two readings read the files differently.",
+      passages: [],
+      views: [
+        { role: "ASSESSOR", result: "MET", reason: "Shown." },
+        { role: "REVIEWER", result: "NOT_MET", reason: "Not shown." },
+      ],
+      ...over,
+    });
+
+  it("cautions where a person's exception stands: accepting does not settle it", () => {
+    const note = row([
+      attribute({
+        disposition: disposition({ kind: "EXCEPTION", relied_on: "" }),
+      }),
+    ]);
+    assert.ok(
+      note.startsWith("Accepting marks attribute A as evidenced."),
+      note,
+    );
+    assert.ok(
+      note.includes(
+        "An exception is recorded on A; accepting does not settle it.",
+      ),
+      note,
+    );
+    // Said for each, together.
+    assert.equal(
+      acceptNote({
+        standing: "REVIEWED",
+        implemented: [],
+        design: [],
+        unstated: [],
+        issues: [],
+        judged: [],
+        decided: [],
+        excepted: ["A", "C"],
+        leftOut: 0,
+        span: (letters) => letters.join(" and "),
+      }),
+      "Accepting marks no attribute as evidenced: the two readings find no record of an instance that shows one. Exceptions are recorded on A and C; accepting does not settle them.",
+    );
+  });
+
+  it("says a closing tickmark carries the person's tickmark, never that a judgment is needed there", () => {
+    const before = row([attribute(), judgment()]);
+    assert.ok(before.includes("Your judgment is needed on B."), before);
+    const note = row([attribute(), judgment({ disposition: disposition() })]);
+    assert.equal(note.includes("Your judgment is needed on B"), false, note);
+    assert.ok(
+      note.includes(
+        "B carries your tickmark, so it is not marked as evidenced.",
+      ),
+      note,
+    );
+    // Never counted as evidenced.
+    assert.ok(
+      note.startsWith("Accepting marks attribute A as evidenced."),
+      note,
+    );
+    assert.equal(note.includes("You can still accept"), false, note);
+    // Every other caution stays: an issue on a tickmarked attribute is still said.
+    const issue = row([
+      attribute(),
+      gap(B, "B", { disposition: disposition() }),
+    ]);
+    assert.ok(issue.includes("Both readings found an issue on B."), issue);
+    assert.ok(issue.includes("B carries your tickmark"), issue);
+    // The check's own evidenced shown stands before a closing tickmark: nothing said.
+    const shown = row([
+      attribute({
+        disposition: disposition({ kind: "NOT_APPLICABLE", relied_on: "" }),
+      }),
+    ]);
+    assert.equal(shown.includes("tickmark"), false, shown);
+  });
+});
+
+describe("what 'Shown, on my review' may rest on (review fix 8)", () => {
+  const set = (notes: Array<Record<string, unknown>>) =>
+    parseAnnotations({
+      file_id: FILE,
+      requirement_id: REQUEST,
+      positions: false,
+      pages: [],
+      can_edit: true,
+      attributes: [{ id: A, code: "A", text: "A", annotation_ids: [] }],
+      annotations: notes,
+    });
+  const note = (n: number, kind: string) => ({
+    id: uuid(300 + n),
+    kind,
+    label: `Note ${n}`,
+    statement: `Statement ${n}.`,
+    quote: "",
+    attribute_ids: [A],
+    status: "CONFIRMED",
+    origin: "PERSON",
+    version: 1,
+    decided_by_name: "Dana Lee",
+  });
+
+  it("offers only an annotation that shows the attribute, and says each one's kind", () => {
+    const sets = [
+      set([
+        note(1, "SHOWS"),
+        note(2, "EXCEPTION"),
+        note(3, "IDENTIFIES"),
+        note(4, "SOURCE"),
+      ]),
+    ].filter((each) => each !== null);
+    const choices = annotationChoices(sets, A, [TICKET]);
+    assert.deepEqual(
+      choices.map((each) => [each.id, each.kind, each.kindWords]),
+      [[uuid(301), "SHOWS", "Shows attribute A"]],
+    );
+    // A standing one is still named by its id whatever its kind (recorded before the
+    // rule, it stands as it was).
+    assert.equal(annotationOf(sets, uuid(302), [TICKET])?.label, "Note 2");
+    assert.equal(annotationOf(sets, uuid(399), [TICKET]), null);
+    assert.equal(annotationOf(sets, null, [TICKET]), null);
+  });
+});
+
+describe("the workpaper's exception recorded by the auditor (review fix 9b)", () => {
+  const paperWith = (states: Array<[string, string]>) => {
+    const raw = JSON.parse(
+      readFileSync("tests/fixtures/design-workpaper/sample.json", "utf8"),
+    ) as Record<string, unknown>;
+    const attributes = raw.attributes as Array<Record<string, unknown>>;
+    raw.attributes = attributes.map((item, at) => {
+      const [state, tickmark] = states[at] ?? [
+        String(item.state),
+        String(item.tickmark),
+      ];
+      return { ...item, state, tickmark };
+    });
+    const paper = parseDesignWorkpaper(raw);
+    assert.ok(paper !== null);
+    return paper;
+  };
+
+  it("words EXCEPTION_RECORDED in its own words, with no tickmark, never as shown", () => {
+    const paper = paperWith([
+      ["EXCEPTION_RECORDED", "AGREED"],
+      ["SHOWN", "AGREED"],
+      ["SHOWN", "AGREED"],
+      ["SHOWN", "AGREED"],
+    ]);
+    const [first] = paper.attributes;
+    assert.ok(first !== undefined);
+    assert.equal(first.state, "EXCEPTION_RECORDED");
+    assert.deepEqual(stateOf(first), {
+      words: "Exception recorded by the auditor",
+      tone: "danger",
+    });
+    assert.equal(first.tickmark, "NONE");
+    const tiles = tilesOf(paper);
+    const attributes = tiles.find((each) => each.key === "attributes");
+    assert.equal(attributes?.value, `3 of ${paper.attributes.length} shown`);
+    assert.equal(attributes?.note.includes("1 exception recorded"), true);
+    assert.notEqual(attributes?.note, "Every attribute is shown");
+    assert.notEqual(attributes?.tone, "success");
+    const exceptions = tiles.find((each) => each.key === "exceptions");
+    assert.ok(
+      exceptions?.note.includes("1 recorded by the auditor"),
+      exceptions?.note,
+    );
+    assert.equal(exceptions?.tone, "danger");
   });
 });

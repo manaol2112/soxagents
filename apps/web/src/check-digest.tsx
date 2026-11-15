@@ -5,6 +5,7 @@ import {
   AttributeTickmark,
   type DigestAddEvidence,
   type DigestTickmarkAction,
+  type DigestTickmarkRead,
 } from "./attribute-tickmark";
 import {
   ASK_OWNER,
@@ -665,6 +666,7 @@ function Attribute({
   finding,
   tickmark,
   addEvidence,
+  read,
 }: {
   row: DigestAttribute;
   digest: CheckDigest;
@@ -677,6 +679,7 @@ function Attribute({
   finding: (line: AttributeLine) => ReactNode;
   tickmark: DigestTickmarkAction | null;
   addEvidence: DigestAddEvidence | null;
+  read: DigestTickmarkRead | null;
 }) {
   const id = useId();
   const [more, setMore] = useState(false);
@@ -823,6 +826,7 @@ function Attribute({
         files={files}
         tickmark={tickmark}
         addEvidence={addEvidence}
+        read={read}
       />
       {table.length > 0 ? (
         <ul className="cdg-rows">
@@ -1024,6 +1028,7 @@ export function CheckDigestView({
   details,
   tickmark = null,
   addEvidence = null,
+  read = null,
 }: {
   digest: CheckDigest;
   /** The request's title, said quietly over an opened attribute. */
@@ -1062,6 +1067,9 @@ export function CheckDigestView({
   tickmark?: DigestTickmarkAction | null;
   /** The row's own ways to add evidence; null for a person who may not act. */
   addEvidence?: DigestAddEvidence | null;
+  /** What anyone who can see the row may read of a tickmark (the annotation it rests
+   * on); null where nothing can be read. */
+  read?: DigestTickmarkRead | null;
 }) {
   const id = useId();
   const root = useRef<HTMLDivElement>(null);
@@ -1456,6 +1464,7 @@ export function CheckDigestView({
                 finding={finding}
                 tickmark={tickmark}
                 addEvidence={addEvidence}
+                read={read}
               />
             );
           })}
