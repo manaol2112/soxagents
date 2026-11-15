@@ -1364,6 +1364,101 @@ rule; authorization and the audit events; the workpaper's states, tickmark and m
 that nothing of the run, its findings or acceptance changes. Web: the model (attention,
 quiet line, verdict counts, what is offered for each state) and the forms.
 
+### 10.14 What is left after a person's work; a person's decision on a file's reliability (14 November 2026)
+
+Found by the product owner after recording a tickmark: "I have added a tickmark on the
+evidence here but says still can't be concluded?" Two causes: the first line shows the
+check's own outcome, which a person's work never rewrites (10.13), and what was left was
+not an attribute but a file: a report that does not show its source, run date or
+parameters, so its completeness and accuracy are not established (the "Reliability to
+resolve" caveat), which no tickmark on an attribute addresses and only a follow-up could.
+The owner chose both remedies ("Okay build both").
+
+**A. The first line says what is left after the person's work.**
+- The check's outcome stays, quietly, as "The check proposed: Unable to conclude yet"
+  (its own words, with "Proposed for your review").
+- Above it, one plain status computed on the page from what is on record:
+  - "Nothing waits on you." only where no attribute needs attention (10.12, 10.13) and no
+    file's reliability is left unresolved;
+  - otherwise "Still open: " and what is left, each in a few words, in this order:
+    exceptions recorded, findings to decide, attributes that need attention, files whose
+    reliability is unresolved (by name), other caveats (read in part, files left out);
+  - where a person's work settled something, it says so first in one short clause:
+    "Your tickmarks settle B and D."
+- It never says the evidence is sufficient and never claims more than the check and the
+  person's records show. The accept note (beside Accept) is unchanged.
+
+**B. A person's decision on a file's reliability.** For a file in force on a D&I request
+whose current check is finished, where the check's review says the file's reliability is
+not established (`assurance_review._reliability`: source prepared by management, of an
+unknown source, a report whose basis is not shown or shown in part, or a file the review
+does not describe), a person who may decide evidence (TASK_UPDATE) records one of:
+
+| Decision | Words | Effect |
+| --- | --- | --- |
+| `ESTABLISHED_ON_REVIEW` | "Reliability established on my review" | The person established the report's completeness and accuracy another way (watched it run, inspected its parameters, the owner confirmed them). States what was relied on (required, 10-600 characters). The file's reliability question no longer waits on the person. |
+| `NOT_RELIED_ON` | "Not relied on" | The conclusion does not depend on this file. Its reliability question no longer waits; the file is said, everywhere it is cited, to be not relied on. |
+
+A reason is required for both (10-1000 characters, cleaned as other person text).
+
+Rules:
+- One standing decision per request and file; recording another replaces it (kept as
+  replaced); a person reopens one with a reason; nothing is deleted; both carry the id the
+  person saw (as 10.13 after its review: `replaces` on record, `id` on reopen).
+- A decision never changes what the check found: its run, its review, its completeness
+  state and reasons stay as they are and stay shown beside the decision.
+- Refused where the request has no finished, current check, where the file is not in force
+  on the request, or where the check raises no reliability question on the file.
+- It ends (kept, with how) when the file is no longer in force on the request (withdrawn,
+  replaced); a later check never ends it, since the file's content is unchanged.
+- Not relied on: an attribute whose verified passages rest only on files not relied on
+  reads as the check found it, but in the workpaper its tickmark is `NONE` and a matter says
+  the support rests on a file not relied on. It is never counted as more shown.
+
+Records (migration 0163): `file_reliability_decisions`: id, organization_id, project_id,
+engagement_control_id, requirement_id, evidence_file_id, kind, reason, relied_on,
+assessment_id (current when recorded), recorded_by, recorded_at, ended_at, ended_by,
+ended_as (`REPLACED`, `REOPENED`, `FILE_GONE`), ended_reason, version; one standing row per
+requirement and file; written once, changed only by ending; never deleted; archived
+engagements read-only. Audit events with the person as actor
+(`evidence.file_reliability_recorded`, `.reopened`); `FILE_GONE` without a person
+(`.ended_with_file`).
+
+API, under `/organizations/{o}/projects/{p}/controls/{c}/evidence-assurance/{requirement_id}/files/{file_id}`:
+`POST /reliability` `{kind, reason, relied_on?, replaces: uuid | null}` and
+`POST /reliability/reopen` `{id, reason}`; both answer 200 with the request's entry as
+`rerun` does; 409 with one plain sentence per refusal. `GET .../evidence-assurance` gives
+each request `file_reliability`: a list, one per file of the check's review whose
+reliability is not established or that carries a decision:
+`{file_id, question: string (the check's own sentence, or ""), decision: null | {id, kind,
+reason, relied_on, recorded_by_name, recorded_at}, history: [... ended ones, at most 10,
+with ended_at, ended_by_name, ended_as, ended_reason]}`.
+
+The workpaper (docs/design-workpaper.md): a file whose reliability was established on
+review counts as reliable for the tickmark rule (an attribute shown on it may be `AGREED` or
+`COMPARED`); its report row carries ◊ "Report parameters inspected" with the person, date
+and what was relied on, and a procedure line "Established the reliability of N report(s)
+on review, as recorded." A file not relied on is listed in the evidence index as "Not
+relied on" with the reason; a matter for each decision (`DISPOSITION`, noted).
+
+The screen:
+- On the first screen the reliability caveat becomes, per file, an attention item
+  ("Reliability of 06_Workday_Security_Activity_Export.csv not established", with the
+  check's sentence as its context and "Decide" opening the file's decision), and leaves
+  Needs attention once decided, going to the quiet line in its own words ("E6 reliability
+  established on your review", "E6 not relied on").
+- The decision is made from that item or from the file's "About this file" tab (docs/
+  evidence-annotations.md 5b): a small form with the two choices, the reason, and what
+  was relied on; a standing decision shows who, when, the reason, Change and Reopen, and
+  ended ones under History.
+
+Tests: server: each kind, each refusal, replace and reopen with ids, the file-gone ending,
+that a later check does not end it, nothing of the run or its review changes, the
+workpaper's tickmark rule, report row, procedure and matters, authorization and audit.
+Web: the status line (A) over every combination of attention, findings, exceptions,
+tickmarks, decisions and caveats, never "Nothing waits on you." while anything is left;
+the item, the form, the quiet line.
+
 ## 9. Status
 
 | Increment | State |
@@ -1379,5 +1474,6 @@ quiet line, verdict counts, what is offered for each state) and the forms.
 | The check's result, simplified (10.11) | first build shown and refused as too heavy, 14 November 2026; never committed; replaced by 10.12 |
 | The check's result as "Needs attention", one attribute at a time (10.12) | built 14 November 2026 (`check-digest-model.ts`, `check-digest.tsx`, `check-digest.css`; the row of a finished check in `design-evidence.tsx`; "View" from a row to the annotated evidence; a result whose elements are each half shown now stands as shown in part); independently reviewed once and corrected (what waits on a person or shows an exception is always on the first screen); checked in a headless browser against scripted answers, used by the product owner on the development data; a second review of the corrections to follow |
 | Tickmarks: a person's disposition of an attribute; adding evidence from the attribute view (10.13) | server built 14 November 2026 (migration 0162 applied to development; `attribute_dispositions.py`; `test_attribute_dispositions.py` in the critical tier); the screen built the same day (`attribute-tickmark.tsx`; Tickmark and Add evidence on the attribute view; the first screen, verdict and workpaper word each disposition apart from shown), checked against scripted answers, not yet against the running server |
+| What is left after a person's work; a person's decision on a file's reliability (10.14) | in progress, 14 November 2026 |
 | Prompt caching of the file text across the two readings (models.py) | planned, after the chain is measured |
 | Interim and roll-forward evidence | planned |
