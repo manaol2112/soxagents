@@ -1198,6 +1198,12 @@ def register_workpapers(app: FastAPI, settings: Settings, scheduler: Any) -> Non
         name, data = run(request, build)
         return _download(name, data)
 
+    # Working copies of a section (docs/design-workpaper.md, section 3.4). That module
+    # imports this one: resolved at call time.
+    from ai_workforce_api.workpaper_drafts import register_workpaper_drafts
+
+    register_workpaper_drafts(app, base, run)
+
 
 def _download(name: str, data: bytes) -> Response:
     return Response(
@@ -1328,6 +1334,8 @@ def _edit(
     key: str,
     body: EditBody,
 ) -> WorkpaperBody:
+    from ai_workforce_api.workpaper_drafts import discard as discard_working_copy
+
     _person(connection, principal, organization_id, project_id, Action.TASK_UPDATE)
     with transaction(connection) as cursor:
         status, drafting, current, *_rest = _locked(cursor, project_id, workpaper_id)
@@ -1391,6 +1399,8 @@ def _edit(
         cursor.execute("UPDATE workpapers SET version = version + 1 WHERE id = %s", (workpaper_id,))
         _audit(cursor, organization_id, project_id, principal.id, workpaper_id,
                "workpaper.edited", {"section": key})  # fmt: skip
+        # Saved: the person's own working copy of the section is done with (section 3.4).
+        discard_working_copy(cursor, workpaper_id, key, principal.id)
     return _body(connection, project_id, workpaper_id)
 
 
@@ -1405,6 +1415,7 @@ def _prepare(
     """Prepare the workpaper. An effectiveness workpaper opens the control's independent
     review (Milestone 9.1); the returned ids are re-performances to schedule."""
     from ai_workforce_api.control_reviews import open_review
+    from ai_workforce_api.workpaper_drafts import discard_all as discard_working_copies
 
     _person(connection, principal, organization_id, project_id, Action.TASK_UPDATE)
     queued: list[UUID] = []
@@ -1485,6 +1496,8 @@ def _prepare(
         _audit(cursor, organization_id, project_id, principal.id, workpaper_id,
                "workpaper.prepared",
                {"version": int(current), "note": clean_line(body.note, 500)})  # fmt: skip
+        # Nothing unfinished is carried past preparation: every working copy of it goes.
+        discard_working_copies(cursor, workpaper_id)
         if stage == "EFFECTIVENESS":
             review = open_review(
                 cursor, organization_id, project_id, UUID(str(control_id)), principal.id

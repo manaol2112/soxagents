@@ -2,9 +2,9 @@
 
 Each workpaper tab is a sheet (Design, Interim testing, Roll-forward): a title block
 (reference, control, version, status, and sign-off), then each of the tab's sections in
-order. Fields are a two-column table, narratives are wrapped text with their sources
-listed under them, and tables keep their columns. The binder starts with an index sheet
-that links to every sheet.
+order. Fields are a two-column table, narratives are wrapped text (without the marks of
+their formatting, workpaper_marks.plain) with their sources listed under them, and tables
+keep their columns. The binder starts with an index sheet that links to every sheet.
 
 Cell values come from the records and from people. Anything that looks like a formula is
 written as text, so a spreadsheet never runs it.
@@ -17,6 +17,8 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
+
+from ai_workforce_api.workpaper_marks import plain
 
 NAVY = "1B2A41"
 HEAD = PatternFill("solid", fgColor="E8EDF5")
@@ -102,7 +104,9 @@ def _sheet(sheet: Worksheet, engagement: str, body: Any, tab: Any, sections: lis
                 row += 1
         elif section.kind == "text":
             sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=WIDTH)
-            text = section.text or ""
+            # A spreadsheet cell shows no formatting: the text is written without its marks
+            # (docs/design-workpaper.md, section 3.3), and only then made safe for a cell.
+            text = plain(section.text or "")
             cell = sheet.cell(row=row, column=1, value=_safe(text))
             cell.alignment = WRAP
             sheet.row_dimensions[row].height = max(18, min(400, 15 * (len(text) // 110 + 1)))
