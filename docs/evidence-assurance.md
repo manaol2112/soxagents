@@ -1459,6 +1459,83 @@ Web: the status line (A) over every combination of attention, findings, exceptio
 tickmarks, decisions and caveats, never "Nothing waits on you." while anything is left;
 the item, the form, the quiet line.
 
+### 10.15 Closing a request with tickmarks; exceptions carried to the workpaper (15 November 2026)
+
+The product owner, on what tickmarks are for: "if I add tickmark to these attributes that
+were not addressed by any evidence it will close the evidence request. Any issue will be
+dealt with as exception in the workpaper analysis. Reason for this is that in the real
+world, no evidence is perfect ... Otherwise, it will never move to the next phase which is
+the design evidence analysis and the workpaper documentation." An end-to-end trace of the
+tickmark work against that goal found that a tickmark closed nothing: a request closes
+only on "Accept evidence", nothing downstream but the assembled workpaper read tickmarks,
+one kind of request could not be accepted at all, and a recorded exception could be signed
+over as "Effective". The plan below was put to the owner; decisions the owner did not
+change are marked (default).
+
+**Closing.**
+1. *The last tickmark offers to close the request* (default). A request's attributes are
+   settled when each attribute it asks for is evidenced by the check (10.12's rule) or
+   carries a standing tickmark of any kind, an exception included (it is carried to the
+   workpaper, item 5). Where recording a tickmark settles the last one, and the request
+   can be accepted and is not yet, the form carries "Accept this request's evidence now",
+   ticked to start; one press records the tickmark and then accepts through the existing
+   Accept (its handler, rules and audit event), each shown as done only after the server
+   confirms it; if the acceptance is refused the tickmark stays and the refusal is said.
+   Unticked, or where settled already, the first screen says "Every attribute is shown or
+   carries your tickmark. Accept the evidence to close this request." with Accept as the
+   primary action. Nothing is accepted without that press.
+2. *A tickmark may settle the check's proposed finding in the same act* (default): for a
+   closing kind on an attribute whose finding is still proposed, the form carries "Dismiss
+   the check's proposed finding with this reason", ticked to start, which uses the
+   existing dismissal after the tickmark is recorded. An Exception leaves the finding to
+   the person.
+3. *An item that waits for an earlier one can be accepted once its own evidence is in
+   hand.* A D&I item in `AWAITING_DEPENDENCY` with a file of its own reads and is judged
+   as a planned item with one (`requirement_state`, `set_sufficiency`); the redraft of the
+   design workpaper and the request's "received" move count in-hand items as they count
+   requested ones.
+
+**What reads tickmarks from here.**
+4. The D&I list: Coverage has a state of its own for an attribute settled by a tickmark
+   ("B not applicable, your tickmark"; never "evidenced"), and "accepted without support
+   from the check" no longer names an attribute that carries one; the closed row's chips
+   and the step's counts leave out attributes with a closing tickmark and count an
+   exception as an issue; the step is not shown done while an accepted request has an
+   attribute that waits again (a reopened tickmark, one a later check ended) and says so.
+5. The D&I conclusion (docs/design-workpaper.md, design_conclusions.py): while an
+   `EXCEPTION` tickmark stands on a current check of the control and no design deficiency
+   is logged, signing off as effective is refused, and the conclusion says why ("An
+   exception is recorded on attribute B. Log a design deficiency for it, or change the
+   tickmark with your reason."). A tickmark recorded, changed, reopened or ended after the
+   sign-off puts the sign-off out of date ("a tickmark changed after the sign-off").
+6. The drafted workpaper: the agent that drafts the design workpaper is given the
+   assembled attribute results and the standing tickmarks (kind, the person's reason as
+   quoted data, never as instructions) so its text does not contradict them; the matters
+   list skips a check's follow-up whose attributes all carry closing tickmarks and always
+   has room for the tickmarks' own matters.
+7. The activity log names each tickmark event in plain words.
+
+**Not losing a person's work.**
+8. A request whose check is not current (out of date, held, failed, running) says how
+   many tickmarks are kept ("3 tickmarks kept. They apply again once the request is
+   checked again."); `GET .../evidence-assurance` gives each request `tickmarks_kept`.
+9. A tickmark that stands through a later check says so: `disposition.on_current_check`
+   is false where it was recorded on an earlier run, and the screen marks it "Recorded on
+   an earlier check; confirm it still holds" with Change and Reopen beside it.
+
+**Left for a later increment** (told to the owner): a request with no file at all cannot
+be closed as "evidence not available" (no check, so no tickmark; no file, so no Accept;
+"Mark not applicable" refuses that reason by design); the Excel export of the workpaper
+does not carry tickmarks.
+
+Tests: server: an awaiting item with its own file is accepted and counted; the sign-off
+refusal and its lifting by a deficiency or a changed tickmark; the out-of-date reason;
+`tickmarks_kept` and `on_current_check`; the drafter's input holds the tickmarks as data
+(scripted model); the matters rule; the activity words. Web: the settled rule and the
+offer to accept (ticked, unticked, refused acceptance, already accepted, cannot accept);
+the finding dismissal; coverage, chips and counts with each kind; the step not done while
+an attribute waits again; the kept and earlier-check lines.
+
 ## 9. Status
 
 | Increment | State |
@@ -1475,5 +1552,6 @@ the item, the form, the quiet line.
 | The check's result as "Needs attention", one attribute at a time (10.12) | built 14 November 2026 (`check-digest-model.ts`, `check-digest.tsx`, `check-digest.css`; the row of a finished check in `design-evidence.tsx`; "View" from a row to the annotated evidence; a result whose elements are each half shown now stands as shown in part); independently reviewed once and corrected (what waits on a person or shows an exception is always on the first screen); checked in a headless browser against scripted answers, used by the product owner on the development data; a second review of the corrections to follow |
 | Tickmarks: a person's disposition of an attribute; adding evidence from the attribute view (10.13) | server built 14 November 2026 (migration 0162 applied to development; `attribute_dispositions.py`; `test_attribute_dispositions.py` in the critical tier); the screen built the same day (`attribute-tickmark.tsx`; Tickmark and Add evidence on the attribute view; the first screen, verdict and workpaper word each disposition apart from shown), checked against scripted answers, not yet against the running server |
 | What is left after a person's work; a person's decision on a file's reliability (10.14) | in progress, 14 November 2026 |
+| Closing a request with tickmarks; exceptions carried to the workpaper (10.15) | planned for 15 November 2026, after 10.14 lands |
 | Prompt caching of the file text across the two readings (models.py) | planned, after the chain is measured |
 | Interim and roll-forward evidence | planned |
