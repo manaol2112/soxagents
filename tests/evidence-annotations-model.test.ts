@@ -1716,7 +1716,12 @@ describe("the annotated copy", () => {
 
 describe("the screen's own files", () => {
   const view = readFileSync("apps/web/src/evidence-annotations.tsx", "utf8");
-  const preview = readFileSync("apps/web/src/evidence-preview.tsx", "utf8");
+  // Changed 14 November 2026 (docs/evidence-annotations.md, section 5a). Old: the old
+  // viewer and its openers in evidence-preview.tsx. New: that file is gone; the openers
+  // are evidence-opener.tsx, and every file is drawn by the one viewer (`view`) and its
+  // stages (evidence-stages.tsx).
+  const preview = readFileSync("apps/web/src/evidence-opener.tsx", "utf8");
+  const stages = readFileSync("apps/web/src/evidence-stages.tsx", "utf8");
   const list = readFileSync("apps/web/src/design-evidence.tsx", "utf8");
   const dialog = readFileSync("apps/web/src/evidence-dialog.tsx", "utf8");
   const route = readFileSync(
@@ -1781,10 +1786,15 @@ describe("the screen's own files", () => {
         name,
       );
     }
-    // The preview's own "Add annotation", on a file with none yet: the same rule.
+    // Changed 14 November 2026 (section 5a). Old: the dialog had its own "Add
+    // annotation" button for a file with none yet, under `notes.set?.canEdit === true`.
+    // New: the viewer's one AddAnnotation (asserted above, under `set.canEdit &&
+    // drawable`) serves a file with none too, and no opener draws a second.
+    assert.ok(!/Add annotation/.test(preview));
+    // A file of no D&I request has no annotations to act on: nothing is offered.
     assert.match(
-      preview,
-      /annotated === null &&\s*notes\.set\?\.canEdit === true &&\s*previewKind\(file\.fileName\) !== "text" \? \(\s*<button/,
+      view,
+      /const set = useMemo\(\(\) => given \?\? noAnnotations\(file\.id\), \[given, file\.id\]\);/,
     );
   });
 
@@ -1876,45 +1886,47 @@ describe("the screen's own files", () => {
       hook,
       /if \(key === ""\) \{\s*return \{ status: "off", set: null, busy: null, act \};/,
     );
-    // The annotated layout only with annotations in hand; otherwise today's body.
+    // Changed 14 November 2026 (section 5a, "One evidence viewer"). Old: the annotated
+    // layout only with annotations in hand, else the old viewer (EvidenceViewer, Viewer,
+    // Highlight, ImageViewer) with its list of cited passages. New: one viewer for every
+    // file; the legend of annotations only with annotations in hand (or one being drawn),
+    // the cited passages beside them, and a file with neither shown by itself.
     assert.match(
-      preview,
-      /const annotated =\s*notes\.set !== null && \(notes\.set\.annotations\.length > 0 \|\| adding\)\s*\? notes\.set\s*: null;/,
+      view,
+      /const annotated =\s*given !== null &&\s*\(annotations\.length > 0 \|\| active\.kind === "draw" \|\| active\.kind === "add"\);/,
     );
-    assert.match(preview, /\{annotated !== null \? \(\s*<AnnotatedEvidence\b/);
-    // Changed 14 November 2026 (item 9: "I want the evidence reviewer to be the one that
-    // has annotations"). Old: one AnnotatedEvidence, in the standalone dialog. New: two,
-    // that dialog's and the reviewer's inline Preview (AnnotatedPreview), the same viewer
-    // with the same review, drawn only with annotations in hand.
+    assert.match(
+      view,
+      /const withPanel = loading \|\| annotated \|\| cited\.length > 0;/,
+    );
+    assert.match(view, /ea-body\$\{withPanel \? "" : " is-plain"\}/);
+    // Both openers draw that viewer, and nothing else.
     assert.equal(preview.match(/<AnnotatedEvidence\b/g)?.length, 2);
-    const inline = component(preview, "AnnotatedPreview");
-    assert.match(
-      inline,
-      /const annotated =\s*notes\.set !== null && \(notes\.set\.annotations\.length > 0 \|\| adding\)\s*\? notes\.set\s*: null;/,
+    assert.equal(
+      /<(EvidenceViewer|PreviewDialog|Viewer|Highlight|ImageViewer)\b/.test(
+        preview,
+      ),
+      false,
     );
-    assert.match(
-      inline,
-      /if \(annotated === null\) \{[\s\S]*?<EvidenceViewer\b/,
-    );
-    // Today's preview is all still there: the viewer, the cited passages, their words.
+    // Today's ways of showing a file are all still there, under the one viewer.
     for (const kept of [
-      '<div className="preview-stage">',
-      '<aside className="preview-sources" aria-label={sourcesTitle}>',
-      'sourcesTitle = "What the tester relied on"',
-      "Boxed on the image; the words were not read by",
-      "<Highlight",
-      "pdfRuns(",
-      "<TextViewer",
-      "<ImageViewer",
+      "<ImageStage",
+      "<PdfStage",
+      "<TextStage",
+      'citedBy = "What the tester relied on"',
+      "Boxed on the image; the words were not read by OCR.",
     ]) {
-      assert.ok(preview.includes(kept), kept);
+      assert.ok(view.includes(kept), kept);
     }
-    // A PDF draws the annotations' layer only where one is handed to it.
-    assert.match(preview, /\{layer !== undefined\s*\? layer\(/);
+    assert.ok(preview.includes('sourcesTitle = "What the tester relied on"'));
+    assert.ok(stages.includes("pdfRuns("));
+    assert.ok(stages.includes("readingBlocks(text)"));
+    // A PDF always draws the viewer's layer over the page it shows.
+    assert.match(stages, /\{layer\(\s*boxedPage === page \? boxes : \[\],/);
     // A load that failed says so in one quiet line, under the file as it always was.
     assert.match(
-      preview,
-      /\{notes\.status === "failed" \? \(\s*<p className="preview-note">\s*The annotations could not be loaded\. The file is shown without\s*them\.\s*<\/p>/,
+      view,
+      /\{status === "failed" \? \(\s*<p className="ea-hint">\s*The annotations could not be loaded\. The file is shown without\s*them\.\s*<\/p>/,
     );
     // No annotations, or none this person may read, is silent.
     assert.match(
@@ -1978,9 +1990,18 @@ describe("the screen's own files", () => {
       body,
       /event\.preventDefault\(\);\s*event\.stopPropagation\(\);/,
     );
+    // Changed 14 November 2026 (section 5a: keyboard use kept in every caller). Old: the
+    // dialog closed only on an Escape no one had cancelled, so inside the evidence
+    // wizard's window (which cancels Escape's default to stay open) neither the callout
+    // nor the dialog closed by Escape. New: the viewer's own Escape stops where it is
+    // taken (above), so the dialog hears only one nothing inside took, cancelled or not.
     assert.match(
       preview,
-      /event\.key === "Escape" &&\s*!event\.defaultPrevented &&\s*isTopmostDialog\(dialog\.current\)/,
+      /if \(event\.key === "Escape" && isTopmostDialog\(dialog\.current\)\) \{\s*onClose\(\);/,
+    );
+    assert.match(
+      body,
+      /here === null \|\|\s*\(event\.defaultPrevented && event\.key !== "Escape"\)/,
     );
     assert.match(
       body,
@@ -1993,7 +2014,9 @@ describe("the screen's own files", () => {
     );
     assert.match(
       body,
-      /set\.canEdit && selected\.status === "PROPOSED"\) \{\s*stop\(\);\s*confirm\(selected\)/,
+      // Changed 14 November 2026 (section 5a): the selection may be a cited passage, which
+      // has nothing to confirm, so Enter confirms only an annotation proposed.
+      /selected !== null &&\s*set\.canEdit &&\s*selected\.status === "PROPOSED"\s*\) \{\s*stop\(\);\s*confirm\(selected\)/,
     );
   });
 

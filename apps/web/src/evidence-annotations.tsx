@@ -33,8 +33,15 @@ import {
   attributeRows,
   boundsOf,
   CALLOUT_WIDTH,
+  CITED_WORDS,
+  type CitedMark,
   calloutPlace,
   checkLine,
+  citedCitations,
+  citedMarks,
+  citedName,
+  citedPageMarks,
+  citedUnboxedLine,
   confirmAllWords,
   copyOffered,
   copyRows,
@@ -56,9 +63,11 @@ import {
   moveBox,
   NOT_IN_FILE,
   nextToReview,
+  noAnnotations,
   nudgeOf,
   pageMarks,
   parseAnnotations,
+  pickTarget,
   positionWords,
   REVIEW_WORDS,
   resizeBox,
@@ -68,7 +77,9 @@ import {
   type Size,
   STARTING_BOX,
   stepTo,
+  textStageLine,
   unboxedLine,
+  type ViewerPick,
   wrapText,
 } from "./evidence-annotations-model";
 import {
@@ -76,6 +87,7 @@ import {
   type EvidenceCitation,
   previewKind,
 } from "./evidence-preview-model";
+import { type Found, ImageStage, PdfStage, TextStage } from "./evidence-stages";
 import { formatDate } from "./format";
 import { UiIcon } from "./ui-icon";
 import { isTopmostDialog } from "./use-focus-trap";
@@ -254,16 +266,6 @@ export function AnnotationsLoading() {
   );
 }
 
-type Found = ReadonlyArray<{ box: Box; index: number }>;
-
-/** What the preview's own PDF viewer is asked to draw: the annotations as cited passages
- * (it finds each quote in the page's text), and this layer over the page in view. */
-export type PdfMarks = (
-  found: Found,
-  page: number,
-  ready: boolean,
-) => ReactNode;
-
 type Mode =
   | { kind: "view" }
   | { kind: "edit"; id: string; draft: EditDraft }
@@ -308,29 +310,30 @@ function useViewportWidth(): number {
 
 type Props = {
   file: { id: string; fileName: string };
-  /** The file as the preview shows it. */
-  url: string;
-  set: AnnotationSet;
+  /** The organization and project the file's routes are read with (`fileQuery`). */
+  query: string;
+  /** The file's annotations on its D&I request; null where no request is known or none
+   * could be read: the file is shown without them, and nothing is offered to review. */
+  set: AnnotationSet | null;
+  /** Where the annotations stand: still being read (the legend's shape is shown, the file
+   * already is), or failed (said in one quiet line under the file). */
+  status?: AnnotationsState["status"];
   busy: AnnotationAction["intent"] | null;
   act: (action: AnnotationAction) => Promise<ActResult>;
   /** Where the dialog's header takes this file's actions. */
   headSlot: HTMLElement | null;
-  /** Opened by "Add annotation" on a file with none: starts on drawing the box. */
-  startAdding?: boolean;
-  /** No annotation is left and none is being added: the preview is as it was again. */
-  onEmpty?: () => void;
-  pdf: (input: {
-    citations: EvidenceCitation[];
-    focused: EvidenceCitation | null;
-    marks: PdfMarks;
-  }) => ReactNode;
-  text: (input: {
-    citations: EvidenceCitation[];
-    focused: EvidenceCitation | null;
-  }) => ReactNode;
-  /** An annotation the page asks to see (a reference of the D&I workpaper): it is
-   * selected each time one is asked for, and the person moves on from it as from any. */
-  pick?: { id: string } | null;
+  /** The passages the screen cites, in this file and in the others it opened (section
+   * 5a): numbered boxes of their own kind, "Cited", in the same legend. */
+  citations?: EvidenceCitation[];
+  /** What cited them: the heading of their lines ("What the tester relied on"). */
+  citedBy?: string;
+  /** A cited passage of another of the files opened was selected: the dialog shows that
+   * file, on that passage. */
+  onOpenFile?: ((fileId: string, pick: ViewerPick) => void) | undefined;
+  /** An annotation or cited passage the page asks to see (a reference of the D&I
+   * workpaper, a citation selected elsewhere on the page): it is selected each time one
+   * is asked for, and the person moves on from it as from any. */
+  pick?: ViewerPick | null;
   /** Shown in a page, not in the dialog (the workpaper's evidence pane): the keys are
    * heard only while the focus is inside it, so the page's own keys stay the page's, and
    * it takes the focus only for what a person selects inside it, never when it appears,
@@ -341,18 +344,26 @@ type Props = {
   returnFocus?: (() => HTMLElement | null) | undefined;
 };
 
-/** The preview's body for a file with annotations: evidence left, the review right. */
+const NONE: EvidenceCitation[] = [];
+
+/**
+ * The one evidence viewer (docs/evidence-annotations.md, sections 1 and 5a): the file
+ * left, the legend right. Every file in the app is shown through it, inline or in the
+ * dialog: an image, a PDF, a spreadsheet's or a document's read text. Where the file's
+ * D&I request is known its annotations are boxed and reviewed here; the passages a screen
+ * cites are boxed as "Cited" beside them; a file with neither is shown by itself.
+ */
 export function AnnotatedEvidence({
   file,
-  url,
-  set,
+  query,
+  set: given,
+  status = "off",
   busy,
   act,
   headSlot,
-  startAdding = false,
-  onEmpty,
-  pdf,
-  text,
+  citations = NONE,
+  citedBy = "What the tester relied on",
+  onOpenFile,
   pick = null,
   inline = false,
   returnFocus,
@@ -360,9 +371,16 @@ export function AnnotatedEvidence({
   const kind = previewKind(file.fileName);
   // A box is drawn on a page: an image, or a PDF's page.
   const drawable = kind !== "text";
+  const url = `/workspace/evidence-files/${file.id}/preview?${query}`;
+  const reading = `/workspace/evidence-files/${file.id}/reading?${query}`;
+  const download = `/workspace/evidence-files/${file.id}?${query}`;
+  // Without a request, or with none read, the file has no annotations and offers nothing.
+  const set = useMemo(() => given ?? noAnnotations(file.id), [given, file.id]);
+  const loading = status === "loading";
   const root = useRef<HTMLDivElement>(null);
   const rowButtons = useRef(new Map<string, HTMLButtonElement>());
   const listId = useId();
+  const citedListId = useId();
   // Where a sheet is shown: over the foot of the evidence, or, where the legend goes under
   // the evidence (evidence-annotations.css, 960px), along the bottom of the whole body.
   const [footHost, setFootHost] = useState<HTMLElement | null>(null);
@@ -375,12 +393,39 @@ export function AnnotatedEvidence({
   const onPageInView = useCallback((page: number) => {
     pageInView.current = page;
   }, []);
-  const [selectedId, setSelectedId] = useState<string | null>(pick?.id ?? null);
-  // Whether the annotation in view was asked for from outside, not selected in here.
-  const [asked, setAsked] = useState(pick !== null);
-  const [mode, setMode] = useState<Mode>(
-    startAdding && set.canEdit && drawable ? { kind: "draw" } : VIEW,
+
+  const { annotations } = set;
+  // The passages cited, by their content: a screen passes a new list on each of its
+  // renders, and a new list alone must not move the page or the selection.
+  const citedKey = JSON.stringify(citations);
+  const steady = useMemo(
+    () => JSON.parse(citedKey) as EvidenceCitation[],
+    [citedKey],
   );
+  // Numbered after this file's annotations; while those are read none is drawn, so no
+  // number changes under the person.
+  const cited = useMemo(
+    () => (loading ? [] : citedMarks(steady, file.id, annotations)),
+    [loading, steady, file.id, annotations],
+  );
+  const citedHere = useMemo(
+    () => cited.filter((mark) => mark.fileId === file.id),
+    [cited, file.id],
+  );
+  // Previous and next go through the annotations, then the cited passages.
+  const marks = useMemo(
+    () => [...annotations, ...citedHere],
+    [annotations, citedHere],
+  );
+
+  const [selectedId, setSelectedId] = useState<string | null>(() =>
+    pickTarget(pick, annotations, citedHere),
+  );
+  // Whether the mark in view was asked for from outside, not selected in here.
+  const [asked, setAsked] = useState(
+    pickTarget(pick, annotations, citedHere) !== null,
+  );
+  const [mode, setMode] = useState<Mode>(VIEW);
   const [removing, setRemoving] = useState(false);
   // A refusal is shown where the action was taken; what was done, in the panel.
   const [problem, setProblem] = useState<string | null>(null);
@@ -390,37 +435,59 @@ export function AnnotatedEvidence({
   // An action the server has not answered yet: no second one is sent meanwhile.
   const sending = useRef(false);
 
-  const { annotations } = set;
   const selected =
     annotations.find((annotation) => annotation.id === selectedId) ?? null;
+  const selectedCited =
+    citedHere.find((mark) => mark.id === selectedId) ?? null;
   // An edit of an annotation that is no longer the one selected is over.
   const active: Mode =
     mode.kind === "edit" && selected?.id !== mode.id ? VIEW : mode;
   const counts = reviewCounts(annotations);
   const waiting = busy !== null;
-  const citations = useMemo(
-    () => annotationCitations(set, file.fileName),
-    [set, file.fileName],
+  // What the file viewers mark: the annotations, then the cited passages, in that order.
+  const stageCitations = useMemo(
+    () => [
+      ...annotationCitations(set, file.fileName),
+      ...citedCitations(citedHere),
+    ],
+    [set, file.fileName, citedHere],
   );
   const focused =
-    selected === null ? null : (citations[selected.number - 1] ?? null);
+    selected !== null
+      ? (stageCitations[selected.number - 1] ?? null)
+      : selectedCited !== null
+        ? (stageCitations[
+            annotations.length + citedHere.indexOf(selectedCited)
+          ] ?? null)
+        : null;
+  // The legend: the annotations where the request is known and there are some (or one is
+  // being drawn), and the cited passages; neither, and the file is shown by itself.
+  const annotated =
+    given !== null &&
+    (annotations.length > 0 || active.kind === "draw" || active.kind === "add");
+  const withPanel = loading || annotated || cited.length > 0;
+  const withFoot =
+    marks.length > 0 ||
+    active.kind !== "view" ||
+    status === "failed" ||
+    (kind === "text" && marks.length > 0);
 
+  // A mark asked for from elsewhere on the page is the one in view; asked for while the
+  // annotations are read, once they are here.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a pick is acted on when it is asked for, and once the marks it may name are here (`loading`).
   useEffect(() => {
-    if (annotations.length === 0 && mode.kind === "view") {
-      onEmpty?.();
+    if (pick === null || loading) {
+      return;
     }
-  }, [annotations.length, mode.kind, onEmpty]);
-
-  // A reference selected elsewhere on the page: its annotation is the one in view.
-  useEffect(() => {
-    if (pick !== null) {
+    const target = pickTarget(pick, annotations, citedHere);
+    if (target !== null) {
       setAsked(true);
-      setSelectedId(pick.id);
+      setSelectedId(target);
       setMode(VIEW);
       setRemoving(false);
       setProblem(null);
     }
-  }, [pick]);
+  }, [pick, loading]);
 
   const dialogOf = () =>
     root.current?.closest<HTMLElement>('[role="dialog"]') ?? null;
@@ -431,6 +498,15 @@ export function AnnotatedEvidence({
     setMode(VIEW);
     setRemoving(false);
     setProblem(null);
+  }
+
+  /** A line of the legend selected: a cited passage of another file opens that file. */
+  function choose(mark: CitedMark) {
+    if (mark.fileId !== file.id) {
+      onOpenFile?.(mark.fileId, { quote: mark.quote });
+      return;
+    }
+    select(mark.id);
   }
 
   /** Closes the callout and hands the focus back: to what asked for the annotation from
@@ -444,7 +520,7 @@ export function AnnotatedEvidence({
   }
 
   function step(direction: 1 | -1) {
-    const next = stepTo(annotations, selected?.id ?? null, direction);
+    const next = stepTo(marks, selectedId, direction);
     if (next !== null) {
       select(next);
     }
@@ -603,7 +679,10 @@ export function AnnotatedEvidence({
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const here = root.current;
-      if (here === null || event.defaultPrevented) {
+      // A key something else took is left to it; an Escape is heard even so, since a
+      // dialog the viewer is drawn in cancels its default to stay open itself (the
+      // evidence wizard's window), and what is open here still closes first.
+      if (here === null || (event.defaultPrevented && event.key !== "Escape")) {
         return;
       }
       if (
@@ -628,7 +707,7 @@ export function AnnotatedEvidence({
         } else if (removing) {
           stop();
           setRemoving(false);
-        } else if (selected !== null) {
+        } else if (selected !== null || selectedCited !== null) {
           stop();
           close();
         }
@@ -650,6 +729,9 @@ export function AnnotatedEvidence({
       ) {
         return;
       }
+      if (marks.length === 0) {
+        return;
+      }
       if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
         stop();
         step(event.key === "ArrowRight" ? 1 : -1);
@@ -657,13 +739,17 @@ export function AnnotatedEvidence({
       }
       // On a button or a link, Enter is that control's own.
       if (event.key === "Enter" && !target?.closest("button, a, summary")) {
-        if (selected === null) {
-          const first = nextToReview(annotations, null) ?? annotations[0]?.id;
+        if (selected === null && selectedCited === null) {
+          const first = nextToReview(annotations, null) ?? marks[0]?.id;
           if (first !== undefined) {
             stop();
             select(first);
           }
-        } else if (set.canEdit && selected.status === "PROPOSED") {
+        } else if (
+          selected !== null &&
+          set.canEdit &&
+          selected.status === "PROPOSED"
+        ) {
           stop();
           confirm(selected).catch(() => undefined);
         }
@@ -705,69 +791,86 @@ export function AnnotatedEvidence({
             />
           ),
         }
-      : selected === null
-        ? null
-        : {
-            tone: toneOf(selected),
-            label: `Annotation ${selected.number}`,
-            node:
-              active.kind === "edit" ? (
-                <SentenceForm
-                  title={`Annotation ${selected.number}`}
-                  set={set}
-                  annotation={selected}
-                  draft={active.draft}
-                  onDraft={(draft) => setMode({ ...active, draft })}
-                  canSave={editChanges(selected, active.draft) !== null}
-                  busy={busy}
-                  problem={problem}
-                  saveLabel="Save"
-                  onSave={() => saveEdit(selected, active.draft)}
-                  onCancel={() => {
-                    setMode(VIEW);
-                    setProblem(null);
-                    setRemoving(false);
-                  }}
-                  removing={removing}
-                  onAskRemove={() => setRemoving(true)}
-                  onKeep={() => setRemoving(false)}
-                  onRemove={() => remove(selected)}
-                />
-              ) : (
-                <Basis
-                  annotation={selected}
-                  at={positionWords(annotations, selected.id)}
-                  previous={stepTo(annotations, selected.id, -1) !== null}
-                  next={stepTo(annotations, selected.id, 1) !== null}
-                  onStep={step}
-                  onClose={close}
-                  problem={problem}
-                  asking={removing}
-                  quiet={inline && asked}
-                  actions={
-                    set.canEdit ? (
-                      <ReviewActions
-                        annotation={selected}
-                        busy={busy}
-                        removing={removing}
-                        onConfirm={() => confirm(selected)}
-                        onEdit={() => {
-                          setProblem(null);
-                          setMode({
-                            kind: "edit",
-                            id: selected.id,
-                            draft: draftOf(selected),
-                          });
-                        }}
-                        onAskRemove={() => setRemoving(true)}
-                        onKeep={() => setRemoving(false)}
-                        onRemove={() => remove(selected)}
-                      />
-                    ) : null
-                  }
-                />
-              ),
-          };
+      : selectedCited !== null
+        ? {
+            tone: CITED_WORDS.tone,
+            label: `Cited ${selectedCited.number}`,
+            node: (
+              <CitedBasis
+                mark={selectedCited}
+                citedBy={citedBy}
+                at={positionWords(marks, selectedCited.id)}
+                previous={stepTo(marks, selectedCited.id, -1) !== null}
+                next={stepTo(marks, selectedCited.id, 1) !== null}
+                onStep={step}
+                onClose={close}
+                quiet={inline && asked}
+              />
+            ),
+          }
+        : selected === null
+          ? null
+          : {
+              tone: toneOf(selected),
+              label: `Annotation ${selected.number}`,
+              node:
+                active.kind === "edit" ? (
+                  <SentenceForm
+                    title={`Annotation ${selected.number}`}
+                    set={set}
+                    annotation={selected}
+                    draft={active.draft}
+                    onDraft={(draft) => setMode({ ...active, draft })}
+                    canSave={editChanges(selected, active.draft) !== null}
+                    busy={busy}
+                    problem={problem}
+                    saveLabel="Save"
+                    onSave={() => saveEdit(selected, active.draft)}
+                    onCancel={() => {
+                      setMode(VIEW);
+                      setProblem(null);
+                      setRemoving(false);
+                    }}
+                    removing={removing}
+                    onAskRemove={() => setRemoving(true)}
+                    onKeep={() => setRemoving(false)}
+                    onRemove={() => remove(selected)}
+                  />
+                ) : (
+                  <Basis
+                    annotation={selected}
+                    at={positionWords(marks, selected.id)}
+                    previous={stepTo(marks, selected.id, -1) !== null}
+                    next={stepTo(marks, selected.id, 1) !== null}
+                    onStep={step}
+                    onClose={close}
+                    problem={problem}
+                    asking={removing}
+                    quiet={inline && asked}
+                    actions={
+                      set.canEdit ? (
+                        <ReviewActions
+                          annotation={selected}
+                          busy={busy}
+                          removing={removing}
+                          onConfirm={() => confirm(selected)}
+                          onEdit={() => {
+                            setProblem(null);
+                            setMode({
+                              kind: "edit",
+                              id: selected.id,
+                              draft: draftOf(selected),
+                            });
+                          }}
+                          onAskRemove={() => setRemoving(true)}
+                          onKeep={() => setRemoving(false)}
+                          onRemove={() => remove(selected)}
+                        />
+                      ) : null
+                    }
+                  />
+                ),
+            };
 
   // The box under a person's hand: the one being edited, or the new one.
   const adjust =
@@ -792,10 +895,11 @@ export function AnnotatedEvidence({
   const layer = (page: number | null, found: Found, ready: boolean) => (
     <Layer
       annotations={annotations}
+      cited={citedHere}
       page={page}
       found={found}
       ready={ready}
-      selectedId={selected?.id ?? null}
+      selectedId={selectedId}
       onSelect={select}
       adjust={adjust}
       onBox={(box) => {
@@ -818,204 +922,305 @@ export function AnnotatedEvidence({
   const legend = legendRows(set);
   const matrix = attributeRows(set);
   const kinds = [...new Set(annotations.map((annotation) => annotation.kind))];
+  const textLine =
+    kind === "text"
+      ? textStageLine(annotations.length > 0, citedHere.length > 0)
+      : "";
+  const lineRef = (id: string) => (node: HTMLButtonElement | null) => {
+    if (node === null) {
+      rowButtons.current.delete(id);
+    } else {
+      rowButtons.current.set(id, node);
+    }
+  };
 
   return (
-    <div className="preview-body ea-body" ref={root}>
+    <div
+      className={`preview-body ea-body${withPanel ? "" : " is-plain"}`}
+      ref={root}
+    >
       <div className="ea-stage-col">
         <div className="preview-stage ea-stage">
           {kind === "image" ? (
-            <ImageStage url={url} name={file.fileName}>
+            <ImageStage url={url} download={download} name={file.fileName}>
               {layer(null, [], true)}
             </ImageStage>
           ) : kind === "pdf" ? (
-            pdf({
-              citations,
-              focused,
-              marks: (found, page, ready) => layer(page, found, ready),
-            })
+            <PdfStage
+              url={url}
+              download={download}
+              citations={stageCitations}
+              focused={focused}
+              marks={(found, page, ready) => layer(page, found, ready)}
+            />
           ) : (
-            text({ citations, focused })
+            <TextStage
+              url={reading}
+              download={download}
+              citations={stageCitations}
+              focused={focused}
+            />
           )}
         </div>
-        <div className="ea-stage-foot">
-          <div className="ea-sheet-host is-foot" ref={setFootHost} />
-          {active.kind === "draw" ? (
-            <p className="ea-drawbar" role="status">
-              <span>Drag on the evidence to draw a box around the words.</span>
-              <button
-                type="button"
-                className="btn-secondary btn-sm"
-                onClick={() => drawn(STARTING_BOX, pageInView.current)}
-              >
-                Place a box to adjust
-              </button>
-              <button
-                type="button"
-                className="btn-ghost btn-sm"
-                onClick={() => setMode(VIEW)}
-              >
-                Cancel
-              </button>
-            </p>
-          ) : (
-            <p className="ea-hint">
-              Select a box or a line to see its basis. The file itself is never
-              changed.
-            </p>
-          )}
-          <span className="ea-quiet" ref={setNoteHost}>
-            {kind === "text"
-              ? "This file is shown as the text read from it: the annotated words are marked, without numbered boxes."
-              : null}
-          </span>
-          {kinds.length > 0 ? (
-            <ul className="ea-key" aria-label="Kinds of annotation">
-              {kinds.map((each) => (
-                <li key={each} className={`ea-tone-${KIND_WORDS[each].tone}`}>
-                  <UiIcon name={KIND_WORDS[each].mark} size={13} />
-                  {KIND_WORDS[each].label}
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </div>
+        {withFoot ? (
+          <div className="ea-stage-foot">
+            <div className="ea-sheet-host is-foot" ref={setFootHost} />
+            {active.kind === "draw" ? (
+              <p className="ea-drawbar" role="status">
+                <span>
+                  Drag on the evidence to draw a box around the words.
+                </span>
+                <button
+                  type="button"
+                  className="btn-secondary btn-sm"
+                  onClick={() => drawn(STARTING_BOX, pageInView.current)}
+                >
+                  Place a box to adjust
+                </button>
+                <button
+                  type="button"
+                  className="btn-ghost btn-sm"
+                  onClick={() => setMode(VIEW)}
+                >
+                  Cancel
+                </button>
+              </p>
+            ) : marks.length > 0 ? (
+              <p className="ea-hint">
+                {annotations.length > 0
+                  ? "Select a box or a line to see its basis. The file itself is never changed."
+                  : "Select a box or a line to see what is cited. The file itself is never changed."}
+              </p>
+            ) : null}
+            {status === "failed" ? (
+              <p className="ea-hint">
+                The annotations could not be loaded. The file is shown without
+                them.
+              </p>
+            ) : null}
+            <span className="ea-quiet" ref={setNoteHost}>
+              {textLine !== "" ? textLine : null}
+            </span>
+            {kinds.length > 0 || citedHere.length > 0 ? (
+              <ul className="ea-key" aria-label="Kinds of mark">
+                {kinds.map((each) => (
+                  <li key={each} className={`ea-tone-${KIND_WORDS[each].tone}`}>
+                    <UiIcon name={KIND_WORDS[each].mark} size={13} />
+                    {KIND_WORDS[each].label}
+                  </li>
+                ))}
+                {citedHere.length > 0 ? (
+                  <li className={`ea-tone-${CITED_WORDS.tone}`}>
+                    <UiIcon name={CITED_WORDS.mark} size={13} />
+                    {CITED_WORDS.label}
+                  </li>
+                ) : null}
+              </ul>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
-      <aside className="ea-panel" aria-label="Annotations">
-        {matrix.length > 0 ? (
-          <section className="ea-sec">
-            <h3>What this file shows</h3>
-            <ul className="ea-matrix">
-              {matrix.map((row) => (
-                <li
-                  key={row.id}
-                  className={`ea-mrow${row.marks.length === 0 ? " is-none" : ""}`}
-                >
-                  <span className="ea-attr">{row.code}</span>
-                  <span className="ea-mtext" title={row.text}>
-                    {row.text}
-                  </span>
-                  {row.marks.length === 0 ? (
-                    <span className="pill tone-warning">{NOT_IN_FILE}</span>
-                  ) : (
-                    <span className="ea-refs">
-                      {row.marks.map((mark) => (
-                        <button
-                          type="button"
-                          key={mark.id}
-                          className={`ea-ref ea-tone-${KIND_WORDS[mark.kind].tone}`}
-                          aria-label={`Annotation ${mark.number}: ${KIND_WORDS[mark.kind].label}`}
-                          onClick={() => select(mark.id)}
-                        >
-                          {mark.number}
-                        </button>
-                      ))}
-                    </span>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </section>
-        ) : null}
-        <section className="ea-sec ea-list">
-          <h3 id={listId}>
-            Annotations
-            {counts.total > 0 ? <small>{reviewedWords(counts)}</small> : null}
-          </h3>
-          {legend.length === 0 ? (
-            <p className="ea-none">No annotations on this file yet.</p>
-          ) : (
-            <ol className="ea-rows" aria-labelledby={listId}>
-              {legend.map((row) => (
-                <li key={row.id}>
-                  <button
-                    type="button"
-                    ref={(node) => {
-                      if (node === null) {
-                        rowButtons.current.delete(row.id);
-                      } else {
-                        rowButtons.current.set(row.id, node);
-                      }
-                    }}
-                    className={`ea-row ea-tone-${KIND_WORDS[row.kind].tone}${
-                      row.id === selected?.id ? " is-selected" : ""
-                    }`}
-                    aria-current={row.id === selected?.id ? "true" : undefined}
-                    title={`${KIND_WORDS[row.kind].label} · ${REVIEW_WORDS[row.review].word}`}
-                    onClick={() => select(row.id)}
+      {loading ? (
+        <AnnotationsLoading />
+      ) : withPanel ? (
+        <aside className="ea-panel" aria-label="Legend">
+          {annotated && matrix.length > 0 ? (
+            <section className="ea-sec">
+              <h3>What this file shows</h3>
+              <ul className="ea-matrix">
+                {matrix.map((row) => (
+                  <li
+                    key={row.id}
+                    className={`ea-mrow${row.marks.length === 0 ? " is-none" : ""}`}
                   >
-                    <span className="ea-num">{row.number}</span>
-                    <span className="ea-what">
-                      {row.label}
-                      {row.value !== "" ? <span> · {row.value}</span> : null}
+                    <span className="ea-attr">{row.code}</span>
+                    <span className="ea-mtext" title={row.text}>
+                      {row.text}
                     </span>
-                    <span className="ea-letters">
-                      {row.codes.map((code) => (
-                        <span className="ea-attr" key={code}>
-                          {code}
+                    {row.marks.length === 0 ? (
+                      <span className="pill tone-warning">{NOT_IN_FILE}</span>
+                    ) : (
+                      <span className="ea-refs">
+                        {row.marks.map((mark) => (
+                          <button
+                            type="button"
+                            key={mark.id}
+                            className={`ea-ref ea-tone-${KIND_WORDS[mark.kind].tone}`}
+                            aria-label={`Annotation ${mark.number}: ${KIND_WORDS[mark.kind].label}`}
+                            onClick={() => select(mark.id)}
+                          >
+                            {mark.number}
+                          </button>
+                        ))}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+          {annotated ? (
+            <section className="ea-sec ea-list">
+              <h3 id={listId}>
+                Annotations
+                {counts.total > 0 ? (
+                  <small>{reviewedWords(counts)}</small>
+                ) : null}
+              </h3>
+              {legend.length === 0 ? (
+                <p className="ea-none">No annotations on this file yet.</p>
+              ) : (
+                <ol className="ea-rows" aria-labelledby={listId}>
+                  {legend.map((row) => (
+                    <li key={row.id}>
+                      <button
+                        type="button"
+                        ref={lineRef(row.id)}
+                        className={`ea-row ea-tone-${KIND_WORDS[row.kind].tone}${
+                          row.id === selectedId ? " is-selected" : ""
+                        }`}
+                        aria-current={
+                          row.id === selectedId ? "true" : undefined
+                        }
+                        title={`${KIND_WORDS[row.kind].label} · ${REVIEW_WORDS[row.review].word}`}
+                        onClick={() => select(row.id)}
+                      >
+                        <span className="ea-num">{row.number}</span>
+                        <span className="ea-what">
+                          {row.label}
+                          {row.value !== "" ? (
+                            <span> · {row.value}</span>
+                          ) : null}
                         </span>
-                      ))}
-                    </span>
-                    <span
-                      className={`ea-st is-${row.review}`}
-                      aria-hidden="true"
-                    >
-                      {REVIEW_WORDS[row.review].mark}
-                    </span>
-                    <span className="sr-only">
-                      {KIND_WORDS[row.kind].label}.{" "}
-                      {REVIEW_WORDS[row.review].word}.
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ol>
-          )}
-          {counts.total > 0 ? (
-            <div className="ea-progress" aria-hidden="true">
-              <i
-                style={{ width: `${(counts.reviewed / counts.total) * 100}%` }}
-              />
-            </div>
-          ) : null}
-        </section>
-        <footer className="ea-foot">
-          {set.canEdit && counts.proposed > 0 ? (
-            <ConfirmAll
-              proposed={counts.proposed}
-              busy={busy}
-              onConfirmAll={confirmAll}
-            />
-          ) : null}
-          {counts.total > 0 ? (
-            <small>
-              {set.canEdit && counts.proposed > 0
-                ? "or review one by one with "
-                : set.canEdit
-                  ? "Every annotation is reviewed. Move between them with "
-                  : "Move between the annotations with "}
-              {set.canEdit && counts.proposed > 0 ? (
-                <>
-                  <kbd className="ea-kbd">↵</kbd>{" "}
-                </>
+                        <span className="ea-letters">
+                          {row.codes.map((code) => (
+                            <span className="ea-attr" key={code}>
+                              {code}
+                            </span>
+                          ))}
+                        </span>
+                        <span
+                          className={`ea-st is-${row.review}`}
+                          aria-hidden="true"
+                        >
+                          {REVIEW_WORDS[row.review].mark}
+                        </span>
+                        <span className="sr-only">
+                          {KIND_WORDS[row.kind].label}.{" "}
+                          {REVIEW_WORDS[row.review].word}.
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ol>
+              )}
+              {counts.total > 0 ? (
+                <div className="ea-progress" aria-hidden="true">
+                  <i
+                    style={{
+                      width: `${(counts.reviewed / counts.total) * 100}%`,
+                    }}
+                  />
+                </div>
               ) : null}
-              <kbd className="ea-kbd">←</kbd> <kbd className="ea-kbd">→</kbd>
-            </small>
+            </section>
           ) : null}
-          <p className="ea-done" role="status">
-            {done !== null ? (
-              <>
-                <UiIcon name="check" size={13} /> {done}
-              </>
-            ) : null}
-          </p>
-          {panelProblem !== null ? (
-            <p className="ea-problem" role="alert">
-              {panelProblem}
-            </p>
+          {cited.length > 0 ? (
+            <section className="ea-sec ea-list ea-cited">
+              <h3 id={citedListId}>{citedBy}</h3>
+              <ol className="ea-rows" aria-labelledby={citedListId}>
+                {cited.map((mark) => {
+                  const elsewhere = mark.fileId !== file.id;
+                  return (
+                    <li key={mark.id}>
+                      <button
+                        type="button"
+                        ref={lineRef(mark.id)}
+                        className={`ea-row ea-tone-${CITED_WORDS.tone}${
+                          mark.id === selectedId ? " is-selected" : ""
+                        }${elsewhere ? " is-elsewhere" : ""}`}
+                        aria-current={
+                          mark.id === selectedId ? "true" : undefined
+                        }
+                        title={
+                          elsewhere
+                            ? `${CITED_WORDS.label} · in ${mark.fileName}`
+                            : CITED_WORDS.label
+                        }
+                        disabled={elsewhere && onOpenFile === undefined}
+                        onClick={() => choose(mark)}
+                      >
+                        <span className="ea-num is-cited">{mark.number}</span>
+                        <span className="ea-what">
+                          <q>{mark.quote}</q>
+                          {mark.location !== "" ? (
+                            <span> · {mark.location}</span>
+                          ) : null}
+                          {elsewhere ? <span> · {mark.fileName}</span> : null}
+                        </span>
+                        <span className="ea-letters">
+                          {mark.label !== "" ? (
+                            <span className="ea-attr">{mark.label}</span>
+                          ) : null}
+                        </span>
+                        <span className="ea-st is-cited" aria-hidden="true">
+                          <UiIcon name={CITED_WORDS.mark} size={11} />
+                        </span>
+                        <span className="sr-only">
+                          {CITED_WORDS.label}
+                          {elsewhere ? `, in ${mark.fileName}` : ""}.
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ol>
+            </section>
           ) : null}
-        </footer>
-      </aside>
+          {annotated || citedHere.length > 0 ? (
+            <footer className="ea-foot">
+              {annotated && set.canEdit && counts.proposed > 0 ? (
+                <ConfirmAll
+                  proposed={counts.proposed}
+                  busy={busy}
+                  onConfirmAll={confirmAll}
+                />
+              ) : null}
+              {marks.length > 0 ? (
+                <small>
+                  {set.canEdit && counts.proposed > 0
+                    ? "or review one by one with "
+                    : set.canEdit && counts.total > 0
+                      ? "Every annotation is reviewed. Move between them with "
+                      : counts.total > 0
+                        ? "Move between the annotations with "
+                        : "Move between the cited passages with "}
+                  {set.canEdit && counts.proposed > 0 ? (
+                    <>
+                      <kbd className="ea-kbd">↵</kbd>{" "}
+                    </>
+                  ) : null}
+                  <kbd className="ea-kbd">←</kbd>{" "}
+                  <kbd className="ea-kbd">→</kbd>
+                </small>
+              ) : null}
+              <p className="ea-done" role="status">
+                {done !== null ? (
+                  <>
+                    <UiIcon name="check" size={13} /> {done}
+                  </>
+                ) : null}
+              </p>
+              {panelProblem !== null ? (
+                <p className="ea-problem" role="alert">
+                  {panelProblem}
+                </p>
+              ) : null}
+            </footer>
+          ) : null}
+        </aside>
+      ) : null}
 
       <div className="ea-sheet-host is-end" ref={setEndHost} />
       {!layerOn && callout !== null ? (
@@ -1099,34 +1304,6 @@ function ConfirmAll({
   );
 }
 
-function ImageStage({
-  url,
-  name,
-  children,
-}: {
-  url: string;
-  name: string;
-  children: ReactNode;
-}) {
-  const [failed, setFailed] = useState(false);
-  if (failed) {
-    return (
-      <p className="preview-empty">
-        This image could not be shown. Download it instead.
-      </p>
-    );
-  }
-  return (
-    <div className="image-stage">
-      <div className="image-frame">
-        {/* biome-ignore lint/performance/noImgElement: evidence bytes are shown as they are, never optimised. */}
-        <img src={url} alt={name} onError={() => setFailed(true)} />
-        {children}
-      </div>
-    </div>
-  );
-}
-
 type Adjust = {
   /** The annotation whose box it is; null for a new one. */
   id: string | null;
@@ -1137,12 +1314,13 @@ type Adjust = {
 };
 
 /**
- * The layer over one page of the evidence: a numbered box on each annotated passage, the
- * box under a person's hand with its eight handles, the surface a new box is drawn on, and
- * the callout of the annotation selected. Nothing of the file is touched.
+ * The layer over one page of the evidence: a numbered box on each annotated passage and on
+ * each cited one, the box under a person's hand with its eight handles, the surface a new
+ * box is drawn on, and the callout of the mark selected. Nothing of the file is touched.
  */
 function Layer({
   annotations,
+  cited,
   page,
   found,
   ready,
@@ -1159,6 +1337,8 @@ function Layer({
   onPage,
 }: {
   annotations: Annotation[];
+  /** The passages cited in this file, numbered after its annotations. */
+  cited: CitedMark[];
   /** The page in view; null for a file of one page. */
   page: number | null;
   found: Found;
@@ -1211,6 +1391,8 @@ function Layer({
   }, [selectedId, frame, page, ready]);
 
   const marks = pageMarks(annotations, page, found);
+  // A cited passage's words are found after the annotations' (`found`, by place).
+  const citedOn = citedPageMarks(cited, page, found, annotations.length);
   const adjustHere =
     adjust !== null && (page === null || adjust.page === page) ? adjust : null;
   const anchor =
@@ -1218,8 +1400,18 @@ function Layer({
       ? adjustHere.box
       : adjust !== null
         ? null
-        : boundsOf(marks.find((mark) => mark.id === selectedId)?.rects ?? []);
-  const quiet = ready ? unboxedLine(annotations, page, marks) : null;
+        : boundsOf(
+            [...marks, ...citedOn].find((mark) => mark.id === selectedId)
+              ?.rects ?? [],
+          );
+  const quiet = ready
+    ? [
+        unboxedLine(annotations, page, marks),
+        citedUnboxedLine(cited, page, citedOn),
+      ]
+        .filter((line): line is string => line !== null)
+        .join(" ") || null
+    : null;
 
   /** A pointer's place on the page, as fractions of it. */
   const point = (event: { clientX: number; clientY: number }) => {
@@ -1304,6 +1496,35 @@ function Layer({
             {line === 0 ? (
               <span className="ea-tick" aria-hidden="true">
                 {annotation.number}
+              </span>
+            ) : null}
+          </button>
+        ));
+      })}
+
+      {citedOn.map((mark, index) => {
+        const passage = cited[index];
+        if (passage === undefined) {
+          return null;
+        }
+        const on = mark.id === selectedId;
+        return mark.rects.map((rect, line) => (
+          <button
+            type="button"
+            // biome-ignore lint/suspicious/noArrayIndexKey: a passage's boxes keep their order.
+            key={`${mark.id}-${line}`}
+            className={`ea-box is-cited ea-tone-${CITED_WORDS.tone}${on ? " is-selected" : ""}`}
+            style={boxStyle(rect)}
+            // As for an annotation: the lines on the right reach it by keyboard.
+            tabIndex={-1}
+            data-selected={on && line === 0 ? "true" : undefined}
+            aria-label={citedName(passage)}
+            aria-pressed={on}
+            onClick={() => onSelect(mark.id)}
+          >
+            {line === 0 ? (
+              <span className="ea-tick" aria-hidden="true">
+                {passage.number}
               </span>
             ) : null}
           </button>
@@ -1627,6 +1848,86 @@ function Basis({
           {problem}
         </p>
       ) : null}
+    </div>
+  );
+}
+
+/** A cited passage (section 5a): its words as the file has them, where they are, and what
+ * cited them. It is shown only: a citation is never stored or reviewed, so it has no
+ * action of its own. */
+function CitedBasis({
+  mark,
+  citedBy,
+  at,
+  previous,
+  next,
+  onStep,
+  onClose,
+  quiet = false,
+}: {
+  mark: CitedMark;
+  citedBy: string;
+  at: string;
+  previous: boolean;
+  next: boolean;
+  onStep: (direction: 1 | -1) => void;
+  onClose: () => void;
+  quiet?: boolean;
+}) {
+  const focus = useCalloutFocus<HTMLDivElement>(mark.id, quiet);
+  return (
+    <div className="ea-basis" ref={focus} tabIndex={-1}>
+      <div className="ea-top">
+        <span className="ea-num is-cited">{mark.number}</span>
+        {mark.label !== "" ? (
+          <span className="ea-attr">{mark.label}</span>
+        ) : null}
+        <span className="ea-kind">
+          <UiIcon name={CITED_WORDS.mark} size={13} />
+          {CITED_WORDS.label}
+          {mark.location !== "" ? ` · ${mark.location}` : ""}
+        </span>
+        <button
+          type="button"
+          className="btn-ghost btn-sm ea-close"
+          aria-label="Close the cited passage"
+          onClick={onClose}
+        >
+          <UiIcon name="x" size={14} />
+        </button>
+      </div>
+      <h3 className="ea-statement">{citedBy}</h3>
+      <p className="ea-reads">{mark.quote}</p>
+      {!mark.found ? (
+        <p className="ea-tip">
+          Boxed on the image; the words were not read by OCR.
+        </p>
+      ) : null}
+      <div className="ea-acts">
+        <span className="ea-nav">
+          <span className="ea-at">{at}</span>
+          <button
+            type="button"
+            className="btn-secondary btn-sm ea-step"
+            aria-label="Previous"
+            disabled={!previous}
+            onClick={() => onStep(-1)}
+          >
+            <span className="icon-back" aria-hidden="true">
+              <UiIcon name="chevron" size={14} />
+            </span>
+          </button>
+          <button
+            type="button"
+            className="btn-secondary btn-sm ea-step"
+            aria-label="Next"
+            disabled={!next}
+            onClick={() => onStep(1)}
+          >
+            <UiIcon name="chevron" size={14} />
+          </button>
+        </span>
+      </div>
     </div>
   );
 }

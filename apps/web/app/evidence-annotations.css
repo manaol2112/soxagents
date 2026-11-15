@@ -33,6 +33,13 @@
   --ea-mark: var(--mark-neutral);
 }
 
+/* Cited (section 5a): a passage a screen cites, never an annotation. Amber, with a dashed
+   edge and a square tickmark, and the word "Cited" in the legend and the key. */
+.ea-tone-cited {
+  --ea-c: var(--warning);
+  --ea-mark: var(--mark-cited);
+}
+
 /* Layout: evidence left, the review right. */
 
 .preview-body.ea-body {
@@ -47,9 +54,34 @@
   min-height: 0;
 }
 
+/* A file shown by itself: nothing to list beside it. */
+.preview-body.ea-body.is-plain {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 /* Room on the left for the tickmark of a box at the page's edge. */
 .preview-stage.ea-stage {
   padding-left: 2.125rem;
+}
+
+/* A PDF's tools stay at the top of the evidence as it scrolls. */
+.ea-stage .pdf-bar {
+  position: sticky;
+  top: -1rem;
+  z-index: 8;
+  justify-self: stretch;
+  width: auto;
+  margin: -1rem -1rem 0 -2.125rem;
+  padding: 0.4rem 1rem 0.4rem 2.125rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* A file that cannot be shown: the sentence, and the original to download. */
+.ea-stage .preview-empty {
+  flex-wrap: wrap;
+  min-height: 12rem;
+  text-align: center;
 }
 
 .ea-stage-foot {
@@ -152,6 +184,16 @@ button.ea-box.is-selected {
     inset 0 0 0 1px var(--ea-mark),
     0 0 0 1.5px var(--mark-paper),
     0 0 0 5px color-mix(in srgb, var(--ea-mark) 32%, transparent);
+}
+
+/* A cited passage's box: dashed, so it is told from an annotation's by its edge too. */
+button.ea-box.is-cited {
+  border-style: dashed;
+}
+
+button.ea-box.is-cited .ea-tick,
+.ea-num.is-cited {
+  border-radius: 5px;
 }
 
 button.ea-box:focus-visible:not(:disabled) {
@@ -793,6 +835,19 @@ button.ea-chip:focus-visible:not(:disabled) {
   background: var(--accent);
 }
 
+/* A cited passage's line: its mark in place of a review mark (it is never reviewed). */
+.ea-st.is-cited {
+  color: var(--ea-c);
+}
+
+.ea-sec.ea-list + .ea-sec.ea-cited {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ea-what q {
+  color: var(--text-strong);
+}
+
 .ea-none {
   margin: 0;
   color: var(--text-secondary);
@@ -922,6 +977,11 @@ button.ea-chip:focus-visible:not(:disabled) {
     padding-left: 1.625rem;
   }
 
+  .ea-stage .pdf-bar {
+    margin-left: -1.625rem;
+    padding-left: 1.625rem;
+  }
+
   button.ea-box,
   .ea-edit-box {
     margin: -1.5px;
@@ -938,9 +998,17 @@ button.ea-chip:focus-visible:not(:disabled) {
     font-size: 10px;
   }
 
-  /* The annotated file's actions take their own line under its name. */
-  .preview-head:has(.ea-head:not(:empty)) {
+  /* The annotated file's actions, and the file switcher, take their own line under its
+     name, so the name keeps the room it needs. */
+  .preview-head:has(.ea-head:not(:empty)),
+  .preview-head:has(> .preview-file-switch) {
     flex-wrap: wrap;
+  }
+
+  .preview-head > .preview-file-switch {
+    flex: 1 1 100%;
+    order: 6;
+    max-width: none;
   }
 
   .ea-head {

@@ -36,7 +36,13 @@ export const ANNOTATION_KINDS = [
  * shown, in a neutral tone, and claims nothing. */
 export type AnnotationKind = (typeof ANNOTATION_KINDS)[number] | "OTHER";
 
-export type KindTone = "success" | "info" | "source" | "danger" | "neutral";
+export type KindTone =
+  | "success"
+  | "info"
+  | "source"
+  | "danger"
+  | "neutral"
+  | "cited";
 
 /** A kind in words, with its tone and its mark: never colour alone. */
 export const KIND_WORDS: Record<
@@ -278,6 +284,20 @@ export function parseAnnotations(value: unknown): AnnotationSet | null {
     attributes,
     annotations,
     canEdit: value.can_edit === true,
+  };
+}
+
+/** A file shown with no annotations: on no D&I request, or with none that could be read.
+ * Nothing is offered to edit. */
+export function noAnnotations(fileId: string): AnnotationSet {
+  return {
+    fileId,
+    requirementId: "",
+    positions: false,
+    pages: [],
+    attributes: [],
+    annotations: [],
+    canEdit: false,
   };
 }
 
@@ -879,6 +899,203 @@ export function annotationCitations(
   }));
 }
 
+/* Cited passages (section 5a) ---------------------------------------------------------- */
+
+/** The kind of a passage a screen cites (the console, a workpaper, a finding, a check's
+ * passage): in the same legend as the annotations, in its own words and mark, never by
+ * colour alone. A citation is never stored, never reviewed and never an annotation. */
+export const CITED_WORDS: { label: string; tone: KindTone; mark: IconName } = {
+  label: "Cited",
+  tone: "cited",
+  mark: "tag",
+};
+
+/** A cited passage as the viewer shows it: a numbered box where its words are found, and
+ * a line in the legend. */
+export type CitedMark = {
+  /** `cited-<place in the screen's list>`; never an annotation's id. */
+  id: string;
+  /** The number on its box and its line: after the shown file's annotations. */
+  number: number;
+  fileId: string;
+  fileName: string;
+  quote: string;
+  /** What the screen calls it ("A2", "[3]"), or "". */
+  label: string;
+  location: string;
+  page: number | null;
+  /** A box the screen already knows (an image's), as fractions of the page. */
+  box: Box | null;
+  /** Whether its words were found in the file's text, or only boxed on an image. */
+  found: boolean;
+};
+
+export const CITED_PREFIX = "cited-";
+
+/** Whether a selection names a cited passage rather than an annotation. */
+export function isCitedId(id: string): boolean {
+  return id.startsWith(CITED_PREFIX);
+}
+
+/**
+ * The passages a screen cites, in its order, numbered after the shown file's annotations
+ * so no two marks in view share a number (with none, 1, 2, 3 as before). A citation of
+ * the shown file whose words an annotation already marks is that annotation's box, not a
+ * second box on the same words. Nothing here is stored or sent.
+ */
+export function citedMarks(
+  citations: readonly EvidenceCitation[],
+  fileId: string,
+  annotations: readonly Pick<Annotation, "quote">[],
+): CitedMark[] {
+  const annotated = new Set(
+    annotations
+      .map((annotation) => quoteKey(annotation.quote))
+      .filter((key) => key !== ""),
+  );
+  return citations
+    .map((citation, index) => ({ citation, index }))
+    .filter(
+      ({ citation }) =>
+        !(
+          citation.fileId === fileId && annotated.has(quoteKey(citation.quote))
+        ),
+    )
+    .map(({ citation, index }, at) => ({
+      id: `${CITED_PREFIX}${index}`,
+      number: annotations.length + at + 1,
+      fileId: citation.fileId,
+      fileName: citation.fileName,
+      quote: citation.quote,
+      label: citation.label,
+      location: citation.location,
+      page: citation.page,
+      box: citation.box,
+      found: citation.found,
+    }));
+}
+
+/** The cited passages as the file viewers take them, to find their words. */
+export function citedCitations(
+  cited: readonly CitedMark[],
+): EvidenceCitation[] {
+  return cited.map((mark) => ({
+    fileId: mark.fileId,
+    fileName: mark.fileName,
+    quote: mark.quote,
+    found: mark.found,
+    location: mark.location,
+    page: mark.page,
+    box: mark.box,
+    label: mark.label,
+  }));
+}
+
+/**
+ * Each cited passage's boxes on the page in view: the box the screen knows (an image's),
+ * else the runs of a text PDF its words cover (`found`, by its place after the
+ * annotations, `offset`). `page` is null for a file of one page.
+ */
+export function citedPageMarks(
+  cited: readonly CitedMark[],
+  page: number | null,
+  found: ReadonlyArray<{ box: Box; index: number }> = [],
+  offset = 0,
+): PageMark[] {
+  return cited.map((mark, index) => {
+    const here = page === null || mark.page === null || mark.page === page;
+    return {
+      id: mark.id,
+      rects: !here
+        ? []
+        : mark.box !== null
+          ? [mark.box]
+          : lineBoxes(
+              found
+                .filter((each) => each.index === offset + index)
+                .map((each) => each.box),
+            ),
+    };
+  });
+}
+
+/** The one quiet line for cited passages listed without a box on the page in view. */
+export function citedUnboxedLine(
+  cited: readonly CitedMark[],
+  page: number | null,
+  marks: readonly PageMark[],
+): string | null {
+  const here = cited.filter(
+    (mark) => page === null || mark.page === null || mark.page === page,
+  );
+  const without = here.filter(
+    (mark) =>
+      (marks.find((each) => each.id === mark.id)?.rects.length ?? 0) === 0,
+  ).length;
+  if (without === 0) {
+    return null;
+  }
+  return without === 1
+    ? "1 cited passage is listed beside the file without a box: its words were not found on this page."
+    : `${without} cited passages are listed beside the file without a box: their words were not found on this page.`;
+}
+
+/** A cited box or line's name for a screen reader. */
+export function citedName(mark: CitedMark): string {
+  const label = mark.label !== "" ? ` ${mark.label}` : "";
+  const quote = mark.quote.replace(/\s+/g, " ").trim();
+  const said =
+    quote === ""
+      ? "a passage"
+      : quote.length <= 60
+        ? quote
+        : `${quote.slice(0, 59).trimEnd()}…`;
+  return `Cited ${mark.number}${label}: ${said}`;
+}
+
+/** What a page asks the viewer to put in view: an annotation or a cited passage by its
+ * id, or whichever marks these words (a citation selected elsewhere on the page). */
+export type ViewerPick = { id: string } | { quote: string };
+
+/** The id a pick names among the marks of the shown file, or null where none is it. */
+export function pickTarget(
+  pick: ViewerPick | null,
+  annotations: readonly Pick<Annotation, "id" | "quote">[],
+  cited: readonly Pick<CitedMark, "id" | "quote">[],
+): string | null {
+  if (pick === null) {
+    return null;
+  }
+  if ("id" in pick) {
+    return [...annotations, ...cited].some((mark) => mark.id === pick.id)
+      ? pick.id
+      : null;
+  }
+  const wanted = quoteKey(pick.quote);
+  if (wanted === "") {
+    return null;
+  }
+  return (
+    cited.find((mark) => quoteKey(mark.quote) === wanted)?.id ??
+    annotations.find((annotation) => quoteKey(annotation.quote) === wanted)
+      ?.id ??
+    null
+  );
+}
+
+/** The line under the evidence for a file shown as its read text, or "" for a page. */
+export function textStageLine(annotated: boolean, cited: boolean): string {
+  if (annotated && cited) {
+    return "This file is shown as the text read from it: the annotated and cited words are marked, without numbered boxes.";
+  }
+  if (annotated) {
+    return "This file is shown as the text read from it: the annotated words are marked, without numbered boxes.";
+  }
+  return cited
+    ? "This file is shown as the text read from it: the cited words are marked, without numbered boxes."
+    : "";
+}
+
 /** What a reference from outside the preview asks to see: the annotation that marks a
  * passage for an attribute (a "Shown" row of a finished check, docs/evidence-assurance.md,
  * section 10.12). */
@@ -1389,4 +1606,5 @@ export const MARK_TOKEN: Record<KindTone, string> = {
   source: "--mark-source",
   danger: "--mark-danger",
   neutral: "--mark-neutral",
+  cited: "--mark-cited",
 };

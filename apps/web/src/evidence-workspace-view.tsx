@@ -5,6 +5,7 @@ import type { ActivityItem } from "./control-workspace-model";
 import { FileChanges } from "./evidence-change";
 import { RequestUpload } from "./evidence-intake";
 import type { Intelligence } from "./evidence-intelligence-view";
+import { PreviewButton } from "./evidence-opener";
 import type { RequirementFile } from "./evidence-plan-model";
 import {
   type EvidencePlan,
@@ -21,7 +22,6 @@ import {
   RequirementRow,
   usePlanAction,
 } from "./evidence-plan-view";
-import { PreviewButton } from "./evidence-preview";
 import { EvidenceRequests } from "./evidence-requests-view";
 import {
   EVIDENCE_VIEWS,

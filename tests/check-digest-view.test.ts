@@ -75,7 +75,11 @@ const askRow = component(digest, "AskRow");
 const askWhy = component(digest, "AskWhy");
 const table = component(digest, "tableOf");
 const assurance = read("apps/web/src/evidence-assurance-model.ts");
-const preview = read("apps/web/src/evidence-preview.tsx");
+// Changed 14 November 2026 (docs/evidence-annotations.md, section 5a, "One evidence
+// viewer"). Old: the openers and the old viewer in evidence-preview.tsx. New: the old
+// viewer is retired; the openers (the button, the dialog, the inline file) are in
+// evidence-opener.tsx and show the one viewer of evidence-annotations.tsx.
+const preview = read("apps/web/src/evidence-opener.tsx");
 const check = component(list, "CheckOfRequest");
 const row = component(list, "Row");
 /** The first screen, and one attribute alone, as the view draws them. */
@@ -1399,12 +1403,15 @@ describe("one attribute at a time", () => {
     const dialog = read("apps/web/src/evidence-dialog.tsx");
     has(dialog, "annotation?: AnnotationAsk;");
     // Its Preview, for a file of that D&I request, is the annotation viewer with its
-    // review, in place of the plain viewer; a spreadsheet's table stays; any other
-    // file, or a file of no D&I request, is as it was.
+    // review; a spreadsheet's table stays. Changed 14 November 2026 (section 5a). Old: any
+    // other file, or a file of no D&I request, in the old viewer (EvidenceViewer). New:
+    // every file in the one viewer (AnnotatedFile), its annotations only where the
+    // request is known (`notes`).
     has(
       dialog,
-      ") : notes !== undefined ? ( // A file of a D&I request: its annotations and their review, in // place of the plain viewer (product owner, 14 November 2026). <AnnotatedPreview",
+      ") : ( // The one evidence viewer (docs/evidence-annotations.md, section // 5a): a file of the D&I request with its annotations and their // review, any file with the passages cited in it. <AnnotatedFile",
     );
+    has(dialog, "annotations={notes} citations={citations} focused={focused}");
     has(
       dialog,
       'const notesOf = (shownId: string) => open.mode === "review" && open.requirementId !== undefined && (shownId === open.fileId || insight?.file.requirementId === open.requirementId) ? { controlId: ids.controlId, requirementId: open.requirementId } : undefined;',
@@ -1413,9 +1420,9 @@ describe("one attribute at a time", () => {
       '{tab === "preview" ? (',
       "table ? (",
       "<DataTable",
-      "<AnnotatedPreview",
-      "<EvidenceViewer",
+      "<AnnotatedFile",
     ]);
+    assert.equal(/<AnnotatedPreview\b|<EvidenceViewer\b/.test(dialog), false);
     // The expand icon keeps the full-size view of the same thing.
     has(
       dialog,
@@ -1424,7 +1431,7 @@ describe("one attribute at a time", () => {
     // The inline viewer: the existing one, with its review, and the same pick.
     has(
       preview,
-      "const pick = useAnnotationPick( notes.set, file.id, undefined, startAnnotationFor, );",
+      "const annotationPick = useAnnotationPick( notes.set, file.id, undefined, startAnnotationFor, );",
     );
     has(preview, "act={notes.act}");
     has(preview, "inline");
@@ -1442,7 +1449,7 @@ describe("one attribute at a time", () => {
     // Opening it writes nothing.
     const opened = preview.slice(
       preview.indexOf("function useAnnotationPick("),
-      preview.indexOf("export function AnnotatedPreview("),
+      preview.indexOf("/** The cited passage a file opens on"),
     );
     assert.ok(opened.length > 200);
     assert.equal(/fetch\(|notes\.act|method:/.test(opened), false);

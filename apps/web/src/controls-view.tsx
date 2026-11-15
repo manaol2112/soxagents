@@ -155,8 +155,8 @@ import {
   isReading,
   uploadBlocked,
 } from "./evidence-model";
+import { PreviewButton } from "./evidence-opener";
 import { populationWaiting } from "./evidence-plan-model";
-import { PreviewButton } from "./evidence-preview";
 import { phaseWindow } from "./evidence-requests-model";
 import {
   proposals as evidenceProposals,

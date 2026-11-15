@@ -22,8 +22,8 @@ import {
 import { FileChanges } from "./evidence-change";
 import { type Picked, walk } from "./evidence-intake";
 import { planUploads, systemsAnswer } from "./evidence-model";
+import { PreviewButton } from "./evidence-opener";
 import { usePlanAction } from "./evidence-plan-view";
-import { PreviewButton } from "./evidence-preview";
 import {
   addressesLine,
   analyzeLabel,

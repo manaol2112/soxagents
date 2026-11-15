@@ -36,7 +36,7 @@ import {
   stepOutcome,
   writtenSoFar,
 } from "./console-model";
-import { EvidencePreview } from "./evidence-preview";
+import { AnnotatedDialog } from "./evidence-opener";
 import { UiIcon } from "./ui-icon";
 
 // While an answer is being written the conversation is fetched often, so the text flows.
@@ -1124,7 +1124,7 @@ function Message({
           <Prose content={message.content} />
           <SourceList />
           {previewing !== null ? (
-            <EvidencePreview
+            <AnnotatedDialog
               organizationId={ids.organizationId}
               projectId={ids.projectId}
               files={citedFiles(message.citations)}

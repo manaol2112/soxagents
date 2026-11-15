@@ -37,7 +37,6 @@ import {
   previewUrl,
   type RefChip,
   type Reference,
-  readingUrl,
   recordKey,
   refChip,
   refChips,
@@ -67,12 +66,8 @@ import {
   AnnotationsLoading,
   useEvidenceAnnotations,
 } from "./evidence-annotations";
-import {
-  EvidencePreview,
-  EvidenceViewer,
-  PdfViewer,
-  TextViewer,
-} from "./evidence-preview";
+import { AnnotatedDialog } from "./evidence-opener";
+import { fileQuery } from "./evidence-preview-model";
 import { FileBadge } from "./file-badge";
 import { type IconName, UiIcon } from "./ui-icon";
 import { WorkpapersTab } from "./workpaper-view";
@@ -630,7 +625,7 @@ export function DesignWorkpaper({
         </div>
       )}
       {opened !== null ? (
-        <EvidencePreview
+        <AnnotatedDialog
           organizationId={scope.organizationId}
           projectId={scope.projectId}
           files={[{ id: opened.entry.fileId, fileName: opened.entry.fileName }]}
@@ -2011,7 +2006,6 @@ function EvidencePane({
         : { ...notes.set, canEdit: false },
     [notes.set],
   );
-  const url = previewUrl(scope, fileId);
   if (notes.status === "loading") {
     return (
       <div className="dw-pane is-loading">
@@ -2020,27 +2014,11 @@ function EvidencePane({
       </div>
     );
   }
-  if (shown === null) {
-    return (
-      <div className="dw-pane">
-        <EvidenceViewer
-          organizationId={organizationId}
-          projectId={projectId}
-          file={file}
-        />
-        <p className="dw-pane-note">
-          {notes.status === "failed"
-            ? "The annotations could not be loaded. The file is shown without them."
-            : "No annotations on this file yet. They appear once the check has read it."}
-        </p>
-      </div>
-    );
-  }
   return (
     <div className="dw-pane">
       <AnnotatedEvidence
         file={file}
-        url={url}
+        query={fileQuery(organizationId, projectId)}
         set={shown}
         busy={null}
         act={READ_ONLY}
@@ -2048,22 +2026,14 @@ function EvidencePane({
         pick={pick}
         inline
         returnFocus={returnFocus}
-        pdf={(input) => (
-          <PdfViewer
-            url={url}
-            citations={input.citations}
-            focused={input.focused}
-            marks={input.marks}
-          />
-        )}
-        text={(input) => (
-          <TextViewer
-            url={readingUrl(scope, fileId)}
-            citations={input.citations}
-            focused={input.focused}
-          />
-        )}
       />
+      {shown === null ? (
+        <p className="dw-pane-note">
+          {notes.status === "failed"
+            ? "The annotations could not be loaded. The file is shown without them."
+            : "No annotations on this file yet. They appear once the check has read it."}
+        </p>
+      ) : null}
     </div>
   );
 }

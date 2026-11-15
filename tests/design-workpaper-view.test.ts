@@ -18,7 +18,10 @@ const controls = read("apps/web/src/controls-view.tsx");
 const card = read("apps/web/src/workpaper-view.tsx");
 const layout = read("apps/web/app/layout.tsx");
 const viewer = read("apps/web/src/evidence-annotations.tsx");
-const preview = read("apps/web/src/evidence-preview.tsx");
+// Changed 14 November 2026 (docs/evidence-annotations.md, section 5a). Old: the dialog
+// in evidence-preview.tsx (EvidencePreview). New: the one viewer's dialog in
+// evidence-opener.tsx (AnnotatedDialog), the old viewer retired.
+const preview = read("apps/web/src/evidence-opener.tsx");
 
 /** A function's source: from its declaration to the next top-level one. */
 const component = (source: string, name: string) => {
@@ -231,17 +234,25 @@ describe("nothing in a view is a decision", () => {
       viewer,
       /if \(\s*inline &&\s*!\(event\.target instanceof Node && here\.contains\(event\.target\)\)\s*\) \{\s*return;/,
     );
-    assert.match(viewer, /pick\?: \{ id: string \} \| null;/);
+    // Changed 14 November 2026 (section 5a). Old: `pick?: { id: string } | null`. New: a
+    // pick is an annotation or a cited passage (ViewerPick); the pane still passes an
+    // annotation's id.
+    assert.match(viewer, /pick\?: ViewerPick \| null;/);
+    assert.match(
+      read("apps/web/src/evidence-annotations-model.ts"),
+      /export type ViewerPick = \{ id: string \} \| \{ quote: string \};/,
+    );
     // Only the selected file is read, and only once the evidence view is shown.
     assert.equal(count(view, /<EvidencePane\b/g), 1);
     assert.match(component(view, "EvidenceSplit"), /<EvidencePane\b/);
   });
 
   it("opens a reference in the existing preview, at the annotation it names", () => {
-    assert.equal(count(view, /<EvidencePreview\b/g), 1);
+    assert.equal(count(view, /<AnnotatedDialog\b/g), 1);
+    assert.equal(count(view, /<EvidencePreview\b|<EvidenceViewer\b/g), 0);
     assert.match(
       view,
-      /<EvidencePreview[\s\S]{0,420}annotations=\{\s*opened\.entry\.requirementId === null\s*\? undefined\s*: \{\s*controlId: scope\.controlId,\s*requirementId: opened\.entry\.requirementId,\s*\}\s*\}\s*startAnnotationId=\{opened\.annotationId \?\? undefined\}/,
+      /<AnnotatedDialog[\s\S]{0,420}annotations=\{\s*opened\.entry\.requirementId === null\s*\? undefined\s*: \{\s*controlId: scope\.controlId,\s*requirementId: opened\.entry\.requirementId,\s*\}\s*\}\s*startAnnotationId=\{opened\.annotationId \?\? undefined\}/,
     );
     assert.match(preview, /startAnnotationId\?: string \| undefined;/);
     assert.match(preview, /pick=\{pick\}/);
@@ -564,11 +575,20 @@ describe("the review's fixes, in the screen's own files", () => {
     // In a page the viewer's callout takes the focus only for what a person selected in
     // it: not when it appears, when its annotations arrive, or for a reference chosen
     // outside it.
+    // Changed 14 November 2026 (docs/evidence-annotations.md, section 5a). Old: a pick
+    // named an annotation by its id, so it was "asked" as soon as it was given. New: a
+    // pick names an annotation or a cited passage, by id or by its words (ViewerPick); it
+    // is "asked" once it names a mark of the file, and a pick given while the annotations
+    // are read is acted on once they are here. The rule is the same: asked from outside,
+    // the callout stays quiet in a page.
     assert.match(
       viewer,
-      /const \[asked, setAsked\] = useState\(pick !== null\);/,
+      /const \[asked, setAsked\] = useState\(\s*pickTarget\(pick, annotations, citedHere\) !== null,\s*\);/,
     );
-    assert.match(viewer, /if \(pick !== null\) \{\s*setAsked\(true\);/);
+    assert.match(
+      viewer,
+      /if \(pick === null \|\| loading\) \{\s*return;\s*\}\s*const target = pickTarget\(pick, annotations, citedHere\);\s*if \(target !== null\) \{\s*setAsked\(true\);/,
+    );
     assert.match(
       viewer,
       /function select\(id: string \| null\) \{\s*setAsked\(false\);/,

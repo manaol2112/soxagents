@@ -26,7 +26,7 @@ import {
   uploadBlocked,
   type WithdrawnFile,
 } from "./evidence-model";
-import { PreviewButton } from "./evidence-preview";
+import { PreviewButton } from "./evidence-opener";
 import { formatBytes, formatDate } from "./format";
 import type { ShellModel } from "./shell-model";
 import { UiIcon } from "./ui-icon";

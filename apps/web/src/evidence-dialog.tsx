@@ -46,13 +46,9 @@ import {
   Trace,
 } from "./evidence-intelligence-view";
 import type { EvidenceMappingRun } from "./evidence-mapping-model";
+import { AnnotatedFile, PreviewButton } from "./evidence-opener";
 import type { EvidencePlan } from "./evidence-plan-model";
 import { Problem, usePlanAction } from "./evidence-plan-view";
-import {
-  AnnotatedPreview,
-  EvidenceViewer,
-  PreviewButton,
-} from "./evidence-preview";
 import type { EvidenceCitation } from "./evidence-preview-model";
 import { formatBytes, formatDate } from "./format";
 import { DataTable } from "./population-table";
@@ -800,10 +796,11 @@ export function EvidenceDialog({
                       onCancel={() => undefined}
                       onAll={() => setTab("data")}
                     />
-                  ) : notes !== undefined ? (
-                    // A file of a D&I request: its annotations and their review, in
-                    // place of the plain viewer (product owner, 14 November 2026).
-                    <AnnotatedPreview
+                  ) : (
+                    // The one evidence viewer (docs/evidence-annotations.md, section
+                    // 5a): a file of the D&I request with its annotations and their
+                    // review, any file with the passages cited in it.
+                    <AnnotatedFile
                       key={`${insight.file.id}-${analysis?.status ?? ""}-${analysis?.version ?? 0}`}
                       organizationId={ids.organizationId}
                       projectId={ids.projectId}
@@ -816,18 +813,6 @@ export function EvidenceDialog({
                       focused={focused}
                       startAnnotationFor={askOf(insight.file.id)}
                       headSlot={notesSlot}
-                    />
-                  ) : (
-                    <EvidenceViewer
-                      key={`${insight.file.id}-${analysis?.status ?? ""}-${analysis?.version ?? 0}`}
-                      organizationId={ids.organizationId}
-                      projectId={ids.projectId}
-                      file={{
-                        id: insight.file.id,
-                        fileName: insight.file.fileName,
-                      }}
-                      citations={citations}
-                      focused={focused}
                     />
                   )
                 ) : tab === "data" ? (

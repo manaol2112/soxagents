@@ -119,52 +119,6 @@
   }
 }
 
-.ed-tab-body .preview-stage.is-inline {
-  min-height: 0;
-  padding: 1rem;
-  overflow: auto;
-  background: var(--surface-sunken);
-  border-radius: 0 0 14px 14px;
-}
-
-.ed-tab-body .pdf-stage.has-tools {
-  gap: 0.5rem;
-}
-
-.ed-tab-body .pdf-bar {
-  position: sticky;
-  top: -1rem;
-  z-index: 2;
-  display: flex;
-  gap: 0.35rem;
-  align-items: center;
-  width: 100%;
-  margin: -1rem -1rem 0;
-  padding: 0.4rem 1rem;
-  color: var(--text-secondary);
-  background: var(--surface);
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.ed-tab-body .pdf-bar .num {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  font-size: var(--fs-sm);
-}
-
-.ed-tab-body .pdf-bar .num input {
-  width: 3.2rem;
-  height: 26px;
-  padding: 0 0.3rem;
-  text-align: center;
-  font-size: var(--fs-sm);
-}
-
-.ed-tab-body .pdf-bar button:first-child svg {
-  transform: rotate(180deg);
-}
-
 .pdf-zoom {
   display: inline-flex;
   align-items: center;
@@ -920,12 +874,12 @@
 
 @media (max-width: 760px) {
   /* The viewer's tools wrap to two rows where one row would push the page sideways. */
-  .ed-tab-body .pdf-bar {
+  .pdf-bar {
     flex-wrap: wrap;
     gap: 0.35rem 0.5rem;
   }
 
-  .ed-tab-body .pdf-zoom {
+  .pdf-zoom {
     margin-left: 0;
   }
 }

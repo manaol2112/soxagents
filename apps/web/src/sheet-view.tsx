@@ -1,5 +1,5 @@
 import { AutoRefresh } from "./auto-refresh";
-import { PreviewButton } from "./evidence-preview";
+import { PreviewButton } from "./evidence-opener";
 import type { Automation } from "./execution-model";
 import { formatDate } from "./format";
 import { PanelClose } from "./panel-close";
