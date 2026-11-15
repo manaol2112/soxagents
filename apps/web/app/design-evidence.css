@@ -786,6 +786,25 @@ button.ep-file-open:focus-visible {
   background: var(--surface-muted);
 }
 
+/* Coverage: an attribute a person's tickmark stands on is a state of its own, neutral
+   and never the green of evidence; a recorded exception is in the danger tone. */
+.dq-cov.is-tickmark {
+  color: var(--neutral);
+  background: var(--neutral-soft);
+  border-color: var(--neutral-border);
+}
+
+.dq-cov.is-flagged {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+}
+
+/* The tickmarks kept while a request's check is not current: quiet, under its line. */
+.de-check .de-check-line.de-check-kept > svg {
+  color: var(--text-tertiary);
+}
+
 /* Under the coverage: which elements are still not shown, by their text. */
 .dq-cov-missing {
   display: grid;

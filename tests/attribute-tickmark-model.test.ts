@@ -262,6 +262,11 @@ describe("reading a person's disposition (section 10.13)", () => {
         }),
       ],
     });
+    // Changed 15 November 2026 (section 10.15, item 9). Old: a disposition read as
+    // `{id, kind, reason, reliedOn, annotationId, recordedBy, recordedAt, version}`.
+    // New: it also carries `onCurrentCheck`, true unless the server says it was recorded
+    // on an earlier check (`on_current_check: false`); the shape grew, and the
+    // assertion is otherwise unchanged.
     assert.deepEqual(read?.disposition, {
       id: uuid(900),
       kind: "NOT_AVAILABLE",
@@ -271,6 +276,7 @@ describe("reading a person's disposition (section 10.13)", () => {
       recordedBy: "Dana Lee",
       recordedAt: "2026-11-14T09:30:00Z",
       version: 1,
+      onCurrentCheck: true,
     });
     assert.deepEqual(
       read?.history.map((item) => [item.id, item.endedAs, item.endedBy]),

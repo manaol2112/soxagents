@@ -25,6 +25,7 @@ import {
   assuranceSentence,
   attributeCoverage,
   DESIGN_ONLY,
+  type DispositionKind,
   type EvidenceAssurance,
   keyedOf,
   SAME_INSTANCE,
@@ -343,6 +344,10 @@ export type EvidenceRow = {
   /** What the assurance chain says of the row's files: each file's check and, once one
    * is finished, each attribute's state. Null where the chain has no entry for them. */
   assurance: AssuranceRow | null;
+  /** The letters of the attributes of an accepted request that wait on a person again
+   * (section 10.15, item 4: a tickmark reopened or ended by a later check, or one a new
+   * check no longer evidences). Empty for every other row. */
+  again: string[];
 };
 
 export type EvidenceStanding =
@@ -355,6 +360,8 @@ export type EvidenceStanding =
   | "CHANGES"
   | "READING"
   | "REVIEW"
+  // An accepted request has an attribute to look at again (section 10.15, item 4).
+  | "AGAIN"
   | "FOLLOW_UP"
   | "INSUFFICIENT"
   | "WITH_OWNER"
@@ -442,8 +449,57 @@ export type CoverageState =
   // Accepted requests show some of its elements from an instance's records, not all.
   | "PARTLY"
   | "REQUESTED"
+  // A person's tickmark stands on it (section 10.15, item 4): a state of its own, worded
+  // by its kind, never "evidenced" and never green.
+  | "TICKMARK"
   | "EXCEPTED"
   | "UNCOVERED";
+
+/** A person's tickmark in the coverage, by its kind: after the letter on the line
+ * ("B not applicable, your tickmark"), and on the chip. An exception is said as
+ * recorded: it settles nothing here and is carried to the workpaper. */
+export const COVERAGE_TICKMARKS: Record<
+  DispositionKind,
+  { line: string; lines: string; chip: string }
+> = {
+  NOT_APPLICABLE: {
+    line: "not applicable, your tickmark",
+    lines: "not applicable, your tickmarks",
+    chip: "Not applicable",
+  },
+  NOT_AVAILABLE: {
+    line: "accepted without evidence, your tickmark",
+    lines: "accepted without evidence, your tickmarks",
+    chip: "Accepted without evidence",
+  },
+  SHOWN_ON_REVIEW: {
+    line: "shown on your review",
+    lines: "shown on your review",
+    chip: "On your review",
+  },
+  EXCEPTION: {
+    line: "exception recorded",
+    lines: "exceptions recorded",
+    chip: "Exception recorded",
+  },
+};
+
+/** Where requests carry different tickmarks on one attribute, the most cautious is the
+ * one the coverage says: an exception first. */
+const TICKMARK_ORDER: readonly DispositionKind[] = [
+  "EXCEPTION",
+  "NOT_AVAILABLE",
+  "NOT_APPLICABLE",
+  "SHOWN_ON_REVIEW",
+];
+
+/** "1 accepted request has an attribute to look at again": the step is not done while
+ * one does (section 10.15, item 4). */
+export function lookAgainStatus(requests: number): string {
+  return requests === 1
+    ? "1 accepted request has an attribute to look at again"
+    : `${requests} accepted requests have attributes to look at again`;
+}
 
 export type CoverageChip = {
   attributeId: string;
@@ -464,6 +520,9 @@ export type CoverageChip = {
   /** Evidenced, and shown across this many accepted requests (2 or more: combined, to
    * be checked for the same instance); 1 where one request shows it; 0 otherwise. */
   across: number;
+  /** The kind of the person's tickmark the chip says; null unless its state is
+   * TICKMARK. */
+  tickmark: DispositionKind | null;
 };
 
 export type EvidenceAttribute = {
@@ -945,6 +1004,11 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
     // reader's single one: the reader's proposal and its follow-up points were never
     // checked by a second reading, so they are not put to the person.
     const single = assured === null && !unreadChecks;
+    // An accepted request whose current check has an attribute that waits again.
+    const again =
+      item.state === "ACCEPTED" && state === "ACCEPTED" && assured !== null
+        ? assured.again
+        : [];
     return {
       id: item.id,
       version: item.version,
@@ -953,7 +1017,11 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
       kind,
       icon,
       categories: [...item.categories],
-      sub: `${item.necessity === "OPTIONAL" ? `${kind} · Optional` : kind} · ${factOf(item, state, assured, !single)}`,
+      sub: `${item.necessity === "OPTIONAL" ? `${kind} · Optional` : kind} · ${factOf(item, state, assured, !single)}${
+        again.length > 0
+          ? ` · ${lettersSpan(again, allLetters)} to look at again`
+          : ""
+      }`,
       letters,
       attributeIds: addressed.map((each) => each.id),
       addresses:
@@ -1015,6 +1083,7 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
       planState: item.state,
       readerShown: single,
       assurance: assured,
+      again,
     };
   });
   const live = rows.filter((row) => !row.aside);
@@ -1160,9 +1229,33 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
     input.exceptions.map((item) => [item.attributeId, item]),
   );
   const excepted = new Set(reasonOf.keys());
+  // A person's tickmarks that stand on a current check of a request that addresses the
+  // attribute (section 10.15, item 4), the most cautious kind first. Not where the
+  // checks could not be read: nothing of them is known then.
+  const tickmarkOn = (attributeId: string): DispositionKind | null => {
+    const kinds = unread
+      ? []
+      : live
+          .filter(
+            (row) =>
+              row.attributeIds.includes(attributeId) &&
+              row.assurance?.standing === "REVIEWED",
+          )
+          .flatMap((row) =>
+            (row.assurance?.tickmarks ?? [])
+              .filter((each) => each.attributeId === attributeId)
+              .map((each) => each.kind),
+          );
+    return TICKMARK_ORDER.find((kind) => kinds.includes(kind)) ?? null;
+  };
   const coverage: CoverageChip[] = attributes.map((item) => {
     const addressing = live.filter((row) => row.attributeIds.includes(item.id));
     const found = attributeCoverage(item.id, settled);
+    // A person's exception stands over everything, the check's own evidence included;
+    // a closing tickmark only where the accepted requests do not evidence the attribute.
+    const marked = tickmarkOn(item.id);
+    const tickmark =
+      marked === "EXCEPTION" || found.state !== "EVIDENCED" ? marked : null;
     // Accepted on a row the chain checked, and its check shows nothing of it.
     const unsupported =
       (found.state === "NONE" || found.state === "UNKNOWN") &&
@@ -1173,18 +1266,22 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
           row.attributeIds.includes(item.id),
       );
     const state: CoverageState =
-      found.state === "EVIDENCED"
-        ? "EVIDENCED"
-        : found.state === "DESIGN_ONLY"
-          ? "DESIGN_ONLY"
-          : found.state === "PARTLY"
-            ? "PARTLY"
-            : addressing.length > 0
-              ? "REQUESTED"
-              : excepted.has(item.id)
-                ? "EXCEPTED"
-                : "UNCOVERED";
-    const missing = state === "EVIDENCED" ? [] : found.missing;
+      tickmark !== null
+        ? "TICKMARK"
+        : found.state === "EVIDENCED"
+          ? "EVIDENCED"
+          : found.state === "DESIGN_ONLY"
+            ? "DESIGN_ONLY"
+            : found.state === "PARTLY"
+              ? "PARTLY"
+              : addressing.length > 0
+                ? "REQUESTED"
+                : excepted.has(item.id)
+                  ? "EXCEPTED"
+                  : "UNCOVERED";
+    // A tickmark stands in for what is not shown: it is not listed as still not shown.
+    const missing =
+      state === "EVIDENCED" || state === "TICKMARK" ? [] : found.missing;
     const accepted = addressing.some((row) => row.state === "ACCEPTED");
     // Accepted, and no accepted request addressing it has been checked yet: said so,
     // never "its check does not show it" (no check ran).
@@ -1206,31 +1303,34 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
       text: item.text,
       state,
       label:
-        state === "EVIDENCED"
-          ? across >= 2
-            ? `Attribute ${item.letter}: shown across ${across} requests`
-            : `Attribute ${item.letter}: evidence accepted`
-          : unread && accepted
-            ? `Attribute ${item.letter}: evidence accepted; its check could not be read`
-            : state === "DESIGN_ONLY"
-              ? `Attribute ${item.letter}: ${DESIGN_ONLY}`
-              : state === "PARTLY"
-                ? `Attribute ${item.letter}: shown in part${missing.length > 0 ? `; still not shown: ${missing.join("; ")}` : ""}`
-                : state === "REQUESTED"
-                  ? unsupported
-                    ? notRun
-                      ? `Attribute ${item.letter}: evidence accepted, not checked against the attributes yet`
-                      : `Attribute ${item.letter}: evidence accepted, and its check does not show the attribute supported`
-                    : `Attribute ${item.letter}: requested, no evidence accepted yet`
-                  : state === "EXCEPTED"
-                    ? `Attribute ${item.letter}: not evidenced at D&I, with a recorded reason`
-                    : `Attribute ${item.letter}: not addressed by any request`,
+        tickmark !== null
+          ? `Attribute ${item.letter}: ${COVERAGE_TICKMARKS[tickmark].line}`
+          : state === "EVIDENCED"
+            ? across >= 2
+              ? `Attribute ${item.letter}: shown across ${across} requests`
+              : `Attribute ${item.letter}: evidence accepted`
+            : unread && accepted
+              ? `Attribute ${item.letter}: evidence accepted; its check could not be read`
+              : state === "DESIGN_ONLY"
+                ? `Attribute ${item.letter}: ${DESIGN_ONLY}`
+                : state === "PARTLY"
+                  ? `Attribute ${item.letter}: shown in part${missing.length > 0 ? `; still not shown: ${missing.join("; ")}` : ""}`
+                  : state === "REQUESTED"
+                    ? unsupported
+                      ? notRun
+                        ? `Attribute ${item.letter}: evidence accepted, not checked against the attributes yet`
+                        : `Attribute ${item.letter}: evidence accepted, and its check does not show the attribute supported`
+                      : `Attribute ${item.letter}: requested, no evidence accepted yet`
+                    : state === "EXCEPTED"
+                      ? `Attribute ${item.letter}: not evidenced at D&I, with a recorded reason`
+                      : `Attribute ${item.letter}: not addressed by any request`,
       reason: state === "EXCEPTED" ? (reasonOf.get(item.id)?.reason ?? "") : "",
       // Which elements are still not shown, by their text, once a check has read them.
       missing: state === "REQUESTED" && !unsupported ? [] : missing,
       unsupported: state === "REQUESTED" && unsupported,
       notRun: state === "REQUESTED" && notRun,
       across,
+      tickmark,
     };
   });
   const exceptions: ExceptionLine[] = attributes.flatMap((item) => {
@@ -1244,6 +1344,7 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
   const reasons = coverage.filter((chip) => chip.state === "EXCEPTED");
   const designed = coverage.filter((chip) => chip.state === "DESIGN_ONLY");
   const inPart = coverage.filter((chip) => chip.state === "PARTLY");
+  const marked = coverage.filter((chip) => chip.tickmark !== null);
   const review = live.filter((row) => row.canAccept && !row.decided);
   // What accepting the files that wait would add to the coverage.
   const waits = (row: EvidenceRow) =>
@@ -1253,6 +1354,11 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
       (item) =>
         !unread &&
         !evidenced.some((chip) => chip.attributeId === item.id) &&
+        // An exception a person recorded is not covered by accepting.
+        !marked.some(
+          (chip) =>
+            chip.attributeId === item.id && chip.tickmark === "EXCEPTION",
+        ) &&
         attributeCoverage(item.id, checked(waits)).state === "EVIDENCED",
     )
     .map((item) => item.letter);
@@ -1277,7 +1383,8 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
             bare.length === 0 &&
             unrun.length === 0 &&
             designed.length === 0 &&
-            inPart.length === 0
+            inPart.length === 0 &&
+            marked.length === 0
               ? "Every attribute is requested · none evidenced yet"
               : `${evidenced.length} of ${plural(attributes.length, "attribute")} evidenced`,
             combined.length > 0
@@ -1309,6 +1416,16 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
             bare.length > 0
               ? `${lettersSpan(bare, allLetters)} accepted without support from the check`
               : "",
+            // A person's tickmarks, each kind in its own words: never "evidenced".
+            ...TICKMARK_ORDER.map((kind) => {
+              const letters = marked
+                .filter((chip) => chip.tickmark === kind)
+                .map((chip) => chip.letter);
+              const words = COVERAGE_TICKMARKS[kind];
+              return letters.length === 0
+                ? ""
+                : `${lettersSpan(letters, allLetters)} ${letters.length === 1 ? words.line : words.lines}`;
+            }),
             reasons.length > 0
               ? `${lettersSpan(
                   reasons.map((chip) => chip.letter),
@@ -1390,6 +1507,7 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
         ? null
         : assuranceCounts(assurance),
     unread,
+    allLetters,
   });
 
   const received = live.reduce((sum, row) => sum + row.files, 0);
@@ -1457,7 +1575,12 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
       ),
     ]),
     activityLine,
-    open: rows.find((row) => row.waits)?.id ?? null,
+    // The first that waits on a person; else an accepted request with an attribute to
+    // look at again, so the step's line points at a row that is open.
+    open:
+      rows.find((row) => row.waits)?.id ??
+      rows.find((row) => !row.aside && row.again.length > 0)?.id ??
+      null,
   };
 }
 
@@ -1478,6 +1601,8 @@ function headerOf(facts: {
   assured: AssuranceCounts | null;
   /** The checks could not be read: the step says so, and nothing of the reader's. */
   unread: boolean;
+  /** The approved attributes' letters, in order: how a span of them is said. */
+  allLetters: readonly string[];
 }): EvidenceHeader {
   const { live, review, reviewFiles, main, owner, handover } = facts;
   const count = (state: ChipState) =>
@@ -1677,6 +1802,28 @@ function headerOf(facts: {
       },
     };
   }
+  // An accepted request has an attribute that waits on a person again (section 10.15,
+  // item 4): the step is not done, and says which request and which attribute.
+  const again = live.filter((row) => row.again.length > 0);
+  const [first] = again;
+  if (first !== undefined) {
+    const one = first.again.length === 1;
+    return {
+      standing: "AGAIN",
+      tone: "attention",
+      status: lookAgainStatus(again.length),
+      need: {
+        kind: "act",
+        title: `${lookAgainStatus(again.length)}.`,
+        detail: `${first.title}: attribute${one ? "" : "s"} ${lettersSpan(first.again, facts.allLetters)} ${one ? "waits" : "wait"} on you again. A tickmark on ${one ? "it" : "them"} no longer stands, or a later check does not show ${one ? "it" : "them"}. Open the request to record a tickmark or add evidence.${
+          again.length > 1
+            ? ` ${plural(again.length - 1, "more request")} ${again.length === 2 ? "has" : "have"} the same.`
+            : ""
+        }`,
+      },
+      agent: { did: "Reads each file as it arrives.", found },
+    };
+  }
   if (reading > 0) {
     return {
       standing: "READING",
@@ -1797,6 +1944,40 @@ function headerOf(facts: {
     },
     agent: { did: "Reads each file as it arrives.", found },
   };
+}
+
+/**
+ * The accepted D&I requests with an attribute to look at again, by id, for the workflow
+ * where the list itself is not built (control-workflow-model's fallback): the rule the
+ * rows read (AssuranceRow.again), from the same read of the checks. Empty where the
+ * checks could not be read.
+ */
+export function requestsToLookAgain(
+  requirements: ReadonlyArray<
+    Pick<Requirement, "id" | "phase" | "state" | "files">
+  >,
+  assurance: EvidenceAssurance | null,
+): Set<string> {
+  const keyed = keyedOf(assurance);
+  return new Set(
+    requirements
+      .filter((item) => item.phase === "DESIGN" && item.state === "ACCEPTED")
+      .filter(
+        (item) =>
+          (assuranceRow({
+            requirementId: item.id,
+            files: item.files.map((file) => ({
+              id: file.fileId,
+              name: file.name,
+            })),
+            assurance,
+            attributes: [],
+            span: (letters) => letters.join(", "),
+            keyed,
+          })?.again.length ?? 0) > 0,
+      )
+      .map((item) => item.id),
+  );
 }
 
 /** Where the step stands when the list was not read: nothing of its own to say. */

@@ -1305,6 +1305,16 @@
   border-radius: 8px;
 }
 
+/* Each sentence that holds the sign-off, whole: it wraps, and is never cut. */
+.dc-blocked > p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.dc-blocked > p + p {
+  margin-top: 0.35rem;
+}
+
 .dc-reopen,
 .dc-history {
   font-size: var(--fs-sm);

@@ -1504,6 +1504,107 @@ button.ei-brief-more[aria-expanded="true"] > svg {
   white-space: nowrap;
 }
 
+/* Closing a request with tickmarks (section 10.15). Under the reason, two real boxes:
+   what recording the tickmark may also do. Quiet: no fill, the hint under its box. */
+.cdg-tmf-check {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  padding: 0.25rem 0.6rem;
+  color: var(--text-strong);
+  cursor: pointer;
+}
+
+.cdg-tmf-check > input {
+  flex: none;
+  margin-top: 0.2rem;
+}
+
+.cdg-tmf-check > span {
+  display: grid;
+  gap: 0.05rem;
+  min-width: 0;
+}
+
+/* What was done, in the order it was done: the tickmark, then what followed it. */
+.cdg-tm-said {
+  display: grid;
+  gap: 0.25rem;
+  justify-items: start;
+  min-width: 0;
+}
+
+/* What followed a recorded tickmark, each line once its own answer came: the mark
+   carries the tone, a refusal its words too. */
+.cdg-tm-steps {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  list-style: none;
+}
+
+.cdg-tm-step {
+  display: flex;
+  gap: 0.4rem;
+  align-items: baseline;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cdg-tm-step > svg {
+  flex: none;
+  align-self: center;
+  color: var(--text-tertiary);
+}
+
+.cdg-tm-step.is-done > svg {
+  color: var(--success);
+}
+
+.cdg-tm-step.is-refused,
+.cdg-tm-step.is-refused > svg {
+  color: var(--danger);
+}
+
+/* A tickmark recorded on an earlier check (item 9): said quietly beside Change and
+   Reopen, on its item under "Needs attention", and beside it on the quiet line. */
+.cdg-tm-earlier {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.cdg-tm-earlier > svg {
+  flex: none;
+  color: var(--text-tertiary);
+}
+
+.cdg-item-note {
+  position: relative;
+  z-index: 1;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  text-align: left;
+}
+
+.cdg-quiet-items > li:has(> .cdg-earlier) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 0.4rem;
+  align-items: center;
+}
+
+.cdg-quiet-items > li > .cdg-earlier {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
 @media (max-width: 640px) {
   .cdg {
     --cdg-pad: 0.75rem;

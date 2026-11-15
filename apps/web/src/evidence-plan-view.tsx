@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { type ReactNode, useId, useState, useTransition } from "react";
+import { type ReactNode, useId, useRef, useState, useTransition } from "react";
 
 import {
   APPLICABILITY_LABELS,
@@ -47,6 +47,9 @@ export function usePlanAction(ids: Ids) {
   const [busy, setBusy] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
   const [note, setNote] = useState("");
+  // The last call's refusal in one sentence (null once the server confirmed it), for a
+  // caller that says it where the action was taken: read once `run` has answered.
+  const last = useRef<string | null>(null);
   async function run(
     label: string,
     fields: Record<string, unknown>,
@@ -80,6 +83,7 @@ export function usePlanAction(ids: Ids) {
     }
     setBusy("");
     const message = planProblem(status, detail);
+    last.current = message;
     setProblem(message);
     setNote(answer);
     if (message === null) {
@@ -87,7 +91,15 @@ export function usePlanAction(ids: Ids) {
     }
     return message === null;
   }
-  return { run, busy, pending: pending || busy !== "", problem, note, ids };
+  return {
+    run,
+    busy,
+    pending: pending || busy !== "",
+    problem,
+    note,
+    ids,
+    refusal: () => last.current,
+  };
 }
 
 export function Problem({ text }: { text: string | null }) {

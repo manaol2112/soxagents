@@ -174,6 +174,34 @@ export function signBlockedReason(conclusion: DesignConclusion): string | null {
   return conclusion.blocking[0] ?? null;
 }
 
+/** What the server says of the workpaper and of a standing sign-off as fragments
+ * (design_conclusions.py), in the page's own sentences: each is said once, and never as
+ * a fragment beside its sentence. "" where the page already says it another way. */
+const BLOCKING_WORDS: Readonly<Record<string, string>> = {
+  "the design workpaper is not prepared":
+    "The design workpaper is prepared first, in D&I Assessment.",
+  "the D&I conclusion is signed off": "",
+};
+
+/**
+ * Everything that holds the sign-off, each sentence once and whole, for every viewer:
+ * the viewer's own reason first (signBlockedReason), then every sentence the server
+ * gives in `blocking` as it sent it (docs/evidence-assurance.md, section 10.15, item 5:
+ * "An exception is recorded on attribute B. Log a design deficiency for it, or change the
+ * tickmark with your reason."). The person who must act on such a sentence is often not
+ * the reviewer, so it is not kept behind the reviewer's own reason. Nothing once the
+ * conclusion is signed off. It decides nothing: the server's `can_sign` does.
+ */
+export function signHolds(conclusion: DesignConclusion): string[] {
+  if (conclusion.status === "SIGNED_OFF") {
+    return [];
+  }
+  const said = (item: string) => (BLOCKING_WORDS[item] ?? item).trim();
+  return [signBlockedReason(conclusion) ?? "", ...conclusion.blocking]
+    .map(said)
+    .filter((item, at, all) => item !== "" && all.indexOf(item) === at);
+}
+
 export type DesignConclusionIntent = "sign" | "reopen";
 
 export type DesignConclusionWrite =

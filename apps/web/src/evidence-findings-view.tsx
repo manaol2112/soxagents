@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useId, useState, useTransition } from "react";
+import { useId, useRef, useState, useTransition } from "react";
 
 import {
   attributeLabel,
@@ -32,6 +32,9 @@ export function useFindingsAction(ids: Ids) {
   const [pending, startTransition] = useTransition();
   const [busy, setBusy] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
+  // The last call's refusal in one sentence (null once the server confirmed it), for a
+  // caller that says it where the action was taken: read once `run` has answered.
+  const last = useRef<string | null>(null);
   async function run(
     label: string,
     fields: Record<string, unknown>,
@@ -62,13 +65,43 @@ export function useFindingsAction(ids: Ids) {
     }
     setBusy("");
     const message = findingsProblem(status, detail);
+    last.current = message;
     setProblem(message);
     if (message === null) {
       startTransition(() => router.refresh());
     }
     return message === null;
   }
-  return { run, busy, pending: pending || busy !== "", problem };
+  return {
+    run,
+    busy,
+    pending: pending || busy !== "",
+    problem,
+    refusal: () => last.current,
+  };
+}
+
+/**
+ * A person's decision on a finding, sent the one way: what the finding's own buttons
+ * send, and what a tickmark's "Dismiss the check's proposed finding with this reason"
+ * sends once its tickmark is recorded (docs/evidence-assurance.md, section 10.15). True
+ * only once the server has confirmed it.
+ */
+export function decideFinding(
+  action: ReturnType<typeof useFindingsAction>,
+  finding: Pick<EvidenceFinding, "id" | "version">,
+  decision: FindingDecision,
+  note: string,
+  question = "",
+): Promise<boolean> {
+  return action.run(`finding-${finding.id}`, {
+    intent: "decide",
+    finding_id: finding.id,
+    decision,
+    note,
+    question: decision === "EDIT" ? question : "",
+    version: finding.version,
+  });
 }
 
 const KIND_ICON: Record<EvidenceFinding["kind"], IconName> = {
@@ -330,14 +363,7 @@ function FindingDetail({
   // view it sits in has its own one primary action (section 10.12).
   const lead = brief !== null ? "btn btn-secondary btn-sm" : "btn btn-sm";
   const decide = async (decision: FindingDecision) => {
-    const ok = await action.run(`finding-${finding.id}`, {
-      intent: "decide",
-      finding_id: finding.id,
-      decision,
-      note,
-      question: decision === "EDIT" ? question : "",
-      version: finding.version,
-    });
+    const ok = await decideFinding(action, finding, decision, note, question);
     if (ok) {
       setDeciding(null);
       setNote("");

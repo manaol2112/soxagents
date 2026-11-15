@@ -256,6 +256,10 @@ export type Disposition = {
   recordedBy: string;
   recordedAt: string;
   version: number;
+  /** Whether it was recorded on the request's current check (section 10.15, item 9):
+   * false only where the server says it was recorded on an earlier run and stands
+   * through a later one. Anything else the server sends, or nothing, reads as current. */
+  onCurrentCheck: boolean;
 };
 
 export type EndedDisposition = Disposition & {
@@ -305,6 +309,8 @@ function parseDisposition(value: unknown): Disposition | null {
     recordedBy: str(value.recorded_by_name).slice(0, 120),
     recordedAt: str(value.recorded_at).slice(0, 40),
     version,
+    // The server's own answer, nothing else: anything but false is the current check.
+    onCurrentCheck: value.on_current_check !== false,
   };
 }
 
@@ -617,6 +623,10 @@ export type AssuredRequest = {
    * a person's decision (section 10.14). Empty unless the check is finished and current,
    * and where the server sent none. */
   fileReliability: FileReliability[];
+  /** The tickmarks a person recorded on the request that are kept while its check is
+   * not current (section 10.15, item 8): the server's own count; 0 where it sent none
+   * this page can read. */
+  tickmarksKept: number;
 };
 
 /** The server's counts. Each is null where it sent none this page can read. */
@@ -1225,6 +1235,7 @@ function parseRequest(value: unknown): AssuredRequest | null {
       status === "REVIEWED"
         ? parseFileReliabilities(value.file_reliability)
         : [],
+    tickmarksKept: count(value.tickmarks_kept) ?? 0,
   };
 }
 
@@ -1301,6 +1312,10 @@ export type AssuranceCounts = {
  * read cautiously as needing judgment is counted, though the server's summary could not
  * know it). An issue a person has decided is not counted. Support is not counted here:
  * the step's line never states it.
+ *
+ * A person's tickmarks (section 10.15, item 4): an attribute a closing tickmark stands on
+ * is left out, and a person's exception counts as an issue whatever the check found. The
+ * server's summary may not know them, so what the tickmarks close is taken off it first.
  */
 export function assuranceCounts(
   assurance: EvidenceAssurance | null,
@@ -1311,6 +1326,15 @@ export function assuranceCounts(
   const has = (...statuses: CheckStatus[]) =>
     requests.filter((item) => statuses.includes(item.status)).length;
   const said = (value: number | null | undefined) => value ?? 0;
+  const closed = (item: AssuredAttribute) =>
+    item.disposition !== null && CLOSING_KINDS.includes(item.disposition.kind);
+  const excepted = (item: AssuredAttribute) =>
+    item.disposition?.kind === "EXCEPTION";
+  const openIssue = (item: AssuredAttribute) =>
+    item.verdict === "ISSUE" && !issueDecided(item);
+  const judged = (item: AssuredAttribute) => item.verdict === "UNSETTLED";
+  const tally = (pick: (item: AssuredAttribute) => boolean) =>
+    attributes.filter(pick).length;
   return {
     requests: requests.length,
     notChecked: has("NOT_CHECKED"),
@@ -1321,14 +1345,13 @@ export function assuranceCounts(
       has("FAILED", "OUT_OF_DATE"),
     ),
     issues: Math.max(
-      said(summary?.issues),
-      attributes.filter(
-        (item) => item.verdict === "ISSUE" && !issueDecided(item),
-      ).length,
+      said(summary?.issues) - tally((item) => closed(item) && openIssue(item)),
+      tally((item) => excepted(item) || (openIssue(item) && !closed(item))),
     ),
     unsettled: Math.max(
-      said(summary?.unsettled),
-      attributes.filter((item) => item.verdict === "UNSETTLED").length,
+      said(summary?.unsettled) -
+        tally((item) => judged(item) && (closed(item) || excepted(item))),
+      tally((item) => judged(item) && !closed(item) && !excepted(item)),
     ),
   };
 }
@@ -1919,7 +1942,22 @@ export type RequestCheck = {
   /** A finished check's files whose reliability is not established, or that carry a
    * person's decision (section 10.14), in the row's file order; empty otherwise. */
   reliability: ReliabilityLine[];
+  /** "3 tickmarks kept. They apply again once the request is checked again.", on a
+   * check that is not current and has tickmarks a person recorded (section 10.15,
+   * item 8); "" otherwise. */
+  kept: string;
 };
+
+/** What a request whose check is not current says of the tickmarks a person recorded on
+ * it (section 10.15, item 8); "" where it has none. */
+export function tickmarksKeptLine(count: number): string {
+  if (!Number.isInteger(count) || count <= 0) {
+    return "";
+  }
+  return count === 1
+    ? "1 tickmark kept. It applies again once the request is checked again."
+    : `${count} tickmarks kept. They apply again once the request is checked again.`;
+}
 
 /** A file's reliability as the row shows it (section 10.14). */
 export type ReliabilityLine = FileReliability & {
@@ -2035,6 +2073,8 @@ export function requestCheck(
     review: null,
     confirm: [],
     reliability: [],
+    // Said on every check that is not current; a finished, current one shows them.
+    kept: tickmarksKeptLine(request.tickmarksKept),
   };
   if (request.status === "NOT_CHECKED") {
     return {
@@ -2117,6 +2157,7 @@ export function requestCheck(
   const read = request.fileIds.length;
   return {
     ...base,
+    kept: "",
     standing: "REVIEWED",
     line:
       lines.length === 0
@@ -2177,6 +2218,92 @@ export function requestCheck(
       )
       .map((item) => item.line),
   };
+}
+
+// Closing a request with tickmarks (docs/evidence-assurance.md, section 10.15)
+
+type Settling = Pick<
+  RequestCheck,
+  "standing" | "attributes" | "notAddressed" | "notAsked"
+>;
+
+/** The attributes a request asks for, as its finished check lists them. */
+export function askedLines(
+  check: Pick<RequestCheck, "attributes" | "notAddressed">,
+): AttributeLine[] {
+  return [...check.attributes, ...check.notAddressed].filter(
+    (line) => line.expected,
+  );
+}
+
+/** An attribute is settled where the check evidences it (AttributeLine.evidenced, the
+ * rule accepting marks by) or a person's tickmark of any kind stands on it: an exception
+ * included, which is carried to the workpaper. Nothing else settles it. */
+export const attributeSettled = (
+  line: Pick<AttributeLine, "evidenced" | "disposition">,
+): boolean => line.evidenced || line.disposition !== null;
+
+/** A request's attributes are settled when its check is finished and current and every
+ * attribute it asks for is settled. A request whose check lists none it asks for is not
+ * settled by that: nothing was shown and nothing was decided. */
+export function requestSettled(check: Settling): boolean {
+  const asked = askedLines(check);
+  return (
+    check.standing === "REVIEWED" &&
+    asked.length > 0 &&
+    asked.every(attributeSettled)
+  );
+}
+
+/** Whether recording a tickmark on this attribute would settle the last one: the request
+ * asks for it, it is not settled yet, and every other attribute the request asks for
+ * is. */
+export function settlesLast(
+  check: Settling,
+  line: Pick<AttributeLine, "key">,
+): boolean {
+  const asked = askedLines(check);
+  const own = asked.find((each) => each.key === line.key);
+  return (
+    check.standing === "REVIEWED" &&
+    own !== undefined &&
+    !attributeSettled(own) &&
+    asked.every((each) => each.key === line.key || attributeSettled(each))
+  );
+}
+
+/** The endings a later check of the request makes. */
+const ENDED_BY_CHECK: readonly Ending[] = [
+  "SUPERSEDED_BY_CHECK",
+  "OVERTAKEN_BY_CHECK",
+];
+
+/**
+ * The attributes a request asks for that wait on a person again (section 10.15, item 4):
+ * not settled now, and either a tickmark on it no longer stands (reopened, ended by a
+ * later check, its annotation gone), or the request was checked again since its
+ * tickmarks were recorded (one of them is from an earlier check, or a check ended one)
+ * and the new check does not evidence the attribute. An attribute that was never settled
+ * on a request no tickmark was ever recorded on is not one of them: the page has no
+ * record that it was looked at before. Empty for a check that is not finished and current.
+ */
+export function waitingAgain(check: Settling): AttributeLine[] {
+  if (check.standing !== "REVIEWED") {
+    return [];
+  }
+  const checkedAgain = [
+    ...check.attributes,
+    ...check.notAddressed,
+    ...check.notAsked,
+  ].some(
+    (line) =>
+      line.disposition?.onCurrentCheck === false ||
+      line.history.some((item) => ENDED_BY_CHECK.includes(item.endedAs)),
+  );
+  return askedLines(check).filter(
+    (line) =>
+      !attributeSettled(line) && (line.history.length > 0 || checkedAgain),
+  );
 }
 
 // The review of a request's evidence, as its row shows it (section 10)
@@ -2674,6 +2801,14 @@ export type AssuranceRow = {
   acceptNote: string;
   /** The check is queued or at work: the list is read again until it ends. */
   working: boolean;
+  /** Every attribute the request asks for is evidenced by the check or carries a
+   * standing tickmark (requestSettled, section 10.15). */
+  settled: boolean;
+  /** The letters of the attributes that wait on a person again (waitingAgain). */
+  again: string[];
+  /** The tickmarks that stand on the check's attributes, for the coverage: a state of
+   * its own, never "evidenced". */
+  tickmarks: Array<{ attributeId: string; kind: DispositionKind }>;
 };
 
 /** An element is shown where both readings agree it is met and a verified passage of
@@ -2734,6 +2869,7 @@ export function notChecked(requirementId: string): AssuredRequest {
     engine: 1,
     review: null,
     fileReliability: [],
+    tickmarksKept: 0,
   };
 }
 
@@ -2922,12 +3058,29 @@ export function assuranceRow(input: {
   const order = input.attributes.map((item) => item.letter);
   const at = (letter: string) =>
     order.indexOf(letter) < 0 ? order.length : order.indexOf(letter);
+  const inOrder = (a: string, b: string) => at(a) - at(b) || a.localeCompare(b);
   // In the attributes' order, as the row's letters are.
   const lettersOf = (key: StateGroupKey) =>
     check.attributes
       .filter((line) => groupOf(line) === key)
       .map((line) => line.letter)
-      .sort((a, b) => at(a) - at(b) || a.localeCompare(b));
+      .sort(inOrder);
+  const every = [...check.attributes, ...check.notAddressed, ...check.notAsked];
+  // Beside the row's letters, a person's tickmarks are read too (section 10.15, item
+  // 4): an attribute a closing tickmark stands on, which the check itself does not
+  // evidence, is left out; a person's exception is an issue, whatever the check found.
+  const shownAs = (line: AttributeLine): StateGroupKey | null =>
+    line.disposition?.kind === "EXCEPTION"
+      ? "ISSUE"
+      : line.disposition !== null && !line.evidenced
+        ? null
+        : groupOf(line);
+  const shownLetters = (key: StateGroupKey) =>
+    every
+      .filter((line) => shownAs(line) === key && line.letter !== "")
+      .map((line) => line.letter)
+      .filter((letter, index, all) => all.indexOf(letter) === index)
+      .sort(inOrder);
   const keys: StateGroupKey[] = [
     "IMPLEMENTED",
     "DESIGN",
@@ -2939,7 +3092,7 @@ export function assuranceRow(input: {
     "DECIDED",
   ];
   const states: StateGroup[] = keys
-    .map((key) => ({ key, letters: lettersOf(key) }))
+    .map((key) => ({ key, letters: shownLetters(key) }))
     .filter((group) => group.letters.length > 0)
     .map(({ key, letters }) => ({
       key,
@@ -2963,7 +3116,7 @@ export function assuranceRow(input: {
   // which accepting does not settle, and a closing one on an attribute the records do not
   // show whole, which accepting never marks as evidenced.
   const tickmarked = (pick: (kind: DispositionKind) => boolean) =>
-    [...check.attributes, ...check.notAddressed, ...check.notAsked]
+    every
       .filter(
         (line) =>
           line.disposition !== null &&
@@ -3009,6 +3162,16 @@ export function assuranceRow(input: {
       span: input.span,
     }),
     working: check.standing === "CHECKING",
+    settled: requestSettled(check),
+    again: waitingAgain(check)
+      .map((line) => line.letter)
+      .filter((letter, index, all) => all.indexOf(letter) === index)
+      .sort(inOrder),
+    tickmarks: every.flatMap((line) =>
+      line.disposition === null || line.attributeId === ""
+        ? []
+        : [{ attributeId: line.attributeId, kind: line.disposition.kind }],
+    ),
   };
 }
 

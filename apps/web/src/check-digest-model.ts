@@ -14,6 +14,7 @@ import {
   type AttributeLine,
   type AttributeState,
   acceptNoteParts,
+  askedLines,
   type CheckAction,
   CLOSING_KINDS,
   CODE_CHECK_WORDS,
@@ -26,7 +27,9 @@ import {
   type FollowUpLine,
   type ReliabilityLine,
   type RequestCheck,
+  requestSettled,
   STATE_WORDS,
+  settlesLast,
   type Tone,
 } from "./evidence-assurance-model.ts";
 import {
@@ -108,6 +111,9 @@ export type AttentionItem = {
    * closes whose finding still waits, that tickmark in its own words (the headline is
    * then "Finding to decide"). Absent otherwise. */
   tickmark?: DigestPill;
+  /** "Recorded on an earlier check. Confirm it still holds.", where the tickmark the item
+   * says was recorded on an earlier check (section 10.15, item 9). Absent otherwise. */
+  note?: string;
   /** The attribute's state in short words with its mark and tone; null for a file, a
    * general request or another item. */
   status: DigestPill | null;
@@ -134,6 +140,9 @@ export type QuietItem = {
   attributeKey: string | null;
   /** A file whose reliability a person decided opens its decision. */
   fileId?: string;
+  /** "Recorded on an earlier check. Confirm it still holds.", on a tickmark that stands
+   * through a later check (section 10.15, item 9). Absent otherwise. */
+  note?: string;
 };
 
 export type DigestDetails = {
@@ -173,6 +182,15 @@ export type CheckDigest = {
   /** The check's files whose reliability is open or decided (section 10.14), as the row
    * reads them: what a file's decision opens on. */
   reliability: ReliabilityLine[];
+  /** Every attribute the request asks for is evidenced by the check or carries a
+   * standing tickmark (requestSettled, section 10.15). */
+  settled: boolean;
+  /** What the status line is made of, kept for the status of a settled request
+   * (closingStatus). */
+  facts: StatusFacts;
+  /** Some attribute the request asks for is settled by a person's tickmark, not by the
+   * check alone: the settled status says "or carries your tickmark" only then. */
+  tickmarked: boolean;
 };
 
 /** A finding as the digest needs it: whether a person has still to decide it. */
@@ -396,6 +414,15 @@ export function endingLine(item: {
   const reason = item.endedReason.replace(/\s+/g, " ").trim();
   return `${ENDING_WORDS[item.endedAs]} (${recordedLine(item.endedBy, item.endedAt)})${reason === "" ? "." : `: ${reason}`}`;
 }
+
+/** Beside a tickmark that stands through a later check (section 10.15, item 9): it was
+ * recorded on an earlier one. Said with Change and Reopen, and on its item. */
+export const EARLIER_CHECK =
+  "Recorded on an earlier check. Confirm it still holds.";
+
+/** Whether a standing tickmark was recorded on an earlier check than the current one. */
+export const fromEarlierCheck = (disposition: Disposition | null): boolean =>
+  disposition !== null && disposition.onCurrentCheck === false;
 
 /** Said where the records contradict the attribute, beside the one kind offered. */
 export const ONLY_EXCEPTION =
@@ -1005,6 +1032,9 @@ function attentionOf(
           context: row.text,
           flag: "",
           tickmark: { label: words.shown, icon: words.icon, tone: words.tone },
+          ...(fromEarlierCheck(row.line.disposition)
+            ? { note: EARLIER_CHECK }
+            : {}),
           status: row.status,
           control: { type: "OPEN", label: DECIDE },
           attributeKey: row.key,
@@ -1027,6 +1057,9 @@ function attentionOf(
                 tone: TICKMARK_WORDS.EXCEPTION.tone,
               },
             }
+          : {}),
+        ...(fromEarlierCheck(row.line.disposition)
+          ? { note: EARLIER_CHECK }
           : {}),
         status: row.status,
         control:
@@ -1241,6 +1274,9 @@ function quietOf(
           icon: words.icon,
           tone: words.tone,
           attributeKey: row.key,
+          ...(fromEarlierCheck(row.line.disposition)
+            ? { note: EARLIER_CHECK }
+            : {}),
         };
       }
       const words = !shown
@@ -1464,6 +1500,21 @@ export function statusLine(facts: StatusFacts): string {
       : tickmarks !== "" || decisions !== ""
         ? `Your ${tickmarks || decisions}.`
         : "";
+  const left = leftOf(facts);
+  return [
+    lead,
+    left.length === 0 ? STATUS_NOTHING : `${STATUS_OPEN} ${left.join(", ")}.`,
+  ]
+    .filter((item) => item !== "")
+    .join(" ");
+}
+
+/** What is left, each in a few words, in the contract's order (section 10.14, A). */
+function leftOf(
+  facts: Omit<StatusFacts, "settled" | "decided">,
+  /** Exceptions are said elsewhere (carried to the workpaper), so not as still open. */
+  carried = false,
+): string[] {
   const exceptions = named(facts.exceptions);
   const findings = named(facts.findings).filter(
     (letter) => !exceptions.includes(letter),
@@ -1472,8 +1523,8 @@ export function statusLine(facts: StatusFacts): string {
     (letter) => !exceptions.includes(letter) && !findings.includes(letter),
   );
   const files = [...new Set(facts.files.filter((name) => name !== ""))];
-  const left = [
-    exceptions.length === 0
+  return [
+    exceptions.length === 0 || carried
       ? ""
       : `${many(exceptions.length, "exception")} recorded on ${andList(exceptions)}`,
     findings.length === 0
@@ -1486,13 +1537,116 @@ export function statusLine(facts: StatusFacts): string {
     ...facts.others.map(part),
     ...facts.caveats.map(part),
   ].filter((item, at, all) => item !== "" && all.indexOf(item) === at);
+}
+
+// Closing a request with tickmarks (docs/evidence-assurance.md, section 10.15)
+
+/** The first line where every attribute the request asks for is shown by the check or
+ * carries a tickmark, and where the check alone shows every one. Never "sufficient". */
+export const SETTLED_TICKMARKED =
+  "Every attribute is shown or carries your tickmark.";
+export const SETTLED_SHOWN = "Every attribute is shown.";
+/** After it, where the request can be accepted and is not: nothing is accepted without
+ * that press. */
+export const ACCEPT_TO_CLOSE = "Accept the evidence to close this request.";
+/** Before it, once a person accepted the request's evidence. */
+export const STATUS_ACCEPTED = "Evidence accepted.";
+/** "1 exception is carried to the workpaper.": a person's exception settles the
+ * attribute here and is dealt with in the workpaper. */
+export const exceptionsCarried = (count: number) =>
+  `${count} ${many(count, "exception is", "exceptions are")} carried to the workpaper.`;
+
+/** Where the request stands for closing, as its row knows it. */
+export type Closing = {
+  /** A person accepted the request's evidence. */
+  accepted: boolean;
+  /** The row offers Accept to this person now (`canAct && row.canAccept`). */
+  canAccept: boolean;
+};
+
+/**
+ * The first line of a finished check whose attributes are settled (section 10.15, item
+ * 1): "Every attribute is shown or carries your tickmark. Accept the evidence to close
+ * this request." The exceptions a person recorded are said as carried to the workpaper;
+ * anything else that is left (a finding to decide, a file's reliability, a caveat) is
+ * still said, and the call to accept only where the row offers Accept. Where the
+ * attributes are not settled, or the row does not say where the request stands, the
+ * status of section 10.14 as it is.
+ */
+export function closingStatus(
+  digest: Pick<CheckDigest, "status" | "settled" | "facts" | "tickmarked">,
+  closing: Closing | null,
+): string {
+  if (closing === null || !digest.settled) {
+    return digest.status;
+  }
+  const exceptions = named(digest.facts.exceptions).length;
+  const left = leftOf(digest.facts, true);
   return [
-    lead,
-    left.length === 0 ? STATUS_NOTHING : `${STATUS_OPEN} ${left.join(", ")}.`,
+    closing.accepted ? STATUS_ACCEPTED : "",
+    digest.tickmarked || exceptions > 0 ? SETTLED_TICKMARKED : SETTLED_SHOWN,
+    exceptions > 0 ? exceptionsCarried(exceptions) : "",
+    left.length > 0 ? `${STATUS_OPEN} ${left.join(", ")}.` : "",
+    !closing.accepted && closing.canAccept ? ACCEPT_TO_CLOSE : "",
   ]
     .filter((item) => item !== "")
     .join(" ");
 }
+
+/** The digest as the row shows it: its first line says where a settled request stands
+ * for closing. Everything else is the check's. */
+export function withClosing(
+  digest: CheckDigest,
+  closing: Closing | null,
+): CheckDigest {
+  const status = closingStatus(digest, closing);
+  return status === digest.status ? digest : { ...digest, status };
+}
+
+/** What recording a tickmark on an attribute may also do, in the same act (section
+ * 10.15, items 1 and 2). Each is offered as a ticked box and done only through the
+ * row's own handler, after the server has confirmed the tickmark. */
+export type TickmarkAfter = {
+  /** Recording it settles the last attribute of a request that can be accepted and is
+   * not: "Accept this request's evidence now". For every kind, an exception included. */
+  accept: boolean;
+  /** The check's finding on the attribute is still proposed: "Dismiss the check's
+   * proposed finding with this reason". Offered for a closing kind only (dismissOffered). */
+  dismiss: boolean;
+};
+
+export function tickmarkAfter(
+  check: Pick<
+    RequestCheck,
+    "standing" | "attributes" | "notAddressed" | "notAsked"
+  >,
+  line: Pick<AttributeLine, "key" | "findingId">,
+  facts: {
+    /** The row offers Accept to this person (`canAct && row.canAccept`). */
+    canAccept: boolean;
+    /** The status of the finding on the attribute; null where there is none. */
+    findingStatus: string | null;
+  },
+): TickmarkAfter {
+  return {
+    accept: facts.canAccept && settlesLast(check, line),
+    dismiss: line.findingId !== null && facts.findingStatus === "PROPOSED",
+  };
+}
+
+/** The finding's dismissal is offered with a closing kind only: an exception leaves the
+ * finding to the person. */
+export const dismissOffered = (
+  after: TickmarkAfter,
+  kind: DispositionKind | null,
+): boolean => after.dismiss && kind !== null && CLOSING_KINDS.includes(kind);
+
+/** The form's two boxes, and the line under the first. */
+export const ACCEPT_NOW = "Accept this request's evidence now";
+export const ACCEPT_NOW_HINT =
+  "Every attribute will then be shown or carry a tickmark.";
+export const DISMISS_FINDING =
+  "Dismiss the check's proposed finding with this reason";
 
 /** "1 follow-up to consider". */
 const followUpsLeft = (count: number) =>
@@ -1737,6 +1891,14 @@ export function checkDigest(
   // is not whole is said apart, as the accept note says it.
   const evidenced = tally("SHOWN");
   const inPart = shows("IMPLEMENTATION");
+  const facts = statusFactsOf(
+    check,
+    attributes,
+    attention,
+    quiet,
+    files,
+    waiting,
+  );
   return {
     // The review's own words: a proposal, never said as more than it says.
     outcome:
@@ -1744,9 +1906,7 @@ export function checkDigest(
         ? null
         : { label: review.label, icon: review.icon, tone: review.tone },
     caveat,
-    status: statusLine(
-      statusFactsOf(check, attributes, attention, quiet, files, waiting),
-    ),
+    status: statusLine(facts),
     verdict: [
       asked.length > 0
         ? verdictShown(evidenced, asked.length)
@@ -1791,6 +1951,11 @@ export function checkDigest(
     asksMore: review?.more ?? "",
     details: detailsOf(check),
     reliability: check.reliability,
+    settled: requestSettled(check),
+    facts,
+    tickmarked: askedLines(check).some(
+      (line) => line.disposition !== null && !line.evidenced,
+    ),
   };
 }
 

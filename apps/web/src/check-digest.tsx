@@ -15,6 +15,7 @@ import {
   askText,
   CHECK_PROPOSED,
   type CheckDigest,
+  type Closing,
   calmUnderStatus,
   type DigestAsk,
   type DigestAttribute,
@@ -23,6 +24,7 @@ import {
   MISSING,
   STATUS_SHOWN,
   tickedToStart,
+  withClosing,
 } from "./check-digest-model";
 import {
   type AttributeLine,
@@ -252,6 +254,11 @@ function Item({
           <span className="cdg-item-flag">{item.flag}</span>
         ) : null}
       </span>
+      {item.note !== undefined ? (
+        // A tickmark recorded on an earlier check (section 10.15, item 9): a quiet
+        // line of its own, so the attribute's wording keeps its line.
+        <span className="cdg-item-note">{item.note}</span>
+      ) : null}
     </>
   );
   const control = item.control;
@@ -1036,7 +1043,7 @@ function Attribute({
  * line with "All details", and the footer.
  */
 export function CheckDigestView({
-  digest,
+  digest: made,
   title,
   files,
   upgrade,
@@ -1054,7 +1061,9 @@ export function CheckDigestView({
   addEvidence = null,
   read = null,
   reliability = null,
+  closing = null,
 }: {
+  /** The check's digest as the model made it. */
   digest: CheckDigest;
   /** The request's title, said quietly over an opened attribute. */
   title: string;
@@ -1098,8 +1107,15 @@ export function CheckDigestView({
   /** The row's calls for a decision on a file's reliability (section 10.14); null for a
    * person who may not act: the decisions are read, nothing is offered. */
   reliability?: ReliabilityAction | null;
+  /** Where the request stands for closing (section 10.15): whether a person accepted
+   * its evidence, and whether the row offers Accept to this person. Null where the row
+   * does not say: the first line is then the check's own status. */
+  closing?: Closing | null;
 }) {
   const id = useId();
+  // Where every attribute the request asks for is shown or carries a tickmark, the
+  // first line says where the request stands for closing: the model's words.
+  const digest = withClosing(made, closing);
   // A file's reliability, open in place under "Needs attention": from its item's
   // button (the form at once) or from the quiet line (the decision that stands).
   const [relOpen, setRelOpen] = useState<{
@@ -1387,6 +1403,16 @@ export function CheckDigestView({
                         {item.text}
                       </span>
                     )}
+                    {item.note !== undefined ? (
+                      // A tickmark that stands through a later check (section 10.15,
+                      // item 9): said quietly beside it.
+                      <>
+                        {" "}
+                        <span className="cdg-quiet-note cdg-earlier">
+                          {item.note}
+                        </span>
+                      </>
+                    ) : null}
                   </li>
                 );
               })}

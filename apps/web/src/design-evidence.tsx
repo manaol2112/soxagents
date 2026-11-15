@@ -23,14 +23,17 @@ import {
   type DigestAskAction,
 } from "./check-digest";
 import {
+  type Closing,
   checkDigest,
   type DigestExtra,
   fileRef,
+  tickmarkAfter,
   tickmarkOffer,
 } from "./check-digest-model";
 import { ControlSend } from "./control-send";
 import type { ActivityItem } from "./control-workspace-model";
 import {
+  COVERAGE_TICKMARKS,
   type EvidenceList,
   type EvidenceRow,
   evidenceActivity,
@@ -59,6 +62,7 @@ import {
   parseAnnotations,
 } from "./evidence-annotations-model";
 import {
+  type AttributeLine,
   assuranceProblem,
   type CheckAction,
   CONSIDERATIONS_TITLE,
@@ -89,6 +93,7 @@ import {
   SENDABLE_STATUSES,
 } from "./evidence-findings-model";
 import {
+  decideFinding,
   FindingRecords,
   FollowUpComposer,
   useFindingsAction,
@@ -151,6 +156,14 @@ const SAVING = "Saving. One moment.";
 /** Why Accept is off while the row's own form is open (a follow-up, a reason): one
  * decision at a time. */
 const ASKING_FIRST = "Record or cancel the form under the result first.";
+/** Said where an acceptance or a dismissal a tickmark asked for was refused and the
+ * server gave no sentence of its own. */
+const ACCEPT_REFUSED =
+  "The server did not accept it. Try again from the summary.";
+const FINDING_NOT_SHOWN =
+  "The finding could not be read here, so it was not dismissed.";
+const DISMISS_REFUSED =
+  "The server did not dismiss it. Decide the finding itself.";
 
 /** What of the row waits on the person beside a finished check, as its first screen
  * says it (docs/evidence-assurance.md, section 10.12): the sample the trace proposes or
@@ -1165,9 +1178,13 @@ export function DesignEvidence({
                         chip.state === "DESIGN_ONLY" ||
                         chip.state === "PARTLY"
                       ? "is-requested"
-                      : chip.state === "EXCEPTED"
-                        ? "is-exception"
-                        : "is-uncovered"
+                      : chip.state === "TICKMARK"
+                        ? chip.tickmark === "EXCEPTION"
+                          ? "is-flagged"
+                          : "is-tickmark"
+                        : chip.state === "EXCEPTED"
+                          ? "is-exception"
+                          : "is-uncovered"
                 }`}
                 title={`${chip.label}. ${chip.text}${chip.reason !== "" ? ` Reason: ${chip.reason}` : ""}`}
               >
@@ -1191,6 +1208,11 @@ export function DesignEvidence({
                 ) : chip.state === "PARTLY" ? (
                   <span className="dq-cov-state" aria-hidden="true">
                     Shown in part
+                  </span>
+                ) : chip.tickmark !== null ? (
+                  // A person's tickmark, in its own words: never the check mark.
+                  <span className="dq-cov-state" aria-hidden="true">
+                    {COVERAGE_TICKMARKS[chip.tickmark].chip}
                   </span>
                 ) : (
                   <span className="dq-cov-state" aria-hidden="true">
@@ -1727,6 +1749,7 @@ function Row({
     if (ok) {
       onDone("Evidence accepted.");
     }
+    return ok;
   }
 
   async function restore() {
@@ -2437,6 +2460,19 @@ function Row({
             }),
         }
       : null;
+  /** The finding that records an attribute's issue, where the list holds it. */
+  const findingOf = (line: AttributeLine) =>
+    line.findingId === null
+      ? null
+      : ((findings ?? []).find((each) => each.id === line.findingId) ?? null);
+  // Why the row's Accept cannot be pressed now, as its button says it; read when an
+  // acceptance a tickmark asked for comes due, not when the form was sent.
+  const acceptOff = useRef<string | null>(null);
+  acceptOff.current = locked
+    ? lockedWhy
+    : asking !== null
+      ? ASKING_FIRST
+      : null;
   // A person's tickmark on an attribute of the finished check, and the row's own ways
   // to add evidence from it (section 10.13): only for a person who may act.
   const tickmark: DigestTickmarkAction | null =
@@ -2456,6 +2492,40 @@ function Row({
               add: { attributeId },
               onClosed: back,
             }),
+          // What recording a tickmark may also do (section 10.15), as the model offers
+          // it: the row's own Accept where it settles the last attribute, and the
+          // dismissal of the check's proposed finding.
+          after: (line) =>
+            tickmarkAfter(assured.check, line, {
+              canAccept: canAct && row.canAccept,
+              findingStatus: findingOf(line)?.status ?? null,
+            }),
+          // The row's one Accept, the handler its button presses, with why it cannot
+          // be pressed now where it cannot; the server's refusal in its own sentence.
+          accept: async () => {
+            const off = acceptOff.current;
+            if (off !== null) {
+              return off;
+            }
+            return (await accept())
+              ? null
+              : (action.refusal() ?? ACCEPT_REFUSED);
+          },
+          // The finding's own dismissal, with the tickmark's reason as its note.
+          dismiss: async (line, note) => {
+            const finding = findingOf(line);
+            if (finding === null) {
+              return FINDING_NOT_SHOWN;
+            }
+            return (await decideFinding(
+              findingsAction,
+              finding,
+              "DISMISS",
+              note,
+            ))
+              ? null
+              : (findingsAction.refusal() ?? DISMISS_REFUSED);
+          },
         }
       : null;
   // A tickmark refused because the request changed (409): where the list read again no
@@ -2565,6 +2635,10 @@ function Row({
         addEvidence={addEvidence}
         read={tickmarkRead}
         reliability={fileReliability}
+        closing={{
+          accepted: item.state === "ACCEPTED",
+          canAccept: canAct && row.canAccept,
+        }}
         refused={lostRefusal}
         picked={picked}
         onPick={(findingId, on) =>
@@ -3007,6 +3081,7 @@ function CheckOfRequest({
   addEvidence,
   read,
   reliability,
+  closing,
   refused,
 }: {
   check: RequestCheck;
@@ -3056,6 +3131,9 @@ function CheckOfRequest({
   /** A person's decision on a file's reliability (section 10.14); null for one who may
    * not act. */
   reliability: ReliabilityAction | null;
+  /** Where the request stands for closing (section 10.15): accepted, and whether this
+   * person is offered Accept. The first line of a settled request says it. */
+  closing: Closing;
   /** A tickmark refused (409) whose attribute the check no longer shows: said on the
    * check's line, so it is never lost unread; null otherwise. */
   refused: string | null;
@@ -3063,6 +3141,15 @@ function CheckOfRequest({
   const action = offer(check.action);
   // The finished check as its first screen; null while it is anything else.
   const digest = checkDigest(check, findings ?? [], files, extras, acceptNote);
+  // The tickmarks kept while the check is not current (section 10.15, item 8), on its
+  // check line.
+  const kept =
+    check.kept !== "" ? (
+      <p className="de-check-line de-check-kept">
+        <UiIcon name="tag" size={13} />
+        <span>{check.kept}</span>
+      </p>
+    ) : null;
   const actButton = (act: CheckAction, about: string) => (
     <button
       type="button"
@@ -3113,6 +3200,7 @@ function CheckOfRequest({
             </span>
           </span>
         </p>
+        {kept}
         <Problem text={refused} />
         {leftOut}
       </div>
@@ -3139,6 +3227,7 @@ function CheckOfRequest({
               )
             : null}
         </div>
+        {kept}
         <Problem text={refused} />
         {leftOut}
       </div>
@@ -3294,6 +3383,7 @@ function CheckOfRequest({
         addEvidence={addEvidence}
         read={read}
         reliability={reliability}
+        closing={closing}
       />
     </div>
   );

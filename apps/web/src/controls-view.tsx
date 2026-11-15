@@ -107,7 +107,11 @@ import { ControlsToolbar } from "./controls-toolbar";
 import { CoverageForm } from "./coverage-form";
 import { DesignConclusionPanel } from "./design-conclusion-panel";
 import { DesignEvidence } from "./design-evidence";
-import { carriersOf, evidenceList } from "./design-evidence-model";
+import {
+  carriersOf,
+  evidenceList,
+  requestsToLookAgain,
+} from "./design-evidence-model";
 import { showsEvidenceWorkspace } from "./design-release-model";
 import { DesignRequests } from "./design-requests";
 import { requestsView } from "./design-requests-model";
@@ -2011,6 +2015,10 @@ function ControlRecord({
       editable: true,
     },
   ];
+  const lookAgain = requestsToLookAgain(
+    requirements,
+    engagement.evidenceAssurance ?? null,
+  );
   const workflowInput: WorkflowInput = {
     details: [
       { label: "Description", filled: control.activity.trim() !== "" },
@@ -2042,6 +2050,10 @@ function ControlRecord({
     requirements: requirements.map((item) => ({
       phase: item.phase,
       state: item.state,
+      // Where the evidence list's own header is not read, the items still say what is
+      // in hand to accept and which accepted request has an attribute to look at again.
+      files: item.files.length,
+      again: lookAgain.has(item.id),
     })),
     designRelease: designPhase,
     designRequests: requestsListed ? designRequests.header : null,

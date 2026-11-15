@@ -11,7 +11,10 @@ import type {
   DesignConclusionStatus,
   DesignVerdict,
 } from "./design-conclusion-model.ts";
-import type { EvidenceWorkflowHeader } from "./design-evidence-model.ts";
+import {
+  type EvidenceWorkflowHeader,
+  lookAgainStatus,
+} from "./design-evidence-model.ts";
 import { requestsFallback } from "./design-requests-model.ts";
 import type { RequirementState } from "./evidence-plan-model.ts";
 
@@ -200,8 +203,17 @@ export type WorkflowInput = {
     untailored?: number;
   };
   plan: { exists: boolean; approved: boolean; pendingReview: boolean };
-  /** The evidence items, each in its phase (DESIGN, INTERIM, ROLLFORWARD). */
-  requirements: ReadonlyArray<{ phase: string; state: RequirementState }>;
+  /** The evidence items, each in its phase (DESIGN, INTERIM, ROLLFORWARD). `files`: how
+   * many files serve it, where that is known (an item not requested yet with a file of
+   * its own is in hand to accept). `again`: an accepted D&I item whose current check has
+   * an attribute that waits on a person again (docs/evidence-assurance.md, section
+   * 10.15, item 4). Both absent where they were not read. */
+  requirements: ReadonlyArray<{
+    phase: string;
+    state: RequirementState;
+    files?: number;
+    again?: boolean;
+  }>;
   /** The D&I evidence's own release (phase_release, B1): where it stands for the control.
    * Undefined or null when it could not be read: the evidence items alone decide then. */
   designRelease?: {
@@ -372,7 +384,11 @@ function understandingState(input: WorkflowInput): State {
 
 /** One branch's evidence: its own phases' items, as the shared evidence service holds them. */
 function evidenceState(
-  items: ReadonlyArray<{ state: RequirementState }>,
+  items: ReadonlyArray<{
+    state: RequirementState;
+    files?: number;
+    again?: boolean;
+  }>,
   before: StepKey,
   ready: boolean,
 ): State {
@@ -384,11 +400,20 @@ function evidenceState(
   }
   const accepted = current.filter((item) => item.state === "ACCEPTED").length;
   const stalled = current.filter((item) => STALLED.includes(item.state)).length;
-  const review = current.filter((item) =>
-    TO_REVIEW.includes(item.state),
+  // An item not requested yet with a file of its own is in hand to accept (section
+  // 10.15, item 3): it is to review, never "later".
+  const inHand = current.filter(
+    (item) => NOT_YET.includes(item.state) && (item.files ?? 0) > 0,
   ).length;
+  const review =
+    current.filter((item) => TO_REVIEW.includes(item.state)).length + inHand;
   const sent = current.filter((item) => item.state === "SENT").length;
-  const later = current.filter((item) => NOT_YET.includes(item.state)).length;
+  const later =
+    current.filter((item) => NOT_YET.includes(item.state)).length - inHand;
+  // Accepted, with an attribute that waits on a person again: never done while one does.
+  const again = current.filter(
+    (item) => item.state === "ACCEPTED" && item.again === true,
+  ).length;
   if (stalled > 0) {
     return {
       tone: "blocked",
@@ -397,6 +422,9 @@ function evidenceState(
   }
   if (review > 0) {
     return { tone: "attention", status: `${plural(review, "item")} to review` };
+  }
+  if (again > 0) {
+    return { tone: "attention", status: lookAgainStatus(again) };
   }
   if (sent > 0) {
     return {

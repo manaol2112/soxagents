@@ -8,7 +8,7 @@ import {
   type DesignConclusionNotice,
   type DesignSignoff,
   parseDesignConclusionNotice,
-  signBlockedReason,
+  signHolds,
   VERDICT_LABELS,
 } from "./design-conclusion-model";
 import { formatDate } from "./format";
@@ -101,7 +101,9 @@ export function DesignConclusionPanel({
     conclusion.status === "SIGNED_OFF"
       ? (conclusion.signed?.verdict ?? null)
       : conclusion.proposed;
-  const blocked = signBlockedReason(conclusion);
+  // What holds the sign-off, every sentence whole: the viewer's own reason, then each
+  // the server gives (an exception a person recorded, with what to do about it).
+  const holds = signHolds(conclusion);
   const earlier = conclusion.history.filter((item) => item.reopenedAt !== null);
   const signs =
     conclusion.canSign &&
@@ -256,8 +258,13 @@ export function DesignConclusionPanel({
             </span>
           </div>
         </form>
-      ) : blocked !== null ? (
-        <p className="dc-blocked">{blocked}</p>
+      ) : null}
+      {holds.length > 0 ? (
+        <div className="dc-blocked" role="note">
+          {holds.map((text) => (
+            <p key={text}>{text}</p>
+          ))}
+        </div>
       ) : null}
 
       {conclusion.signed !== null && conclusion.viewerIsReviewer ? (
