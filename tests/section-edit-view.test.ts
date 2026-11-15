@@ -150,9 +150,14 @@ describe("Edit opens the section's editor where the document shows it", () => {
       body,
       /root\.current\?\.querySelector<HTMLElement>\("\[data-section-editor\]"\) \?\? null;/,
     );
+    // Rewritten for the formatted text box (product owner, 15 November 2026,
+    // docs/design-workpaper.md section 3.3). Old expectation: the first box is looked for
+    // as a `textarea` only. New expectation: the text section's box is a textbox that is
+    // not a textarea, so the first of either takes the focus; the grid's and the notes'
+    // first box is still their first textarea.
     assert.match(
       body,
-      /frame\.querySelector<HTMLElement>\("textarea"\) \?\?\s*frame\.querySelector<HTMLElement>\("button:not\(:disabled\)"\);\s*first\?\.focus\(\{ preventScroll: true \}\);\s*frame\.scrollIntoView\(\{[\s\S]{0,200}behavior: calm\(\) \? "auto" : "smooth",/,
+      /frame\.querySelector<HTMLElement>\('\[role="textbox"\], textarea'\) \?\?\s*frame\.querySelector<HTMLElement>\("button:not\(:disabled\)"\);\s*first\?\.focus\(\{ preventScroll: true \}\);\s*frame\.scrollIntoView\(\{[\s\S]{0,200}behavior: calm\(\) \? "auto" : "smooth",/,
     );
     assert.match(body, /\}, \[openSection, view\]\);/);
     // Back to the link, unless the person has already moved on.
@@ -441,7 +446,12 @@ describe("the editors", () => {
       component(editor, "AutoArea"),
       /<textarea\s+ref=\{box\}\s+className=\{className\}\s+rows=\{1\}\s+value=\{value\}\s+aria-label=\{label\}/,
     );
-    assert.equal(count(editor, /<AutoArea\b/g), 3);
+    // Rewritten for the formatted text box (product owner, 15 November 2026,
+    // docs/design-workpaper.md section 3.3). Old expectation: three plain boxes (the
+    // text, a grid cell, a note). New expectation: two plain boxes (a grid cell, a note)
+    // and the text section's formatted one; every one of the three is still named.
+    assert.equal(count(editor, /<AutoArea\b/g), 2);
+    assert.equal(count(editor, /<RichTextBox\b/g), 1);
     assert.equal(count(editor, /(?<![\w-])label=\{/g), 3);
     assert.match(editor, /label=\{editor\.title\}/);
     assert.match(

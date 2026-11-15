@@ -1,6 +1,7 @@
 import { AutoRefresh } from "./auto-refresh";
 import { type Automation, executionOf } from "./execution-model";
 import { formatDate } from "./format";
+import { RichText } from "./rich-text";
 import { type SheetTab, SheetTabs } from "./sheet-tabs";
 import { UiIcon } from "./ui-icon";
 import {
@@ -589,20 +590,9 @@ function SectionView({
         </dl>
       ) : section.kind === "text" ? (
         <>
-          <p className="wp-text">
-            {section.text.split(/(\[\^\d{1,2}\])/).map((part, index) => {
-              const cite = /^\[\^(\d{1,2})\]$/.exec(part);
-              return cite !== null ? (
-                // biome-ignore lint/suspicious/noArrayIndexKey: parts of one text keep their order.
-                <sup key={index} className="wp-cite">
-                  {cite[1]}
-                </sup>
-              ) : (
-                // biome-ignore lint/suspicious/noArrayIndexKey: parts of one text keep their order.
-                <span key={index}>{part}</span>
-              );
-            })}
-          </p>
+          <div className="wp-text">
+            <RichText text={section.text} cite />
+          </div>
           {section.citations.length > 0 ? (
             <ol className="wp-sources">
               {section.citations.map((citation) => (

@@ -14,6 +14,7 @@ import {
 } from "react";
 
 import { keyed } from "./design-workpaper-model";
+import { RichTextBox } from "./rich-editor";
 import {
   addRow,
   changed,
@@ -33,10 +34,11 @@ import { UiIcon } from "./ui-icon";
 
 /**
  * A section of the D&I workpaper edited where it is (docs/design-workpaper.md, section
- * 3.2): the text editor, the grid editor, the box of an attribute's note, and the bar they
- * share. What an editor starts from, what may be saved and what a save sends are the
- * model's (section-edit-model.ts); the server decides whether a save is taken. Nothing here
- * says "saved": the view does, once the server confirmed and the workpaper was read again.
+ * 3.2): the text editor (its box is the formatted one, rich-editor.tsx, section 3.3), the
+ * grid editor, the box of an attribute's note, and the bar they share. What an editor
+ * starts from, what may be saved and what a save sends are the model's
+ * (section-edit-model.ts); the server decides whether a save is taken. Nothing here says
+ * "saved": the view does, once the server confirmed and the workpaper was read again.
  */
 
 /** Where an open editor stands: typed in, sent and waiting for the server, or confirmed and
@@ -389,7 +391,8 @@ function GridBox({
 
 /**
  * A section's text, or its rows, edited where the section is shown: one box that grows
- * with the text, or one box per cell under the stored section's own columns.
+ * with the text and shows its formatting, or one plain box per cell under the stored
+ * section's own columns.
  */
 export function SectionEditorPanel({
   heading,
@@ -411,8 +414,7 @@ export function SectionEditorPanel({
         </p>
       ) : null}
       {editor.kind === "text" && draft.kind === "text" ? (
-        <AutoArea
-          className="se-text"
+        <RichTextBox
           label={editor.title}
           value={draft.text}
           readOnly={busy}

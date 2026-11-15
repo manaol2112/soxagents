@@ -34,7 +34,6 @@ import {
   openMatters,
   type DesignWorkpaper as Paper,
   PROPOSED_BY_AGENT,
-  paragraphs,
   parseDesignWorkpaper,
   previewUrl,
   type RefChip,
@@ -72,6 +71,7 @@ import {
 import { AnnotatedDialog } from "./evidence-opener";
 import { fileQuery } from "./evidence-preview-model";
 import { FileBadge } from "./file-badge";
+import { RichText } from "./rich-text";
 import {
   changed,
   DISCARD_QUESTION,
@@ -501,7 +501,7 @@ export function DesignWorkpaper({
     }
     focused.current = openSection;
     const first =
-      frame.querySelector<HTMLElement>("textarea") ??
+      frame.querySelector<HTMLElement>('[role="textbox"], textarea') ??
       frame.querySelector<HTMLElement>("button:not(:disabled)");
     first?.focus({ preventScroll: true });
     frame.scrollIntoView({
@@ -1208,7 +1208,7 @@ function DocumentSheet({
   const dated = walkthroughIsDated(paper.walkthrough);
   const columns = walkthroughHeaders(paper.walkthrough.columns);
   const legend = tickmarkLegend(paper);
-  const understanding = paragraphs(paper.understanding);
+  const { understanding } = paper;
   const { workpaper } = paper;
   // The section open in its editor, if one is (never on the printed sheet).
   const open = actions?.editing ?? null;
@@ -1313,9 +1313,7 @@ function DocumentSheet({
         ) : understanding.length > 0 ? (
           <div className="dw-prose">
             <h6>Understanding of the control</h6>
-            {keyed(understanding, (part) => part).map(({ key, item }) => (
-              <p key={key}>{item}</p>
-            ))}
+            <RichText text={understanding} />
           </div>
         ) : null}
       </Section>
@@ -1650,9 +1648,7 @@ function DocumentSheet({
                 prepared, and a reviewer signs it.
               </p>
             ) : (
-              keyed(paragraphs(conclusion.text), (part) => part).map(
-                ({ key, item }) => <p key={key}>{item}</p>,
-              )
+              <RichText text={conclusion.text} />
             )}
             <OutOfDate reasons={conclusion.outOfDate} />
           </div>
@@ -2232,11 +2228,7 @@ function EvidenceSplit({
             {conclusion.text !== "" ? (
               <details className="dw-more">
                 <summary>Read the conclusion</summary>
-                {keyed(paragraphs(conclusion.text), (part) => part).map(
-                  ({ key, item }) => (
-                    <p key={key}>{item}</p>
-                  ),
-                )}
+                <RichText text={conclusion.text} />
               </details>
             ) : null}
             <OutOfDate reasons={conclusion.outOfDate} />

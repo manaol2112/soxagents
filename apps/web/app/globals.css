@@ -8588,6 +8588,18 @@ button.cite-chip.is-open {
   white-space: pre-wrap;
 }
 
+/* A text section's formatting in the card (rich-text.tsx): a blank line between its
+   paragraphs and its lists, as the plain text had. */
+.wp-text > :is(ul, ol) {
+  margin: 0;
+  padding-left: 1.375rem;
+}
+
+.wp-text > :is(p, ul, ol) + :is(p, ul, ol) {
+  margin-top: 1.6em;
+  margin-top: 1lh;
+}
+
 .wp-cite {
   margin: 0 0.0625rem;
   padding: 0 0.25rem;

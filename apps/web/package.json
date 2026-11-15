@@ -13,6 +13,9 @@
     "start": "next start --hostname 127.0.0.1 --port 3000"
   },
   "dependencies": {
+    "@tiptap/pm": "3.32.2",
+    "@tiptap/react": "3.32.2",
+    "@tiptap/starter-kit": "3.32.2",
     "@xyflow/react": "12.12.0",
     "next": "16.4.3",
     "pdfjs-dist": "6.3.289",

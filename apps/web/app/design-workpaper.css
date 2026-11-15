@@ -1880,13 +1880,6 @@ button.dw-edit:disabled:hover {
   resize: none;
 }
 
-textarea.se-text {
-  min-height: 4.5rem;
-  padding: 0.625rem 0.75rem;
-  color: var(--text-strong);
-  line-height: 1.6;
-}
-
 textarea.se-cell {
   min-height: 32px;
   padding: 5px 7px;
@@ -2029,6 +2022,155 @@ button.se-x:focus-visible:not(:disabled) {
   margin-left: auto;
 }
 
+/* A text section's formatting (docs/design-workpaper.md, section 3.3).
+
+   Where it is read (rich-text.tsx): its lists in the Document, in the Evidence view's
+   conclusion and on paper. Bold, italic and underline are the browser's own. */
+.dw-prose > :is(ul, ol),
+.dw-concl-text > :is(ul, ol):not(.dw-stale),
+.dw-more > :is(ul, ol) {
+  margin: 0;
+  padding-left: 1.375rem;
+}
+
+.dw-prose > :is(p, ul, ol) + :is(ul, ol),
+.dw-prose > :is(ul, ol) + p,
+.dw-concl-text > :is(p, ul, ol) + :is(ul, ol):not(.dw-stale),
+.dw-concl-text > :is(ul, ol) + p,
+.dw-more > :is(ul, ol) {
+  margin-top: 0.5rem;
+}
+
+.dw-prose > :is(ul, ol) > li + li,
+.dw-concl-text > :is(ul, ol):not(.dw-stale) > li + li,
+.dw-more > :is(ul, ol) > li + li {
+  margin-top: 2px;
+}
+
+/* Where it is typed (rich-editor.tsx): the formatting bar, quiet buttons that wrap where
+   there is no room, over a box with the look of the plain one it stands for. */
+.se-rich-box {
+  min-width: 0;
+}
+
+.se-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 0.625rem;
+  align-items: center;
+  margin-bottom: 0.375rem;
+}
+
+.se-tool-group {
+  display: flex;
+  gap: 2px;
+}
+
+button.se-tool {
+  min-width: 28px;
+  height: 28px;
+  padding: 0 0.4375rem;
+  color: var(--text-secondary);
+  background: transparent;
+  border-color: transparent;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+button.se-tool:hover {
+  color: var(--text-strong);
+  background: var(--surface-sunken);
+  border-color: transparent;
+}
+
+button.se-tool:disabled:hover {
+  color: var(--text-secondary);
+  background: transparent;
+}
+
+button.se-tool[aria-pressed="true"] {
+  color: var(--accent-strong);
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+button.se-tool:focus-visible:not(:disabled) {
+  box-shadow: var(--ring);
+}
+
+/* A letter drawn as the format it gives. */
+.se-glyph {
+  font-size: var(--fs-md);
+  line-height: 1;
+}
+
+.se-glyph.is-bold {
+  font-weight: 750;
+}
+
+.se-glyph.is-italic {
+  font-family: var(--font-display);
+  font-style: italic;
+}
+
+.se-glyph.is-underline {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.se-glyph.is-number {
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The box is as tall as what is in it, as the plain one is. Its spaces are kept as
+   typed, which the editor needs to place the caret. */
+.se-rich {
+  min-height: 4.5rem;
+  padding: 0.625rem 0.75rem;
+  color: var(--text-strong);
+  background-color: var(--surface);
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-xs);
+  font-size: var(--fs-base);
+  font-variant-ligatures: none;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  white-space: break-spaces;
+  overflow-wrap: anywhere;
+}
+
+.se-rich:hover {
+  border-color: var(--text-disabled);
+}
+
+.se-rich:focus {
+  border-color: var(--accent);
+  outline: 0;
+  box-shadow: var(--ring);
+}
+
+.se-rich[contenteditable="false"] {
+  color: var(--text-secondary);
+  background-color: var(--surface-muted);
+}
+
+.se-rich :is(ul, ol) {
+  margin: 0;
+  padding-left: 1.375rem;
+}
+
+.se-rich > :is(p, ul, ol) + :is(p, ul, ol) {
+  margin-top: 0.5rem;
+}
+
+.se-rich li + li {
+  margin-top: 2px;
+}
+
 @container dw-sheet (max-width: 640px) {
   .se-frame {
     margin-inline: -0.5rem;
@@ -2163,6 +2305,12 @@ button.se-x:focus-visible:not(:disabled) {
 
   .dw-print-root .dw-sec-head {
     break-after: avoid;
+  }
+
+  /* An item of a text section's list stays whole. */
+  .dw-print-root .dw-prose li,
+  .dw-print-root .dw-concl-text li {
+    break-inside: avoid;
   }
 
   .dw-print-root .dw-sign {
