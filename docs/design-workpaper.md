@@ -357,6 +357,35 @@ Files: server `workpaper_drafts.py` (routes registered with the workpaper servic
 `rich-editor.tsx`, `working-copy-model.ts`, `leave-guard.ts`, `leave-dialog.tsx`,
 `apps/web/app/workspace/workpapers/draft/route.ts`.
 
+## 3.5 One conclusion, written in D&I Assessment, reviewed in its own step (product owner, 15 November 2026)
+
+"The conclusion already shows up in my D&I analysis then there is another step for the
+D&I conclusion. However, in the D&I analysis, I don't have the option to edit the
+conclusion here." Decided: "keep the Section 7 'Conclusion' here but allow the preparer
+to update the conclusion … Then in the last step, probably the D&I Conclusion and Review."
+
+- **Section 7 of the workpaper (D&I Assessment) is where the preparer concludes.** In the
+  Document view it is one card:
+  - the verdict, said as what it is: "Proposed by the agent · review it" until the
+    workpaper is prepared, and why ("From the records: no design deficiency is logged" /
+    "N design deficiencies are logged"), with "Log a design deficiency" (the existing
+    way, never a typed verdict: the verdict follows the deficiency log, section 2);
+  - the conclusion text, formatted (3.3), with **Edit conclusion** as a button in the
+    card (not only the small link on the heading), opening the in-place editor of 3.2
+    with autosave (3.4);
+  - where a reviewer signed, who and when; where the sign-off no longer holds, that.
+  - The Matrix and the Evidence views keep their short verdict and a link to section 7;
+    they do not repeat the text.
+- **The last D&I step is "D&I Conclusion and Review"** (was "D&I Conclusion"; covers
+  "Review · Sign-off"). It is the reviewer's: the conclusion exactly as written in
+  section 7 (the verdict line and the formatted text, read-only), what the sign-off rests
+  on, and the sign-off, as today. For the preparer it says where to change it: "Edit the
+  conclusion in D&I Assessment" (a link to section 7, whose editor opens there). Nothing
+  is edited in this step, so the conclusion has one editor.
+- **No server change, no migration.** The text is the workpaper's `design-conclusion`
+  section, read by the step through the existing workpaper read; the verdict and the
+  sign-off are the existing D&I conclusion's.
+
 ## 4. Tests
 
 Server: the assembly from synthetic records (each attribute state, the evidence numbering
@@ -376,3 +405,4 @@ source-level checks that the existing actions are kept and appear once.
 | A When column in the standard walkthrough; a thumbnail route; a readable title per file | planned |
 | A section edited where it is (3.2) | built 15 November 2026, web only (`section-edit-model.ts`, `section-editor.tsx`, route `/workspace/workpapers/section`; the server's existing section edit); independently reviewed the same day and tightened (the fold's editor made anew per version, "Edit" off while the page's records are behind a save, a 409 reads again, spaces alone are no change); checked in a headless browser on synthetic data (72 checks), not yet against the live API. Leaving by in-app navigation is not asked about until 3.4 |
 | Formatting (3.3); autosave and leaving (3.4) | being built |
+| One conclusion (3.5) | agreed 15 November 2026; to build after 3.4 |
