@@ -169,7 +169,9 @@ and text views in evidence-preview.tsx) is removed once nothing uses it.
 - **Behaviour kept from the old viewer**: paging, zoom, download of the original file,
   several files with a switcher, a file that cannot be shown saying so plainly, keyboard
   use, and focus returning to what opened it.
-- Opening a file never writes anything; only the existing review actions do.
+- Opening a file never records a decision or changes evidence: only the existing review
+  actions do. (The first time an image's annotations are asked for, its word positions are
+  read once by local OCR and stored, section 3; that is the only write a read can cause.)
 
 ## 5b. Opening a file opens the viewer, not the reviewer (14 November 2026)
 
