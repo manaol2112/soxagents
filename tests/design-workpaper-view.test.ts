@@ -183,9 +183,15 @@ describe("the existing workpaper card, kept once per mount", () => {
       /if \(onEdit === null \|\| !editable\) \{\s*return null;/,
     );
     assert.match(link, /type="button"/);
+    // Changed (product owner, 15 November 2026, docs/design-workpaper.md section 3.2).
+    // Old: "Edit" on an editable section always opened the fold
+    // (`if (editable.has(section)) { onEdit(section); }`). New: "Edit" turns the section
+    // into its editor where the document shows it, and opens the fold only where the
+    // model gives the page no editor for it (tests/section-edit-view.test.ts has the
+    // rest). Kept: nothing happens for a section the model does not say may be edited.
     assert.match(
       component(view, "DesignWorkpaper"),
-      /if \(editable\.has\(section\)\) \{\s*onEdit\(section\);/,
+      /if \(\s*!editable\.has\(section\) \|\|\s*editing !== null \|\|\s*paper === null \|\|\s*behind\s*\) \{\s*return;\s*\}\s*const editor = editorFor\(section, source, paper\);\s*if \(source === null \|\| editor === null\) \{\s*\/\/ [^\n]*\n\s*onEdit\(section\);\s*return;\s*\}/,
     );
   });
 });

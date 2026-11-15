@@ -72,7 +72,33 @@ import {
 import { AnnotatedDialog } from "./evidence-opener";
 import { fileQuery } from "./evidence-preview-model";
 import { FileBadge } from "./file-badge";
+import {
+  changed,
+  DISCARD_QUESTION,
+  type Draft,
+  draftOf,
+  draftProblem,
+  type EditSource,
+  editorFor,
+  editSource,
+  recordsBehind,
+  SAVED,
+  SAVED_NOT_READ,
+  type SectionEditor,
+  saveProblem,
+  saveRequest,
+} from "./section-edit-model";
+import {
+  type EditorProps,
+  type EditPhase,
+  NoteBox,
+  NotesEditorPanel,
+  SectionEditorPanel,
+  sendSection,
+  useRecordsRefresh,
+} from "./section-editor";
 import { type IconName, UiIcon } from "./ui-icon";
+import type { Workpaper } from "./workpaper-model";
 import { WorkpapersTab } from "./workpaper-view";
 
 /**
@@ -81,9 +107,11 @@ import { WorkpapersTab } from "./workpaper-view";
  * it; a person switches between the views on the page, and the browser remembers which.
  *
  * Nothing here is a decision. A view shows what the server assembled; the conclusion reads
- * as proposed until the server says a reviewer signed it; and editing, drafting, preparing,
+ * as proposed until the server says a reviewer signed it; and drafting, preparing,
  * reopening and the versions stay the existing workpaper card's, in the fold under the
- * views.
+ * views. A section of the draft is edited where the document shows it (section 3.2): the
+ * editors and the request a save sends are section-editor.tsx's, the server decides whether
+ * the save is taken, and the card's own editor in the fold stays for everything else.
  */
 
 const VIEW_ICONS: Record<ViewKey, IconName> = {
@@ -106,8 +134,16 @@ type Actions = {
   /** Selecting a reference: opens the file (the document and the matrix), or shows it in
    * the pane (the evidence view). */
   onRef: (chip: RefChip, from?: string, opener?: HTMLElement) => void;
-  /** "Edit" on a section a preparer may edit: opens the fold at that section. */
+  /** "Edit" on a section a preparer may edit: its editor where the document shows it, or
+   * the fold at that section where the page cannot edit it in place. */
   onEdit: ((section: EditableSection) => void) | null;
+  /** The section being edited where it is, and what its editor may do; null while none
+   * is. Only one is open at a time. */
+  editing: (EditorProps & { section: EditableSection }) | null;
+  /** The section whose save the server last confirmed, until another editor opens. */
+  saved: EditableSection | null;
+  /** The page's records are a version behind the views: "Edit" waits for them. */
+  behind: boolean;
   /** The count of open matters under a verdict: goes to the document's section 6. */
   onMatters: (() => void) | null;
 };
@@ -204,6 +240,7 @@ export function DesignWorkpaperStep(props: CardProps) {
         key={scope.controlId}
         scope={scope}
         recordKey={key}
+        papers={papers}
         onEdit={reveal}
         onDraft={() => reveal(null)}
       />
@@ -241,15 +278,33 @@ type Loaded = {
   loading: boolean;
 };
 
+/** The section being edited where it is (docs/design-workpaper.md, section 3.2). */
+type Editing = {
+  section: EditableSection;
+  /** The stored workpaper the editor was opened on: a save is based on its version, so a
+   * workpaper that changed since is refused by the server, never written over. */
+  source: EditSource;
+  editor: SectionEditor;
+  draft: Draft;
+  phase: EditPhase;
+  /** Why the last save was not taken; "" where none was refused. */
+  refusal: string;
+};
+
 export function DesignWorkpaper({
   scope,
   recordKey: record = "",
+  papers = null,
   onEdit,
   onDraft,
 }: {
   scope: WorkpaperScope;
   /** Changes when the workpaper record does: the views then read again. */
   recordKey?: string;
+  /** The page's stored workpapers: what "Edit" on a section edits where it is. Without
+   * them every "Edit" opens the fold. */
+  papers?: ReadonlyArray<Workpaper> | null;
+  /** Opens the fold at a section's own editor: what "Edit" falls back to. */
   onEdit?: (section: EditableSection) => void;
   /** Shows where the existing "Draft" action is, for a control with no workpaper yet. */
   onDraft?: () => void;
@@ -278,6 +333,21 @@ export function DesignWorkpaper({
   // "Try again" was pressed: when the banner it is in goes, the focus is not left
   // nowhere.
   const retried = useRef(false);
+  // The one editor open in the document, if any.
+  const [editing, setEditing] = useState<Editing | null>(null);
+  const [saved, setSaved] = useState<EditableSection | null>(null);
+  // The section whose editor just closed: its "Edit" link takes the focus back.
+  const [closed, setClosed] = useState<EditableSection | null>(null);
+  const root = useRef<HTMLElement>(null);
+  // A save the server confirmed, until the views have read the workpaper again.
+  const confirmed = useRef<EditableSection | null>(null);
+  // One press, one request.
+  const sending = useRef(false);
+  // The section whose editor was given the focus when it opened.
+  const focused = useRef<EditableSection | null>(null);
+  // Another control is another mount: an answer for the last one is dropped.
+  const mounted = useRef(true);
+  const refreshRecords = useRecordsRefresh();
 
   // The view this browser chose last: read once the page is in the browser, so the
   // server's page and the browser's first one are the same.
@@ -291,6 +361,8 @@ export function DesignWorkpaper({
   useEffect(() => {
     const control = new AbortController();
     let current = true;
+    // A save confirmed before this read began: this read is the one that shows it.
+    const shows = confirmed.current;
     setState((before) => ({ ...before, loading: true }));
     (async () => {
       let status = 0;
@@ -320,11 +392,23 @@ export function DesignWorkpaper({
               // What was on screen stays there; the sentence says the read failed.
               paper: before.paper,
               problem:
-                loadProblem(status) ??
-                "The workpaper views could not be read. Nothing was changed: try again.",
+                // After a save the server took, "nothing was changed" would be wrong.
+                shows !== null
+                  ? SAVED_NOT_READ
+                  : (loadProblem(status) ??
+                    "The workpaper views could not be read. Nothing was changed: try again."),
               loading: false,
             },
       );
+      // The server confirmed the save and the views have read again (or said they could
+      // not): only now does the editor close and the section say it was saved. A read
+      // that was stopped never gets here, and the read that replaced it does.
+      if (shows !== null && confirmed.current === shows) {
+        confirmed.current = null;
+        setEditing(null);
+        setSaved(shows);
+        setClosed(shows);
+      }
     })();
     return () => {
       current = false;
@@ -393,6 +477,76 @@ export function DesignWorkpaper({
     heading?.focus({ preventScroll: true });
   }, [seeking, view, uid]);
 
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  // An editor that opened: its first box takes the focus, and it comes into view.
+  const openSection = editing?.section ?? null;
+  useEffect(() => {
+    if (openSection === null) {
+      focused.current = null;
+      return;
+    }
+    if (view !== "document" || focused.current === openSection) {
+      return;
+    }
+    const frame =
+      root.current?.querySelector<HTMLElement>("[data-section-editor]") ?? null;
+    if (frame === null) {
+      return;
+    }
+    focused.current = openSection;
+    const first =
+      frame.querySelector<HTMLElement>("textarea") ??
+      frame.querySelector<HTMLElement>("button:not(:disabled)");
+    first?.focus({ preventScroll: true });
+    frame.scrollIntoView({
+      block:
+        frame.getBoundingClientRect().height > window.innerHeight
+          ? "start"
+          : "nearest",
+      behavior: calm() ? "auto" : "smooth",
+    });
+  }, [openSection, view]);
+
+  // An editor that closed: the focus it held goes back to its section's "Edit" link,
+  // unless the person has already moved on to something else.
+  useEffect(() => {
+    if (closed === null || editing !== null) {
+      return;
+    }
+    setClosed(null);
+    const active = document.activeElement;
+    if (active !== null && active !== document.body) {
+      return;
+    }
+    const link =
+      root.current?.querySelector<HTMLElement>(
+        `button[data-edit="${closed}"]`,
+      ) ?? null;
+    (link ?? tabs.current.get(view))?.focus();
+  }, [closed, editing, view]);
+
+  // Leaving the page with something typed and not saved asks first.
+  const unsaved =
+    editing !== null &&
+    editing.phase !== "refreshing" &&
+    changed(editing.editor, editing.draft);
+  useEffect(() => {
+    if (!unsaved) {
+      return;
+    }
+    const ask = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+    };
+    window.addEventListener("beforeunload", ask);
+    return () => window.removeEventListener("beforeunload", ask);
+  }, [unsaved]);
+
   const returnToOpener = useCallback(
     () => (opener.current?.isConnected ? opener.current : null),
     [],
@@ -414,6 +568,11 @@ export function DesignWorkpaper({
       paper === null ? new Set<EditableSection>() : editableSections(paper),
     [paper],
   );
+  // The stored workpaper "Edit" may open where it is; null where it opens the fold.
+  const source = useMemo(() => editSource(papers, paper), [papers, paper]);
+  // The page's records are a version behind the views (a save's reading of them has not
+  // landed): "Edit" waits for them, so no editor opens on the text before the save.
+  const behind = useMemo(() => recordsBehind(papers, paper), [papers, paper]);
   const shown =
     paper === null ? null : startingSelection(paper, selection ?? null);
   // The annotation asked for, as the viewer takes it: a new one each time a person asks.
@@ -424,6 +583,78 @@ export function DesignWorkpaper({
         : { id: selection.annotationId },
     [selection],
   );
+
+  const redraft = (draft: Draft) =>
+    setEditing((before) =>
+      before === null || before.phase !== "editing"
+        ? before
+        : { ...before, draft },
+    );
+  /** "Cancel", and Escape inside the editor: what was typed is given up only if the
+   * person says so. */
+  const cancel = () => {
+    if (editing === null || editing.phase !== "editing") {
+      return;
+    }
+    if (
+      changed(editing.editor, editing.draft) &&
+      !window.confirm(DISCARD_QUESTION)
+    ) {
+      return;
+    }
+    setEditing(null);
+    setClosed(editing.section);
+  };
+  /** "Save": one request. Nothing reads as saved until the server confirmed it and the
+   * views have read the workpaper again; a refusal keeps the editor and what was typed. */
+  const save = async () => {
+    const open = editing;
+    if (
+      open === null ||
+      open.phase !== "editing" ||
+      sending.current ||
+      !changed(open.editor, open.draft) ||
+      draftProblem(open.editor, open.draft) !== ""
+    ) {
+      return;
+    }
+    sending.current = true;
+    setEditing({ ...open, phase: "saving", refusal: "" });
+    const answer = await sendSection(
+      saveRequest(scope, open.source, open.editor, open.draft),
+    );
+    sending.current = false;
+    const refusal = saveProblem(answer.status, answer.detail);
+    if (refusal === "") {
+      // The server took it: the page reads its records again, so the card in the fold
+      // and its version are current, whatever became of this view. No page is loaded
+      // again.
+      refreshRecords();
+    }
+    // An answer for a view that has gone to another control changes nothing on screen.
+    if (!mounted.current) {
+      return;
+    }
+    if (refusal !== "") {
+      setEditing((before) =>
+        before === null ? before : { ...before, phase: "editing", refusal },
+      );
+      if (answer.status === 409) {
+        // The workpaper is not as this page has it: the records and the views are read
+        // again, so "Edit" after "Cancel" opens the latest. The editor and what was
+        // typed stay as they are.
+        refreshRecords();
+        setAttempt((count) => count + 1);
+      }
+      return;
+    }
+    confirmed.current = open.section;
+    setEditing((before) =>
+      before === null ? before : { ...before, phase: "refreshing" },
+    );
+    // The views read the workpaper again: the read that shows the save closes the editor.
+    setAttempt((count) => count + 1);
+  };
 
   const actions: Actions = {
     onRef: (chip, from = "", element) => {
@@ -457,10 +688,50 @@ export function DesignWorkpaper({
       onEdit === undefined
         ? null
         : (section) => {
-            if (editable.has(section)) {
-              onEdit(section);
+            if (
+              !editable.has(section) ||
+              editing !== null ||
+              paper === null ||
+              behind
+            ) {
+              return;
             }
+            const editor = editorFor(section, source, paper);
+            if (source === null || editor === null) {
+              // Not a section this page can edit where it is: the fold's own editor.
+              onEdit(section);
+              return;
+            }
+            if (view !== "document") {
+              choose("document");
+            }
+            setSaved(null);
+            setEditing({
+              section,
+              source,
+              editor,
+              draft: draftOf(editor),
+              phase: "editing",
+              refusal: "",
+            });
           },
+    editing:
+      editing === null
+        ? null
+        : {
+            section: editing.section,
+            editor: editing.editor,
+            draft: editing.draft,
+            phase: editing.phase,
+            refusal: editing.refusal,
+            onChange: redraft,
+            onSave: () => {
+              void save();
+            },
+            onCancel: cancel,
+          },
+    saved,
+    behind,
     onMatters: () => {
       choose("document");
       setSeeking(true);
@@ -528,7 +799,11 @@ export function DesignWorkpaper({
     );
 
   return (
-    <section className="dw" aria-label="Design and implementation workpaper">
+    <section
+      ref={root}
+      className="dw"
+      aria-label="Design and implementation workpaper"
+    >
       {tabbed ? (
         <div className="dw-bar">
           <div
@@ -570,7 +845,18 @@ export function DesignWorkpaper({
               ? "Reading the workpaper again"
               : ""}
           </p>
-          {view === "document" && paper !== null ? (
+          {view === "document" && paper !== null && editing !== null ? (
+            // A section open in its editor is not the workpaper as saved: it is not
+            // printed until the editor is closed.
+            <button
+              type="button"
+              className="btn-secondary btn-sm"
+              disabled
+              title="Save or cancel the section you are editing before printing."
+            >
+              <UiIcon name="file" size={13} /> Print or save as PDF
+            </button>
+          ) : view === "document" && paper !== null ? (
             <button
               type="button"
               className="btn-secondary btn-sm"
@@ -777,7 +1063,9 @@ function StatePill({ words, tone }: { words: string; tone: string }) {
   return <span className={`pill tone-${tone}`}>{words}</span>;
 }
 
-/** "Edit" on a section a preparer may edit: it opens the existing editor in the fold. */
+/** "Edit" on a section a preparer may edit: it opens the section's editor where the
+ * document shows it, or the existing editor in the fold. While a section is being edited it
+ * says so in place of its link, and the other links are off. */
 function EditLink({
   section,
   what,
@@ -793,8 +1081,22 @@ function EditLink({
   if (onEdit === null || !editable) {
     return null;
   }
+  const editing = actions?.editing ?? null;
+  if (editing !== null && editing.section === section) {
+    return (
+      <span className="pill tone-info dw-editing">
+        Editing<span className="sr-only"> {what}</span>
+      </span>
+    );
+  }
   return (
-    <button type="button" className="dw-edit" onClick={() => onEdit(section)}>
+    <button
+      type="button"
+      className="dw-edit"
+      data-edit={section}
+      disabled={editing !== null || actions?.behind === true}
+      onClick={() => onEdit(section)}
+    >
       Edit<span className="sr-only"> {what}</span>
     </button>
   );
@@ -836,16 +1138,36 @@ function OutOfDate({ reasons }: { reasons: readonly string[] }) {
 
 /* Document: the classic workpaper ------------------------------------------------------- */
 
+/** The attributes' table: as it is, or inside the notes editor while the notes are edited
+ * (each row then holds its own box, and the editor's bar is under the table). */
+function NotesFrame({
+  open,
+  children,
+}: {
+  open: EditorProps | null;
+  children: ReactNode;
+}) {
+  return open === null ? (
+    children
+  ) : (
+    <NotesEditorPanel {...open}>{children}</NotesEditorPanel>
+  );
+}
+
 function Section({
   number,
   title,
   edit,
+  said,
   anchor,
   children,
 }: {
   number?: number;
   title: string;
   edit?: ReactNode;
+  /** What the section says once a save of it is confirmed; "" until then. The line is
+   * there from the start, so the words are announced when they arrive. */
+  said?: string | undefined;
   /** Where a link elsewhere on the page lands: its heading then takes the focus. */
   anchor?: string | undefined;
   children: ReactNode;
@@ -859,6 +1181,11 @@ function Section({
         </h5>
         {edit}
       </header>
+      {said !== undefined ? (
+        <p className="dw-saved" role="status">
+          {said}
+        </p>
+      ) : null}
       {children}
     </section>
   );
@@ -883,6 +1210,33 @@ function DocumentSheet({
   const legend = tickmarkLegend(paper);
   const understanding = paragraphs(paper.understanding);
   const { workpaper } = paper;
+  // The section open in its editor, if one is (never on the printed sheet).
+  const open = actions?.editing ?? null;
+  const editorOf = (section: EditableSection) =>
+    open !== null && open.section === section ? open : null;
+  const understood = editorOf("understanding");
+  const walking = editorOf("walkthrough");
+  const reporting = editorOf("reports");
+  const concluding = editorOf("conclusion");
+  const noting = editorOf("attributes");
+  const notes =
+    noting !== null &&
+    noting.editor.kind === "notes" &&
+    noting.draft.kind === "notes"
+      ? {
+          items: noting.editor.items,
+          typed: noting.draft.notes,
+          phase: noting.phase,
+          onChange: noting.onChange,
+        }
+      : null;
+  /** The line under a section's heading that says its save was confirmed. */
+  const saidOf = (section: EditableSection) =>
+    actions === null || !editable.has(section)
+      ? undefined
+      : actions.saved === section
+        ? SAVED
+        : "";
   return (
     <article className="card dw-sheet">
       <header className="dw-top">
@@ -917,6 +1271,7 @@ function DocumentSheet({
       <Section
         number={1}
         title="Objective, risk and control"
+        said={saidOf("understanding")}
         edit={
           understanding.length > 0 ? (
             <EditLink
@@ -950,7 +1305,12 @@ function DocumentSheet({
             )}
           </dl>
         ) : null}
-        {understanding.length > 0 ? (
+        {understood !== null ? (
+          <SectionEditorPanel
+            {...understood}
+            heading="Understanding of the control"
+          />
+        ) : understanding.length > 0 ? (
           <div className="dw-prose">
             <h6>Understanding of the control</h6>
             {keyed(understanding, (part) => part).map(({ key, item }) => (
@@ -978,6 +1338,7 @@ function DocumentSheet({
       <Section
         number={3}
         title="Walkthrough of one instance"
+        said={saidOf("walkthrough")}
         edit={
           <EditLink
             section="walkthrough"
@@ -987,7 +1348,9 @@ function DocumentSheet({
           />
         }
       >
-        {paper.walkthrough.steps.length === 0 ? (
+        {walking !== null ? (
+          <SectionEditorPanel {...walking} />
+        ) : paper.walkthrough.steps.length === 0 ? (
           <p className="dw-none">
             No walkthrough yet. The agent writes it when the workpaper is
             drafted from the evidence.
@@ -1041,6 +1404,7 @@ function DocumentSheet({
       <Section
         number={4}
         title="Attributes tested"
+        said={saidOf("attributes")}
         edit={
           <EditLink
             section="attributes"
@@ -1050,101 +1414,114 @@ function DocumentSheet({
           />
         }
       >
-        {paper.attributes.length === 0 ? (
+        {paper.attributes.length === 0 && noting === null ? (
           <p className="dw-none">
             No approved attribute yet. They are listed here once the test plan
             is approved.
           </p>
         ) : (
-          <div className="dw-table-wrap">
-            <table className="dw-table">
-              <thead>
-                <tr>
-                  <th scope="col" className="is-attr">
-                    Attribute
-                  </th>
-                  <th scope="col">What the evidence shows</th>
-                  <th scope="col" className="is-refs">
-                    Evidence
-                  </th>
-                  <th scope="col" className="is-state">
-                    Result
-                  </th>
-                  <th
-                    scope="col"
-                    className="is-tm"
-                    aria-label="Tickmark"
-                    title="Tickmark"
-                  >
-                    TM
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {paper.attributes.map((attribute) => {
-                  const mark = tickmarkOf(paper, attribute.tickmark);
-                  return (
-                    <tr key={attribute.id}>
-                      <th scope="row" className="is-attr">
-                        <b>{attribute.code}. </b>
-                        {attribute.text}
-                      </th>
-                      <td>
-                        {attribute.basis || (
-                          <span className="dw-quiet">
-                            Nothing on record for it yet.
-                          </span>
-                        )}
-                        {strayLine(attribute) !== "" ? (
-                          <p className="dw-stray">{strayLine(attribute)}</p>
-                        ) : null}
-                        {attribute.checks.length > 0 ? (
-                          <ul className="dw-checks">
-                            {keyed(attribute.checks, (item) => item).map(
-                              ({ key, item }) => (
-                                <li key={key}>{item}</li>
-                              ),
-                            )}
-                          </ul>
-                        ) : null}
-                        {attribute.notes !== "" ? (
-                          <p className="dw-note">
-                            <b>Preparer's note.</b> {attribute.notes}
-                          </p>
-                        ) : null}
-                      </td>
-                      <td className="is-refs">
-                        <Refs
-                          refs={attribute.refs}
-                          paper={paper}
-                          actions={actions}
-                        />
-                      </td>
-                      <td className="is-state">
-                        <StatePill {...stateOf(attribute)} />
-                      </td>
-                      <td className="is-tm">
-                        {mark.symbol !== "" ? (
-                          <span className="dw-tm" title={mark.meaning}>
-                            <span aria-hidden="true">{mark.symbol}</span>
-                            <span className="sr-only">{mark.meaning}</span>
-                          </span>
-                        ) : (
-                          <span className="sr-only">No tickmark</span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <NotesFrame open={noting}>
+            <div className="dw-table-wrap">
+              <table className="dw-table">
+                <thead>
+                  <tr>
+                    <th scope="col" className="is-attr">
+                      Attribute
+                    </th>
+                    <th scope="col">What the evidence shows</th>
+                    <th scope="col" className="is-refs">
+                      Evidence
+                    </th>
+                    <th scope="col" className="is-state">
+                      Result
+                    </th>
+                    <th
+                      scope="col"
+                      className="is-tm"
+                      aria-label="Tickmark"
+                      title="Tickmark"
+                    >
+                      TM
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {paper.attributes.map((attribute) => {
+                    const mark = tickmarkOf(paper, attribute.tickmark);
+                    const item =
+                      notes?.items.find((entry) => entry.id === attribute.id) ??
+                      null;
+                    return (
+                      <tr key={attribute.id}>
+                        <th scope="row" className="is-attr">
+                          <b>{attribute.code}. </b>
+                          {attribute.text}
+                        </th>
+                        <td>
+                          {attribute.basis || (
+                            <span className="dw-quiet">
+                              Nothing on record for it yet.
+                            </span>
+                          )}
+                          {strayLine(attribute) !== "" ? (
+                            <p className="dw-stray">{strayLine(attribute)}</p>
+                          ) : null}
+                          {attribute.checks.length > 0 ? (
+                            <ul className="dw-checks">
+                              {keyed(attribute.checks, (item) => item).map(
+                                ({ key, item }) => (
+                                  <li key={key}>{item}</li>
+                                ),
+                              )}
+                            </ul>
+                          ) : null}
+                          {notes !== null && item !== null ? (
+                            <NoteBox
+                              item={item}
+                              notes={notes.typed}
+                              phase={notes.phase}
+                              onChange={notes.onChange}
+                            />
+                          ) : attribute.notes !== "" ? (
+                            <p className="dw-note">
+                              <b>Preparer's note.</b> {attribute.notes}
+                            </p>
+                          ) : null}
+                        </td>
+                        <td className="is-refs">
+                          <Refs
+                            refs={attribute.refs}
+                            paper={paper}
+                            actions={actions}
+                          />
+                        </td>
+                        <td className="is-state">
+                          <StatePill {...stateOf(attribute)} />
+                        </td>
+                        <td className="is-tm">
+                          {mark.symbol !== "" ? (
+                            <span className="dw-tm" title={mark.meaning}>
+                              <span aria-hidden="true">{mark.symbol}</span>
+                              <span className="sr-only">{mark.meaning}</span>
+                            </span>
+                          ) : (
+                            <span className="sr-only">No tickmark</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </NotesFrame>
         )}
       </Section>
 
       <Section
         number={5}
         title="Information produced by the entity"
+        said={saidOf("reports")}
         edit={
           <EditLink
             section="reports"
@@ -1154,7 +1531,9 @@ function DocumentSheet({
           />
         }
       >
-        {paper.reports.length === 0 ? (
+        {reporting !== null ? (
+          <SectionEditorPanel {...reporting} />
+        ) : paper.reports.length === 0 ? (
           <p className="dw-none">No report is listed in this workpaper.</p>
         ) : (
           <div className="dw-table-wrap">
@@ -1249,6 +1628,7 @@ function DocumentSheet({
       <Section
         number={7}
         title="Conclusion"
+        said={saidOf("conclusion")}
         edit={
           <EditLink
             section="conclusion"
@@ -1261,7 +1641,9 @@ function DocumentSheet({
         <div className="dw-concl">
           <Verdict conclusion={conclusion} label="Design and implementation" />
           <div className="dw-concl-text">
-            {conclusion.text === "" ? (
+            {concluding !== null ? (
+              <SectionEditorPanel {...concluding} />
+            ) : conclusion.text === "" ? (
               <p className="dw-quiet">
                 No conclusion is written yet. The agent drafts it with the
                 workpaper; the verdict is proposed once the workpaper is

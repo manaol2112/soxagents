@@ -532,7 +532,9 @@ function WorkpaperCard({
       <div className="wp-sections workpaper-body">
         {tab.sections.map((section) => (
           <SectionView
-            key={section.key}
+            // A new version is another editor: its box starts from that version's text,
+            // also when the page's records were read again without loading the page.
+            key={`${section.key}:${paper.currentVersion}`}
             section={section}
             paper={paper}
             ids={ids}

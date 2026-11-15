@@ -180,7 +180,7 @@ The views load on their own (one request, an outline while it loads, a plain sen
 "Try again" when it fails), and load again after the fold saves something. Thumbnails and
 the evidence beside the workpaper load only when shown.
 
-## 3.2 Editing a section where it is (product owner, 16 November 2026)
+## 3.2 Editing a section where it is (product owner, 15 November 2026)
 
 Old: "Edit" on a section of a view opened the fold at the bottom of the page, at the
 card's editor (one text box; a table typed one row per line with "|" between cells; a
@@ -207,8 +207,10 @@ changed: a save is the existing `POST …/workpapers/{id}/sections/{key}` (`base
 - **Where "Edit" opens in place.** Only where the stored section is on the page, is the
   version the views show (`workpaper.id` and `currentVersion` match the card's), has the
   kind the editor needs (text, or a table; for the attributes a table with a "Notes"
-  column), and the section is editable (`editableSections`, the existing rule).
-  Otherwise "Edit" opens the fold as before. From the Matrix and the Evidence views,
+  column that is not the first), and the section is editable (`editableSections`, the
+  existing rule). Otherwise "Edit" opens the fold as before. For the moment after a save
+  in which the page's records are still a version behind the views, "Edit" is off
+  everywhere: neither editor opens on the text before the save. From the Matrix and the Evidence views,
   "Edit" shows the Document view with that section's editor open.
 - **One section at a time.** While an editor is open the other "Edit" links are off.
   "Cancel" (or Escape) closes it; where something was changed it asks first ("Discard
@@ -220,12 +222,21 @@ changed: a save is the existing `POST …/workpapers/{id}/sections/{key}` (`base
   redirects). The editor stays, read-only, saying "Saving…", until the server confirms
   and the views have read the workpaper again; only then does it close and say "Saved as
   a new version of the draft." Nothing is shown as saved before that. A refusal keeps the
-  editor open with what was typed and says why in one sentence (the server's own for a
-  409 or 422: the workpaper changed, is prepared, or is being drafted). After a save the
+  editor open with what was typed and says why in one sentence (for a 409 this page's
+  own where it knows the refusal, otherwise the server's: the workpaper changed, is
+  prepared, or is being drafted; an ended session says to sign in again). After a 409
+  the records and the views are read again, so "Cancel" then "Edit" opens the latest.
+  Where the save was confirmed and the views then cannot be read, the editor still
+  closes (the save stands) and the page says so: "Your change was saved as a new
+  version, but the workpaper could not be read again." A change of spaces only that the
+  server would drop is not a change: "Save" stays off. After a save the
   page's records are read again in the background (`router.refresh()`), so the fold's
   card and its version are current; no page is loaded again.
-- **The fold** keeps today's card unchanged, with its own plain editor: it is the way to
-  edit a section the Document does not show, and what "Edit" falls back to.
+- **The fold** keeps today's card, with its own plain editor: it is the way to edit a
+  section the Document does not show, and what "Edit" falls back to. One thing of the
+  card changes: its editor of a section is made anew for each version, so its box always
+  starts from that version's text (the page used to load again after every save; now the
+  records can change under it).
 - **Phone and keyboard.** The grid scrolls sideways inside its own frame, as the tables
   do. The editor's first box takes the focus when it opens; the focus returns to the
   section's "Edit" link when it closes. Motion is short and off under reduced motion.
@@ -235,7 +246,7 @@ the limits, the rows a save sends, the write the route validates),
 `apps/web/src/section-editor.tsx` (the three editors and their bar),
 `apps/web/app/workspace/workpapers/section/route.ts`.
 
-## 3.3 Formatting in a text section (product owner, 16 November 2026)
+## 3.3 Formatting in a text section (product owner, 15 November 2026)
 
 "The textbox where I can edit the documentation, can that have a text formatting? … bold,
 italic, underline, and anything possible." Decided with the product owner: formatting is
@@ -280,7 +291,7 @@ app (TipTap 3.32.2, pinned: `@tiptap/react`, `@tiptap/pm`, `@tiptap/starter-kit`
   (`plain`) read the same grammar; the shared cases are in
   `tests/fixtures/rich-text/cases.json`, read by both sides' tests.
 
-## 3.4 Autosave, and leaving with changes (product owner, 16 November 2026)
+## 3.4 Autosave, and leaving with changes (product owner, 15 November 2026)
 
 "I want to automatically save the updates that the user has typed in or edited. If the
 user is leaving or moving to other pages, the system should ask if he/she wanted to save
@@ -363,3 +374,5 @@ source-level checks that the existing actions are kept and appear once.
 | Server: the assembled view | built 14 November 2026 (`design_workpaper.py`, read-only route, no migration; `test_design_workpaper_model.py` in the fast tier, `test_design_workpaper.py`); independently reviewed and tightened the same day (section 2: the most cautious reading across requests, tickmarks, marks, matters); read over the 24 controls of the development data without writing; not yet seen with a live engine 2 check |
 | The three views, the switcher, print | built 14 November 2026 (`design-workpaper-view.tsx`, `design-workpaper-model.ts`, `design-workpaper.css`, route `/workspace/design-workpaper`; mounted at the two D&I workpaper places with today's card in a fold); independently reviewed; checked in a headless browser against scripted answers in both themes and at phone width, not yet by eye in the running app, a real print dialog, or with a PDF file beside the workpaper |
 | A When column in the standard walkthrough; a thumbnail route; a readable title per file | planned |
+| A section edited where it is (3.2) | built 15 November 2026, web only (`section-edit-model.ts`, `section-editor.tsx`, route `/workspace/workpapers/section`; the server's existing section edit); independently reviewed the same day and tightened (the fold's editor made anew per version, "Edit" off while the page's records are behind a save, a 409 reads again, spaces alone are no change); checked in a headless browser on synthetic data (72 checks), not yet against the live API. Leaving by in-app navigation is not asked about until 3.4 |
+| Formatting (3.3); autosave and leaving (3.4) | being built |

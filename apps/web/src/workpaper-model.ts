@@ -14,7 +14,7 @@ import {
 } from "./run-state.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const CREDENTIAL =
+export const CREDENTIAL =
   /(?:api[_-]?key|client[_-]?secret|refresh[_-]?token|access[_-]?token|password\s*[:=]|private[_-]?key)/i;
 
 export type WorkpaperSection = {
