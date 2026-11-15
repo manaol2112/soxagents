@@ -897,16 +897,36 @@ describe("what the result sends", () => {
     ]) {
       assert.equal(forbidden.test(digest), false, String(forbidden));
     }
-    // It imports React, the two models and the icon, and nothing that could send.
+    // It imports React, the two models, the tickmark's view and the icon, and nothing
+    // that could send. Changed 14 November 2026 (docs/evidence-assurance.md, section
+    // 10.13). Old: React, the two models and the icon. New: also ./attribute-tickmark,
+    // the attribute view's tickmark, whose form sends through the row's own handlers
+    // only: it too has no call, no route and no write of its own (checked below and in
+    // attribute-tickmark-view.test.ts).
     assert.deepEqual(
       [...digest.matchAll(/from "([^"]+)";/g)].map((match) => match[1]),
       [
         "react",
+        "./attribute-tickmark",
         "./check-digest-model",
         "./evidence-assurance-model",
         "./ui-icon",
       ],
     );
+    const tickmark = read("apps/web/src/attribute-tickmark.tsx");
+    for (const forbidden of [
+      /fetch\(/,
+      /XMLHttpRequest|sendBeacon|WebSocket/,
+      /method:/,
+      /intent:/,
+      /useRouter|router\./,
+      /action\.run/,
+      /\/workspace\//,
+      /localStorage|sessionStorage|document\.cookie/,
+      /location\.(reload|href|assign)/,
+    ]) {
+      assert.equal(forbidden.test(tickmark), false, String(forbidden));
+    }
   });
 
   it("reaches the follow-up form only by the row's existing ask", () => {
@@ -1429,10 +1449,17 @@ describe("one attribute at a time", () => {
       "annotations={notesOf(insight.file.id)} startAnnotationFor={askOf(insight.file.id)}",
     );
     // The inline viewer: the existing one, with its review, and the same pick.
+    // Changed 14 November 2026 (docs/evidence-assurance.md, section 10.13, tickmarks).
+    // Old: the inline viewer passed `undefined` for the annotation asked for by its id.
+    // New: it passes `startAnnotationId`, so a tickmark's "E2 · View" opens the reviewer
+    // on the annotation a "Shown, on my review" rests on; the pick by passage is as it
+    // was, and the dialog's own open state also says when it was opened to add one.
     has(
       preview,
-      "const annotationPick = useAnnotationPick( notes.set, file.id, undefined, startAnnotationFor, );",
+      "const annotationPick = useAnnotationPick( notes.set, file.id, startAnnotationId, startAnnotationFor, );",
     );
+    has(dialog, "annotationId?: string;");
+    has(dialog, "add?: { attributeId: string };");
     has(preview, "act={notes.act}");
     has(preview, "inline");
     // The matcher runs once each file's annotations are here; `startAnnotationId` keeps

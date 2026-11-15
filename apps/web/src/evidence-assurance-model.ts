@@ -199,7 +199,153 @@ export type AssuredAttribute = {
   /** The comparisons made in code for the attribute's elements (engine 2); empty
    * otherwise. */
   checks: CodeCheck[];
+  /** The current check finds the records contradict the attribute (section 10.13, "As
+   * built": the run's assessment CONTRADICTED, worked out as the server does for a run
+   * of the first engine). Only an exception can be recorded on it then. */
+  contradicted: boolean;
+  /** A person's disposition of the attribute on this request that stands (section
+   * 10.13); null where none does, or where what the server sent is not one. */
+  disposition: Disposition | null;
+  /** The ended ones, newest first, at most 10. */
+  history: EndedDisposition[];
 };
+
+/** A person's disposition of an attribute (docs/evidence-assurance.md, section 10.13). */
+export const DISPOSITION_KINDS = [
+  "SHOWN_ON_REVIEW",
+  "NOT_APPLICABLE",
+  "NOT_AVAILABLE",
+  "EXCEPTION",
+] as const;
+export type DispositionKind = (typeof DISPOSITION_KINDS)[number];
+/** The kinds after which the attribute no longer waits on the person: EXCEPTION closes
+ * nothing. */
+export const CLOSING_KINDS: readonly DispositionKind[] = [
+  "SHOWN_ON_REVIEW",
+  "NOT_APPLICABLE",
+  "NOT_AVAILABLE",
+];
+export const ENDINGS = [
+  "REPLACED",
+  "REOPENED",
+  "SUPERSEDED_BY_CHECK",
+  "OVERTAKEN_BY_CHECK",
+  "ANNOTATION_GONE",
+] as const;
+/** OTHER: an ending this page does not know; said as no longer standing, nothing more. */
+export type Ending = (typeof ENDINGS)[number] | "OTHER";
+
+/** The bounds of a disposition's texts (attribute_dispositions.py). */
+export const DISPOSITION_BOUNDS = {
+  reasonMin: 10,
+  reasonMax: 1000,
+  reliedOnMax: 600,
+  history: 10,
+} as const;
+
+export type Disposition = {
+  id: string;
+  kind: DispositionKind;
+  reason: string;
+  /** What was relied on instead ("Evidence not available, accepted" only); "" otherwise. */
+  reliedOn: string;
+  /** The annotation a "Shown, on my review" rests on; null for every other kind. */
+  annotationId: string | null;
+  recordedBy: string;
+  recordedAt: string;
+  version: number;
+};
+
+export type EndedDisposition = Disposition & {
+  endedAt: string;
+  /** Null where a check ended it. */
+  endedBy: string | null;
+  endedAs: Ending;
+  endedReason: string;
+};
+
+/**
+ * A disposition as the server sent it, or null. Strict: a kind this page does not know,
+ * an id that is not one, a version that is not a whole number from 1, or a "Shown, on my
+ * review" without the annotation it rests on is not taken, so it never closes an
+ * attribute: the attribute waits on the person as the check left it.
+ */
+function parseDisposition(value: unknown): Disposition | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const id = uuidOrNull(value.id);
+  const kind = DISPOSITION_KINDS.find((item) => item === value.kind) ?? null;
+  const version =
+    typeof value.version === "number" &&
+    Number.isInteger(value.version) &&
+    value.version >= 1
+      ? value.version
+      : null;
+  const annotationId = uuidOrNull(value.annotation_id);
+  if (
+    id === null ||
+    kind === null ||
+    version === null ||
+    (kind === "SHOWN_ON_REVIEW" && annotationId === null)
+  ) {
+    return null;
+  }
+  return {
+    id,
+    kind,
+    reason: str(value.reason).slice(0, DISPOSITION_BOUNDS.reasonMax),
+    reliedOn:
+      kind === "NOT_AVAILABLE"
+        ? str(value.relied_on).slice(0, DISPOSITION_BOUNDS.reliedOnMax)
+        : "",
+    annotationId: kind === "SHOWN_ON_REVIEW" ? annotationId : null,
+    recordedBy: str(value.recorded_by_name).slice(0, 120),
+    recordedAt: str(value.recorded_at).slice(0, 40),
+    version,
+  };
+}
+
+/** An ended disposition; null where it is not one. An ending this page does not know is
+ * kept, said only as no longer standing. */
+function parseEnded(value: unknown): EndedDisposition | null {
+  const said = parseDisposition(value);
+  if (said === null || !isRecord(value)) {
+    return null;
+  }
+  return {
+    ...said,
+    endedAt: str(value.ended_at).slice(0, 40),
+    endedBy: str(value.ended_by_name).slice(0, 120) || null,
+    endedAs: ENDINGS.find((item) => item === value.ended_as) ?? "OTHER",
+    endedReason: str(value.ended_reason).slice(0, DISPOSITION_BOUNDS.reasonMax),
+  };
+}
+
+/** Whether the server reads the attribute as contradicted by the records: its own
+ * assessment where an engine 2 run sent one, and otherwise the same table it applies to a run of the
+ * first engine (attribute_dispositions.check_finds): an issue resting on a record of the
+ * deviation or a contradiction, or an exception shown beside a file not read. Read from
+ * what was sent, before this page's own cautious reading of it, so a contradiction the
+ * server would hold is never offered the kinds it refuses. */
+function contradictedOf(value: Raw, engine: 1 | 2): boolean {
+  // An engine 1 run records no assessment (section 10.1): one sent with it is not read.
+  const said = engine === 2 ? value.assessment : undefined;
+  if (said === "CONTRADICTED") {
+    return true;
+  }
+  if (said !== null && said !== undefined) {
+    return false;
+  }
+  const deviation = (Array.isArray(value.elements) ? value.elements : []).some(
+    (element) => isRecord(element) && element.deviation === true,
+  );
+  return (
+    (value.verdict === "ISSUE" &&
+      (deviation || value.result === "CONTRADICTED")) ||
+    (value.verdict === "UNSETTLED" && deviation)
+  );
+}
 
 /** A file the gate left out of the readings; the run went ahead on the rest. */
 export type HeldFile = { fileId: string; code: HeldCode; reason: string };
@@ -668,6 +814,18 @@ function parseAttribute(
             .filter((item): item is CodeCheck => item !== null)
             .slice(0, REVIEW_BOUNDS.checks)
         : [],
+    contradicted: contradictedOf(value, engine),
+    disposition: parseDisposition(value.disposition),
+    history: (Array.isArray(value.disposition_history)
+      ? value.disposition_history
+      : []
+    )
+      .map(parseEnded)
+      .filter((item): item is EndedDisposition => item !== null)
+      .filter(
+        (item, at, all) => all.findIndex((each) => each.id === item.id) === at,
+      )
+      .slice(0, DISPOSITION_BOUNDS.history),
   };
 }
 
@@ -1342,6 +1500,14 @@ export type AttributeLine = {
    * assuranceRow). The one rule the accept note, the verdict's count and the first
    * screen's calm line all read. */
   evidenced: boolean;
+  /** The records contradict it on the current check: only an exception can be recorded
+   * (section 10.13). */
+  contradicted: boolean;
+  /** A person's disposition that stands on it for this request; null where none does.
+   * It changes nothing above: what the check found is said as it was. */
+  disposition: Disposition | null;
+  /** The dispositions that no longer stand, newest first. */
+  history: EndedDisposition[];
 };
 
 export type Lettered = { id: string; letter: string; text: string };
@@ -1475,6 +1641,9 @@ function attributeLine(
       icon: CODE_CHECK_WORDS[check.status].icon,
       tone: CODE_CHECK_WORDS[check.status].tone,
     })),
+    contradicted: item.contradicted,
+    disposition: item.disposition,
+    history: item.history,
   };
 }
 
@@ -2767,11 +2936,76 @@ export const STILL_CHECKING = "Still checking. Refresh to see the result.";
 // Running a check, and reading a file again
 
 type Fields = Record<string, unknown>;
-type AssuranceWrite = { path: string } | { error: "invalid" };
+/** The API call to make: its path, and the JSON body a tickmark sends (a check sends
+ * none). */
+type AssuranceWrite =
+  | { path: string; body?: Record<string, unknown> }
+  | { error: "invalid" };
+
+/** The intents the /workspace/evidence-assurance route takes: running a check
+ * ("rerun", "upgrade"), and a person's disposition of an attribute (section 10.13):
+ * "disposition" records one, "reopen-disposition" reopens the one that stands. */
+export const ASSURANCE_INTENTS = [
+  "rerun",
+  "upgrade",
+  "disposition",
+  "reopen-disposition",
+] as const;
+
+/** A person's text as it is sent: one line, its length within the contract's bounds. */
+const personText = (value: unknown): string | null =>
+  typeof value === "string" ? value.replace(/\s+/g, " ").trim() : null;
+
+/** The reason a tickmark carries, or null where it is not one the server takes. */
+function reasonOf(value: unknown): string | null {
+  const reason = personText(value);
+  return reason !== null &&
+    reason.length >= DISPOSITION_BOUNDS.reasonMin &&
+    reason.length <= DISPOSITION_BOUNDS.reasonMax
+    ? reason
+    : null;
+}
+
+/** The body of a disposition, checked as the contract shapes it; null where it is not
+ * one: a kind of the four, a reason of 10 to 1000 characters, what was relied on (600)
+ * only with "Evidence not available, accepted", and an annotation with "Shown, on my
+ * review" only, which needs one. */
+function dispositionBody(fields: Fields): Record<string, unknown> | null {
+  const kind = DISPOSITION_KINDS.find((item) => item === fields.kind) ?? null;
+  const reason = reasonOf(fields.reason);
+  const reliedOn =
+    fields.relied_on === undefined || fields.relied_on === null
+      ? ""
+      : personText(fields.relied_on);
+  const annotation =
+    fields.annotation_id === undefined || fields.annotation_id === null
+      ? ""
+      : str(fields.annotation_id);
+  if (
+    kind === null ||
+    reason === null ||
+    reliedOn === null ||
+    reliedOn.length > DISPOSITION_BOUNDS.reliedOnMax ||
+    (reliedOn !== "" && kind !== "NOT_AVAILABLE") ||
+    (annotation !== "" && !UUID.test(annotation)) ||
+    (kind === "SHOWN_ON_REVIEW") !== (annotation !== "")
+  ) {
+    return null;
+  }
+  return {
+    kind,
+    reason,
+    ...(reliedOn !== "" ? { relied_on: reliedOn } : {}),
+    ...(annotation !== "" ? { annotation_id: annotation } : {}),
+  };
+}
 
 /** The API call behind "Check again", "Check now" and "Check again with the current
  * engine" (the /workspace/evidence-assurance route): POST
- * .../evidence-assurance/{requirement_id}/rerun, or /upgrade, with no body. */
+ * .../evidence-assurance/{requirement_id}/rerun, or /upgrade, with no body; and behind a
+ * tickmark: POST .../{requirement_id}/attributes/{attribute_id}/disposition with
+ * {kind, reason, relied_on?, annotation_id?}, or .../disposition/reopen with
+ * {version, reason}. Anything else is not sent. */
 export function assuranceWrite(fields: Fields): AssuranceWrite {
   const [organizationId, projectId, controlId, requirementId] = [
     "organization_id",
@@ -2779,18 +3013,59 @@ export function assuranceWrite(fields: Fields): AssuranceWrite {
     "control_id",
     "requirement_id",
   ].map((key) => str(fields[key]));
-  const intent = str(fields.intent);
+  const intent = ASSURANCE_INTENTS.find((item) => item === fields.intent);
   if (
-    (intent !== "rerun" && intent !== "upgrade") ||
+    intent === undefined ||
     ![organizationId, projectId, controlId, requirementId].every((id) =>
       UUID.test(id ?? ""),
     )
   ) {
     return { error: "invalid" };
   }
-  return {
-    path: `/organizations/${organizationId}/projects/${projectId}/controls/${controlId}/evidence-assurance/${requirementId}/${intent}`,
-  };
+  const base = `/organizations/${organizationId}/projects/${projectId}/controls/${controlId}/evidence-assurance/${requirementId}`;
+  if (intent === "rerun" || intent === "upgrade") {
+    return { path: `${base}/${intent}` };
+  }
+  const attributeId = str(fields.attribute_id);
+  if (!UUID.test(attributeId)) {
+    return { error: "invalid" };
+  }
+  const path = `${base}/attributes/${attributeId}/disposition`;
+  if (intent === "disposition") {
+    const body = dispositionBody(fields);
+    return body === null ? { error: "invalid" } : { path, body };
+  }
+  const reason = reasonOf(fields.reason);
+  const version = fields.version;
+  return reason === null ||
+    typeof version !== "number" ||
+    !Number.isInteger(version) ||
+    version < 1
+    ? { error: "invalid" }
+    : { path: `${path}/reopen`, body: { version, reason } };
+}
+
+/** What a person reads when a tickmark, or reopening one, did not go through; null when
+ * the server confirmed it. A refusal is the server's own sentence. */
+export function dispositionProblem(status: number, detail = ""): string | null {
+  if (status === 200) {
+    return null;
+  }
+  if (status === 409) {
+    return detail.trim() !== ""
+      ? sentence(detail.trim())
+      : "The tickmark could not be recorded as the request stands. The list is read again.";
+  }
+  if (status === 403) {
+    return "Your role cannot record a tickmark.";
+  }
+  if (status === 404) {
+    return "This request or attribute is no longer here. Refresh the page.";
+  }
+  if (status === 422) {
+    return "The tickmark was not in a form the server takes. Check the reason and try again.";
+  }
+  return "The tickmark could not be recorded. Try again in a moment.";
 }
 
 /** What a person reads when running the check did not go through; null when the

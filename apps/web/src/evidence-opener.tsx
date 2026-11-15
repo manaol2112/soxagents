@@ -323,6 +323,8 @@ export function AnnotatedFile({
   citations = [],
   focused = null,
   startAnnotationFor,
+  startAnnotationId,
+  startAdding,
   headSlot,
   returnFocus,
 }: {
@@ -333,6 +335,11 @@ export function AnnotatedFile({
   citations?: EvidenceCitation[];
   focused?: EvidenceCitation | null;
   startAnnotationFor?: AnnotationAsk | undefined;
+  /** The annotation to open on, by its id. */
+  startAnnotationId?: string | undefined;
+  /** Opened to add an annotation for this attribute: drawing starts at once, where the
+   * person may add one. */
+  startAdding?: string | undefined;
   headSlot: HTMLElement | null;
   returnFocus?: (() => HTMLElement | null) | undefined;
 }) {
@@ -355,7 +362,7 @@ export function AnnotatedFile({
   const annotationPick = useAnnotationPick(
     notes.set,
     file.id,
-    undefined,
+    startAnnotationId,
     startAnnotationFor,
   );
   const focusedPick = useMemo(
@@ -379,6 +386,7 @@ export function AnnotatedFile({
       pick={focusedPick ?? annotationPick}
       inline
       returnFocus={returnFocus}
+      startAdding={startAdding}
     />
   );
 }

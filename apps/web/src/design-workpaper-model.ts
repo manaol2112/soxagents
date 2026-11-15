@@ -106,15 +106,36 @@ export const ATTRIBUTE_STATES = [
   "NOT_SHOWN",
   "NOT_CONCLUDED",
   "NOT_TESTED",
+  // A person's disposition of the attribute (docs/evidence-assurance.md, section 10.13),
+  // read only where the checks do not show it themselves: never counted as shown.
+  "SHOWN_ON_REVIEW",
+  "NOT_APPLICABLE",
+  "NOT_AVAILABLE",
 ] as const;
 /** OTHER: a state this page does not know. It is shown in the server's own words, in a
  * neutral tone, and counts as neither shown nor an exception. */
 export type AttributeState = (typeof ATTRIBUTE_STATES)[number] | "OTHER";
 
-export const MARKS = ["EXCEPTION", "SHOWS", "IDENTIFIES", "SOURCE"] as const;
+/** REVIEWED: the file holds the person's annotation a "Shown, auditor's judgment" rests
+ * on (section 10.13), never a check's "shows". */
+export const MARKS = [
+  "EXCEPTION",
+  "SHOWS",
+  "REVIEWED",
+  "IDENTIFIES",
+  "SOURCE",
+] as const;
 export type Mark = (typeof MARKS)[number] | "OTHER";
 
-export const TICKMARKS = ["AGREED", "COMPARED", "EXCEPTION", "NONE"] as const;
+/** REVIEWED (†): on the auditor's review, with the reason recorded; only of an attribute
+ * that reads "Shown, auditor's judgment". */
+export const TICKMARKS = [
+  "AGREED",
+  "COMPARED",
+  "REVIEWED",
+  "EXCEPTION",
+  "NONE",
+] as const;
 export type Tickmark = (typeof TICKMARKS)[number];
 
 export type EvidenceEntry = {
@@ -347,6 +368,10 @@ export const ATTRIBUTE_WITHOUT_TEXT = "Attribute text not stated";
 function tickmarkFor(state: AttributeState, value: unknown): Tickmark {
   const mark = oneOf(TICKMARKS, value);
   if ((mark === "AGREED" || mark === "COMPARED") && state === "SHOWN") {
+    return mark;
+  }
+  // The auditor's own review stands only on "Shown, auditor's judgment".
+  if (mark === "REVIEWED" && state === "SHOWN_ON_REVIEW") {
     return mark;
   }
   return mark === "EXCEPTION" && state === "EXCEPTION" ? mark : "NONE";
@@ -643,6 +668,10 @@ const STATE_WORDS: Record<AttributeState, { words: string; tone: Tone }> = {
   NOT_SHOWN: { words: "Not shown", tone: "warning" },
   NOT_CONCLUDED: { words: "Not concluded", tone: "info" },
   NOT_TESTED: { words: "Not tested yet", tone: "neutral" },
+  // A person's disposition: in its own words, never the plain "Shown", never green.
+  SHOWN_ON_REVIEW: { words: "Shown, auditor's judgment", tone: "neutral" },
+  NOT_APPLICABLE: { words: "Not applicable to this instance", tone: "neutral" },
+  NOT_AVAILABLE: { words: "Evidence not available, accepted", tone: "neutral" },
   OTHER: { words: "Not stated", tone: "neutral" },
 };
 
@@ -692,6 +721,12 @@ export const MARK_WORDS: Record<
     meaning: "Shows the attribute",
     tone: "success",
   },
+  REVIEWED: {
+    symbol: "†",
+    word: "Reviewed",
+    meaning: "Holds the annotation the auditor's judgment rests on",
+    tone: "neutral",
+  },
   IDENTIFIES: {
     symbol: "●",
     word: "Identifies",
@@ -722,6 +757,10 @@ const TICKMARK_FALLBACK: Record<string, { symbol: string; meaning: string }> = {
     meaning:
       "Dates or values compared in code, within what the attribute allows.",
   },
+  REVIEWED: {
+    symbol: "†",
+    meaning: "On the auditor's review, with the reason recorded.",
+  },
   EXCEPTION: { symbol: "✗", meaning: "Exception shown." },
 };
 
@@ -749,10 +788,13 @@ export function tickmarkOf(
 export function tickmarkLegend(
   paper: Pick<DesignWorkpaper, "tickmarks" | "attributes">,
 ): Array<{ mark: string; symbol: string; meaning: string }> {
-  if (paper.tickmarks.length > 0) {
-    return paper.tickmarks;
-  }
   const used = new Set(paper.attributes.map((attribute) => attribute.tickmark));
+  if (paper.tickmarks.length > 0) {
+    // The auditor's own review (†) is in the legend only where an attribute carries it.
+    return paper.tickmarks.filter(
+      (item) => item.mark !== "REVIEWED" || used.has("REVIEWED"),
+    );
+  }
   return TICKMARKS.filter((mark) => used.has(mark) && mark !== "NONE").map(
     (mark) => ({ mark, ...tickmarkOf(paper, mark) }),
   );
@@ -765,6 +807,7 @@ const MATTER_KINDS: Record<string, string> = {
   UNSETTLED: "Attribute not concluded",
   FILE: "File left out",
   COMPLETENESS: "Completeness or reliability",
+  DISPOSITION: "Tickmark",
   NOTE: "Note",
 };
 
@@ -1230,6 +1273,13 @@ export type Tile = {
   tone: Tone;
 };
 
+/** A person's disposition as the attributes tile counts it: never inside "shown". */
+const DISPOSITION_TILE_WORDS: Record<string, string> = {
+  SHOWN_ON_REVIEW: "on the auditor's judgment",
+  NOT_APPLICABLE: "not applicable",
+  NOT_AVAILABLE: "accepted without evidence",
+};
+
 /** The counts above the matrix. Each is counted from what the server sent: nothing is
  * concluded here. */
 export function tilesOf(paper: DesignWorkpaper): Tile[] {
@@ -1240,7 +1290,10 @@ export function tilesOf(paper: DesignWorkpaper): Tile[] {
   const rest = new Map<string, number>();
   for (const attribute of attributes) {
     if (attribute.state !== "SHOWN" && attribute.state !== "EXCEPTION") {
-      const words = stateOf(attribute).words.toLowerCase();
+      // A person's disposition is counted apart from "shown", in short words of its own.
+      const words =
+        own(DISPOSITION_TILE_WORDS, attribute.state) ??
+        stateOf(attribute).words.toLowerCase();
       rest.set(words, (rest.get(words) ?? 0) + 1);
     }
   }

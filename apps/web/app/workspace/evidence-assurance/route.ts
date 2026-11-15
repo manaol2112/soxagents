@@ -7,9 +7,12 @@ import { apiBaseUrl, sessionToken } from "../../../src/load-workspace";
 /** "Check again" on a D&I request whose check failed or is out of date
  * (docs/evidence-assurance.md, section 6), and "Check again with the current engine" on
  * one an earlier engine finished (section 10.10: intent "upgrade", which assuranceWrite
- * validates like "rerun"). Called in the background; answers as JSON
- * with the API's status (its 202 said as 200), and the page reads the checks again once
- * it is confirmed. The API decides who may run it and refuses while a check is at work. */
+ * validates like "rerun"); and a person's tickmark on an attribute (section 10.13:
+ * intents "disposition" and "reopen-disposition", whose bodies assuranceWrite checks as
+ * the contract shapes them). Called in the background; answers as JSON with the API's
+ * status (any 2xx said as 200), and the page reads the checks again once it is
+ * confirmed. The API decides who may act and refuses, in one sentence, what it does not
+ * take. */
 export async function POST(request: Request) {
   let fields: Record<string, unknown> = {};
   try {
@@ -32,14 +35,19 @@ export async function POST(request: Request) {
     if (session !== undefined) {
       headers.set("cookie", `aw_session=${session}`);
     }
+    if (write.body !== undefined) {
+      headers.set("content-type", "application/json");
+    }
     const response = await fetch(`${apiBaseUrl()}${write.path}`, {
       method: "POST",
       headers,
+      ...(write.body !== undefined ? { body: JSON.stringify(write.body) } : {}),
       cache: "no-store",
       // The run is queued and worked in the background: the call itself is short.
       signal: AbortSignal.timeout(30000),
     });
-    // The server answers 202 with the request's entry: any 2xx is its confirmation.
+    // The server answers 202 (a check) or 200 (a tickmark) with the request's entry: any
+    // 2xx is its confirmation.
     status = response.ok ? 200 : response.status;
     if (status !== 200) {
       const body = (await response.json()) as unknown;

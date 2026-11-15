@@ -1,0 +1,775 @@
+"use client";
+
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+
+import {
+  type AnnotationChoice,
+  annotationChoices,
+  draftFrom,
+  ENDING_WORDS,
+  fileRef,
+  recordedLine,
+  TICKMARK_WORDS,
+  type TickmarkDraft,
+  type TickmarkOffer,
+  tickmarkFields,
+  tickmarkProblems,
+} from "./check-digest-model";
+import type { AnnotationSet } from "./evidence-annotations-model";
+import {
+  type AttributeLine,
+  DISPOSITION_BOUNDS,
+  type Disposition,
+  type DispositionKind,
+  type RowFile,
+} from "./evidence-assurance-model";
+import { RowMenu, type RowMenuItem } from "./row-menu";
+import { UiIcon } from "./ui-icon";
+
+/**
+ * A person's tickmark on one attribute (docs/evidence-assurance.md, section 10.13), in the
+ * attribute view of a finished check: "Add evidence" (the row's own upload and picker),
+ * "Tickmark" (a small form in place), the disposition that stands with "Change" and
+ * "Reopen", and the ended ones under "History". What the check found stays below it,
+ * unchanged. Nothing here decides: the row sends through its own handlers, success is
+ * said only once the server has answered, and a refusal is the server's own sentence.
+ */
+
+export const TICKMARK = "Tickmark";
+export const ADD_EVIDENCE = "Add evidence";
+export const UPLOAD_A_FILE = "Upload a file";
+export const USE_A_HELD_FILE = "Use a file the control holds";
+export const TICKMARK_RECORD = "Record";
+export const TICKMARK_CHANGE = "Change";
+export const TICKMARK_REOPEN = "Reopen";
+export const TICKMARK_HISTORY = "History";
+export const TICKMARK_RECORDED = "Tickmark recorded.";
+export const TICKMARK_REOPENED =
+  "Tickmark reopened. The attribute waits on you again.";
+export const ADD_AN_ANNOTATION = "Add an annotation";
+export const RELIED_ON_LABEL = "What you relied on instead";
+export const REOPEN_LABEL = "Why reopen it";
+export const NO_ANNOTATION =
+  "No annotation a person reviewed names this attribute yet. Add one on the evidence, then choose it here.";
+
+/** The row's own ways to add evidence to the request. */
+export type DigestAddEvidence = {
+  /** Opens the evidence wizard on this request. */
+  upload: () => void;
+  /** Why it cannot be used now; null when it can. */
+  uploadOff: string | null;
+  /** Opens the row's "Use a file the control holds" picker. */
+  held: () => void;
+  heldOff: string | null;
+};
+
+/** The row's own calls for a tickmark: each answers the server's refusal in one sentence,
+ * or null once the server has confirmed it. */
+export type DigestTickmarkAction = {
+  /** What may be recorded on the attribute; null where nothing may. */
+  offer: (line: AttributeLine) => TickmarkOffer | null;
+  record: (
+    attributeId: string,
+    fields: Record<string, string>,
+  ) => Promise<string | null>;
+  reopen: (
+    attributeId: string,
+    version: number,
+    reason: string,
+  ) => Promise<string | null>;
+  /** The annotations of the request's files, read when asked; null where they could
+   * not be read. */
+  annotations: () => Promise<AnnotationSet[] | null>;
+  /** Opens the evidence reviewer on a file to add an annotation for the attribute;
+   * `back` runs once it closes. */
+  addAnnotation: (
+    fileId: string,
+    attributeId: string,
+    back: () => void,
+  ) => void;
+  /** Opens the evidence reviewer on an annotation. */
+  openAnnotation: (fileId: string, annotationId: string) => void;
+};
+
+type Choices =
+  | { status: "idle" | "loading" | "failed"; items: AnnotationChoice[] }
+  | { status: "ready"; items: AnnotationChoice[] };
+
+/** A count under a text field, read politely. */
+function Count({ id, used, max }: { id: string; used: number; max: number }) {
+  return (
+    <span
+      id={id}
+      className={`cdg-tmf-count${used > max ? " is-over" : ""}`}
+      aria-live="polite"
+    >
+      {`${used} of ${max} characters`}
+    </span>
+  );
+}
+
+const spoken = (text: string) => text.replace(/\s+/g, " ").trim().length;
+
+/** The annotation a disposition rests on, as "E2 · View", opening the reviewer on it. */
+function RestsOn({
+  disposition,
+  choices,
+  letter,
+  open,
+}: {
+  disposition: Disposition;
+  choices: Choices;
+  letter: string;
+  open: ((fileId: string, annotationId: string) => void) | null;
+}) {
+  const found = choices.items.find(
+    (item) => item.id === disposition.annotationId,
+  );
+  if (found === undefined) {
+    return choices.status === "loading" || choices.status === "idle" ? (
+      <p className="cdg-tm-line">
+        <span className="cdg-cap">Rests on</span>
+        <span className="cdg-quiet-note">Reading its annotation…</span>
+      </p>
+    ) : (
+      <p className="cdg-tm-line">
+        <span className="cdg-cap">Rests on</span>
+        <span>An annotation on the evidence.</span>
+      </p>
+    );
+  }
+  return (
+    <p className="cdg-tm-line">
+      <span className="cdg-cap">Rests on</span>
+      <span>
+        {found.label !== "" ? `${found.label}. ` : ""}
+        {found.statement}
+      </span>
+      {open !== null ? (
+        <button
+          type="button"
+          className="cdg-link"
+          onClick={() => open(found.fileId, found.id)}
+        >
+          <span aria-hidden="true">{`${found.ref || "File"} · View`}</span>
+          <span className="sr-only">{`View annotation ${found.number} on ${found.ref || "the file"} for attribute ${letter}`}</span>
+        </button>
+      ) : null}
+    </p>
+  );
+}
+
+/** The ended dispositions, under a closed "History". */
+function History({ line }: { line: AttributeLine }) {
+  const id = useId();
+  const [open, setOpen] = useState(false);
+  if (line.history.length === 0) {
+    return null;
+  }
+  return (
+    <div className="cdg-tm-history">
+      <button
+        type="button"
+        className="cdg-link"
+        aria-expanded={open}
+        aria-controls={`${id}-history`}
+        onClick={() => setOpen((value) => !value)}
+      >
+        {`${TICKMARK_HISTORY} (${line.history.length})`}
+        <span className="sr-only"> of the tickmarks on this attribute</span>
+        <UiIcon name="chevron" size={12} />
+      </button>
+      <ul id={`${id}-history`} hidden={!open}>
+        {line.history.map((item) => (
+          <li key={item.id}>
+            <p>
+              <strong>{TICKMARK_WORDS[item.kind].shown}</strong>
+              <span className="cdg-tm-by">
+                {recordedLine(item.recordedBy, item.recordedAt)}
+              </span>
+            </p>
+            <p className="cdg-tm-ended">
+              {ENDING_WORDS[item.endedAs]}
+              {` (${recordedLine(item.endedBy, item.endedAt)})`}
+              {item.endedAs === "REOPENED" && item.endedReason !== ""
+                ? `: ${item.endedReason}`
+                : "."}
+            </p>
+            {item.reason !== "" ? (
+              <p className="cdg-tm-ended">{`Reason: ${item.reason}`}</p>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * Under the attribute's status line: "Add evidence" and "Tickmark" (or, where one stands,
+ * the disposition with "Change" and "Reopen"); the form in place; then the history.
+ */
+export function AttributeTickmark({
+  line,
+  letter,
+  files,
+  tickmark,
+  addEvidence,
+}: {
+  line: AttributeLine;
+  letter: string;
+  files: RowFile[];
+  /** Null for a person who may not act: nothing is offered. */
+  tickmark: DigestTickmarkAction | null;
+  /** Null for a person who may not act. */
+  addEvidence: DigestAddEvidence | null;
+}) {
+  const id = useId();
+  const standing = line.disposition;
+  const offer = tickmark?.offer(line) ?? null;
+  const [mode, setMode] = useState<"none" | "form" | "reopen">("none");
+  const [draft, setDraft] = useState<TickmarkDraft>(() => draftFrom(null));
+  const [tried, setTried] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+  const [done, setDone] = useState("");
+  const [reopenReason, setReopenReason] = useState("");
+  const [onFile, setOnFile] = useState(files[0]?.id ?? "");
+  const [choices, setChoices] = useState<Choices>({
+    status: "idle",
+    items: [],
+  });
+  // Where the focus goes back to when the form or the reopen closes.
+  const opener = useRef<HTMLElement | null>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+  const reopenRef = useRef<HTMLTextAreaElement>(null);
+  const doneRef = useRef<HTMLParagraphElement>(null);
+  const addRef = useRef<HTMLButtonElement>(null);
+  // A later answer overtakes an earlier one: a stale list never replaces a newer one.
+  const latest = useRef(0);
+
+  const readChoices = useCallback(async () => {
+    if (tickmark === null) {
+      return;
+    }
+    const run = ++latest.current;
+    setChoices((was) => ({ status: "loading", items: was.items }));
+    const sets = await tickmark.annotations();
+    if (run !== latest.current) {
+      return;
+    }
+    setChoices(
+      sets === null
+        ? { status: "failed", items: [] }
+        : {
+            status: "ready",
+            items: annotationChoices(sets, line.attributeId, files),
+          },
+    );
+  }, [tickmark, line.attributeId, files]);
+
+  // The annotation a standing "Shown, on my review" rests on is read once, to name its
+  // file; the person's choices, once the form asks for them.
+  const wanted =
+    standing?.kind === "SHOWN_ON_REVIEW" ||
+    (mode === "form" && draft.kind === "SHOWN_ON_REVIEW");
+  const status = choices.status;
+  useEffect(() => {
+    if (wanted && status === "idle") {
+      void readChoices();
+    }
+  }, [wanted, status, readChoices]);
+
+  // The form takes the focus when it opens: its chosen kind, else the first.
+  useEffect(() => {
+    if (mode === "form") {
+      const form = formRef.current;
+      (
+        form?.querySelector<HTMLInputElement>('input[type="radio"]:checked') ??
+        form?.querySelector<HTMLInputElement>('input[type="radio"]')
+      )?.focus();
+    } else if (mode === "reopen") {
+      reopenRef.current?.focus();
+    }
+  }, [mode]);
+
+  if (offer === null && addEvidence === null && standing === null) {
+    return <History line={line} />;
+  }
+
+  const open = (next: "form" | "reopen", from: HTMLElement) => {
+    opener.current = from;
+    setProblem(null);
+    setDone("");
+    setTried(false);
+    if (next === "form") {
+      // "Change" starts from what stands; a kind the check no longer allows is not kept.
+      const start = draftFrom(standing);
+      const kept =
+        start.kind !== null &&
+        offer !== null &&
+        !offer.kinds.includes(start.kind)
+          ? { ...start, kind: null }
+          : start;
+      // Where one kind is all that may be recorded (a contradiction), it is chosen.
+      const [one, ...more] = offer?.kinds ?? [];
+      setDraft(
+        kept.kind === null && one !== undefined && more.length === 0
+          ? { ...kept, kind: one }
+          : kept,
+      );
+    } else {
+      setReopenReason("");
+    }
+    setMode(next);
+  };
+  const close = () => {
+    setMode("none");
+    setProblem(null);
+    const back = opener.current;
+    // Back to what opened it, where it is still there.
+    window.setTimeout(() => back?.isConnected && back.focus(), 0);
+  };
+  const confirmed = (words: string) => {
+    setMode("none");
+    setDone(words);
+    window.setTimeout(() => doneRef.current?.focus(), 0);
+  };
+
+  const problems = tickmarkProblems(draft);
+  const submit = async () => {
+    setTried(true);
+    if (
+      tickmark === null ||
+      busy ||
+      draft.kind === null ||
+      Object.keys(problems).length > 0
+    ) {
+      return;
+    }
+    setBusy(true);
+    setProblem(null);
+    const refused = await tickmark.record(
+      line.attributeId,
+      tickmarkFields({ ...draft, kind: draft.kind }),
+    );
+    setBusy(false);
+    if (refused === null) {
+      confirmed(TICKMARK_RECORDED);
+    } else {
+      setProblem(refused);
+    }
+  };
+  const reopenProblem =
+    spoken(reopenReason) < DISPOSITION_BOUNDS.reasonMin
+      ? `Give the reason in a sentence of at least ${DISPOSITION_BOUNDS.reasonMin} characters.`
+      : spoken(reopenReason) > DISPOSITION_BOUNDS.reasonMax
+        ? `The reason can be at most ${DISPOSITION_BOUNDS.reasonMax} characters.`
+        : null;
+  const reopen = async () => {
+    setTried(true);
+    if (
+      tickmark === null ||
+      standing === null ||
+      busy ||
+      reopenProblem !== null
+    ) {
+      return;
+    }
+    setBusy(true);
+    setProblem(null);
+    const refused = await tickmark.reopen(
+      line.attributeId,
+      standing.version,
+      reopenReason.replace(/\s+/g, " ").trim(),
+    );
+    setBusy(false);
+    if (refused === null) {
+      confirmed(TICKMARK_REOPENED);
+    } else {
+      setProblem(refused);
+    }
+  };
+
+  const set = (change: Partial<TickmarkDraft>) =>
+    setDraft((was) => ({ ...was, ...change }));
+  const err = (field: keyof typeof problems) =>
+    tried ? (problems[field] ?? null) : null;
+  const kinds: readonly DispositionKind[] = offer?.kinds ?? [];
+  const menu: RowMenuItem[] =
+    addEvidence === null
+      ? []
+      : [
+          {
+            label: UPLOAD_A_FILE,
+            icon: "upload",
+            onSelect: addEvidence.upload,
+            unavailable: addEvidence.uploadOff,
+          },
+          {
+            label: USE_A_HELD_FILE,
+            icon: "paperclip",
+            onSelect: addEvidence.held,
+            unavailable: addEvidence.heldOff,
+          },
+        ];
+
+  const words = standing === null ? null : TICKMARK_WORDS[standing.kind];
+  return (
+    <div className="cdg-tm-wrap">
+      {standing !== null && words !== null ? (
+        <section
+          className={`cdg-tm is-${words.tone}`}
+          aria-labelledby={`${id}-standing`}
+        >
+          <div className="cdg-tm-head">
+            <span className="cdg-cap">{TICKMARK}</span>
+            <h6 id={`${id}-standing`} className={`cdg-state is-${words.tone}`}>
+              <UiIcon name={words.icon} size={13} />
+              {words.shown}
+            </h6>
+            <span className="cdg-tm-by">
+              {recordedLine(standing.recordedBy, standing.recordedAt)}
+            </span>
+            {offer !== null ? (
+              // Hidden, not removed, while a form is open: the focus comes back to it.
+              <span className="cdg-tm-acts" hidden={mode !== "none"}>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={(event) => open("form", event.currentTarget)}
+                >
+                  {TICKMARK_CHANGE}
+                  <span className="sr-only">{` the tickmark on attribute ${letter}`}</span>
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={(event) => open("reopen", event.currentTarget)}
+                >
+                  {TICKMARK_REOPEN}
+                  <span className="sr-only">{` the tickmark on attribute ${letter}`}</span>
+                </button>
+              </span>
+            ) : null}
+          </div>
+          <p className="cdg-tm-reason">{standing.reason}</p>
+          {standing.reliedOn !== "" ? (
+            <p className="cdg-tm-line">
+              <span className="cdg-cap">Relied on instead</span>
+              <span>{standing.reliedOn}</span>
+            </p>
+          ) : null}
+          {standing.kind === "SHOWN_ON_REVIEW" ? (
+            <RestsOn
+              disposition={standing}
+              choices={choices}
+              letter={letter}
+              open={tickmark?.openAnnotation ?? null}
+            />
+          ) : null}
+          {mode === "reopen" ? (
+            <form
+              className="cdg-tmf is-reopen"
+              noValidate
+              autoComplete="off"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void reopen();
+              }}
+            >
+              <label htmlFor={`${id}-reopen`}>{REOPEN_LABEL}</label>
+              <textarea
+                id={`${id}-reopen`}
+                ref={reopenRef}
+                rows={2}
+                value={reopenReason}
+                aria-invalid={tried && reopenProblem !== null}
+                aria-describedby={`${id}-reopen-count${tried && reopenProblem !== null ? ` ${id}-reopen-error` : ""}`}
+                onChange={(event) => setReopenReason(event.target.value)}
+              />
+              <Count
+                id={`${id}-reopen-count`}
+                used={spoken(reopenReason)}
+                max={DISPOSITION_BOUNDS.reasonMax}
+              />
+              {tried && reopenProblem !== null ? (
+                <p id={`${id}-reopen-error`} className="cdg-tmf-error">
+                  {reopenProblem}
+                </p>
+              ) : null}
+              {problem !== null ? (
+                <p className="cdg-tmf-problem" role="alert">
+                  {problem}
+                </p>
+              ) : null}
+              <div className="cdg-tmf-acts">
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={close}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-secondary btn-sm"
+                  disabled={busy}
+                >
+                  {busy ? "Reopening…" : TICKMARK_REOPEN}
+                </button>
+              </div>
+            </form>
+          ) : null}
+        </section>
+      ) : null}
+      {addEvidence !== null || (offer !== null && standing === null) ? (
+        <div className="cdg-tm-bar" hidden={mode === "form"}>
+          {addEvidence !== null ? (
+            <RowMenu
+              label={`attribute ${letter}`}
+              items={menu}
+              trigger={{
+                label: ADD_EVIDENCE,
+                icon: "plus",
+                className: "btn-secondary btn-sm cdg-tm-add",
+                ariaLabel: `${ADD_EVIDENCE} for attribute ${letter}`,
+              }}
+            />
+          ) : null}
+          {offer !== null && standing === null ? (
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={(event) => open("form", event.currentTarget)}
+            >
+              <UiIcon name="tag" size={13} />
+              {TICKMARK}
+              <span className="sr-only">{` attribute ${letter}`}</span>
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {done !== "" ? (
+        <p className="cdg-tm-done" role="status" tabIndex={-1} ref={doneRef}>
+          <UiIcon name="check" size={13} />
+          {done}
+        </p>
+      ) : null}
+      {mode === "form" && offer !== null ? (
+        <form
+          className="cdg-tmf"
+          ref={formRef}
+          noValidate
+          autoComplete="off"
+          aria-labelledby={`${id}-form`}
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submit();
+          }}
+        >
+          <h6 id={`${id}-form`} className="cdg-tmf-title">
+            {standing === null
+              ? `${TICKMARK} for attribute ${letter}`
+              : `Change the tickmark on attribute ${letter}`}
+          </h6>
+          {offer.note !== "" ? (
+            <p className="cdg-tmf-note">
+              <UiIcon name="info" size={13} />
+              {offer.note}
+            </p>
+          ) : null}
+          <fieldset
+            className="cdg-tmf-kinds"
+            aria-describedby={
+              err("kind") !== null ? `${id}-kind-error` : undefined
+            }
+          >
+            <legend>What you conclude</legend>
+            {kinds.map((kind) => (
+              <label key={kind} className="cdg-tmf-kind">
+                <input
+                  type="radio"
+                  name={`${id}-kind`}
+                  value={kind}
+                  checked={draft.kind === kind}
+                  onChange={() => set({ kind })}
+                />
+                <span>
+                  <strong>{TICKMARK_WORDS[kind].label}</strong>
+                  <span className="cdg-tmf-hint">
+                    {TICKMARK_WORDS[kind].hint}
+                  </span>
+                </span>
+              </label>
+            ))}
+            {err("kind") !== null ? (
+              <p id={`${id}-kind-error`} className="cdg-tmf-error">
+                {err("kind")}
+              </p>
+            ) : null}
+          </fieldset>
+          {draft.kind === "SHOWN_ON_REVIEW" ? (
+            <fieldset
+              className="cdg-tmf-notes"
+              aria-describedby={
+                err("annotation") !== null ? `${id}-note-error` : undefined
+              }
+            >
+              <legend>The annotation it rests on</legend>
+              {choices.status === "loading" && choices.items.length === 0 ? (
+                <p className="cdg-quiet-note" role="status">
+                  Reading the annotations…
+                </p>
+              ) : choices.status === "failed" ? (
+                <p className="cdg-tmf-error">
+                  The annotations could not be read. Close the form and try
+                  again.
+                </p>
+              ) : choices.items.length === 0 ? (
+                <p className="cdg-quiet-note">{NO_ANNOTATION}</p>
+              ) : (
+                choices.items.map((choice) => (
+                  <label key={choice.id} className="cdg-tmf-kind">
+                    <input
+                      type="radio"
+                      name={`${id}-note`}
+                      value={choice.id}
+                      checked={draft.annotationId === choice.id}
+                      onChange={() => set({ annotationId: choice.id })}
+                    />
+                    <span>
+                      <strong>
+                        {`${choice.ref || "File"}, annotation ${choice.number}`}
+                        {choice.label !== "" ? `: ${choice.label}` : ""}
+                      </strong>
+                      <span className="cdg-tmf-hint">
+                        {choice.statement}
+                        {choice.decidedBy !== ""
+                          ? ` Reviewed by ${choice.decidedBy}.`
+                          : ""}
+                      </span>
+                    </span>
+                  </label>
+                ))
+              )}
+              {tickmark !== null && files.length > 0 ? (
+                <div className="cdg-tmf-add">
+                  {files.length > 1 ? (
+                    <>
+                      <label htmlFor={`${id}-file`} className="sr-only">
+                        The file to annotate
+                      </label>
+                      <select
+                        id={`${id}-file`}
+                        value={onFile}
+                        onChange={(event) => setOnFile(event.target.value)}
+                      >
+                        {files.map((file) => (
+                          <option key={file.id} value={file.id}>
+                            {`${fileRef(files, file.id)} · ${file.name}`}
+                          </option>
+                        ))}
+                      </select>
+                    </>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    ref={addRef}
+                    onClick={() =>
+                      tickmark.addAnnotation(
+                        onFile || (files[0]?.id ?? ""),
+                        line.attributeId,
+                        () => {
+                          // Back in the form: what was added is read, and the focus
+                          // is where it was.
+                          void readChoices();
+                          window.setTimeout(() => addRef.current?.focus(), 0);
+                        },
+                      )
+                    }
+                  >
+                    <UiIcon name="plus" size={13} />
+                    {ADD_AN_ANNOTATION}
+                  </button>
+                </div>
+              ) : null}
+              {err("annotation") !== null ? (
+                <p id={`${id}-note-error`} className="cdg-tmf-error">
+                  {err("annotation")}
+                </p>
+              ) : null}
+            </fieldset>
+          ) : null}
+          <div className="cdg-tmf-field">
+            <label htmlFor={`${id}-reason`}>Reason</label>
+            <textarea
+              id={`${id}-reason`}
+              rows={3}
+              value={draft.reason}
+              required
+              aria-invalid={err("reason") !== null}
+              aria-describedby={`${id}-reason-count${err("reason") !== null ? ` ${id}-reason-error` : ""}`}
+              onChange={(event) => set({ reason: event.target.value })}
+            />
+            <Count
+              id={`${id}-reason-count`}
+              used={spoken(draft.reason)}
+              max={DISPOSITION_BOUNDS.reasonMax}
+            />
+            {err("reason") !== null ? (
+              <p id={`${id}-reason-error`} className="cdg-tmf-error">
+                {err("reason")}
+              </p>
+            ) : null}
+          </div>
+          {draft.kind === "NOT_AVAILABLE" ? (
+            <div className="cdg-tmf-field">
+              <label htmlFor={`${id}-relied`}>
+                {RELIED_ON_LABEL}
+                <span className="cdg-tmf-optional"> (optional)</span>
+              </label>
+              <textarea
+                id={`${id}-relied`}
+                rows={2}
+                value={draft.reliedOn}
+                aria-invalid={err("reliedOn") !== null}
+                aria-describedby={`${id}-relied-count${err("reliedOn") !== null ? ` ${id}-relied-error` : ""}`}
+                onChange={(event) => set({ reliedOn: event.target.value })}
+              />
+              <Count
+                id={`${id}-relied-count`}
+                used={spoken(draft.reliedOn)}
+                max={DISPOSITION_BOUNDS.reliedOnMax}
+              />
+              {err("reliedOn") !== null ? (
+                <p id={`${id}-relied-error`} className="cdg-tmf-error">
+                  {err("reliedOn")}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+          {problem !== null ? (
+            <p className="cdg-tmf-problem" role="alert">
+              {problem}
+            </p>
+          ) : null}
+          <div className="cdg-tmf-acts">
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={close}
+            >
+              Cancel
+            </button>
+            <button type="submit" className="btn btn-sm" disabled={busy}>
+              {busy ? "Recording…" : TICKMARK_RECORD}
+            </button>
+          </div>
+        </form>
+      ) : null}
+      <History line={line} />
+    </div>
+  );
+}

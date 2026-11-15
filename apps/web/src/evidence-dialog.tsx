@@ -71,6 +71,15 @@ export type DialogOpen =
       /** What the file was opened to see: the annotation that marks this passage for
        * this attribute is selected once the annotations are read (annotationFor). */
       annotation?: AnnotationAsk;
+      /** The annotation to open on, by its id (a tickmark's "E2 · View"). */
+      annotationId?: string;
+      /** Opened to add an annotation for this attribute (a tickmark's "Add an
+       * annotation", docs/evidence-assurance.md, section 10.13): the reviewer starts
+       * drawing a box, the attribute chosen. */
+      add?: { attributeId: string };
+      /** Run once the dialog closes: the screen that opened it carries on (the tickmark
+       * form reads its annotations again). */
+      onClosed?: () => void;
     };
 
 type Tab = "preview" | "data" | "details";
@@ -812,6 +821,18 @@ export function EvidenceDialog({
                       citations={citations}
                       focused={focused}
                       startAnnotationFor={askOf(insight.file.id)}
+                      startAnnotationId={
+                        open.mode === "review" &&
+                        insight.file.id === open.fileId
+                          ? open.annotationId
+                          : undefined
+                      }
+                      startAdding={
+                        open.mode === "review" &&
+                        insight.file.id === open.fileId
+                          ? open.add?.attributeId
+                          : undefined
+                      }
                       headSlot={notesSlot}
                     />
                   )

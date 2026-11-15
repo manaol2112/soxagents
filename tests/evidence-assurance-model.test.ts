@@ -268,6 +268,11 @@ describe("parseAssurance (section 6)", () => {
       // Engine 2's fields, at their defaults for an engine 1 check.
       assessment: null,
       checks: [],
+      // Added 14 November 2026 (section 10.13, tickmarks): no contradiction, and no
+      // person's disposition, standing or ended, where the server sent none.
+      contradicted: false,
+      disposition: null,
+      history: [],
     });
     assert.deepEqual(read.summary, {
       checking: 0,

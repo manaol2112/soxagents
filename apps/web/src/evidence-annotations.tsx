@@ -342,6 +342,10 @@ type Props = {
   /** Where the focus goes back to when an annotation asked for from outside is closed:
    * what asked for it (the reference chip), if it is still there. */
   returnFocus?: (() => HTMLElement | null) | undefined;
+  /** Opened to add an annotation for this attribute (a tickmark's "Add an annotation",
+   * docs/evidence-assurance.md, section 10.13): once the annotations are read and the
+   * person may add one, drawing starts, and the box drawn names the attribute. Once. */
+  startAdding?: string | undefined;
 };
 
 const NONE: EvidenceCitation[] = [];
@@ -367,6 +371,7 @@ export function AnnotatedEvidence({
   pick = null,
   inline = false,
   returnFocus,
+  startAdding,
 }: Props) {
   const kind = previewKind(file.fileName);
   // A box is drawn on a page: an image, or a PDF's page.
@@ -653,10 +658,36 @@ export function AnnotatedEvidence({
     setMode({
       kind: "add",
       page,
-      draft: { statement: "", attributeIds: [], box },
+      draft: {
+        statement: "",
+        // Opened to add one for an attribute: it is chosen, and can be changed.
+        attributeIds:
+          startAdding !== undefined &&
+          set.attributes.some((attribute) => attribute.id === startAdding)
+            ? [startAdding]
+            : [],
+        box,
+      },
       annotationKind: "SHOWS",
     });
   }
+
+  // Opened to add an annotation: drawing starts once, when the person may draw.
+  const addingStarted = useRef(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: drawing starts once, when what it needs is here; startDrawing is the component's own.
+  useEffect(() => {
+    if (
+      startAdding === undefined ||
+      addingStarted.current ||
+      loading ||
+      !set.canEdit ||
+      !drawable
+    ) {
+      return;
+    }
+    addingStarted.current = true;
+    startDrawing();
+  }, [startAdding, loading, set.canEdit, drawable]);
 
   async function downloadCopy() {
     setCopying(true);

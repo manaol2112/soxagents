@@ -2,6 +2,11 @@
 
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import {
+  AttributeTickmark,
+  type DigestAddEvidence,
+  type DigestTickmarkAction,
+} from "./attribute-tickmark";
+import {
   ASK_OWNER,
   type AttentionItem,
   absentOf,
@@ -221,6 +226,15 @@ function Item({
         </span>
         {unasked ? (
           <span className="cdg-item-flag">{DIGEST_NOT_ASKED}</span>
+        ) : null}
+        {item.tickmark !== undefined ? (
+          // A person's exception keeps the item: said in words, with its mark.
+          <span
+            className={`cdg-state cdg-item-tickmark is-${item.tickmark.tone}`}
+          >
+            <UiIcon name={item.tickmark.icon} size={12} />
+            {item.tickmark.label}
+          </span>
         ) : null}
         {item.flag !== "" ? (
           <span className="cdg-item-flag">{item.flag}</span>
@@ -649,6 +663,8 @@ function Attribute({
   passage,
   onEvidence,
   finding,
+  tickmark,
+  addEvidence,
 }: {
   row: DigestAttribute;
   digest: CheckDigest;
@@ -659,6 +675,8 @@ function Attribute({
   passage: (passage: ShownPassage, letter: string) => ReactNode;
   onEvidence: (evidence: DigestEvidence) => void;
   finding: (line: AttributeLine) => ReactNode;
+  tickmark: DigestTickmarkAction | null;
+  addEvidence: DigestAddEvidence | null;
 }) {
   const id = useId();
   const [more, setMore] = useState(false);
@@ -797,6 +815,15 @@ function Attribute({
           </span>
         ) : null}
       </p>
+      {/* A person's tickmark and the ways to add evidence (section 10.13), above what
+          the check found, which stays below as it was. */}
+      <AttributeTickmark
+        line={line}
+        letter={row.letter}
+        files={files}
+        tickmark={tickmark}
+        addEvidence={addEvidence}
+      />
       {table.length > 0 ? (
         <ul className="cdg-rows">
           {table.map((each) => {
@@ -995,6 +1022,8 @@ export function CheckDigestView({
   accept,
   acceptNote,
   details,
+  tickmark = null,
+  addEvidence = null,
 }: {
   digest: CheckDigest;
   /** The request's title, said quietly over an opened attribute. */
@@ -1028,6 +1057,11 @@ export function CheckDigestView({
   /** What "All details" opens to: the request and the check's details, as the row
    * draws them. */
   details: ReactNode;
+  /** The row's calls for a person's tickmark on an attribute (section 10.13); null for a
+   * person who may not act. */
+  tickmark?: DigestTickmarkAction | null;
+  /** The row's own ways to add evidence; null for a person who may not act. */
+  addEvidence?: DigestAddEvidence | null;
 }) {
   const id = useId();
   const root = useRef<HTMLDivElement>(null);
@@ -1420,6 +1454,8 @@ export function CheckDigestView({
                 passage={passage}
                 onEvidence={onEvidence}
                 finding={finding}
+                tickmark={tickmark}
+                addEvidence={addEvidence}
               />
             );
           })}

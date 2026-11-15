@@ -1403,9 +1403,23 @@ describe("the review on the request's row", () => {
     assert.equal(two?.check.line, one?.check.line);
     assert.deepEqual(two?.implementedIds, one?.implementedIds);
     assert.deepEqual(two?.elementFacts, one?.elementFacts);
+    // Changed 14 November 2026 (docs/evidence-assurance.md, section 10.13, tickmarks).
+    // Old: every field but engine 2's comparisons (`checks`) was the same for both
+    // engines. New: `contradicted` is left out too: like the comparisons it is read from
+    // what engine 2 records (its assessment CONTRADICTED, here the failed comparison on
+    // D), which an engine 1 run has not, exactly as the server reads it; it decides only
+    // which tickmarks are offered. Everything the row shows is still the same.
     assert.deepEqual(
-      two?.check.attributes.map(({ checks: _checks, ...line }) => line),
-      one?.check.attributes.map(({ checks: _checks, ...line }) => line),
+      two?.check.attributes.map(
+        ({ checks: _checks, contradicted: _contradicted, ...line }) => line,
+      ),
+      one?.check.attributes.map(
+        ({ checks: _checks, contradicted: _contradicted, ...line }) => line,
+      ),
+    );
+    assert.equal(
+      two?.check.attributes.find((line) => line.letter === "D")?.contradicted,
+      true,
     );
   });
 

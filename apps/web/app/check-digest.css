@@ -1120,6 +1120,302 @@ button.ei-brief-more[aria-expanded="true"] > svg {
   }
 }
 
+/* --------------------------------------------------------------------------
+   A person's tickmark on an attribute (docs/evidence-assurance.md, section
+   10.13; attribute-tickmark.tsx): "Add evidence" and "Tickmark" under the
+   status line, the disposition that stands with Change and Reopen, the form
+   in place, and the history. Quiet: a neutral panel, a status colour only on
+   the words' mark, and the danger tone only for a person's exception.
+   -------------------------------------------------------------------------- */
+
+.cdg-tm-wrap {
+  display: grid;
+  gap: 0.7rem;
+  min-width: 0;
+}
+
+.cdg-tm-wrap:empty {
+  display: none;
+}
+
+.cdg-tm-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: -0.2rem;
+}
+
+.cdg-tm-bar .btn {
+  gap: 0.35rem;
+}
+
+.cdg-tm {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+  padding: 0.75rem 0.95rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.cdg-tm-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.75rem;
+  align-items: center;
+  min-width: 0;
+}
+
+.cdg-tm-head > h6 {
+  font-size: var(--fs-base);
+}
+
+.cdg-tm-by {
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+.cdg-tm-acts {
+  display: inline-flex;
+  gap: 0.25rem;
+  margin-left: auto;
+}
+
+.cdg-tm-reason {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.cdg-tm-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.6rem;
+  align-items: baseline;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cdg-tm-done {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: center;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.cdg-tm-done > svg {
+  color: var(--success);
+}
+
+.cdg-tm-done:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.cdg-tm-history {
+  display: grid;
+  gap: 0.4rem;
+  justify-items: start;
+}
+
+.cdg-tm-history > ul {
+  display: grid;
+  gap: 0.55rem;
+  width: 100%;
+  padding-left: 0.8rem;
+  border-left: 2px solid var(--border);
+  animation: tar-open 200ms ease;
+}
+
+.cdg-tm-history li > p:first-child {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.1rem 0.6rem;
+  align-items: baseline;
+}
+
+.cdg-tm-ended {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+/* The form, in place. */
+.cdg-tmf {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 0.9rem 0.95rem;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  animation: tar-open 200ms ease;
+}
+
+.cdg-tmf.is-reopen {
+  gap: 0.4rem;
+  padding: 0.6rem 0 0;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+}
+
+.cdg-tmf-title {
+  font-size: var(--fs-md);
+  font-weight: 650;
+}
+
+.cdg-tmf-note {
+  display: flex;
+  gap: 0.4rem;
+  align-items: baseline;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.cdg-tmf-note > svg {
+  flex: none;
+  align-self: center;
+}
+
+.cdg-tmf fieldset {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.cdg-tmf legend,
+.cdg-tmf-field > label,
+.cdg-tmf.is-reopen > label {
+  margin-bottom: 0.15rem;
+  padding: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+}
+
+.cdg-tmf-kind {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.cdg-tmf-kind:hover {
+  background: var(--surface-hover);
+}
+
+.cdg-tmf-kind:has(input:checked) {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+.cdg-tmf-kind > input {
+  margin-top: 0.2rem;
+}
+
+.cdg-tmf-kind > span {
+  display: grid;
+  gap: 0.05rem;
+  min-width: 0;
+}
+
+.cdg-tmf-kind strong {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.cdg-tmf-hint {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.cdg-tmf-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.cdg-tmf-add > select {
+  width: auto;
+  max-width: 100%;
+  height: 28px;
+  font-size: var(--fs-sm);
+}
+
+.cdg-tmf-field {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.cdg-tmf textarea {
+  min-height: 3.2rem;
+}
+
+.cdg-tmf textarea[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.cdg-tmf-optional {
+  color: var(--text-tertiary);
+  font-weight: 500;
+}
+
+.cdg-tmf-count {
+  justify-self: end;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.cdg-tmf-count.is-over {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.cdg-tmf-error {
+  color: var(--danger);
+  font-size: var(--fs-sm);
+}
+
+.cdg-tmf-problem {
+  padding: 0.5rem 0.7rem;
+  color: var(--danger);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.cdg-tmf-acts {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+/* A person's exception, on its item under "Needs attention". */
+.cdg-item-tickmark {
+  flex: none;
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
 @media (max-width: 640px) {
   .cdg {
     --cdg-pad: 0.75rem;
@@ -1134,8 +1430,14 @@ button.ei-brief-more[aria-expanded="true"] > svg {
   .cdg-details,
   .cdg-more-body,
   .cdg-asks .cdg-asks,
-  .ei-brief-body {
+  .ei-brief-body,
+  .cdg-tmf,
+  .cdg-tm-history > ul {
     animation: none;
+  }
+
+  .cdg-tmf-kind {
+    transition: none;
   }
 
   button.cdg-link,

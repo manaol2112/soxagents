@@ -11,13 +11,22 @@ import {
   useTransition,
 } from "react";
 import { HeldPicker, PolicyPicker } from "./add-evidence-menu";
+import type {
+  DigestAddEvidence,
+  DigestTickmarkAction,
+} from "./attribute-tickmark";
 import { AutoRefresh } from "./auto-refresh";
 import {
   CheckDigestView,
   type DigestAcceptAction,
   type DigestAskAction,
 } from "./check-digest";
-import { checkDigest, type DigestExtra, fileRef } from "./check-digest-model";
+import {
+  checkDigest,
+  type DigestExtra,
+  fileRef,
+  tickmarkOffer,
+} from "./check-digest-model";
 import { ControlSend } from "./control-send";
 import type { ActivityItem } from "./control-workspace-model";
 import {
@@ -35,12 +44,18 @@ import {
   useRequestAction,
 } from "./design-requests";
 import type { RequestRow as RequestsRow } from "./design-requests-model";
-import type { AnnotationAsk } from "./evidence-annotations-model";
+import {
+  type AnnotationAsk,
+  type AnnotationSet,
+  annotationsQuery,
+  parseAnnotations,
+} from "./evidence-annotations-model";
 import {
   assuranceProblem,
   type CheckAction,
   CONSIDERATIONS_TITLE,
   checkPollDelay,
+  dispositionProblem,
   FILES_TITLE,
   offeredAction,
   RESOLVED_TITLE,
@@ -320,6 +335,123 @@ function useAssuranceAction(ids: Ids) {
     pending: pending || busy !== "",
     problem,
   };
+}
+
+/**
+ * A person's tickmark on an attribute of a finished check (docs/evidence-assurance.md,
+ * section 10.13): recorded, or reopened, through the same route as a check
+ * (/workspace/evidence-assurance, intents "disposition" and "reopen-disposition", which
+ * assuranceWrite checks). It answers the server's refusal in one sentence, or null only
+ * once the server has confirmed it; the list is then read again in place (no reload).
+ * A refusal because something changed under the person (409) reads it again too.
+ */
+function useTickmarkAction(ids: Ids) {
+  const router = useRouter();
+  const [, startTransition] = useTransition();
+  // A second press while the first is on its way sends nothing.
+  const sending = useRef(false);
+  async function send(fields: Record<string, unknown>): Promise<string | null> {
+    if (sending.current) {
+      return "The last tickmark is still being recorded. Wait for it, then try again.";
+    }
+    sending.current = true;
+    let status = 0;
+    let detail = "";
+    try {
+      const response = await fetch("/workspace/evidence-assurance", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          organization_id: ids.organizationId,
+          project_id: ids.projectId,
+          control_id: ids.controlId,
+          ...fields,
+        }),
+      });
+      const body = (await response.json()) as {
+        status?: unknown;
+        detail?: unknown;
+      };
+      status = typeof body.status === "number" ? body.status : 0;
+      detail = typeof body.detail === "string" ? body.detail : "";
+    } catch {
+      status = 0;
+    }
+    sending.current = false;
+    const problem = dispositionProblem(status, detail);
+    if (problem === null || status === 409) {
+      startTransition(() => router.refresh());
+    }
+    return problem;
+  }
+  return {
+    record: (
+      requirementId: string,
+      attributeId: string,
+      fields: Record<string, string>,
+    ) =>
+      send({
+        intent: "disposition",
+        requirement_id: requirementId,
+        attribute_id: attributeId,
+        ...fields,
+      }),
+    reopen: (
+      requirementId: string,
+      attributeId: string,
+      version: number,
+      reason: string,
+    ) =>
+      send({
+        intent: "reopen-disposition",
+        requirement_id: requirementId,
+        attribute_id: attributeId,
+        version,
+        reason,
+      }),
+  };
+}
+
+/** The annotations of a request's files, as the evidence reviewer reads them (the
+ * annotations route): each file's own, or null where none could be read. Read only. */
+async function readRequestAnnotations(
+  ids: Ids,
+  requirementId: string,
+  fileIds: readonly string[],
+): Promise<AnnotationSet[] | null> {
+  const each = await Promise.all(
+    fileIds.map(async (fileId) => {
+      try {
+        const response = await fetch(
+          `/workspace/evidence-annotations?${annotationsQuery({
+            organizationId: ids.organizationId,
+            projectId: ids.projectId,
+            controlId: ids.controlId,
+            requirementId,
+            fileId,
+          })}`,
+          { cache: "no-store" },
+        );
+        const body = (await response.json()) as {
+          status?: unknown;
+          result?: unknown;
+        };
+        if (body.status === 404 || body.status === 403) {
+          // A file with no annotations for this request is not a fault.
+          return null;
+        }
+        return body.status === 200 ? parseAnnotations(body.result) : undefined;
+      } catch {
+        return undefined;
+      }
+    }),
+  );
+  if (each.some((set) => set === undefined)) {
+    return null;
+  }
+  return each.filter(
+    (set): set is AnnotationSet => set !== null && set !== undefined,
+  );
 }
 
 /**
@@ -1113,7 +1245,13 @@ export function DesignEvidence({
               : `add-${evidence.itemId ?? ""}`
           }
           open={evidence}
-          onClose={() => setEvidence(null)}
+          onClose={() => {
+            // What opened it carries on (a tickmark's form reads its annotations again).
+            const after =
+              evidence.mode === "review" ? evidence.onClosed : undefined;
+            setEvidence(null);
+            after?.();
+          }}
           ids={ids}
           plan={plan}
           register={intelligence.register}
@@ -1229,6 +1367,19 @@ function Row({
   // The assurance chain's check of the request, and the findings its issues are.
   const assured = row.assurance;
   const findingsAction = useFindingsAction(ids);
+  const tickmarks = useTickmarkAction(ids);
+  // "Use a file the control holds", chosen from an attribute's "Add evidence": the
+  // picker opens under the check and takes the focus.
+  const heldRef = useRef<HTMLDivElement>(null);
+  const [heldAsked, setHeldAsked] = useState(false);
+  useEffect(() => {
+    if (picker === "held" && heldAsked) {
+      const box = heldRef.current;
+      box?.scrollIntoView({ block: "nearest" });
+      box?.querySelector<HTMLElement>("select, input, button")?.focus();
+      setHeldAsked(false);
+    }
+  }, [picker, heldAsked]);
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
   // A finished check is the row's first screen (section 10.12): the request's wording
   // and its files open on request.
@@ -1970,24 +2121,26 @@ function Row({
         />
       ) : null}
       {picker === "held" ? (
-        <HeldPicker
-          held={held}
-          onCancel={() => setPicker(null)}
-          onLink={async (fileId, reason) => {
-            if (
-              await action.run(`link-${item.id}`, {
-                intent: "link",
-                requirement_id: item.id,
-                file_id: fileId,
-                reason,
-                version: item.version,
-              })
-            ) {
-              setPicker(null);
-              onDone("File added to the request.");
-            }
-          }}
-        />
+        <div ref={heldRef}>
+          <HeldPicker
+            held={held}
+            onCancel={() => setPicker(null)}
+            onLink={async (fileId, reason) => {
+              if (
+                await action.run(`link-${item.id}`, {
+                  intent: "link",
+                  requirement_id: item.id,
+                  file_id: fileId,
+                  reason,
+                  version: item.version,
+                })
+              ) {
+                setPicker(null);
+                onDone("File added to the request.");
+              }
+            }}
+          />
+        </div>
       ) : null}
       {canAct && asking !== null ? (
         <AskForm
@@ -2081,6 +2234,52 @@ function Row({
       ) : null}
     </>
   );
+  // A person's tickmark on an attribute of the finished check, and the row's own ways
+  // to add evidence from it (section 10.13): only for a person who may act.
+  const tickmark: DigestTickmarkAction | null =
+    canAct && assured !== null
+      ? {
+          offer: (line) => tickmarkOffer(assured.check, line, canAct),
+          record: (attributeId, fields) =>
+            tickmarks.record(item.id, attributeId, fields),
+          reopen: (attributeId, version, reason) =>
+            tickmarks.reopen(item.id, attributeId, version, reason),
+          annotations: () =>
+            readRequestAnnotations(
+              ids,
+              item.id,
+              rowFiles.map((file) => file.id),
+            ),
+          addAnnotation: (fileId, attributeId, back) =>
+            onDialog({
+              mode: "review",
+              fileId,
+              requirementId: item.id,
+              add: { attributeId },
+              onClosed: back,
+            }),
+          openAnnotation: (fileId, annotationId) =>
+            onDialog({
+              mode: "review",
+              fileId,
+              requirementId: item.id,
+              annotationId,
+            }),
+        }
+      : null;
+  const unavailable = (key: MenuKey) =>
+    menuEntries.find((each) => each.key === key)?.unavailable ?? null;
+  const addEvidence: DigestAddEvidence | null = canAct
+    ? {
+        upload: () => onUpload(),
+        uploadOff: locked ? lockedWhy : unavailable("upload"),
+        held: () => {
+          setPicker("held");
+          setHeldAsked(true);
+        },
+        heldOff: locked ? lockedWhy : unavailable("held"),
+      }
+    : null;
   const check =
     assured !== null && row.reading === 0 ? (
       <CheckOfRequest
@@ -2145,6 +2344,8 @@ function Row({
             : null
         }
         acceptNote={assured.acceptNote}
+        tickmark={tickmark}
+        addEvidence={addEvidence}
         picked={picked}
         onPick={(findingId, on) =>
           setPicked((current) => {
@@ -2582,6 +2783,8 @@ function CheckOfRequest({
   ask,
   accept,
   acceptNote,
+  tickmark,
+  addEvidence,
 }: {
   check: RequestCheck;
   /** The row's in-force files. */
@@ -2621,6 +2824,10 @@ function CheckOfRequest({
   accept: DigestAcceptAction | null;
   /** The row's warning about accepting. */
   acceptNote: string;
+  /** A person's tickmark on an attribute (section 10.13); null for one who may not act. */
+  tickmark: DigestTickmarkAction | null;
+  /** The row's own ways to add evidence; null for a person who may not act. */
+  addEvidence: DigestAddEvidence | null;
 }) {
   const action = offer(check.action);
   // The finished check as its first screen; null while it is anything else.
@@ -2850,6 +3057,8 @@ function CheckOfRequest({
         accept={accept}
         acceptNote={acceptNote}
         details={details}
+        tickmark={tickmark}
+        addEvidence={addEvidence}
       />
     </div>
   );
