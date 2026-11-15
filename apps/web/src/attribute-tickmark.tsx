@@ -113,7 +113,7 @@ type Choices = {
  * every keystroke: a polite announcement only where the text crosses the limit, either
  * way, and when the form is sent (`submits` grows).
  */
-function Count({
+export function Count({
   id,
   used,
   max,

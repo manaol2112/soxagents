@@ -324,6 +324,146 @@ function parseEnded(value: unknown): EndedDisposition | null {
   };
 }
 
+// A person's decision on a file's reliability (docs/evidence-assurance.md, section 10.14)
+
+/** "Reliability established on my review" and "Not relied on". */
+export const RELIABILITY_KINDS = [
+  "ESTABLISHED_ON_REVIEW",
+  "NOT_RELIED_ON",
+] as const;
+export type ReliabilityKind = (typeof RELIABILITY_KINDS)[number];
+export const RELIABILITY_ENDINGS = [
+  "REPLACED",
+  "REOPENED",
+  "FILE_GONE",
+] as const;
+/** OTHER: an ending this page does not know; said as no longer standing, nothing more. */
+export type ReliabilityEnding = (typeof RELIABILITY_ENDINGS)[number] | "OTHER";
+
+/** The bounds of a decision's texts (section 10.14): a reason of 10 to 1000 characters,
+ * and, for "Reliability established on my review", what was relied on, 10 to 600. */
+export const RELIABILITY_BOUNDS = {
+  reasonMin: 10,
+  reasonMax: 1000,
+  reliedOnMin: 10,
+  reliedOnMax: 600,
+  history: 10,
+  files: 60,
+} as const;
+
+export type ReliabilityDecision = {
+  id: string;
+  kind: ReliabilityKind;
+  reason: string;
+  /** What was relied on ("Reliability established on my review" only); "" otherwise. */
+  reliedOn: string;
+  recordedBy: string;
+  recordedAt: string;
+};
+
+export type EndedReliability = ReliabilityDecision & {
+  endedAt: string;
+  /** Null where no person ended it (the file is no longer on the request). */
+  endedBy: string | null;
+  endedAs: ReliabilityEnding;
+  endedReason: string;
+};
+
+/** One file of the check's review whose reliability is not established, or that carries
+ * a decision: the server's `file_reliability` entry. */
+export type FileReliability = {
+  fileId: string;
+  /** The check's own sentence on the file's reliability; "" where it sent none. */
+  question: string;
+  /** The decision that stands; null where none does, or where what the server sent is
+   * not one (the file's reliability then waits on the person, as the check left it). */
+  decision: ReliabilityDecision | null;
+  /** The ended ones, newest first, at most 10. */
+  history: EndedReliability[];
+};
+
+/**
+ * A decision as the server sent it, or null. Strict: a kind this page does not know, an
+ * id that is not one, or "Reliability established on my review" without what was relied
+ * on is not taken, so it never settles a file: the file's reliability stays open.
+ */
+function parseReliabilityDecision(value: unknown): ReliabilityDecision | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const id = uuidOrNull(value.id);
+  const kind = RELIABILITY_KINDS.find((item) => item === value.kind) ?? null;
+  const reliedOn = str(value.relied_on).slice(
+    0,
+    RELIABILITY_BOUNDS.reliedOnMax,
+  );
+  if (
+    id === null ||
+    kind === null ||
+    (kind === "ESTABLISHED_ON_REVIEW" && reliedOn === "")
+  ) {
+    return null;
+  }
+  return {
+    id,
+    kind,
+    reason: str(value.reason).slice(0, RELIABILITY_BOUNDS.reasonMax),
+    reliedOn: kind === "ESTABLISHED_ON_REVIEW" ? reliedOn : "",
+    recordedBy: str(value.recorded_by_name).slice(0, 120),
+    recordedAt: str(value.recorded_at).slice(0, 40),
+  };
+}
+
+/** An ended decision; null where it is not one. An ending this page does not know is
+ * kept, said only as no longer standing. */
+function parseEndedReliability(value: unknown): EndedReliability | null {
+  const said = parseReliabilityDecision(value);
+  if (said === null || !isRecord(value)) {
+    return null;
+  }
+  return {
+    ...said,
+    endedAt: str(value.ended_at).slice(0, 40),
+    endedBy: str(value.ended_by_name).slice(0, 120) || null,
+    endedAs:
+      RELIABILITY_ENDINGS.find((item) => item === value.ended_as) ?? "OTHER",
+    endedReason: str(value.ended_reason).slice(0, RELIABILITY_BOUNDS.reasonMax),
+  };
+}
+
+function parseFileReliability(value: unknown): FileReliability | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const fileId = uuidOrNull(value.file_id);
+  if (fileId === null) {
+    return null;
+  }
+  return {
+    fileId,
+    question: str(value.question).slice(0, 600),
+    decision: parseReliabilityDecision(value.decision),
+    history: (Array.isArray(value.history) ? value.history : [])
+      .map(parseEndedReliability)
+      .filter((item): item is EndedReliability => item !== null)
+      .filter(
+        (item, at, all) => all.findIndex((each) => each.id === item.id) === at,
+      )
+      .slice(0, RELIABILITY_BOUNDS.history),
+  };
+}
+
+/** The request's `file_reliability`, one entry per file; empty where the server sent
+ * none (a server from before section 10.14), so the page reads as it did. */
+function parseFileReliabilities(value: unknown): FileReliability[] {
+  return distinct(
+    (Array.isArray(value) ? value : [])
+      .map(parseFileReliability)
+      .filter((item): item is FileReliability => item !== null),
+    (item) => item.fileId,
+  ).slice(0, RELIABILITY_BOUNDS.files);
+}
+
 /** A file the gate left out of the readings; the run went ahead on the rest. */
 export type HeldFile = { fileId: string; code: HeldCode; reason: string };
 
@@ -473,6 +613,10 @@ export type AssuredRequest = {
   /** The review of a finished engine 2 check; null for engine 1, for a check that is
    * not finished and current, and where what the server sent is not a review. */
   review: Review | null;
+  /** Each file whose reliability the check's review does not establish, or that carries
+   * a person's decision (section 10.14). Empty unless the check is finished and current,
+   * and where the server sent none. */
+  fileReliability: FileReliability[];
 };
 
 /** The server's counts. Each is null where it sent none this page can read. */
@@ -1076,6 +1220,11 @@ function parseRequest(value: unknown): AssuredRequest | null {
       status === "REVIEWED" && engineVersion === 2
         ? parseReview(value.review, only)
         : null,
+    // Like the attributes: only of a finished, current check.
+    fileReliability:
+      status === "REVIEWED"
+        ? parseFileReliabilities(value.file_reliability)
+        : [],
   };
 }
 
@@ -1767,7 +1916,22 @@ export type RequestCheck = {
   /** Files the check read as the type they appear to be (engine 2): each named, with
    * the row's own action that confirms the type. Empty otherwise. */
   confirm: LeftOutLine[];
+  /** A finished check's files whose reliability is not established, or that carry a
+   * person's decision (section 10.14), in the row's file order; empty otherwise. */
+  reliability: ReliabilityLine[];
 };
+
+/** A file's reliability as the row shows it (section 10.14). */
+export type ReliabilityLine = FileReliability & {
+  /** The file's name; "A file no longer on this request" where it is not one of the
+   * row's in-force files. */
+  name: string;
+  /** Whether it is one of the row's in-force files: a decision is offered only then. */
+  inForce: boolean;
+};
+
+/** What a file the row no longer holds is called. */
+export const FILE_NOT_ON_REQUEST = "A file no longer on this request";
 
 /** A sentence as the server sent it, closed with a full stop. */
 function sentence(text: string): string {
@@ -1870,6 +2034,7 @@ export function requestCheck(
     notAsked: [],
     review: null,
     confirm: [],
+    reliability: [],
   };
   if (request.status === "NOT_CHECKED") {
     return {
@@ -1992,6 +2157,25 @@ export function requestCheck(
             ? fileAction(item.code, item.fileId)
             : null,
       })),
+    // Each file's reliability as the server says it, in the row's file order; one the
+    // row no longer holds last, said as such, and never offered a decision.
+    reliability: request.fileReliability
+      .map((item) => {
+        const at = files.findIndex((file) => file.id === item.fileId);
+        return {
+          at,
+          line: {
+            ...item,
+            name: at < 0 ? FILE_NOT_ON_REQUEST : nameOf(item.fileId),
+            inForce: at >= 0,
+          },
+        };
+      })
+      .sort(
+        (a, b) =>
+          (a.at < 0 ? files.length : a.at) - (b.at < 0 ? files.length : b.at),
+      )
+      .map((item) => item.line),
   };
 }
 
@@ -2549,6 +2733,7 @@ export function notChecked(requirementId: string): AssuredRequest {
     engineVersion: 1,
     engine: 1,
     review: null,
+    fileReliability: [],
   };
 }
 
@@ -2954,13 +3139,17 @@ type AssuranceWrite =
   | { error: "invalid" };
 
 /** The intents the /workspace/evidence-assurance route takes: running a check
- * ("rerun", "upgrade"), and a person's disposition of an attribute (section 10.13):
- * "disposition" records one, "reopen-disposition" reopens the one that stands. */
+ * ("rerun", "upgrade"), a person's disposition of an attribute (section 10.13):
+ * "disposition" records one, "reopen-disposition" reopens the one that stands; and a
+ * person's decision on a file's reliability (section 10.14): "file-reliability" records
+ * one, "reopen-file-reliability" reopens the one that stands. */
 export const ASSURANCE_INTENTS = [
   "rerun",
   "upgrade",
   "disposition",
   "reopen-disposition",
+  "file-reliability",
+  "reopen-file-reliability",
 ] as const;
 
 /** A person's text as it is sent: one line, its length within the contract's bounds. */
@@ -3028,15 +3217,62 @@ function dispositionBody(fields: Fields): Record<string, unknown> | null {
   };
 }
 
+/** The reason a decision on a file's reliability carries, or null where it is not one
+ * the server takes (10 to 1000 characters). */
+function reliabilityReason(value: unknown): string | null {
+  const reason = personText(value);
+  return reason !== null &&
+    reason.length >= RELIABILITY_BOUNDS.reasonMin &&
+    reason.length <= RELIABILITY_BOUNDS.reasonMax
+    ? reason
+    : null;
+}
+
+/** The body of a decision on a file's reliability, checked as section 10.14 shapes it;
+ * null where it is not one: a kind of the two, a reason of 10 to 1000 characters, what
+ * was relied on (10 to 600) with "Reliability established on my review", which needs
+ * it, and never with "Not relied on", and `replaces`, always said (the id of the
+ * decision seen standing, or null for none). */
+function reliabilityBody(fields: Fields): Record<string, unknown> | null {
+  const kind = RELIABILITY_KINDS.find((item) => item === fields.kind) ?? null;
+  const reason = reliabilityReason(fields.reason);
+  const reliedOn =
+    fields.relied_on === undefined || fields.relied_on === null
+      ? ""
+      : personText(fields.relied_on);
+  const replaces = replacesOf(fields);
+  if (
+    replaces === undefined ||
+    kind === null ||
+    reason === null ||
+    reliedOn === null ||
+    reliedOn.length > RELIABILITY_BOUNDS.reliedOnMax ||
+    (kind === "ESTABLISHED_ON_REVIEW") !==
+      reliedOn.length >= RELIABILITY_BOUNDS.reliedOnMin ||
+    (kind === "NOT_RELIED_ON" && reliedOn !== "")
+  ) {
+    return null;
+  }
+  return {
+    kind,
+    reason,
+    ...(kind === "ESTABLISHED_ON_REVIEW" ? { relied_on: reliedOn } : {}),
+    replaces,
+  };
+}
+
 /** The API call behind "Check again", "Check now" and "Check again with the current
  * engine" (the /workspace/evidence-assurance route): POST
  * .../evidence-assurance/{requirement_id}/rerun, or /upgrade, with no body; and behind a
  * tickmark: POST .../{requirement_id}/attributes/{attribute_id}/disposition with
  * {kind, reason, relied_on?, annotation_id?, replaces} (`replaces`: the id of the
  * disposition the person saw standing, or null), or .../disposition/reopen with
- * {id, reason} (`id`: the disposition the person saw standing and reopens). Each act
- * names what the person saw, so that the server refuses it, in its own sentence, where
- * the page is stale. Anything else is not sent. */
+ * {id, reason} (`id`: the disposition the person saw standing and reopens); and behind a
+ * decision on a file's reliability (section 10.14): POST
+ * .../{requirement_id}/files/{file_id}/reliability with {kind, reason, relied_on?,
+ * replaces}, or .../reliability/reopen with {id, reason}. Each act names what the person
+ * saw, so that the server refuses it, in its own sentence, where the page is stale.
+ * Anything else is not sent. */
 export function assuranceWrite(fields: Fields): AssuranceWrite {
   const [organizationId, projectId, controlId, requirementId] = [
     "organization_id",
@@ -3056,6 +3292,22 @@ export function assuranceWrite(fields: Fields): AssuranceWrite {
   const base = `/organizations/${organizationId}/projects/${projectId}/controls/${controlId}/evidence-assurance/${requirementId}`;
   if (intent === "rerun" || intent === "upgrade") {
     return { path: `${base}/${intent}` };
+  }
+  if (intent === "file-reliability" || intent === "reopen-file-reliability") {
+    const fileId = str(fields.file_id);
+    if (!UUID.test(fileId)) {
+      return { error: "invalid" };
+    }
+    const path = `${base}/files/${fileId}/reliability`;
+    if (intent === "file-reliability") {
+      const body = reliabilityBody(fields);
+      return body === null ? { error: "invalid" } : { path, body };
+    }
+    const reason = reliabilityReason(fields.reason);
+    const id = fields.id;
+    return reason === null || typeof id !== "string" || !UUID.test(id)
+      ? { error: "invalid" }
+      : { path: `${path}/reopen`, body: { id, reason } };
   }
   const attributeId = str(fields.attribute_id);
   if (!UUID.test(attributeId)) {
@@ -3096,6 +3348,30 @@ export function dispositionProblem(status: number, detail = ""): string | null {
     return "The tickmark was not in a form the server takes. Check the reason and try again.";
   }
   return "The tickmark could not be recorded. Try again in a moment.";
+}
+
+/** What a person reads when a decision on a file's reliability, or reopening one, did
+ * not go through; null when the server confirmed it. A refusal is the server's own
+ * sentence. */
+export function reliabilityProblem(status: number, detail = ""): string | null {
+  if (status === 200) {
+    return null;
+  }
+  if (status === 409) {
+    return detail.trim() !== ""
+      ? sentence(detail.trim())
+      : "The decision could not be recorded as the request stands. The list is read again.";
+  }
+  if (status === 403) {
+    return "Your role cannot decide a file's reliability.";
+  }
+  if (status === 404) {
+    return "This request or file is no longer here. Refresh the page.";
+  }
+  if (status === 422) {
+    return "The decision was not in a form the server takes. Check the reason and try again.";
+  }
+  return "The decision could not be recorded. Try again in a moment.";
 }
 
 /** What a person reads when running the check did not go through; null when the

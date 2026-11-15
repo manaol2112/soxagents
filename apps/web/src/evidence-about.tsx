@@ -20,6 +20,7 @@ import { AutoRefresh } from "./auto-refresh";
 import type { ControlFiles } from "./engagement-model";
 import type { AboutPlace, AboutTab, PanelTab } from "./evidence-annotations";
 import type { AnnotationAsk } from "./evidence-annotations-model";
+import type { ReliabilityLine } from "./evidence-assurance-model";
 import { FileChanges } from "./evidence-change";
 import {
   instanceFor,
@@ -48,6 +49,11 @@ import { AnnotatedDialog } from "./evidence-opener";
 import type { EvidencePlan, PlanRequirement } from "./evidence-plan-model";
 import { Problem, usePlanAction } from "./evidence-plan-view";
 import type { EvidenceCitation } from "./evidence-preview-model";
+import {
+  FileReliability,
+  RELIABILITY_TITLE,
+  type ReliabilityAction,
+} from "./file-reliability";
 import { DataTable } from "./population-table";
 import type { ControlTest } from "./testing-model";
 import { UiIcon } from "./ui-icon";
@@ -59,6 +65,8 @@ import { UiIcon } from "./ui-icon";
  * read's "Read again"; the data of a spreadsheet or a population, with picking the
  * walkthrough instance where it is offered; population checks, samples and the instance;
  * the file's findings with their actions; "Remove from this request"; the file's history.
+ * On a D&I request whose check raises the file's reliability, "Reliability": what the
+ * check found, and a person's decision on it (docs/evidence-assurance.md, section 10.14).
  *
  * Each action keeps the server call, form and confirmation it had in the reviewer, and
  * nothing is shown as done before the server has answered. Opening the tab writes
@@ -86,6 +94,19 @@ export type AboutContext = {
   /** A file withdrawn from its request (the server confirmed it): the screen says so on
    * its list and closes the viewer, since the file no longer serves the request. */
   onWithdrawn?: ((message: string) => void) | undefined;
+  /** The file's reliability on the D&I request it was opened on (docs/evidence-assurance.md,
+   * section 10.14), where the request's finished check raises it or a person decided it;
+   * null otherwise. `action` is null for a person who may not act. */
+  reliability?:
+    | ((
+        requirementId: string,
+        fileId: string,
+      ) => {
+        line: ReliabilityLine;
+        ref: string;
+        action: ReliabilityAction | null;
+      } | null)
+    | undefined;
 };
 
 /** What the reviewer's own calls answer, and what is in progress: its route, unchanged. */
@@ -784,6 +805,8 @@ export function aboutApplies(context: AboutContext, fileId: string): boolean {
 export function aboutTabs(
   context: AboutContext,
   start?: "pick",
+  /** The D&I request the file was opened on: its reliability is said there. */
+  requirementId?: string,
 ): (fileId: string) => AboutTab | null {
   return (fileId) =>
     aboutApplies(context, fileId)
@@ -794,6 +817,7 @@ export function aboutTabs(
             fileId={fileId}
             place={place}
             start={start}
+            requirementId={requirementId}
           />
         )
       : null;
@@ -872,8 +896,13 @@ export function FileViewer({
   onClose: () => void;
 }) {
   const about = useMemo(
-    () => aboutTabs(context, open.pick === true ? "pick" : undefined),
-    [context, open.pick],
+    () =>
+      aboutTabs(
+        context,
+        open.pick === true ? "pick" : undefined,
+        open.requirementId,
+      ),
+    [context, open.pick, open.requirementId],
   );
   // What the reader's mapping cites in these files: boxed as "Cited", as the reviewer's
   // preview showed them.
@@ -924,11 +953,13 @@ function AboutThisFile({
   fileId,
   place,
   start,
+  requirementId,
 }: {
   context: AboutContext;
   fileId: string;
   place: AboutPlace;
   start?: "pick" | undefined;
+  requirementId?: string | undefined;
 }) {
   const [data, setData] = useState<DataView>(null);
   const [picked, setPicked] = useState<string | null>(null);
@@ -963,6 +994,11 @@ function AboutThisFile({
     return null;
   }
   const name = insight.file.fileName;
+  // The file's reliability on the request it was opened on, where its check raises it.
+  const reliability =
+    requirementId === undefined
+      ? null
+      : (context.reliability?.(requirementId, fileId) ?? null);
   const show = (citation: EvidenceCitation | null) => {
     setFocused(citation);
     if (citation !== null) {
@@ -1037,6 +1073,20 @@ function AboutThisFile({
           </p>
         ) : null}
       </section>
+
+      {reliability !== null ? (
+        // What the check found of the file's reliability, and a person's decision on it
+        // (docs/evidence-assurance.md, section 10.14), with the same calls as the first
+        // screen of the request.
+        <section className="ea-sec" aria-labelledby={`${uid}-reliability`}>
+          <h3 id={`${uid}-reliability`}>{RELIABILITY_TITLE}</h3>
+          <FileReliability
+            line={reliability.line}
+            fileRef={reliability.ref}
+            action={reliability.action}
+          />
+        </section>
+      ) : null}
 
       {table ? (
         <section className="ea-sec" aria-labelledby={`${uid}-data`}>

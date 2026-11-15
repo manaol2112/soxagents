@@ -13,7 +13,9 @@ import {
   absentOf,
   askLines,
   askText,
+  CHECK_PROPOSED,
   type CheckDigest,
+  calmUnderStatus,
   type DigestAsk,
   type DigestAttribute,
   type DigestPill,
@@ -33,6 +35,7 @@ import {
   type RowFile,
   type ShownPassage,
 } from "./evidence-assurance-model";
+import { FileReliability, type ReliabilityAction } from "./file-reliability";
 import { UiIcon } from "./ui-icon";
 
 /**
@@ -43,6 +46,11 @@ import { UiIcon } from "./ui-icon";
  * arrange what the model (check-digest-model) words and handle opening, stepping and
  * ticking. They send nothing and decide nothing: a file's action, a finding's decisions,
  * a passage's viewer, the follow-up form and Accept are the row's own, handed in.
+ *
+ * Section 10.14: the first line says what is left after the person's work (the model's
+ * status), and the check's outcome moves to a quiet "The check proposed: ..." line; a
+ * file whose reliability is not established is an item whose button opens its decision
+ * in place (file-reliability.tsx), sent through the row's own calls.
  */
 
 /** Said beside the verdict of every finished check: it is the check's proposal. */
@@ -185,6 +193,7 @@ function Item({
   act,
   onOpen,
   onView,
+  onReliability,
 }: {
   item: AttentionItem;
   digest: CheckDigest;
@@ -192,6 +201,8 @@ function Item({
   act: (action: CheckAction) => ReactNode;
   onOpen: (key: string) => void;
   onView: (key: string) => void;
+  /** Opens a file's reliability decision in place; null for a person who may not act. */
+  onReliability: ((fileId: string, from: HTMLElement) => void) | null;
 }) {
   const key = item.attributeKey;
   // The verdict counts the attributes the request asks for: an item on another says so.
@@ -311,6 +322,19 @@ function Item({
           </button>
         ) : null}
         {control.type === "ACT" ? act(control.action) : null}
+        {control.type === "RELIABILITY" && onReliability !== null ? (
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            data-cdg-reliability={control.fileId}
+            onClick={(event) =>
+              onReliability(control.fileId, event.currentTarget)
+            }
+          >
+            {control.label}
+            <span className="sr-only">{` the reliability of ${item.mark || "this file"}`}</span>
+          </button>
+        ) : null}
         {control.type === "VIEW" ? (
           <button
             type="button"
@@ -1029,6 +1053,7 @@ export function CheckDigestView({
   tickmark = null,
   addEvidence = null,
   read = null,
+  reliability = null,
 }: {
   digest: CheckDigest;
   /** The request's title, said quietly over an opened attribute. */
@@ -1070,8 +1095,50 @@ export function CheckDigestView({
   /** What anyone who can see the row may read of a tickmark (the annotation it rests
    * on); null where nothing can be read. */
   read?: DigestTickmarkRead | null;
+  /** The row's calls for a decision on a file's reliability (section 10.14); null for a
+   * person who may not act: the decisions are read, nothing is offered. */
+  reliability?: ReliabilityAction | null;
 }) {
   const id = useId();
+  // A file's reliability, open in place under "Needs attention": from its item's
+  // button (the form at once) or from the quiet line (the decision that stands).
+  const [relOpen, setRelOpen] = useState<{
+    fileId: string;
+    form: boolean;
+  } | null>(null);
+  const relOpener = useRef<HTMLElement | null>(null);
+  const relLine =
+    relOpen === null
+      ? null
+      : (digest.reliability.find((line) => line.fileId === relOpen.fileId) ??
+        null);
+  // The file is no longer listed once the list is read again: nothing is left open.
+  const relGone = relOpen !== null && relLine === null;
+  useEffect(() => {
+    if (relGone) {
+      setRelOpen(null);
+    }
+  }, [relGone]);
+  const openReliability = (
+    fileId: string,
+    from: HTMLElement,
+    form: boolean,
+  ) => {
+    relOpener.current = from;
+    setRelOpen({ fileId, form });
+  };
+  const closeReliability = () => {
+    const from = relOpener.current;
+    setRelOpen(null);
+    // Back to what opened it where it is still there (an item that left the list once
+    // decided is not), else to the first screen's heading.
+    window.setTimeout(() => {
+      (from?.isConnected === true
+        ? from
+        : root.current?.querySelector<HTMLElement>(".cdg-outcome")
+      )?.focus();
+    }, 0);
+  };
   const root = useRef<HTMLDivElement>(null);
   // The attribute shown alone, by its key: it stays when the list is read again, and
   // the first screen comes back where the check no longer has it.
@@ -1202,37 +1269,36 @@ export function CheckDigestView({
   // in favour ("Accepting marks attribute A as evidenced.") waits behind "more".
   const warning = accept !== null ? flat(acceptNote) : "";
   const { favour, caution } = acceptNoteParts(warning);
-  // Where nothing waits, the calm line is not the footer's own caution said again.
-  const calm = digest.calm === caution ? "" : digest.calm;
+  // Where nothing waits, the calm line is not the footer's own caution said again, nor
+  // what the status line already says (section 10.14).
+  const calm = digest.calm === caution ? "" : calmUnderStatus(digest);
 
   return (
     <div className="cdg" ref={root}>
       <div className="cdg-summary" hidden={current !== null}>
         <div className="cdg-verdict">
-          <div className="cdg-verdict-line">
-            {/* The review's own outcome, in its words; a check without a review has the
-                sentence alone. */}
-            <h5 className="cdg-outcome" tabIndex={-1}>
-              {digest.outcome !== null ? (
-                <>
-                  <span
-                    className={`cdg-dot is-${digest.outcome.tone}`}
-                    aria-hidden="true"
-                  />
+          {/* What is left after the person's work (section 10.14, A), first and large;
+              then the counts; then, quietly, the check's own outcome in its words, with
+              whose proposal it is. */}
+          <h5 className="cdg-outcome" tabIndex={-1}>
+            {digest.status}
+          </h5>
+          <p className="cdg-sentence">{digest.verdict}</p>
+          <p className="cdg-proposed-line">
+            {digest.outcome !== null ? (
+              <span className="cdg-check-said">
+                {CHECK_PROPOSED}{" "}
+                <span className={`cdg-state is-${digest.outcome.tone}`}>
+                  <span className="cdg-dot" aria-hidden="true" />
                   {digest.outcome.label}
-                </>
-              ) : (
-                digest.verdict
-              )}
-            </h5>
+                </span>
+              </span>
+            ) : null}
             <span className="cdg-proposed">
               <UiIcon name="sparkles" size={12} />
               {DIGEST_PROPOSED}
             </span>
-          </div>
-          {digest.outcome !== null ? (
-            <p className="cdg-sentence">{digest.verdict}</p>
-          ) : null}
+          </p>
           {upgrade}
         </div>
         {digest.attention.length > 0 ? (
@@ -1253,6 +1319,11 @@ export function CheckDigestView({
                   act={act}
                   onOpen={show}
                   onView={onView}
+                  onReliability={
+                    reliability === null
+                      ? null
+                      : (fileId, from) => openReliability(fileId, from, true)
+                  }
                 />
               ))}
             </ul>
@@ -1262,6 +1333,20 @@ export function CheckDigestView({
           // "nothing needs your attention" only where nothing says otherwise.
           <p className="cdg-calm">{calm}</p>
         ) : null}
+        {relOpen !== null && relLine !== null ? (
+          // A file's reliability, in place: the form its item opens, or the
+          // decision that stands; it stays open once recorded, with its confirmation.
+          <div className="cdg-rel-wrap">
+            <FileReliability
+              key={relLine.fileId}
+              line={relLine}
+              fileRef={fileRef(files, relLine.fileId)}
+              action={reliability}
+              startForm={relOpen.form}
+              onClose={closeReliability}
+            />
+          </div>
+        ) : null}
         {under}
         <div className="cdg-quiet">
           {digest.quiet.length > 0 ? (
@@ -1269,9 +1354,24 @@ export function CheckDigestView({
             <ul className="cdg-quiet-items">
               {digest.quiet.map((item) => {
                 const key = item.attributeKey;
+                const fileId = item.fileId;
                 return (
                   <li key={item.key} className={`is-${item.tone}`}>
-                    {key !== null ? (
+                    {fileId !== undefined ? (
+                      // A file whose reliability a person decided: its decision, in
+                      // place, with its own Close.
+                      <button
+                        type="button"
+                        className="cdg-link cdg-quiet-open"
+                        data-cdg-reliability={fileId}
+                        onClick={(event) =>
+                          openReliability(fileId, event.currentTarget, false)
+                        }
+                      >
+                        <UiIcon name={item.icon} size={13} />
+                        {item.text}
+                      </button>
+                    ) : key !== null ? (
                       <button
                         type="button"
                         className="cdg-link cdg-quiet-open"

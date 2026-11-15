@@ -72,6 +72,7 @@ import {
   type RequestCheck,
   type ReviewView,
   type RowFile,
+  reliabilityProblem,
   rereadProblem,
   type ShownPassage,
   STILL_CHECKING,
@@ -118,6 +119,8 @@ import { wizardItems } from "./evidence-wizard-model";
 import type { HeldFile } from "./evidence-workspace-model";
 import { linkableFiles } from "./evidence-workspace-model";
 import { fileLine } from "./evidence-workspace-view";
+import type { ReliabilityAction } from "./file-reliability";
+import { reliabilityOffer } from "./file-reliability-model";
 import { formatDate } from "./format";
 import { LocalTime } from "./local-time";
 import {
@@ -434,6 +437,105 @@ function useTickmarkAction(ids: Ids) {
   };
 }
 
+/**
+ * A person's decision on a file's reliability (docs/evidence-assurance.md, section 10.14):
+ * recorded, or reopened, through the same route as a check (/workspace/evidence-assurance,
+ * intents "file-reliability" and "reopen-file-reliability", which assuranceWrite checks).
+ * It answers the server's refusal in one sentence, or null only once the server has
+ * confirmed it; the list is then read again in place (no reload), and after a refusal
+ * because something changed under the person (409) too. Each act names the decision the
+ * person saw: a recording the one it replaces (`replaces`, null for none), a reopening the
+ * one it reopens (`id`). One for the list: the first screen and "About this file" share it.
+ */
+function useReliabilityAction(ids: Ids) {
+  const router = useRouter();
+  const [, startTransition] = useTransition();
+  // A second press while the first is on its way sends nothing.
+  const sending = useRef(false);
+  async function send(fields: Record<string, unknown>): Promise<string | null> {
+    if (sending.current) {
+      return "The last decision is still being recorded. Wait for it, then try again.";
+    }
+    sending.current = true;
+    let status = 0;
+    let detail = "";
+    try {
+      const response = await fetch("/workspace/evidence-assurance", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          organization_id: ids.organizationId,
+          project_id: ids.projectId,
+          control_id: ids.controlId,
+          ...fields,
+        }),
+      });
+      const body = (await response.json()) as {
+        status?: unknown;
+        detail?: unknown;
+      };
+      status = typeof body.status === "number" ? body.status : 0;
+      detail = typeof body.detail === "string" ? body.detail : "";
+    } catch {
+      status = 0;
+    }
+    sending.current = false;
+    const problem = reliabilityProblem(status, detail);
+    if (problem === null || status === 409) {
+      startTransition(() => router.refresh());
+    }
+    return problem;
+  }
+  return {
+    record: (
+      requirementId: string,
+      fileId: string,
+      fields: Record<string, string>,
+      replaces: string | null,
+    ) =>
+      send({
+        intent: "file-reliability",
+        requirement_id: requirementId,
+        file_id: fileId,
+        ...fields,
+        replaces,
+      }),
+    reopen: (
+      requirementId: string,
+      fileId: string,
+      id: string,
+      reason: string,
+    ) =>
+      send({
+        intent: "reopen-file-reliability",
+        requirement_id: requirementId,
+        file_id: fileId,
+        id,
+        reason,
+      }),
+  };
+}
+type ReliabilityCalls = ReturnType<typeof useReliabilityAction>;
+
+/** The calls for a decision on a request's file, as the request's check offers them:
+ * only to a person who may act, on a finished, current check, for a file in force. */
+function reliabilityFor(
+  calls: ReliabilityCalls,
+  requirementId: string,
+  check: RequestCheck,
+  canAct: boolean,
+): ReliabilityAction | null {
+  return canAct
+    ? {
+        offer: (line) => reliabilityOffer(check, line, canAct),
+        record: (fileId, fields, replaces) =>
+          calls.record(requirementId, fileId, fields, replaces),
+        reopen: (fileId, seen, reason) =>
+          calls.reopen(requirementId, fileId, seen, reason),
+      }
+    : null;
+}
+
 /** The annotations of a request's files, as the evidence reviewer reads them (the
  * annotations route): each file's own, or null where none could be read. Read only. */
 async function readRequestAnnotations(
@@ -606,6 +708,7 @@ export function DesignEvidence({
   const list = useRequestAction(ids);
   const policies = usePolicyEvidence(ids);
   const checks = useAssuranceAction(ids);
+  const reliabilityCalls = useReliabilityAction(ids);
   const requirements = new Map(
     plan.phases
       .flatMap((phase) => phase.requirements)
@@ -682,6 +785,27 @@ export function DesignEvidence({
       setViewing(null);
       setRemoved(null);
       setDone(message);
+    },
+    // A file's reliability on its request (section 10.14): what the request's finished
+    // check raises, the decision that stands, and the same calls as the first screen.
+    reliability: (requirementId, fileId) => {
+      const row = view.rows.find((each) => each.id === requirementId);
+      const check = row?.assurance?.check ?? null;
+      const line =
+        check === null || check.standing !== "REVIEWED"
+          ? undefined
+          : check.reliability.find((each) => each.fileId === fileId);
+      if (check === null || line === undefined) {
+        return null;
+      }
+      const held = (requirements.get(requirementId)?.files ?? []).map(
+        (file) => ({ id: file.fileId, name: file.name }),
+      );
+      return {
+        line,
+        ref: fileRef(held, fileId),
+        action: reliabilityFor(reliabilityCalls, requirementId, check, canAct),
+      };
     },
   };
   const opened = chosen ?? new Set(view.open !== null ? [view.open] : []);
@@ -986,6 +1110,7 @@ export function DesignEvidence({
                       analyses={intelligence.register?.analyses ?? []}
                       controlRef={controlRef}
                       checks={checks}
+                      reliabilityCalls={reliabilityCalls}
                       onCoverage={() =>
                         document
                           .getElementById(`${id}-coverage`)
@@ -1345,6 +1470,7 @@ function Row({
   analyses,
   controlRef,
   checks,
+  reliabilityCalls,
   onCoverage,
   onEdit,
   onAttributes,
@@ -1379,6 +1505,8 @@ function Row({
   controlRef: string;
   /** "Check again" on a file of the row. */
   checks: ReturnType<typeof useAssuranceAction>;
+  /** A person's decision on a file's reliability (section 10.14): the list's calls. */
+  reliabilityCalls: ReliabilityCalls;
   /** Shows which attributes the requests cover (the coverage under the list). */
   onCoverage: () => void;
   onEdit: () => void;
@@ -2350,6 +2478,12 @@ function Row({
       clearRefused();
     }
   }, [lostRefusal, standingNow, clearRefused]);
+  // A person's decision on a file's reliability (section 10.14): only for a person who may
+  // act; anyone who can see the row reads the decisions.
+  const fileReliability: ReliabilityAction | null =
+    assured !== null
+      ? reliabilityFor(reliabilityCalls, item.id, assured.check, canAct)
+      : null;
   const unavailable = (key: MenuKey) =>
     menuEntries.find((each) => each.key === key)?.unavailable ?? null;
   const addEvidence: DigestAddEvidence | null = canAct
@@ -2430,6 +2564,7 @@ function Row({
         tickmark={tickmark}
         addEvidence={addEvidence}
         read={tickmarkRead}
+        reliability={fileReliability}
         refused={lostRefusal}
         picked={picked}
         onPick={(findingId, on) =>
@@ -2871,6 +3006,7 @@ function CheckOfRequest({
   tickmark,
   addEvidence,
   read,
+  reliability,
   refused,
 }: {
   check: RequestCheck;
@@ -2917,6 +3053,9 @@ function CheckOfRequest({
   addEvidence: DigestAddEvidence | null;
   /** What anyone who can see the row may read of a tickmark. */
   read: DigestTickmarkRead | null;
+  /** A person's decision on a file's reliability (section 10.14); null for one who may
+   * not act. */
+  reliability: ReliabilityAction | null;
   /** A tickmark refused (409) whose attribute the check no longer shows: said on the
    * check's line, so it is never lost unread; null otherwise. */
   refused: string | null;
@@ -3154,6 +3293,7 @@ function CheckOfRequest({
         tickmark={tickmark}
         addEvidence={addEvidence}
         read={read}
+        reliability={reliability}
       />
     </div>
   );

@@ -156,6 +156,10 @@ export type EvidenceEntry = {
   /** The gate's sentence where the current check left the file out. */
   leftOut: string | null;
   image: boolean;
+  /** Where a person decided the file is not relied on (docs/evidence-assurance.md,
+   * section 10.14): the server's sentence, "Not relied on, recorded by ... Reason: ...".
+   * Absent where it sends none. */
+  notReliedOn?: string;
 };
 
 export type Reference = {
@@ -239,6 +243,10 @@ export type DesignWorkpaper = {
     report: string;
     source: string;
     procedure: string;
+    /** Where a person established the reliability of the file the row names on their
+     * review (section 10.14): the server's sentence (who, when and what was relied on),
+     * sent with the mark INSPECTED. Absent otherwise. */
+    inspected?: string;
   }>;
   matters: Matter[];
   conclusion: {
@@ -354,6 +362,10 @@ function evidenceOf(value: unknown): EvidenceEntry[] {
       reviewed: Math.min(count(item.reviewed), count(item.annotations)),
       leftOut: lineOrNull(item.left_out, 600),
       image: item.image === true,
+      // A person's decision that the file is not relied on: the server's sentence.
+      ...(line(item.not_relied_on, 1200) === ""
+        ? {}
+        : { notReliedOn: line(item.not_relied_on, 1200) }),
     });
     if (entries.length === LIMITS.evidence) {
       break;
@@ -562,6 +574,10 @@ export function parseDesignWorkpaper(value: unknown): DesignWorkpaper | null {
         report: line(report.report, 400),
         source: line(report.source, 400),
         procedure: line(report.procedure, 2000),
+        // The inspected mark only with the sentence that says who established it.
+        ...(report.mark === "INSPECTED" && line(report.established, 1200) !== ""
+          ? { inspected: line(report.established, 1200) }
+          : {}),
       }))
       .filter((report) => report.report !== "")
       .slice(0, 40),
@@ -1574,6 +1590,35 @@ export function startingSelection(
   const first = paper.evidence[0];
   return first === undefined ? null : { ref: first.ref, annotationId: null };
 }
+
+/** A report's row where a person established its reliability (section 10.14): the
+ * legend's mark for inspected parameters (◊ where the legend has none), its words, and
+ * the server's sentence (who, when and what was relied on). Null where no person did. It
+ * is a procedure on record, never a sign that more is shown. */
+export function reportInspected(
+  paper: Pick<DesignWorkpaper, "tickmarks">,
+  report: Pick<DesignWorkpaper["reports"][number], "inspected">,
+): { symbol: string; words: string; said: string } | null {
+  if (report.inspected === undefined) {
+    return null;
+  }
+  const listed = paper.tickmarks.find((item) => item.mark === "INSPECTED");
+  return {
+    symbol: listed?.symbol || "◊",
+    words: REPORT_INSPECTED,
+    said: report.inspected,
+  };
+}
+export const REPORT_INSPECTED = "Report parameters inspected";
+
+/** Said in the evidence index of a file a person decided not to rely on (section 10.14):
+ * the server's sentence; "" otherwise. */
+export function notReliedOnLine(
+  entry: Pick<EvidenceEntry, "notReliedOn">,
+): string {
+  return entry.notReliedOn ?? "";
+}
+export const NOT_RELIED_ON = "Not relied on";
 
 /** One line on a file of the index: what it is, its request, its annotations. */
 export function evidenceLine(entry: EvidenceEntry): string {

@@ -140,8 +140,20 @@ describe("the first screen of a finished check", () => {
     // Second review, item 2(b): where the model has nothing else to say, its calm line is
     // what the accept note cautions, which the footer already says beside Accept; the
     // screen does not say it twice. A person with no footer reads it here.
-    has(view, 'const calm = digest.calm === caution ? "" : digest.calm;');
-    assert.equal(count(digest, /digest\.calm\b/g), 2);
+    // Changed 14 November 2026 (docs/evidence-assurance.md, section 10.14, A). Old:
+    // `const calm = digest.calm === caution ? "" : digest.calm;`. New: the same, the
+    // model's calm line as it reads under the status line (calmUnderStatus), which drops
+    // only what the status line now says itself ("Nothing needs your attention.", what
+    // the tickmarks settle, or the caveats alone). The calm line stays the model's.
+    has(
+      view,
+      'const calm = digest.calm === caution ? "" : calmUnderStatus(digest);',
+    );
+    assert.equal(count(digest, /digest\.calm\b/g), 1);
+    assert.match(
+      model,
+      /return digest\.calm === DIGEST_NOTHING \|\|\s*digest\.calm\.startsWith\(DIGEST_TICKMARKED\) \|\|\s*digest\.calm === caveats\s*\? ""\s*: digest\.calm;/,
+    );
     assert.equal(/DIGEST_NOTHING\b/.test(digest), false);
     assert.equal(/Nothing needs your attention/.test(digest), false);
     // The model decides the words, and says the sentence only where nothing says
@@ -169,25 +181,42 @@ describe("the first screen of a finished check", () => {
       'const fine = (review === null || review.state === "SUFFICIENT") && asked.length > 0 && asked.every((row) => row.line.evidenced);',
     );
   });
-  it("leads with the review's own outcome, large, and one sentence; a check without a review has the sentence alone", () => {
+  it("leads with what is left after the person's work, large; then the counts; then the check's own outcome, quietly", () => {
+    // Changed 14 November 2026 (docs/evidence-assurance.md, section 10.14, A; the product
+    // owner: "I have added a tickmark on the evidence here but says still can't be
+    // concluded?"). Old: the heading was the review's own outcome with its mark ("Unable
+    // to conclude yet"), the sentence under it, and a check without a review had the
+    // sentence alone as its heading. New: the heading is the model's status line (what
+    // a person's work settled and what is left, or "Nothing waits on you."), the
+    // sentence under it for every check, and the check's outcome kept, in its own words
+    // with its mark, on a quiet line: "The check proposed: ...", with "Proposed for your
+    // review". What it protects is kept: the outcome is the review's own words, never
+    // reworded, and always said to be a proposal.
     inOrder(summary, [
+      "{digest.status}",
+      "{digest.verdict}",
+      "{CHECK_PROPOSED}",
       "{digest.outcome.label}",
-      "digest.verdict",
       "{DIGEST_PROPOSED}",
       "{upgrade}",
     ]);
-    // The outcome's words with a small mark; where there is no review, the sentence is
-    // the heading and is not said a second time under it.
     assert.match(
       summary,
-      /<h5 className="cdg-outcome" tabIndex=\{-1\}>\s*\{digest\.outcome !== null \? \(\s*<>\s*<span\s+className=\{`cdg-dot is-\$\{digest\.outcome\.tone\}`\}\s+aria-hidden="true"\s*\/>\s*\{digest\.outcome\.label\}\s*<\/>\s*\) : \(\s*digest\.verdict\s*\)\}/,
+      /<h5 className="cdg-outcome" tabIndex=\{-1\}>\s*\{digest\.status\}\s*<\/h5>\s*<p className="cdg-sentence">\{digest\.verdict\}<\/p>/,
     );
     assert.match(
       summary,
-      /\{digest\.outcome !== null \? \(\s*<p className="cdg-sentence">\{digest\.verdict\}<\/p>\s*\) : null\}/,
+      /\{digest\.outcome !== null \? \(\s*<span className="cdg-check-said">\s*\{CHECK_PROPOSED\}\{" "\}\s*<span className=\{`cdg-state is-\$\{digest\.outcome\.tone\}`\}>\s*<span className="cdg-dot" aria-hidden="true" \/>\s*\{digest\.outcome\.label\}/,
     );
-    assert.equal(count(summary, /digest\.verdict/g), 2);
+    assert.equal(count(summary, /digest\.verdict/g), 1);
+    assert.equal(count(summary, /digest\.status/g), 1);
+    assert.match(model, /export const CHECK_PROPOSED = "The check proposed:";/);
     assert.match(rule(css, ".cdg-outcome"), /font-size: var\(--fs-lg\);/);
+    // Quiet, and in tokens only.
+    assert.match(
+      rule(css, ".cdg-proposed-line"),
+      /color: var\(--text-tertiary\);/,
+    );
   });
 
   it("shows the result only for a finished check, and leaves every other standing its one line", () => {
@@ -439,10 +468,13 @@ describe("the first screen of a finished check", () => {
 
 describe("audit integrity of the first screen", () => {
   it("says the result is proposed on every finished check, whatever else it holds", () => {
-    // Not under a condition: the span follows the heading directly.
+    // Not under a condition. Changed 14 November 2026 (section 10.14, A). Old: the span
+    // followed the heading (the outcome) directly. New: it closes the quiet line that
+    // keeps the check's outcome, outside any condition, so every finished check still
+    // says its result is proposed.
     assert.match(
       summary,
-      /<\/h5>\n\s*<span className="cdg-proposed">\s*<UiIcon name="sparkles" size=\{12\} \/>\s*\{DIGEST_PROPOSED\}\s*<\/span>/,
+      /\) : null\}\s*<span className="cdg-proposed">\s*<UiIcon name="sparkles" size=\{12\} \/>\s*\{DIGEST_PROPOSED\}\s*<\/span>\s*<\/p>/,
     );
     assert.equal(count(digest, /\{DIGEST_PROPOSED\}/g), 1);
     // The outcome is the review's own words, and nothing on the screen words it again.
@@ -503,13 +535,21 @@ describe("audit integrity of the first screen", () => {
     );
     // An attribute with no item opens from the quiet line whatever its state (kind
     // SHOWN or OTHER_STATE): the button is drawn for every item that names one.
+    // Changed 14 November 2026 (section 10.14). Old: `{key !== null ? ( <button ...`
+    // first. New: a file whose reliability a person decided opens its decision first
+    // (`{fileId !== undefined ? ( <button ...`), then `) : key !== null ? (` as before;
+    // its words are the model's too, so `{item.text}` is drawn three times, not two.
     has(
       summary,
-      `{key !== null ? ( <button type="button" className="cdg-link cdg-quiet-open" data-cdg-open={key} onClick={() => show(key)} > <UiIcon name={item.icon} size={13} /> {item.text} </button>`,
+      `) : key !== null ? ( <button type="button" className="cdg-link cdg-quiet-open" data-cdg-open={key} onClick={() => show(key)} > <UiIcon name={item.icon} size={13} /> {item.text} </button>`,
+    );
+    has(
+      summary,
+      `{fileId !== undefined ? ( // A file whose reliability a person decided: its decision, in // place, with its own Close. <button type="button" className="cdg-link cdg-quiet-open" data-cdg-reliability={fileId} onClick={(event) => openReliability(fileId, event.currentTarget, false) } > <UiIcon name={item.icon} size={13} /> {item.text} </button>`,
     );
     assert.equal(/item\.kind === "(SHOWN|OTHER_STATE)"/.test(summary), false);
     // Its words are the model's, unchanged ("D shown (not asked for)", "A supported").
-    assert.equal(count(summary, /\{item\.text\}/g), 2);
+    assert.equal(count(summary, /\{item\.text\}/g), 3);
     assert.match(
       css,
       /\nbutton\.cdg-quiet-open,\nbutton\.cdg-quiet-open:hover:not\(:disabled\) \{\s*color: var\(--text-secondary\);/,
@@ -588,7 +628,14 @@ describe("audit integrity of the first screen", () => {
       item,
       '{control.type === "VIEW" ? ( <button type="button" className="btn btn-secondary btn-sm" data-cdg-view={item.key} onClick={() => onView(item.key)} > {control.label}',
     );
-    assert.equal(count(item, /\{control\.label\}/g), 2);
+    // Changed 14 November 2026 (section 10.14). Old: two controls drew the model's label
+    // (OPEN and VIEW). New: also RELIABILITY, a file's "Decide", drawn only where the row
+    // offers a decision (onReliability), with what it decides for a screen reader.
+    has(
+      item,
+      '{control.type === "RELIABILITY" && onReliability !== null ? ( <button type="button" className="btn btn-secondary btn-sm" data-cdg-reliability={control.fileId} onClick={(event) => onReliability(control.fileId, event.currentTarget) } > {control.label}',
+    );
+    assert.equal(count(item, /\{control\.label\}/g), 3);
     assert.match(item, /\{ASK_OWNER\}/);
   });
 
@@ -909,6 +956,10 @@ describe("what the result sends", () => {
     // the attribute view's tickmark, whose form sends through the row's own handlers
     // only: it too has no call, no route and no write of its own (checked below and in
     // attribute-tickmark-view.test.ts).
+    // Changed 14 November 2026 (section 10.14). Old: these five. New: also
+    // ./file-reliability, a file's reliability decision, whose form, like the tickmark's,
+    // sends through the row's own handlers only, with no call, route or write of its own
+    // (checked below and in file-reliability-view.test.ts).
     assert.deepEqual(
       [...digest.matchAll(/from "([^"]+)";/g)].map((match) => match[1]),
       [
@@ -916,9 +967,23 @@ describe("what the result sends", () => {
         "./attribute-tickmark",
         "./check-digest-model",
         "./evidence-assurance-model",
+        "./file-reliability",
         "./ui-icon",
       ],
     );
+    const reliability = read("apps/web/src/file-reliability.tsx");
+    for (const forbidden of [
+      /fetch\(/,
+      /XMLHttpRequest|sendBeacon|WebSocket/,
+      /method:/,
+      /intent:/,
+      /useRouter|router\./,
+      /\/workspace\//,
+      /localStorage|sessionStorage|document\.cookie/,
+      /location\.(reload|href|assign)/,
+    ]) {
+      assert.equal(forbidden.test(reliability), false, String(forbidden));
+    }
     const tickmark = read("apps/web/src/attribute-tickmark.tsx");
     for (const forbidden of [
       /fetch\(/,

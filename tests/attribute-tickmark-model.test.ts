@@ -843,11 +843,18 @@ describe("the write (assuranceWrite)", () => {
   const base = `/organizations/${ORG}/projects/${PROJECT}/controls/${CONTROL}/evidence-assurance/${REQUEST}`;
 
   it("knows the check's intents and the two tickmark intents, and nothing else", () => {
+    // Changed 14 November 2026 (docs/evidence-assurance.md, section 10.14, B). Old: these
+    // four. New: also "file-reliability" and "reopen-file-reliability", a person's
+    // decision on a file's reliability, whose bodies assuranceWrite checks as the
+    // contract shapes them (file-reliability-model.test.ts). Kept: any other intent is
+    // not sent.
     assert.deepEqual(ASSURANCE_INTENTS, [
       "rerun",
       "upgrade",
       "disposition",
       "reopen-disposition",
+      "file-reliability",
+      "reopen-file-reliability",
     ]);
     assert.deepEqual(assuranceWrite({ ...ids, intent: "rerun" }), {
       path: `${base}/rerun`,

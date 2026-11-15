@@ -130,8 +130,9 @@ button.cdg-link[aria-expanded="true"] > svg {
   transform: rotate(90deg);
 }
 
-/* The verdict: the outcome's words, large, with whose it is beside them; one sentence
-   under. */
+/* The verdict: what is left after the person's work, large (docs/evidence-assurance.md,
+   10.14); the counts in one sentence; then, quietly, the check's own outcome with whose
+   proposal it is. */
 .cdg-verdict {
   display: grid;
   gap: 0.2rem;
@@ -139,15 +140,6 @@ button.cdg-link[aria-expanded="true"] > svg {
   min-width: 0;
   padding: 1.1rem var(--cdg-pad) 1rem;
   border-top: 1px solid var(--border);
-}
-
-.cdg-verdict-line {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.2rem 1rem;
-  align-items: center;
-  justify-self: stretch;
-  min-width: 0;
 }
 
 .cdg-outcome {
@@ -184,6 +176,102 @@ button.cdg-link[aria-expanded="true"] > svg {
 .cdg-sentence {
   color: var(--text-secondary);
   overflow-wrap: anywhere;
+}
+
+/* "The check proposed: Unable to conclude yet · Proposed for your review": the check's
+   words, kept and quiet. */
+.cdg-proposed-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.9rem;
+  align-items: center;
+  margin-top: 0.15rem;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.cdg-check-said {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+  min-width: 0;
+}
+
+.cdg-check-said > .cdg-state {
+  font-size: var(--fs-xs);
+}
+
+/* A file's reliability, in place under "Needs attention" (file-reliability.tsx). */
+.cdg-rel-wrap {
+  min-width: 0;
+  padding: 0.2rem var(--cdg-pad) 1rem
+    calc(var(--cdg-pad) + var(--cdg-mark) + 0.75rem);
+  animation: tar-open 200ms ease;
+}
+
+.cdg-rel {
+  display: grid;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+/* The same parts under "About this file", outside the first screen's own resets. */
+.cdg-rel p,
+.cdg-rel ul,
+.cdg-rel h6 {
+  margin: 0;
+}
+
+.cdg-rel ul {
+  list-style: none;
+}
+
+.cdg-rel [hidden] {
+  display: none !important;
+}
+
+.cdg-rel.is-panel {
+  padding: 0.8rem 0.95rem 0.9rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+/* Inside the panel the form is not a second box: a rule above it is enough. */
+.cdg-rel.is-panel > .cdg-tmf:not(.is-reopen) {
+  padding: 0.75rem 0 0;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+}
+
+.cdg-rel-head {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  min-width: 0;
+}
+
+.cdg-rel-head > h6 {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.cdg-rel-head > h6:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.cdg-rel-found {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
 }
 
 .cdg-verdict > button {
@@ -1420,12 +1508,18 @@ button.ei-brief-more[aria-expanded="true"] > svg {
   .cdg {
     --cdg-pad: 0.75rem;
   }
+
+  /* On a phone the panel takes the row's width, not the items' indent. */
+  .cdg-rel-wrap {
+    padding-left: var(--cdg-pad);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .cdg-summary,
   .cdg-one,
   .cdg-summary > .de-under,
+  .cdg-rel-wrap,
   .cdg-focus,
   .cdg-details,
   .cdg-more-body,

@@ -29,6 +29,8 @@ import {
   loadProblem,
   matrixOf,
   matterWords,
+  NOT_RELIED_ON,
+  notReliedOnLine,
   openMatters,
   type DesignWorkpaper as Paper,
   PROPOSED_BY_AGENT,
@@ -42,6 +44,7 @@ import {
   refChips,
   rememberedView,
   rememberView,
+  reportInspected,
   type Selection,
   sectionKeyFor,
   staleProblem,
@@ -666,6 +669,30 @@ export function DesignWorkpaper({
 }
 
 /** The views' shape while the workpaper is read: a header block and a few sections. */
+/** A report whose reliability a person established on review (section 10.14): the
+ * legend's mark with its words, then the server's sentence (who, when, what was relied
+ * on). Nothing where no person did. */
+function Inspected({
+  paper,
+  report,
+}: {
+  paper: Paper;
+  report: Paper["reports"][number];
+}) {
+  const said = reportInspected(paper, report);
+  if (said === null) {
+    return null;
+  }
+  return (
+    <span className="dw-inspected">
+      <b className="dw-tm" aria-hidden="true">
+        {said.symbol}
+      </b>{" "}
+      {`${said.words}. ${said.said}`}
+    </span>
+  );
+}
+
 function Outline() {
   return (
     <div className="card dw-outline">
@@ -1159,11 +1186,13 @@ function DocumentSheet({
                     </th>
                     <td>{report.source || "Not stated"}</td>
                     <td>
-                      {report.procedure || (
-                        <span className="dw-quiet">
-                          No procedure on record yet.
-                        </span>
-                      )}
+                      {report.procedure ||
+                        (reportInspected(paper, report) === null ? (
+                          <span className="dw-quiet">
+                            No procedure on record yet.
+                          </span>
+                        ) : null)}
+                      <Inspected paper={paper} report={report} />
                     </td>
                   </tr>
                 ))}
@@ -1283,6 +1312,12 @@ function DocumentSheet({
                       <small className="dw-left-out">
                         {" "}
                         Left out of the check: {entry.leftOut}
+                      </small>
+                    ) : null}
+                    {notReliedOnLine(entry) !== "" ? (
+                      <small className="dw-not-relied">
+                        {" "}
+                        {notReliedOnLine(entry)}
                       </small>
                     ) : null}
                   </span>
@@ -1666,6 +1701,7 @@ function MatrixBoard({
                       <b>{report.report}</b>
                       {report.source !== "" ? `, ${report.source}` : ""}.{" "}
                       {report.procedure}
+                      <Inspected paper={paper} report={report} />
                     </span>
                   </li>
                 ),
@@ -1719,6 +1755,9 @@ function MatrixBoard({
                       <small className="dw-left-out">
                         Left out of the check
                       </small>
+                    ) : null}
+                    {notReliedOnLine(entry) !== "" ? (
+                      <small className="dw-not-relied">{NOT_RELIED_ON}</small>
                     ) : null}
                   </span>
                 </button>
@@ -1947,6 +1986,11 @@ function EvidenceSplit({
               {entry.leftOut !== null ? (
                 <p className="dw-left-out is-line">
                   Left out of the check: {entry.leftOut}
+                </p>
+              ) : null}
+              {notReliedOnLine(entry) !== "" ? (
+                <p className="dw-not-relied is-line">
+                  {notReliedOnLine(entry)}
                 </p>
               ) : null}
               <EvidencePane

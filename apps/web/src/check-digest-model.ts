@@ -17,16 +17,24 @@ import {
   type CheckAction,
   CLOSING_KINDS,
   CODE_CHECK_WORDS,
+  COMPLETENESS_WORDS,
   DISPOSITION_BOUNDS,
   DISPOSITION_KINDS,
   type Disposition,
   type DispositionKind,
   type Ending,
   type FollowUpLine,
+  type ReliabilityLine,
   type RequestCheck,
   STATE_WORDS,
   type Tone,
 } from "./evidence-assurance-model.ts";
+import {
+  RELIABILITY_DECIDE,
+  RELIABILITY_WORDS,
+  reliabilityHeadline,
+  reliabilityQuiet,
+} from "./file-reliability-model.ts";
 import { formatDate } from "./format.ts";
 import type { IconName } from "./icon-name.ts";
 
@@ -73,6 +81,8 @@ export type AttentionControl =
   | { type: "ACT"; action: CheckAction; label: string }
   /** A button that reveals something of the screen's own, by the item's key. */
   | { type: "VIEW"; label: string }
+  /** A button that opens a file's reliability decision ("Decide", section 10.14). */
+  | { type: "RELIABILITY"; fileId: string; label: string }
   | { type: "NONE" };
 
 /** One thing that waits on this person, in at most two lines with one control. */
@@ -112,8 +122,9 @@ export type QuietItem = {
   key: string;
   /** SHOWN: shown by the records or by a document. TICKMARK: closed by a person's
    * disposition (section 10.13), in its own words, never as shown. OTHER_STATE: any other
-   * attribute without an item, in its own state's words. */
-  kind: "SHOWN" | "TICKMARK" | "OTHER_STATE" | "CAVEAT";
+   * attribute without an item, in its own state's words. RELIABILITY: a file whose
+   * reliability a person decided (section 10.14), in the decision's own words. */
+  kind: "SHOWN" | "TICKMARK" | "OTHER_STATE" | "RELIABILITY" | "CAVEAT";
   /** "C shown", "C shown in design", "E waiting on a file", "D shown (not asked for)",
    * "Reliability to resolve", "Read in part", "1 file left out". */
   text: string;
@@ -121,6 +132,8 @@ export type QuietItem = {
   tone: Tone;
   /** An attribute opens; a caveat does not. */
   attributeKey: string | null;
+  /** A file whose reliability a person decided opens its decision. */
+  fileId?: string;
 };
 
 export type DigestDetails = {
@@ -135,6 +148,10 @@ export type CheckDigest = {
   outcome: DigestPill | null;
   /** The completeness caveat; null where the evidence is complete. */
   caveat: DigestPill | null;
+  /** What is left after the person's work, first (section 10.14, A): "Your tickmarks
+   * settle B and D. Still open: reliability of E6.csv.", or "Nothing waits on you." only
+   * where nothing is left. Never says the evidence is sufficient. */
+  status: string;
   /** "1 of 4 attributes is shown. 3 need your attention." */
   verdict: string;
   /** What waits on this person, one item each. */
@@ -153,6 +170,9 @@ export type CheckDigest = {
   /** "2 more follow-ups are not listed here."; "" where every one is listed. */
   asksMore: string;
   details: DigestDetails;
+  /** The check's files whose reliability is open or decided (section 10.14), as the row
+   * reads them: what a file's decision opens on. */
+  reliability: ReliabilityLine[];
 };
 
 /** A finding as the digest needs it: whether a person has still to decide it. */
@@ -1103,6 +1123,31 @@ function attentionOf(
     ...files("CONFIRM_TYPE", NEED_CONFIRM_TITLE, check.confirm),
     ...files("FILE", NEED_FILE_TITLE, check.leftOut),
   ];
+  // A file whose reliability the check does not establish and no person has decided
+  // (section 10.14): the reliability caveat, per file, with the check's own sentence and
+  // "Decide". A file no longer on the request is still said, with nothing to press.
+  const reliability: AttentionItem[] = check.reliability
+    .filter((line) => line.decision === null)
+    .map((line) => ({
+      key: `${RELIABILITY_KEY}${line.fileId}`,
+      kind: "FILE",
+      mark: fileRef(rowFiles, line.fileId),
+      headline: reliabilityHeadline(line.name),
+      more: 0,
+      // The check's own sentence; where it sent none (no supported attribute rests on
+      // the file), the item is worded from the file's name alone.
+      context: flat(line.question),
+      flag: "",
+      status: null,
+      control: line.inForce
+        ? {
+            type: "RELIABILITY",
+            fileId: line.fileId,
+            label: RELIABILITY_DECIDE,
+          }
+        : { type: "NONE" },
+      attributeKey: null,
+    }));
   const other: AttentionItem[] = extras
     .filter(
       (extra) =>
@@ -1123,7 +1168,13 @@ function attentionOf(
   // Each item once, by its key: a key that came twice (from what the screen passed) is
   // told apart, never drawn twice under one.
   const seen = new Set<string>();
-  return [...attributes, ...fileItems, ...other, ...general].map((item) => {
+  return [
+    ...attributes,
+    ...fileItems,
+    ...reliability,
+    ...other,
+    ...general,
+  ].map((item) => {
     let key = item.key;
     for (let at = 2; seen.has(key); at += 1) {
       key = `${item.key}#${at}`;
@@ -1140,11 +1191,24 @@ function attentionOf(
 const actionless = (lines: RequestCheck["leftOut"]) =>
   lines.filter((item) => item.action === null).length;
 
+/** Where a file's reliability is the caveat, and the server names each file it is about
+ * (section 10.14): each file is said on its own, so the label is not said beside them. */
+function replacedByFiles(check: RequestCheck, caveat: DigestPill): boolean {
+  return (
+    caveat.label === COMPLETENESS_WORDS.RELIABILITY_UNRESOLVED &&
+    check.reliability.length > 0
+  );
+}
+
+/** The key of a file's reliability, on its item and on the quiet line. */
+export const RELIABILITY_KEY = "RELIABILITY:";
+
 function quietOf(
   check: RequestCheck,
   rows: readonly DigestAttribute[],
   caveat: DigestPill | null,
   extras: readonly DigestExtra[],
+  files: readonly DigestFile[],
 ): QuietItem[] {
   // Every attribute that has no item above, in its own state's words and tone: none is
   // reachable only by stepping through the attributes.
@@ -1213,10 +1277,36 @@ function quietOf(
   const partSaid =
     caveat?.label.toLowerCase().includes(QUIET_READ_IN_PART.toLowerCase()) ??
     false;
+  // A file whose reliability a person decided (section 10.14), in the decision's own
+  // words and a neutral tone, opening the decision.
+  const decided: QuietItem[] = check.reliability.flatMap((line) =>
+    line.decision === null
+      ? []
+      : [
+          {
+            key: `${RELIABILITY_KEY}${line.fileId}`,
+            kind: "RELIABILITY" as const,
+            text: reliabilityQuiet(
+              fileRef(files, line.fileId),
+              line.name,
+              line.decision.kind,
+            ),
+            icon: RELIABILITY_WORDS[line.decision.kind].icon,
+            tone: RELIABILITY_WORDS[line.decision.kind].tone,
+            attributeKey: null,
+            fileId: line.fileId,
+          },
+        ],
+  );
   return [
     ...attributes,
-    // Every caveat, of either engine: none is clipped or left out.
-    ...(caveat === null ? [] : [said("CAVEAT:COMPLETENESS", caveat.label)]),
+    ...decided,
+    // Every caveat, of either engine: none is clipped or left out. The reliability caveat
+    // is said per file where the server names the files (an item while open, the
+    // decision's words once decided), and as the check's own label where it does not.
+    ...(caveat === null || replacedByFiles(check, caveat)
+      ? []
+      : [said("CAVEAT:COMPLETENESS", caveat.label)]),
     ...(check.readInPart !== null && !partSaid
       ? [said("CAVEAT:READ_IN_PART", QUIET_READ_IN_PART)]
       : []),
@@ -1290,6 +1380,208 @@ function calmOf(
     caveats.map((item) => closed(flat(item.text))).join(" ") ||
     acceptNoteParts(note).caution
   );
+}
+
+// What is left after the person's work (section 10.14, A)
+
+/** The first line where nothing is left: no attribute waits on the person, no file's
+ * reliability is unresolved, and no caveat is left. Never "sufficient": it says only
+ * that nothing waits. */
+export const STATUS_NOTHING = "Nothing waits on you.";
+/** Before what is left. */
+export const STATUS_OPEN = "Still open:";
+/** Quietly, under the status: the check's own outcome, in its words. */
+export const CHECK_PROPOSED = "The check proposed:";
+
+/** What the status line is made of, each in the order it is said. Letters are the
+ * attributes'; files are named by their name (open) or their reference (decided). */
+export type StatusFacts = {
+  /** Attributes a person's closing tickmark settles (section 10.13): no longer waiting,
+   * and not shown by the check itself. */
+  settled: string[];
+  /** Files whose reliability a person decided. */
+  decided: string[];
+  /** Attributes on which a person recorded an exception. */
+  exceptions: string[];
+  /** Attributes with a finding the person has still to decide (and no exception). */
+  findings: string[];
+  /** The other attributes that need attention. */
+  attributes: string[];
+  /** Files whose reliability is unresolved, by name. */
+  files: string[];
+  /** Anything else under "Needs attention", each in a few words. */
+  others: string[];
+  /** Every caveat of the quiet line, in its words. */
+  caveats: string[];
+};
+
+/** "A", "A and B", "A, B and C". */
+export function andList(items: readonly string[]): string {
+  const said = items.filter((item) => item !== "");
+  if (said.length <= 1) {
+    return said[0] ?? "";
+  }
+  return `${said.slice(0, -1).join(", ")} and ${said[said.length - 1]}`;
+}
+
+/** Letters as said, an attribute without a letter as such, each once. */
+const named = (letters: readonly string[]) => [
+  ...new Set(letters.map((letter) => flat(letter) || "an attribute")),
+];
+
+const many = (count: number, one: string, more = `${one}s`) =>
+  count === 1 ? one : more;
+
+/** Words of a caveat or an item as part of the line: no closing stop, a small first
+ * letter (a file's name or a letter is kept as written). */
+const part = (text: string) => {
+  const said = flat(text).replace(/[.!?…]+$/u, "");
+  return /^[A-Z][a-z]/.test(said) ? small(said) : said;
+};
+
+/**
+ * The first line of a finished check (section 10.14, A): what a person's work settled, in
+ * one short clause, then what is left, each in a few words, in the contract's order
+ * (exceptions recorded, findings to decide, attributes that need attention, files whose
+ * reliability is unresolved, anything else waiting, other caveats); "Nothing waits on
+ * you." only where nothing is left. It never says the evidence is sufficient, and never
+ * claims more than the check and the person's records show.
+ */
+export function statusLine(facts: StatusFacts): string {
+  const settled = named(facts.settled);
+  const decided = [...new Set(facts.decided.filter((item) => item !== ""))];
+  const tickmarks =
+    settled.length === 0
+      ? ""
+      : `${many(settled.length, "tickmark")} ${many(settled.length, "settles", "settle")} ${andList(settled)}`;
+  const decisions =
+    decided.length === 0
+      ? ""
+      : `${many(decided.length, "decision")} ${many(decided.length, "settles", "settle")} the reliability of ${andList(decided)}`;
+  const lead =
+    tickmarks !== "" && decisions !== ""
+      ? `Your ${tickmarks}, and your ${decisions}.`
+      : tickmarks !== "" || decisions !== ""
+        ? `Your ${tickmarks || decisions}.`
+        : "";
+  const exceptions = named(facts.exceptions);
+  const findings = named(facts.findings).filter(
+    (letter) => !exceptions.includes(letter),
+  );
+  const attributes = named(facts.attributes).filter(
+    (letter) => !exceptions.includes(letter) && !findings.includes(letter),
+  );
+  const files = [...new Set(facts.files.filter((name) => name !== ""))];
+  const left = [
+    exceptions.length === 0
+      ? ""
+      : `${many(exceptions.length, "exception")} recorded on ${andList(exceptions)}`,
+    findings.length === 0
+      ? ""
+      : `${many(findings.length, "finding")} to decide on ${andList(findings)}`,
+    attributes.length === 0
+      ? ""
+      : `${many(attributes.length, "attribute")} ${andList(attributes)}`,
+    files.length === 0 ? "" : `reliability of ${andList(files)}`,
+    ...facts.others.map(part),
+    ...facts.caveats.map(part),
+  ].filter((item, at, all) => item !== "" && all.indexOf(item) === at);
+  return [
+    lead,
+    left.length === 0 ? STATUS_NOTHING : `${STATUS_OPEN} ${left.join(", ")}.`,
+  ]
+    .filter((item) => item !== "")
+    .join(" ");
+}
+
+/** "1 follow-up to consider". */
+const followUpsLeft = (count: number) =>
+  `${count} ${many(count, "follow-up")} to consider`;
+
+/** What the status line is made of, from the digest's own lists: every item under
+ * "Needs attention" and every caveat is in it, so "Nothing waits on you." is said only
+ * where both are empty. */
+function statusFactsOf(
+  check: RequestCheck,
+  rows: readonly DigestAttribute[],
+  attention: readonly AttentionItem[],
+  quiet: readonly QuietItem[],
+  files: readonly DigestFile[],
+  waiting: ReadonlySet<string>,
+): StatusFacts {
+  const rowOf = (key: string | null) =>
+    rows.find((row) => row.key === key) ?? null;
+  const attributeItems = attention.filter((item) => item.kind === "ATTRIBUTE");
+  const lettersWhere = (pick: (row: DigestAttribute) => boolean) =>
+    attributeItems.flatMap((item) => {
+      const row = rowOf(item.attributeKey);
+      return row !== null && pick(row) ? [row.letter] : [];
+    });
+  const excepted = (row: DigestAttribute) =>
+    row.line.disposition?.kind === "EXCEPTION";
+  const waits = (row: DigestAttribute) =>
+    row.line.findingId !== null && waiting.has(row.line.findingId);
+  const reliability = (item: AttentionItem) =>
+    item.key.startsWith(RELIABILITY_KEY);
+  const general = attention.filter((item) => item.kind === "GENERAL").length;
+  return {
+    settled: rows
+      .filter(
+        (row) =>
+          !row.attention && !row.line.evidenced && closes(row.line.disposition),
+      )
+      .map((row) => row.letter),
+    decided: check.reliability
+      .filter((line) => line.decision !== null)
+      .map((line) => fileRef(files, line.fileId) || line.name),
+    exceptions: lettersWhere(excepted),
+    findings: lettersWhere((row) => !excepted(row) && waits(row)),
+    attributes: [
+      ...lettersWhere((row) => !excepted(row) && !waits(row)),
+      // An item whose attribute is not among the rows (never expected) is still said.
+      ...attributeItems
+        .filter((item) => rowOf(item.attributeKey) === null)
+        .map((item) => item.mark),
+    ],
+    files: check.reliability
+      .filter((line) => line.decision === null)
+      .map((line) => line.name),
+    others: [
+      ...attention
+        .filter(
+          (item) =>
+            item.kind !== "ATTRIBUTE" &&
+            item.kind !== "GENERAL" &&
+            !reliability(item),
+        )
+        .map((item) =>
+          item.key.startsWith("CONFIRM_TYPE:")
+            ? `type of ${item.mark || "a file"} to confirm`
+            : item.key.startsWith("FILE:")
+              ? `${item.mark || "a file"} left out`
+              : item.headline,
+        ),
+      ...(general > 0 ? [followUpsLeft(general)] : []),
+    ],
+    caveats: quiet
+      .filter((item) => item.kind === "CAVEAT")
+      .map((item) => item.text),
+  };
+}
+
+/** The calm line as it is said under the status line: not where the status already
+ * says it ("Nothing needs your attention.", what the tickmarks settle, or the caveats
+ * alone); the review's own explanation otherwise. */
+export function calmUnderStatus(digest: CheckDigest): string {
+  const caveats = digest.quiet
+    .filter((item) => item.kind === "CAVEAT")
+    .map((item) => closed(flat(item.text)))
+    .join(" ");
+  return digest.calm === DIGEST_NOTHING ||
+    digest.calm.startsWith(DIGEST_TICKMARKED) ||
+    digest.calm === caveats
+    ? ""
+    : digest.calm;
 }
 
 // The rest, behind one line
@@ -1411,7 +1703,7 @@ export function checkDigest(
     files,
     extras,
   );
-  const quiet = quietOf(check, attributes, caveat, extras);
+  const quiet = quietOf(check, attributes, caveat, extras, files);
   // Of the attributes the request asks for: those the records of an instance show;
   // apart, those shown only by what a document requires, and those supported without
   // the check saying how.
@@ -1452,6 +1744,9 @@ export function checkDigest(
         ? null
         : { label: review.label, icon: review.icon, tone: review.tone },
     caveat,
+    status: statusLine(
+      statusFactsOf(check, attributes, attention, quiet, files, waiting),
+    ),
     verdict: [
       asked.length > 0
         ? verdictShown(evidenced, asked.length)
@@ -1495,6 +1790,7 @@ export function checkDigest(
     askTotal: asks.reduce((sum, ask) => sum + 1 + ask.similar.length, 0),
     asksMore: review?.more ?? "",
     details: detailsOf(check),
+    reliability: check.reliability,
   };
 }
 
