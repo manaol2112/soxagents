@@ -6,6 +6,17 @@
  * who may edit are the server's, and nothing here prepares, signs or approves.
  */
 
+import {
+  type ChoiceFacts,
+  CONCLUSION_WORDS,
+  type ConclusionChoice,
+  type ConclusionKind,
+  type ConclusionResult,
+  conclusionChoiceOf,
+  conclusionKindOf,
+  conclusionResultOf,
+  type ResultKind,
+} from "./design-conclusion-model.ts";
 import { fileQuery } from "./evidence-preview-model.ts";
 import { formatDate } from "./format.ts";
 
@@ -193,7 +204,13 @@ export type Attribute = {
   strayExceptions: number;
   checks: string[];
   notes: string;
+  /** How a current check shows an attribute that reads "Shown" (section 3.6): in the
+   * records of an instance, or only as a document requires it; null otherwise, and for
+   * anything this page does not know. */
+  shownBy: ShownBy | null;
 };
+
+export type ShownBy = "IMPLEMENTATION" | "DESIGN";
 
 export type Matter = {
   state: "OPEN" | "NOTED";
@@ -255,7 +272,16 @@ export type DesignWorkpaper = {
     proposed: string | null;
     words: string;
     signed: boolean;
+    /** The conclusion the records propose now, and why (section 3.6); null where the
+     * server does not say, or says a kind this page does not know. */
+    proposedConclusion: ConclusionKind | null;
+    proposedReasons: string[];
+    /** The preparer's conclusion that stands, or null. */
+    choice: ConclusionChoice | null;
   };
+  /** The design and the implementation result (section 3.6); null where not sent. */
+  design: ConclusionResult | null;
+  implementation: ConclusionResult | null;
   tickmarks: Array<{ mark: string; symbol: string; meaning: string }>;
   canEdit: boolean;
 };
@@ -447,6 +473,12 @@ function attributeOf(item: Raw, known: ReadonlySet<string>): Attribute | null {
     strayExceptions,
     checks: lines(item.checks, 20),
     notes: prose(item.notes, 4000),
+    // Only of an attribute that reads "Shown": a way of being shown is never read into
+    // another state.
+    shownBy:
+      state === "SHOWN"
+        ? oneOf(["IMPLEMENTATION", "DESIGN"] as const, item.shown_by)
+        : null,
   };
 }
 
@@ -601,7 +633,12 @@ export function parseDesignWorkpaper(value: unknown): DesignWorkpaper | null {
       words: line(conclusion.words, 120),
       // Signed only when the server says so in as many words: anything else is proposed.
       signed: conclusion.signed === true,
+      proposedConclusion: conclusionKindOf(conclusion.proposed_conclusion),
+      proposedReasons: lines(conclusion.proposed_reasons, 12, 600),
+      choice: conclusionChoiceOf(conclusion.choice),
     },
+    design: conclusionResultOf(value.design),
+    implementation: conclusionResultOf(value.implementation),
     tickmarks: raws(value.tickmarks)
       .map((mark) => ({
         mark: line(mark.mark, 40),
@@ -1023,9 +1060,27 @@ export const PROPOSED_BY_AGENT = "Proposed by the agent, not signed";
 /** What stands in the verdict's place until the records propose one. */
 export const NOT_CONCLUDED = "Not concluded yet";
 
+/** Where a link from another step lands: section 7 of the document, the conclusion
+ * (docs/design-workpaper.md, section 3.5). */
+export const CONCLUSION_ANCHOR = "di-conclusion";
+
+/** "/?…#di-conclusion": D&I Assessment, at section 7. */
+export function conclusionHref(assessmentHref: string): string {
+  return `${assessmentHref.split("#")[0] ?? assessmentHref}#${CONCLUSION_ANCHOR}`;
+}
+
+/** The pill of the agent's proposal in section 7 until the preparer records a
+ * conclusion (docs/design-workpaper.md, sections 3.5 and 3.6). */
+export const PROPOSED_REVIEW = "Proposed by the agent · review it";
+
 export type ConclusionView = {
   /** A reviewer's sign-off stands (`isSigned`). */
   signed: boolean;
+  /** The preparer's conclusion is recorded and no sign-off of it stands (section 3.6). */
+  recorded: boolean;
+  /** The conclusion it speaks of, where the server names one of the five; null for the
+   * two-value verdict of an answer from before section 3.6. */
+  kind: ConclusionKind | null;
   /** The records propose a verdict that no reviewer has signed. */
   proposed: boolean;
   /** An earlier sign-off no longer stands. */
@@ -1065,7 +1120,29 @@ export function conclusionOf(paper: Standing): ConclusionView {
       : "";
   const worded = (code: string | null): string =>
     code === null ? "" : (own(VERDICT_WORDS, code) ?? said);
-  const common = { text: conclusion.text, outOfDate: review.outOfDate };
+  const common = {
+    text: conclusion.text,
+    outOfDate: review.outOfDate,
+    recorded: false,
+    kind: null,
+  };
+  const choice = conclusion.choice;
+  if (isSigned(paper) && choice !== null) {
+    // Section 3.6: the reviewer signed the preparer's conclusion, which still stands (a
+    // changed one puts the sign-off out of date, so it is not signed here).
+    const verdict = CONCLUSION_WORDS[choice.kind];
+    return {
+      ...common,
+      kind: choice.kind,
+      signed: true,
+      proposed: false,
+      stale: false,
+      verdict,
+      headline: `Signed: ${verdict}`,
+      standing: `Signed${by}${on}`,
+      tone: KIND_TONES[choice.kind],
+    };
+  }
   if (isSigned(paper)) {
     // What the reviewer signed is the verdict on the sign-off, not what is proposed now.
     const code = review.signedVerdict ?? conclusion.proposed ?? review.proposed;
@@ -1086,11 +1163,45 @@ export function conclusionOf(paper: Standing): ConclusionView {
             : "neutral",
     };
   }
-  const verdict = worded(conclusion.proposed ?? review.proposed);
-  const proposed = verdict !== "";
   // The earlier sign-off's record is still on the review; the server says why it no
   // longer stands.
   const stale = isStale(paper);
+  const staleLine = `The sign-off${by}${on} is out of date`;
+  if (choice !== null) {
+    // Section 3.6: the preparer's conclusion, recorded and not (or no longer) signed.
+    const verdict = CONCLUSION_WORDS[choice.kind];
+    return {
+      ...common,
+      recorded: true,
+      kind: choice.kind,
+      signed: false,
+      proposed: false,
+      stale,
+      verdict,
+      headline: `Recorded: ${verdict}`,
+      standing: stale ? staleLine : recordedLine(choice),
+      tone: stale ? "warning" : "info",
+    };
+  }
+  const proposal = conclusion.proposedConclusion;
+  if (proposal !== null) {
+    // Section 3.6: the agent proposes, whatever the workpaper's state, until the
+    // preparer records a conclusion.
+    const verdict = CONCLUSION_WORDS[proposal];
+    return {
+      ...common,
+      kind: proposal,
+      signed: false,
+      proposed: true,
+      stale,
+      verdict,
+      headline: `Proposed: ${verdict}`,
+      standing: stale ? staleLine : PROPOSED_REVIEW,
+      tone: stale ? "warning" : "ai",
+    };
+  }
+  const verdict = worded(conclusion.proposed ?? review.proposed);
+  const proposed = verdict !== "";
   const author = own(SOURCE_WORDS, conclusion.source);
   return {
     ...common,
@@ -1100,7 +1211,7 @@ export function conclusionOf(paper: Standing): ConclusionView {
     verdict,
     headline: proposed ? `Proposed: ${verdict}` : NOT_CONCLUDED,
     standing: stale
-      ? `The sign-off${by}${on} is out of date`
+      ? staleLine
       : !proposed
         ? paper.workpaper !== null && paper.workpaper.status === "PREPARED"
           ? "The records propose no verdict yet"
@@ -1112,6 +1223,124 @@ export function conclusionOf(paper: Standing): ConclusionView {
             : `Proposed by ${author}, not signed`,
     tone: stale ? "warning" : proposed ? "ai" : "neutral",
   };
+}
+
+/** A signed conclusion's tone: green for effective and no instance, the warning tone for
+ * exceptions noted (concluded on, never green), red for not effective. Only of a
+ * sign-off that stands. */
+const KIND_TONES: Readonly<Record<ConclusionKind, Tone>> = {
+  EFFECTIVE: "success",
+  NO_INSTANCE: "success",
+  EXCEPTIONS_NOTED: "warning",
+  NOT_EFFECTIVE: "danger",
+  NOT_CONCLUDED: "neutral",
+};
+
+/** "Recorded by Dana Lee on Nov 15, 2026": who recorded the preparer's conclusion. */
+export function recordedLine(choice: ConclusionChoice): string {
+  const on =
+    choice.recordedAt === "" ? "" : ` on ${formatDate(choice.recordedAt)}`;
+  return `Recorded by ${choice.recordedBy || "the preparer"}${on}`;
+}
+
+/** The design and the implementation result in the contract's words (section 3.6). */
+export const RESULT_WORDS: Readonly<
+  Record<"design" | "implementation", Readonly<Record<ResultKind, string>>>
+> = {
+  design: {
+    DESIGNED: "Designed to address the risk",
+    IN_PLACE: "Designed to address the risk",
+    EXCEPTIONS: "Exceptions noted",
+    OPEN: "Not concluded",
+  },
+  implementation: {
+    IN_PLACE: "In place in the instance walked through",
+    DESIGNED: "In place in the instance walked through",
+    EXCEPTIONS: "Exceptions noted",
+    OPEN: "Not concluded",
+  },
+};
+
+export type ResultBox = {
+  label: "Design" | "Implementation";
+  words: string;
+  sentence: string;
+  /** "Not yet shown: B, C", or "" where nothing is open. */
+  open: string;
+  tone: Tone;
+};
+
+/** The two boxes beside the conclusion: the design and the implementation result, each
+ * in its words, with the server's sentence and the letters still open. Settled reads in
+ * the tone of information, never the green of a sign-off; a result not sent reads as not
+ * concluded. */
+export function resultBoxes(
+  paper: Pick<DesignWorkpaper, "design" | "implementation">,
+): ResultBox[] {
+  return (["design", "implementation"] as const).map((which) => {
+    const result = paper[which];
+    const kind: ResultKind = result?.result ?? "OPEN";
+    return {
+      label: which === "design" ? "Design" : "Implementation",
+      words: RESULT_WORDS[which][kind],
+      sentence: result?.sentence ?? "",
+      open:
+        result === null || result.open.length === 0
+          ? ""
+          : `Not yet shown: ${result.open.join(", ")}`,
+      tone:
+        kind === "EXCEPTIONS"
+          ? "warning"
+          : kind === "OPEN"
+            ? "neutral"
+            : "info",
+    };
+  });
+}
+
+/** Under an attribute's result in section 4: how it is shown (section 3.6). */
+export const SHOWN_BY_WORDS: Readonly<Record<ShownBy, string>> = {
+  IMPLEMENTATION: "In the instance",
+  DESIGN: "As designed",
+};
+
+/** What the page knows of the records the preparer's choice is ruled by (section 3.6):
+ * a design deficiency stands exactly where the agent proposes "Not effective" (the first
+ * rule of the proposal); the exceptions are the attributes whose state is one; the
+ * results are the server's. */
+export function choiceFactsOf(
+  paper: Pick<
+    DesignWorkpaper,
+    "conclusion" | "attributes" | "design" | "implementation"
+  >,
+): ChoiceFacts {
+  return {
+    deficiency: paper.conclusion.proposedConclusion === "NOT_EFFECTIVE",
+    exceptions: paper.attributes
+      .filter(
+        (item) =>
+          item.state === "EXCEPTION" || item.state === "EXCEPTION_RECORDED",
+      )
+      .map((item) => item.code),
+    design: paper.design?.result ?? null,
+    implementation: paper.implementation?.result ?? null,
+    implementationOpen: paper.implementation?.open ?? [],
+  };
+}
+
+/** Whether section 7 offers "Log a design deficiency": while an exception stands (a
+ * deficiency is one way to answer it), or where the conclusion is "Not effective" and no
+ * design deficiency is logged yet (its sign-off needs one). */
+export function deficiencyWanted(
+  facts: ChoiceFacts,
+  kind: ConclusionKind | null,
+): boolean {
+  return (
+    facts.exceptions.length > 0 ||
+    facts.design === "EXCEPTIONS" ||
+    facts.implementation === "EXCEPTIONS" ||
+    (kind === "NOT_EFFECTIVE" && !facts.deficiency)
+  );
 }
 
 /* References --------------------------------------------------------------------------- */

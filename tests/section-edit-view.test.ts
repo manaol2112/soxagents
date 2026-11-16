@@ -118,10 +118,15 @@ describe("Edit opens the section's editor where the document shows it", () => {
       sheet,
       /\{reporting !== null \? \(\s*<SectionEditorPanel \{\.\.\.reporting\} \/>\s*\) : paper\.reports\.length === 0 \? \(/,
     );
-    // The verdict and what is out of date stay beside the conclusion's editor.
+    // Rewritten 15 November 2026. Old: the verdict (`<Verdict conclusion={conclusion}
+    // label="Design and implementation" />`) directly beside the conclusion's editor.
+    // New: section 7 is one card, top to bottom: the agent's proposal or the preparer's
+    // conclusion (ConclusionHead), the design and implementation results, the choice,
+    // then the text with its one editor (product owner, 15 November 2026,
+    // docs/design-workpaper.md section 3.5/3.6). The editor stays in the text's place.
     assert.match(
       sheet,
-      /<Verdict conclusion=\{conclusion\} label="Design and implementation" \/>\s*<div className="dw-concl-text">\s*\{concluding !== null \? \(\s*<SectionEditorPanel \{\.\.\.concluding\} \/>\s*\) : conclusion\.text === "" \? \(/,
+      /<ConclusionHead paper=\{paper\} conclusion=\{conclusion\} \/>\s*<Results paper=\{paper\} \/>\s*<ConclusionChoiceOf paper=\{paper\} actions=\{actions\} \/>\s*<div className="dw-concl-text">\s*\{concluding !== null \? \(\s*<SectionEditorPanel \{\.\.\.concluding\} \/>\s*\) : conclusion\.text === "" \? \(/,
     );
     assert.match(
       sheet,

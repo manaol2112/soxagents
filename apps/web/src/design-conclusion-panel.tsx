@@ -1,8 +1,10 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { type FormEvent, useState, useTransition } from "react";
+import { type FormEvent, useEffect, useState, useTransition } from "react";
 import {
+  BASIS_WORDS,
+  CONCLUSION_WORDS,
   conclusionHead,
   DESIGN_CONCLUSION_NOTICES,
   type DesignConclusion,
@@ -13,7 +15,14 @@ import {
   parseDesignConclusionNotice,
   VERDICT_LABELS,
 } from "./design-conclusion-model";
+import {
+  conclusionHref,
+  designWorkpaperQuery,
+  parseDesignWorkpaper,
+  recordedLine,
+} from "./design-workpaper-model";
 import { formatDate } from "./format";
+import { RichText } from "./rich-text";
 import { UiIcon } from "./ui-icon";
 
 const FAILED: readonly DesignConclusionNotice[] = [
@@ -33,6 +42,53 @@ const REOPENED_FROM: Record<
   SUPERSEDED: "Superseded by a later sign-off",
 };
 
+/** The conclusion's text as section 7 shows it: one read of the D&I workpaper through
+ * the views' own route, stopped when the step goes, and again when the preparer's
+ * conclusion changes. `null` while it is read; `false` where it could not be. */
+function useConclusionText(
+  ids: { organizationId: string; projectId: string; controlId: string },
+  again: string,
+  wanted: boolean,
+): string | null | false {
+  const [text, setText] = useState<string | null | false>(null);
+  const query = designWorkpaperQuery(ids);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `again` is what asks for another read.
+  useEffect(() => {
+    if (!wanted) {
+      return;
+    }
+    const control = new AbortController();
+    let current = true;
+    setText(null);
+    (async () => {
+      let read: string | false = false;
+      try {
+        const response = await fetch(`/workspace/design-workpaper?${query}`, {
+          cache: "no-store",
+          signal: control.signal,
+        });
+        const body = (await response.json()) as {
+          status?: unknown;
+          result?: unknown;
+        };
+        const paper =
+          body.status === 200 ? parseDesignWorkpaper(body.result) : null;
+        read = paper === null ? false : paper.conclusion.text;
+      } catch {
+        read = false;
+      }
+      if (current) {
+        setText(read);
+      }
+    })();
+    return () => {
+      current = false;
+      control.abort();
+    };
+  }, [query, again, wanted]);
+  return text;
+}
+
 /**
  * Step 05, the D&I conclusion (product owner, 8 November 2026): the verdict the records
  * support, what it rests on, and the reviewer's sign-off that clears OE (or ends it). The
@@ -45,6 +101,13 @@ const REOPENED_FROM: Record<
  * preparer does next; never that a verdict awaits the reviewer, and never the green of
  * an effective verdict. Every word of the card is the model's
  * (design-conclusion-model.conclusionHead).
+ *
+ * D&I Conclusion and Review (product owner, 15 November 2026; docs/design-workpaper.md,
+ * sections 3.5 and 3.6): the preparer concludes in section 7 of D&I Assessment, and this
+ * step is the reviewer's. It shows, read-only and first, the preparer's conclusion (its
+ * words, basis and reason) and the conclusion's text exactly as section 7 shows it, then
+ * what the sign-off rests on, then the sign-off of that conclusion. Nothing is edited
+ * here: the conclusion has one editor, in section 7.
  */
 export function DesignConclusionPanel({
   ids,
@@ -64,6 +127,13 @@ export function DesignConclusionPanel({
   const [pending, startTransition] = useTransition();
   const [pressed, setPressed] = useState<"sign" | "reopen" | null>(null);
   const [shown, setShown] = useState<DesignConclusionNotice | null>(notice);
+  // Read only where there is a conclusion to show it with.
+  const text = useConclusionText(
+    ids,
+    `${conclusion?.choice?.id ?? ""}:${conclusion?.status ?? ""}`,
+    conclusion !== null &&
+      (conclusion.choice !== null || conclusion.signed?.conclusion != null),
+  );
 
   if (conclusion === null) {
     return (
@@ -116,10 +186,22 @@ export function DesignConclusionPanel({
   // each the server gives that the card does not already say.
   const holds = holdsBelow(conclusion);
   const earlier = conclusion.history.filter((item) => item.reopenedAt !== null);
+  // Section 3.6: the reviewer signs the preparer's conclusion that stands, never "Not
+  // concluded".
+  const choice = conclusion.choice;
+  const signed = conclusion.signed;
+  const signable =
+    choice === null || choice.kind === "NOT_CONCLUDED" ? null : choice.kind;
   const signs =
-    conclusion.canSign &&
-    conclusion.proposed !== null &&
-    paper?.preparedVersion != null;
+    conclusion.canSign && signable !== null && paper?.preparedVersion != null;
+  // What the step says first: the conclusion recorded (or signed). An answer from before
+  // section 3.6 names none, and its verdict is read as before.
+  const named = choice !== null || signed?.conclusion != null;
+  const before36 =
+    conclusion.proposedConclusion === null && choice === null && !named;
+  const section7 = conclusionHref(assessmentHref);
+  const preparerSide =
+    conclusion.viewerPrepared || !conclusion.viewerIsReviewer;
 
   return (
     <section className="dc" aria-labelledby="dc-heading">
@@ -143,7 +225,52 @@ export function DesignConclusionPanel({
             {head.status}
           </span>
         </div>
-        <p className="dc-verdict-word">{head.word}</p>
+        {named || before36 ? (
+          <p className="dc-verdict-word">{head.word}</p>
+        ) : (
+          <p className="dc-none">
+            The preparer has not recorded a conclusion yet.{" "}
+            <a href={section7}>Open section 7 in D&amp;I Assessment</a>
+          </p>
+        )}
+        {choice !== null ? (
+          <div className="dc-chosen">
+            <p className="dc-recorded">{recordedLine(choice)}</p>
+            {choice.basis !== null ? (
+              <p>
+                <b>Not effective in:</b> {BASIS_WORDS[choice.basis]}
+              </p>
+            ) : null}
+            {choice.reason !== "" ? (
+              <p>
+                <b>Reason.</b> {choice.reason}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
+        {named ? (
+          // The text exactly as section 7 shows it, read-only.
+          <div className="dc-text">
+            <h4>Conclusion, as written in section 7</h4>
+            {text === null ? (
+              <p className="dc-quiet">Reading the conclusion…</p>
+            ) : text === false ? (
+              <p className="dc-quiet">
+                The conclusion's text could not be read. Open section 7 in
+                D&amp;I Assessment to read it.
+              </p>
+            ) : text === "" ? (
+              <p className="dc-quiet">No conclusion is written yet.</p>
+            ) : (
+              <RichText text={text} />
+            )}
+          </div>
+        ) : null}
+        {named && preparerSide ? (
+          <p className="dc-edit-where">
+            <a href={section7}>Edit the conclusion in D&amp;I Assessment</a>
+          </p>
+        ) : null}
         {head.reasons.length > 0 ? (
           // An exception a person recorded holds the sign-off: the server's sentence(s),
           // whole, then what the preparer does next. Nothing here says a verdict waits
@@ -217,16 +344,24 @@ export function DesignConclusionPanel({
               </dd>
             </div>
           ) : null}
-          {conclusion.signed !== null ? (
+          {signed !== null ? (
             <div>
               <dt>Signed off</dt>
               <dd>
-                {conclusion.signed.signedBy || "A reviewer"} on{" "}
-                {formatDate(conclusion.signed.signedAt)} ·{" "}
-                {VERDICT_LABELS[conclusion.signed.verdict]} · workpaper version{" "}
-                {conclusion.signed.workpaperVersion}
-                {conclusion.signed.note !== "" ? (
-                  <span className="dc-note">{conclusion.signed.note}</span>
+                {signed.signedBy || "A reviewer"} on{" "}
+                {formatDate(signed.signedAt)}
+                {/* The conclusion is said once, above; the sign-off names it only where
+                    it signed another (the preparer's changed since). */}
+                {signed.conclusion !== null &&
+                choice !== null &&
+                signed.conclusion !== choice.kind
+                  ? ` · signed as “${CONCLUSION_WORDS[signed.conclusion]}”`
+                  : before36
+                    ? ` · ${VERDICT_LABELS[signed.verdict]}`
+                    : ""}{" "}
+                · workpaper version {signed.workpaperVersion}
+                {signed.note !== "" ? (
+                  <span className="dc-note">{signed.note}</span>
                 ) : null}
               </dd>
             </div>
@@ -262,11 +397,7 @@ export function DesignConclusionPanel({
         >
           {hidden}
           <input type="hidden" name="intent" value="sign" />
-          <input
-            type="hidden"
-            name="verdict"
-            value={conclusion.proposed ?? ""}
-          />
+          <input type="hidden" name="conclusion" value={signable ?? ""} />
           <input
             type="hidden"
             name="workpaper_version"
@@ -286,11 +417,11 @@ export function DesignConclusionPanel({
             <button type="submit" disabled={pending}>
               {pending && pressed === "sign"
                 ? "Signing off…"
-                : `Sign off: ${VERDICT_LABELS[conclusion.proposed ?? "EFFECTIVE"]}`}
+                : `Sign off: ${signable === null ? "" : CONCLUSION_WORDS[signable]}`}
             </button>
             <span className="form-hint">
-              A different verdict is recorded as a design deficiency, or by
-              reopening the design workpaper.
+              You sign the preparer's conclusion. A different one is theirs to
+              record: reopen the design workpaper for them to change it.
             </span>
           </div>
         </form>
@@ -303,7 +434,7 @@ export function DesignConclusionPanel({
         </div>
       ) : null}
 
-      {conclusion.signed !== null && conclusion.viewerIsReviewer ? (
+      {signed !== null && conclusion.viewerIsReviewer ? (
         <details className="dc-reopen">
           <summary>Reopen the D&amp;I conclusion</summary>
           <form
@@ -350,9 +481,14 @@ export function DesignConclusionPanel({
           <ol>
             {earlier.map((item) => (
               <li key={item.id}>
-                <strong>{VERDICT_LABELS[item.verdict]}</strong> · signed by{" "}
-                {item.signedBy || "a reviewer"} on {formatDate(item.signedAt)} ·
-                workpaper version {item.workpaperVersion}
+                <strong>
+                  {item.conclusion !== null
+                    ? CONCLUSION_WORDS[item.conclusion]
+                    : VERDICT_LABELS[item.verdict]}
+                </strong>{" "}
+                · signed by {item.signedBy || "a reviewer"} on{" "}
+                {formatDate(item.signedAt)} · workpaper version{" "}
+                {item.workpaperVersion}
                 <span className="dc-note">
                   {item.reopenedFrom !== null
                     ? REOPENED_FROM[item.reopenedFrom]

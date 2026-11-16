@@ -425,15 +425,24 @@ describe("where a text section is read", () => {
       /<div className="dw-prose">\s*<h6>Understanding of the control<\/h6>\s*<RichText text=\{understanding\} \/>\s*<\/div>/,
     );
     assert.match(sheet, /const \{ understanding \} = paper;/);
+    // Rewritten 15 November 2026. Old: the conclusion's RichText directly before
+    // <OutOfDate>, and the Evidence view repeating the text under "Read the conclusion"
+    // (three RichText in the view). New: section 7 is the one place the conclusion is
+    // read and written; "Edit conclusion" stands between the text and what is out of
+    // date, and the Evidence view links to section 7 instead of repeating the text (two
+    // RichText) (product owner, 15 November 2026, docs/design-workpaper.md section
+    // 3.5/3.6). The text is still shown formatted, by the same reader.
     assert.match(
       sheet,
-      /\) : conclusion\.text === "" \? \([\s\S]{0,400}\) : \(\s*<RichText text=\{conclusion\.text\} \/>\s*\)\}\s*<OutOfDate reasons=\{conclusion\.outOfDate\} \/>/,
+      /\) : conclusion\.text === "" \? \([\s\S]{0,400}\) : \(\s*<RichText text=\{conclusion\.text\} \/>\s*\)\}\s*\{concluding === null \? \(\s*<EditConclusion[\s\S]{0,160}\) : null\}\s*<OutOfDate reasons=\{conclusion\.outOfDate\} \/>/,
     );
-    assert.match(
-      component(view, "EvidenceSplit"),
-      /<details className="dw-more">\s*<summary>Read the conclusion<\/summary>\s*<RichText text=\{conclusion\.text\} \/>\s*<\/details>/,
+    assert.equal(
+      /Read the conclusion|RichText text=\{conclusion/.test(
+        component(view, "EvidenceSplit"),
+      ),
+      false,
     );
-    assert.equal(count(view, /<RichText\b/g), 3);
+    assert.equal(count(view, /<RichText\b/g), 2);
     // The plain splitting into paragraphs is gone from the views: the printed sheet is
     // the Document's own component, so it reads the same.
     assert.ok(!/\bparagraphs\(/.test(view));

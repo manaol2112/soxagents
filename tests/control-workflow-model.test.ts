@@ -172,7 +172,12 @@ describe("the control's workflow", () => {
         "Attributes",
         "D&I Evidence",
         "D&I Assessment",
-        "D&I Conclusion",
+        // Rewritten 15 November 2026. Old: "D&I Conclusion" (covers "Reviewer
+        // sign-off"). New: "D&I Conclusion and Review" (covers "Review · Sign-off"): the
+        // preparer concludes in section 7 of D&I Assessment and this step is the
+        // reviewer's (product owner, 15 November 2026, docs/design-workpaper.md section
+        // 3.5/3.6).
+        "D&I Conclusion and Review",
         "Scope & Sampling",
         "OE Evidence",
         "OE Testing",

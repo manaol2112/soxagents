@@ -146,8 +146,11 @@ describe("what the panel says where nothing is needed from the person", () => {
     assert.ok(line !== null);
     assert.match(line.text, /D&I Conclusion/);
     assert.equal(line.working, false);
+    // Rewritten 15 November 2026. Old: "Open D&I Conclusion". New: "Open D&I Conclusion
+    // and Review", the step's new title (product owner, 15 November 2026,
+    // docs/design-workpaper.md section 3.5/3.6).
     assert.deepEqual(line.link, {
-      label: "Open D&I Conclusion",
+      label: "Open D&I Conclusion and Review",
       step: "designconclusion",
     });
   });

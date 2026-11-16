@@ -14,9 +14,18 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
+import { ConclusionChoicePanel, openedAtConclusion } from "./conclusion-choice";
 import {
+  BASIS_WORDS,
+  CONCLUSION_WORDS,
+  type ConclusionChoice,
+} from "./design-conclusion-model";
+import {
+  CONCLUSION_ANCHOR,
   type ConclusionView,
+  choiceFactsOf,
   conclusionOf,
+  deficiencyWanted,
   designWorkpaperQuery,
   type EditableSection,
   type EvidenceEntry,
@@ -34,17 +43,21 @@ import {
   openMatters,
   type DesignWorkpaper as Paper,
   PROPOSED_BY_AGENT,
+  PROPOSED_REVIEW,
   parseDesignWorkpaper,
   previewUrl,
   type RefChip,
   type Reference,
+  recordedLine,
   recordKey,
   refChip,
   refChips,
   rememberedView,
   rememberView,
   reportInspected,
+  resultBoxes,
   type Selection,
+  SHOWN_BY_WORDS,
   sectionKeyFor,
   staleProblem,
   startingSelection,
@@ -79,6 +92,7 @@ import {
   whenAsked,
 } from "./leave-guard";
 import { RichText } from "./rich-text";
+import { destinationHref } from "./routes";
 import {
   changed,
   DISCARD_QUESTION,
@@ -177,6 +191,19 @@ type Actions = {
   checking: boolean;
   /** The count of open matters under a verdict: goes to the document's section 6. */
   onMatters: (() => void) | null;
+  /** The Matrix's and the Evidence view's link to the document's section 7, where the
+   * conclusion is (docs/design-workpaper.md, section 3.5). */
+  onConclusion: (() => void) | null;
+  /** Section 7's choice of the conclusion (section 3.6): the ids it is recorded for,
+   * and what the page does once the server confirmed or refused it. */
+  choice: {
+    scope: WorkpaperScope;
+    onRecorded: (choice: ConclusionChoice | null) => void;
+    onRefused: () => void;
+  } | null;
+  /** Where a design deficiency is logged (the deficiency log's form for this control);
+   * null where the page has no link to it. */
+  deficiencyHref: string | null;
 };
 
 /* The mount: the views, and the existing card in a fold under them ---------------------- */
@@ -194,6 +221,15 @@ type CardProps = Omit<
  */
 export function DesignWorkpaperStep(props: CardProps) {
   const { ids, papers, notice, viewing } = props;
+  // Section 7 links to where a design deficiency is logged: the deficiency log's form for
+  // this control (Reports, Deficiencies; docs/design-workpaper.md, section 3.5).
+  const deficiencyHref = destinationHref(
+    "reports",
+    "deficiencies",
+    ids.organizationId,
+    ids.projectId,
+    { new: ids.controlId },
+  );
   const starts = foldStartsOpen({ papers, notice, viewing });
   const [open, setOpen] = useState(starts);
   const fold = useRef<HTMLDetailsElement>(null);
@@ -274,6 +310,7 @@ export function DesignWorkpaperStep(props: CardProps) {
         papers={papers}
         onEdit={reveal}
         onDraft={() => reveal(null)}
+        deficiencyHref={deficiencyHref}
       />
       <details
         ref={fold}
@@ -343,6 +380,7 @@ export function DesignWorkpaper({
   papers = null,
   onEdit,
   onDraft,
+  deficiencyHref = null,
 }: {
   scope: WorkpaperScope;
   /** Changes when the workpaper record does: the views then read again. */
@@ -354,6 +392,8 @@ export function DesignWorkpaper({
   onEdit?: (section: EditableSection) => void;
   /** Shows where the existing "Draft" action is, for a control with no workpaper yet. */
   onDraft?: () => void;
+  /** Where a design deficiency is logged for this control; null where not linked. */
+  deficiencyHref?: string | null;
 }) {
   const uid = useId();
   const query = designWorkpaperQuery(scope);
@@ -371,6 +411,9 @@ export function DesignWorkpaper({
   const [printing, setPrinting] = useState(false);
   // "N matters open": the document's section 6 is where they are read.
   const [seeking, setSeeking] = useState(false);
+  // Section 7, the conclusion: from the Matrix, the Evidence view, or a link to it.
+  const [seekingConclusion, setSeekingConclusion] = useState(false);
+  const linkedOnce = useRef(false);
   const tabs = useRef(new Map<ViewKey, HTMLButtonElement>());
   const pane = useRef<HTMLDivElement>(null);
   // The reference chip that last showed a file in the pane: Escape from its annotation
@@ -522,6 +565,34 @@ export function DesignWorkpaper({
     });
     heading?.focus({ preventScroll: true });
   }, [seeking, view, uid]);
+
+  // Section 7, once the document is the view shown; and once on arrival where the page
+  // was opened at it (`#di-conclusion`, from D&I Conclusion and Review).
+  const arrived = state.paper !== null && state.paper.workpaper !== null;
+  useEffect(() => {
+    if (!arrived || linkedOnce.current) {
+      return;
+    }
+    linkedOnce.current = true;
+    if (openedAtConclusion()) {
+      setView("document");
+      setSeekingConclusion(true);
+    }
+  }, [arrived]);
+  useEffect(() => {
+    if (!seekingConclusion || view !== "document") {
+      return;
+    }
+    setSeekingConclusion(false);
+    const heading = document
+      .getElementById(CONCLUSION_ANCHOR)
+      ?.querySelector<HTMLElement>("h5");
+    heading?.scrollIntoView({
+      block: "start",
+      behavior: calm() ? "auto" : "smooth",
+    });
+    heading?.focus({ preventScroll: true });
+  }, [seekingConclusion, view]);
 
   useEffect(() => {
     mounted.current = true;
@@ -1038,6 +1109,35 @@ export function DesignWorkpaper({
       choose("document");
       setSeeking(true);
     },
+    onConclusion: () => {
+      choose("document");
+      setSeekingConclusion(true);
+    },
+    choice: {
+      scope,
+      // Recorded (section 3.6): the conclusion the server answered with is shown at
+      // once, and the views are read again in the background (the choice's panel reads
+      // the page's records again itself).
+      onRecorded: (choice) => {
+        setState((before) =>
+          before.paper === null
+            ? before
+            : {
+                ...before,
+                paper: {
+                  ...before.paper,
+                  conclusion: { ...before.paper.conclusion, choice },
+                },
+              },
+        );
+        setAttempt((n) => n + 1);
+      },
+      // Refused as the records changed: they are read again, what was chosen stays.
+      onRefused: () => {
+        setAttempt((n) => n + 1);
+      },
+    },
+    deficiencyHref,
   };
   // A paper kept after a read that failed may be out of date: it says so, and is not
   // printed until it is read again.
@@ -1483,6 +1583,199 @@ function Verdict({
   );
 }
 
+/** Section 7's head: the agent's proposal and its reasons until the preparer records a
+ * conclusion; then the preparer's conclusion, who recorded it, and what the agent
+ * proposed; signed or out of date where the server says so (sections 3.5 and 3.6). */
+function ConclusionHead({
+  paper,
+  conclusion,
+}: {
+  paper: Paper;
+  conclusion: ConclusionView;
+}) {
+  const { proposedConclusion: proposal, proposedReasons: reasons } =
+    paper.conclusion;
+  const choice = paper.conclusion.choice;
+  const pill = conclusion.signed
+    ? conclusion.standing
+    : conclusion.stale
+      ? conclusion.standing
+      : choice !== null
+        ? recordedLine(choice)
+        : proposal !== null
+          ? PROPOSED_REVIEW
+          : conclusion.standing;
+  return (
+    <div className={`dw-verdict dw-concl-head is-${conclusion.tone}`}>
+      <small>
+        {conclusion.signed
+          ? "Signed conclusion"
+          : choice !== null
+            ? "The preparer's conclusion"
+            : proposal !== null
+              ? "The agent's proposal"
+              : "Design and implementation"}
+      </small>
+      <strong>
+        {conclusion.verdict !== "" ? conclusion.verdict : conclusion.headline}
+      </strong>
+      <span className={`pill tone-${conclusion.tone}`}>
+        {pill === PROPOSED_REVIEW || pill === PROPOSED_BY_AGENT ? (
+          <UiIcon name="sparkles" size={11} />
+        ) : null}
+        {pill}
+      </span>
+      {choice !== null && choice.basis !== null ? (
+        <p className="dw-concl-line">
+          <b>Not effective in:</b> {BASIS_WORDS[choice.basis]}
+        </p>
+      ) : null}
+      {choice !== null && choice.reason !== "" ? (
+        <p className="dw-concl-line">
+          <b>Reason.</b> {choice.reason}
+        </p>
+      ) : null}
+      {proposal !== null && reasons.length > 0 ? (
+        <div className="dw-concl-why">
+          {choice !== null ? (
+            <p>
+              {choice.kind === proposal
+                ? "The agent proposed the same, because:"
+                : `The agent proposed “${CONCLUSION_WORDS[proposal]}”, because:`}
+            </p>
+          ) : null}
+          <ul aria-label="Why the agent proposes it">
+            {keyed(reasons, (reason) => reason).map(({ key, item }) => (
+              <li key={key}>{item}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** The design and the implementation result side by side (section 3.6). Nothing where
+ * the server sends neither. */
+function Results({ paper }: { paper: Paper }) {
+  if (paper.design === null && paper.implementation === null) {
+    return null;
+  }
+  return (
+    <div className="dw-results">
+      {resultBoxes(paper).map((box) => (
+        <div key={box.label} className={`dw-result is-${box.tone}`}>
+          <small>{box.label}</small>
+          <strong>{box.words}</strong>
+          {box.sentence !== "" ? <p>{box.sentence}</p> : null}
+          {box.open !== "" ? <p className="dw-quiet">{box.open}</p> : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** The choice of the conclusion where the preparer may record it (the editable draft:
+ * the server's `can_edit`, the same rule as its `can_choose`); on paper, and for anyone
+ * else, nothing more than the head says. The way to a design deficiency, where the
+ * conclusion depends on one. */
+function ConclusionChoiceOf({
+  paper,
+  actions,
+}: {
+  paper: Paper;
+  actions: Actions | null;
+}) {
+  if (actions === null) {
+    return null;
+  }
+  const facts = choiceFactsOf(paper);
+  const choice = paper.conclusion.choice;
+  const wanted = deficiencyWanted(
+    facts,
+    choice?.kind ?? paper.conclusion.proposedConclusion,
+  );
+  const scope = actions.choice?.scope ?? null;
+  return (
+    <>
+      {paper.canEdit && scope !== null && actions.choice !== null ? (
+        <ConclusionChoicePanel
+          // Another workpaper is another panel.
+          key={paper.workpaper?.id ?? ""}
+          scope={scope}
+          choice={choice}
+          proposal={paper.conclusion.proposedConclusion}
+          facts={facts}
+          onRecorded={actions.choice.onRecorded}
+          onRefused={actions.choice.onRefused}
+          deficiencyHref={actions.deficiencyHref}
+        />
+      ) : choice === null ? (
+        <p className="dw-quiet dw-concl-none">
+          No conclusion is recorded yet. The preparer records it here while the
+          workpaper is a draft.
+        </p>
+      ) : null}
+      {wanted ? (
+        <p className="dw-concl-deficiency">
+          {actions.deficiencyHref !== null ? (
+            <>
+              The conclusion follows the deficiency log.{" "}
+              <a href={actions.deficiencyHref}>Log a design deficiency</a>
+            </>
+          ) : (
+            "The conclusion follows the deficiency log: log a design deficiency in Reports, under Deficiencies."
+          )}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+/** "Edit conclusion": the same in-place editor as the link on section 7's heading, as a
+ * button in the card (section 3.5). Off while another editor is open, while the page's
+ * records are behind a save, and while the working copies are read. */
+function EditConclusion({
+  actions,
+  editable,
+}: {
+  actions: Actions | null;
+  editable: boolean;
+}) {
+  const onEdit = actions?.onEdit ?? null;
+  if (onEdit === null || !editable) {
+    return null;
+  }
+  const copied = actions?.copied.has("conclusion") === true;
+  return (
+    <div className="dw-concl-edit">
+      <button
+        type="button"
+        className="btn-secondary btn-sm"
+        disabled={
+          actions?.editing != null ||
+          actions?.behind === true ||
+          actions?.checking === true
+        }
+        onClick={() => onEdit("conclusion")}
+      >
+        {copied ? CONTINUE_EDITING : "Edit conclusion"}
+        {copied ? <span className="sr-only"> the conclusion</span> : null}
+      </button>
+    </div>
+  );
+}
+
+/** "Open section 7": the document's conclusion, from the Matrix and the Evidence view. */
+function ToConclusion({ onOpen }: { onOpen: () => void }) {
+  return (
+    <button type="button" className="dw-edit dw-to-concl" onClick={onOpen}>
+      Open section 7
+      <span className="sr-only">, the conclusion, in the document</span>
+    </button>
+  );
+}
+
 function OutOfDate({ reasons }: { reasons: readonly string[] }) {
   if (reasons.length === 0) {
     return null;
@@ -1695,7 +1988,7 @@ function DocumentSheet({
 
       <Section
         number={3}
-        title="Walkthrough of one instance"
+        title="Implementation: walkthrough of one instance"
         said={saidOf("walkthrough")}
         edit={
           <EditLink
@@ -1855,6 +2148,11 @@ function DocumentSheet({
                         </td>
                         <td className="is-state">
                           <StatePill {...stateOf(attribute)} />
+                          {attribute.shownBy !== null ? (
+                            <small className="dw-shown-by">
+                              {SHOWN_BY_WORDS[attribute.shownBy]}
+                            </small>
+                          ) : null}
                         </td>
                         <td className="is-tm">
                           {mark.symbol !== "" ? (
@@ -1987,6 +2285,9 @@ function DocumentSheet({
         number={7}
         title="Conclusion"
         said={saidOf("conclusion")}
+        // Where D&I Conclusion and Review links to; not on the printed copy, which is a
+        // second sheet.
+        anchor={actions === null ? undefined : CONCLUSION_ANCHOR}
         edit={
           <EditLink
             section="conclusion"
@@ -1996,20 +2297,31 @@ function DocumentSheet({
           />
         }
       >
+        {/* One card (docs/design-workpaper.md, sections 3.5 and 3.6): the agent's
+            proposal or the preparer's conclusion, the design and the implementation
+            results, the choice, the way to a design deficiency, then the text with its
+            one editor, and the sign-off. */}
         <div className="dw-concl">
-          <Verdict conclusion={conclusion} label="Design and implementation" />
+          <ConclusionHead paper={paper} conclusion={conclusion} />
+          <Results paper={paper} />
+          <ConclusionChoiceOf paper={paper} actions={actions} />
           <div className="dw-concl-text">
             {concluding !== null ? (
               <SectionEditorPanel {...concluding} />
             ) : conclusion.text === "" ? (
               <p className="dw-quiet">
                 No conclusion is written yet. The agent drafts it with the
-                workpaper; the verdict is proposed once the workpaper is
-                prepared, and a reviewer signs it.
+                workpaper, and the preparer finalizes it here.
               </p>
             ) : (
               <RichText text={conclusion.text} />
             )}
+            {concluding === null ? (
+              <EditConclusion
+                actions={actions}
+                editable={editable.has("conclusion")}
+              />
+            ) : null}
             <OutOfDate reasons={conclusion.outOfDate} />
           </div>
         </div>
@@ -2219,6 +2531,11 @@ function MatrixBoard({
             <small>{tile.label}</small>
             <strong>{tile.value}</strong>
             <p title={tile.note}>{tile.note}</p>
+            {/* The conclusion is read and chosen in the document's section 7 (section
+                3.5): a short line here, and the way there. */}
+            {tile.key === "conclusion" && actions.onConclusion !== null ? (
+              <ToConclusion onOpen={actions.onConclusion} />
+            ) : null}
           </li>
         ))}
       </ul>
@@ -2555,9 +2872,11 @@ function EvidenceSplit({
               <h5>
                 {conclusion.signed
                   ? "Signed conclusion"
-                  : conclusion.proposed
-                    ? "Proposed conclusion"
-                    : "Conclusion"}
+                  : conclusion.recorded
+                    ? "Recorded conclusion"
+                    : conclusion.proposed
+                      ? "Proposed conclusion"
+                      : "Conclusion"}
               </h5>
               <EditLink
                 section="conclusion"
@@ -2585,11 +2904,10 @@ function EvidenceSplit({
                 </button>
               )}
             </p>
-            {conclusion.text !== "" ? (
-              <details className="dw-more">
-                <summary>Read the conclusion</summary>
-                <RichText text={conclusion.text} />
-              </details>
+            {/* The text and the choice are the document's section 7 (section 3.5):
+                the way there, never the text again. */}
+            {actions.onConclusion !== null ? (
+              <ToConclusion onOpen={actions.onConclusion} />
             ) : null}
             <OutOfDate reasons={conclusion.outOfDate} />
           </section>

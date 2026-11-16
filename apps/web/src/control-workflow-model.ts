@@ -123,11 +123,15 @@ export const STEPS: ReadonlyArray<{
     short: "D&I assessment",
   },
   {
+    // "D&I Conclusion and Review" (product owner, 15 November 2026;
+    // docs/design-workpaper.md, section 3.5): the preparer concludes in section 7 of D&I
+    // Assessment, and this step is the reviewer's. A step that waits on it still waits
+    // on the D&I conclusion.
     key: "designconclusion",
     group: "design",
     kind: "gate",
-    title: "D&I Conclusion",
-    covers: "Reviewer sign-off",
+    title: "D&I Conclusion and Review",
+    covers: "Review · Sign-off",
     short: "D&I conclusion",
   },
   {
@@ -1039,7 +1043,7 @@ export type Band = {
  * it, and the understanding down into the Attributes, which open the two branches from the row
  * between them. D&I runs along the top row and OE along the third; OE starts one column later
  * than D&I: Scope & Sampling may begin once the attributes are settled, but OE Evidence sits
- * directly under the D&I Conclusion, whose effective verdict drops straight into it. A
+ * directly under the D&I Conclusion and Review, whose effective verdict drops straight into it. A
  * not-effective verdict and OE Testing join at the Control Conclusion on the middle row, and
  * the review and the final workpaper follow below it.
  */

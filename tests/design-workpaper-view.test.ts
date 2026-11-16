@@ -322,7 +322,11 @@ describe("print or save as PDF", () => {
     for (const section of [
       'number={1}\n        title="Objective, risk and control"',
       'number={2} title="Procedures performed"',
-      'number={3}\n        title="Walkthrough of one instance"',
+      // Rewritten 15 November 2026. Old: section 3 "Walkthrough of one instance". New:
+      // "Implementation: walkthrough of one instance", saying which part of the D&I
+      // assessment is the implementation (product owner, 15 November 2026,
+      // docs/design-workpaper.md section 3.5/3.6).
+      'number={3}\n        title="Implementation: walkthrough of one instance"',
       'number={4}\n        title="Attributes tested"',
       'number={5}\n        title="Information produced by the entity"',
       'number={6} title="Matters for the reviewer" anchor={mattersId}',

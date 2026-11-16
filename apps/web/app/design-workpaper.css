@@ -701,17 +701,22 @@ button.dw-edit:focus-visible:not(:disabled) {
   color: var(--text-secondary);
 }
 
+/* Section 7 is one card, top to bottom (docs/design-workpaper.md, sections 3.5 and 3.6):
+   the proposal or the preparer's conclusion, the design and implementation results, the
+   choice, then the text with its editor. Calm: one border, quiet dividers. */
 .dw-concl {
   display: grid;
-  grid-template-columns: minmax(0, 18rem) minmax(0, 1fr);
   margin-top: 0.75rem;
   border: 1px solid var(--text-strong);
+}
+
+.dw-concl > * + * {
+  border-top: 1px solid var(--border);
 }
 
 .dw-concl .dw-verdict {
   background: var(--surface-muted);
   border: 0;
-  border-right: 1px solid var(--border);
   border-left: 4px solid var(--dw-c, var(--border-strong));
   border-radius: 0;
 }
@@ -722,8 +727,265 @@ button.dw-edit:focus-visible:not(:disabled) {
   font-weight: 600;
 }
 
+.dw-concl-line,
+.dw-concl-why {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.dw-concl-line b {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.dw-concl-why ul {
+  margin: 0.125rem 0 0;
+  padding-left: 1.125rem;
+}
+
+.dw-concl-why li + li {
+  margin-top: 0.125rem;
+}
+
+/* The design and the implementation result, side by side. */
+.dw-results {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.625rem;
+  padding: 0.75rem 1rem;
+}
+
+.dw-result {
+  display: grid;
+  gap: 0.25rem;
+  align-content: start;
+  min-width: 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--dw-c, var(--border-strong));
+  border-radius: var(--radius);
+}
+
+.dw-result.is-info {
+  --dw-c: var(--info);
+}
+
+.dw-result.is-warning {
+  --dw-c: var(--warning);
+}
+
+.dw-result.is-neutral {
+  --dw-c: var(--neutral);
+}
+
+.dw-result small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.dw-result strong {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+}
+
+.dw-result p {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+.dw-concl-none,
+.dw-concl-deficiency {
+  padding: 0.625rem 1rem;
+  font-size: var(--fs-sm);
+}
+
+.dw-concl-deficiency {
+  color: var(--text-secondary);
+}
+
 .dw-concl-text {
   padding: 0.875rem 1rem;
+}
+
+.dw-concl-edit {
+  margin-top: 0.625rem;
+}
+
+/* Under an attribute's result: how it is shown (section 3.6). */
+.dw-shown-by {
+  display: block;
+  margin-top: 0.25rem;
+  color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
+}
+
+/* The preparer's choice of the conclusion (section 3.6). */
+.cc {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.875rem 1rem;
+}
+
+.cc fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.cc legend {
+  margin-bottom: 0.375rem;
+  padding: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 650;
+}
+
+.cc-kinds {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.cc-kind {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.5rem;
+  align-items: start;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.cc-kind:hover:not(.is-off) {
+  background: var(--surface-muted);
+}
+
+.cc-kind.is-on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.cc-kind:has(input:disabled) {
+  cursor: default;
+}
+
+.cc-kind input {
+  margin-top: 0.2rem;
+}
+
+.cc-kind-copy {
+  display: grid;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.cc-kind-words {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+  align-items: center;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.cc-kind.is-off .cc-kind-words {
+  color: var(--text-tertiary);
+}
+
+.cc-kind small,
+.cc-hint {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+.cc-kind small.cc-off {
+  color: var(--text-tertiary);
+}
+
+.cc-proposed {
+  height: auto;
+  min-height: 18px;
+  font-size: var(--fs-2xs);
+}
+
+.cc-basis {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.cc-basis-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem 1rem;
+}
+
+.cc-basis-option {
+  display: inline-flex;
+  gap: 0.375rem;
+  align-items: center;
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.cc-reason {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.cc-reason label {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.cc-reason textarea {
+  width: 100%;
+  min-height: 4.5rem;
+  resize: vertical;
+}
+
+.cc-reason textarea[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.cc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+}
+
+.cc-why {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cc-refusal {
+  padding: 0.5rem 0.75rem;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  background: var(--danger-soft);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius);
+  overflow-wrap: anywhere;
+}
+
+/* The way to the document's section 7, from the Matrix and the Evidence view. */
+button.dw-to-concl {
+  justify-self: start;
+  margin-top: 0.25rem;
 }
 
 .dw-legend {
@@ -804,9 +1066,8 @@ button.dw-edit:focus-visible:not(:disabled) {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .dw-concl .dw-verdict {
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
+  .dw-results {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .dw-title {
@@ -2238,6 +2499,7 @@ button.se-tool:focus-visible:not(:disabled) {
     animation: none;
   }
 
+  .cc-kind,
   button.dw-tab,
   button.dw-ref,
   button.dw-cell,

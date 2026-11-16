@@ -5,8 +5,12 @@ import { describe, it } from "node:test";
 import {
   ATTRIBUTE_STATES,
   ATTRIBUTE_WITHOUT_TEXT,
+  CONCLUSION_ANCHOR,
+  choiceFactsOf,
+  conclusionHref,
   conclusionOf,
   type DesignWorkpaper,
+  deficiencyWanted,
   designWorkpaperPath,
   designWorkpaperQuery,
   EXCEPTIONS_NOTED,
@@ -25,14 +29,19 @@ import {
   NO_EXCEPTIONS_NOTED,
   openMatters,
   PROPOSED_BY_AGENT,
+  PROPOSED_REVIEW,
   paragraphs,
   parseDesignWorkpaper,
   previewUrl,
+  RESULT_WORDS,
+  recordedLine,
   recordKey,
   refChip,
   refChips,
   rememberedView,
   rememberView,
+  resultBoxes,
+  SHOWN_BY_WORDS,
   sectionKeyFor,
   staleProblem,
   startingSelection,
@@ -2170,5 +2179,348 @@ describe("the evidence beside the workpaper", () => {
       startingSelection(paper, { ref: "E99", annotationId: null }),
       { ref: "E3", annotationId: null },
     );
+  });
+});
+
+// One conclusion, written in D&I Assessment (section 3.5); the preparer concludes and the
+// agent proposes (section 3.6; product owner, 15 November 2026). The assembled view gains
+// `attributes[].shown_by`, the design and implementation results, and the proposal and
+// the preparer's choice on its conclusion part. Read cautiously: a missing field is null,
+// and an unknown kind never reads as effective.
+
+describe("the conclusion the preparer records, and the agent's proposal", () => {
+  const CHOICE = uuid(60);
+  const choice = {
+    id: CHOICE,
+    kind: "EXCEPTIONS_NOTED",
+    basis: null,
+    reason: "The late removal was on a holiday; access was not used.",
+    proposed_kind: "EXCEPTIONS_NOTED",
+    recorded_by: "Dana Lee",
+    recorded_at: "2026-11-15T10:00:00Z",
+    workpaper_version: 1,
+  };
+  const draft = {
+    workpaper: {
+      ...(sample().workpaper as Record<string, unknown>),
+      status: "DRAFT",
+      prepared_by: null,
+      prepared_at: null,
+    },
+    review: {
+      status: "NOT_READY",
+      proposed: null,
+      signed_verdict: null,
+      signed_by: null,
+      signed_at: null,
+      out_of_date: [],
+    },
+  };
+  const withConclusion = (
+    conclusion: Record<string, unknown>,
+    over: Record<string, unknown> = {},
+  ) =>
+    parsed({
+      ...draft,
+      conclusion: {
+        ...(sample().conclusion as Record<string, unknown>),
+        proposed: null,
+        ...conclusion,
+      },
+      ...over,
+    });
+
+  it("reads the new fields, and nothing it does not know", () => {
+    const paper = parsed({
+      attributes: attributesOf().map((item, at) => ({
+        ...item,
+        shown_by: at === 0 ? "IMPLEMENTATION" : at === 1 ? "DESIGN" : "SOMEHOW",
+      })),
+      design: {
+        result: "DESIGNED",
+        sentence: "Every attribute is shown.",
+        open: [],
+      },
+      implementation: {
+        result: "OPEN",
+        sentence: "Attribute D is not yet shown.",
+        open: ["D"],
+      },
+      conclusion: {
+        ...(sample().conclusion as Record<string, unknown>),
+        proposed_conclusion: "NOT_CONCLUDED",
+        proposed_reasons: [
+          "Attribute D is not yet shown in the records of an instance.",
+        ],
+        choice,
+      },
+    });
+    assert.deepEqual(
+      paper.attributes.map((item) => item.shownBy),
+      ["IMPLEMENTATION", "DESIGN", null, null],
+    );
+    assert.equal(paper.design?.result, "DESIGNED");
+    assert.deepEqual(paper.implementation?.open, ["D"]);
+    assert.equal(paper.conclusion.proposedConclusion, "NOT_CONCLUDED");
+    assert.equal(paper.conclusion.choice?.kind, "EXCEPTIONS_NOTED");
+    // An answer from before section 3.6: every new field is null.
+    const old = parsed();
+    assert.equal(old.design, null);
+    assert.equal(old.implementation, null);
+    assert.equal(old.conclusion.proposedConclusion, null);
+    assert.deepEqual(old.conclusion.proposedReasons, []);
+    assert.equal(old.conclusion.choice, null);
+    assert.ok(old.attributes.every((item) => item.shownBy === null));
+    // A way of being shown is read only of an attribute that reads "Shown".
+    const notShown = parsed({
+      attributes: attributesOf().map((item) => ({
+        ...item,
+        state: "NOT_SHOWN",
+        shown_by: "IMPLEMENTATION",
+      })),
+    });
+    assert.ok(notShown.attributes.every((item) => item.shownBy === null));
+    // Unknown kinds: never effective, never a choice.
+    const odd = withConclusion(
+      {
+        proposed_conclusion: "EFFECTIVE-ISH",
+        choice: { ...choice, kind: "PASS" },
+      },
+      {
+        design: { result: "GREAT", sentence: "", open: [] },
+      },
+    );
+    assert.equal(odd.conclusion.proposedConclusion, null);
+    assert.equal(odd.conclusion.choice, null);
+    assert.equal(odd.design, null);
+  });
+
+  it("words the agent's proposal as a proposal to review, in the agent's tone", () => {
+    const view = conclusionOf(
+      withConclusion({
+        proposed_conclusion: "EXCEPTIONS_NOTED",
+        proposed_reasons: ["An exception stands on attribute B."],
+      }),
+    );
+    assert.equal(view.proposed, true);
+    assert.equal(view.recorded, false);
+    assert.equal(view.signed, false);
+    assert.equal(view.kind, "EXCEPTIONS_NOTED");
+    assert.equal(view.headline, "Proposed: Exceptions noted");
+    assert.equal(view.standing, PROPOSED_REVIEW);
+    assert.equal(PROPOSED_REVIEW, "Proposed by the agent · review it");
+    assert.equal(view.tone, "ai");
+  });
+
+  it("words a recorded conclusion by who recorded it, never as signed or green", () => {
+    const view = conclusionOf(
+      withConclusion({ proposed_conclusion: "EFFECTIVE", choice }),
+    );
+    assert.equal(view.recorded, true);
+    assert.equal(view.signed, false);
+    assert.equal(view.proposed, false);
+    assert.equal(view.headline, "Recorded: Exceptions noted");
+    assert.match(view.standing, /^Recorded by Dana Lee on /);
+    assert.equal(view.tone, "info");
+    assert.equal(
+      recordedLine({
+        id: CHOICE,
+        kind: "EFFECTIVE",
+        basis: null,
+        reason: "",
+        proposedKind: null,
+        recordedBy: "",
+        recordedAt: "",
+        workpaperVersion: null,
+      }),
+      // Nobody named, no date: still who it is, never an empty name.
+      "Recorded by the preparer",
+    );
+    // The tiles say it the same way.
+    const tile = tilesOf(withConclusion({ choice })).find(
+      (item) => item.key === "conclusion",
+    );
+    assert.equal(tile?.value, "Recorded: Exceptions noted");
+  });
+
+  it("words a signed conclusion by the preparer's words, only while the sign-off stands", () => {
+    const signedPaper = parsed({
+      review: {
+        status: "SIGNED_OFF",
+        proposed: "EFFECTIVE",
+        signed_verdict: "EFFECTIVE",
+        signed_by: "Riley Reviewer",
+        signed_at: "2026-11-16T09:00:00Z",
+        out_of_date: [],
+      },
+      conclusion: {
+        ...(sample().conclusion as Record<string, unknown>),
+        signed: true,
+        proposed_conclusion: "EXCEPTIONS_NOTED",
+        choice,
+      },
+    });
+    const view = conclusionOf(signedPaper);
+    assert.equal(view.signed, true);
+    assert.equal(view.headline, "Signed: Exceptions noted");
+    assert.match(view.standing, /^Signed by Riley Reviewer on /);
+    // Exceptions noted, signed: concluded on, never the green of effective.
+    assert.equal(view.tone, "warning");
+    const effective = conclusionOf(
+      parsed({
+        review: {
+          status: "SIGNED_OFF",
+          proposed: "EFFECTIVE",
+          signed_verdict: "EFFECTIVE",
+          signed_by: "Riley Reviewer",
+          signed_at: "2026-11-16T09:00:00Z",
+          out_of_date: [],
+        },
+        conclusion: {
+          ...(sample().conclusion as Record<string, unknown>),
+          signed: true,
+          choice: { ...choice, kind: "EFFECTIVE" },
+        },
+      }),
+    );
+    assert.equal(effective.tone, "success");
+    // Out of date: never signed, and says so.
+    const stale = conclusionOf(
+      parsed({
+        review: {
+          status: "OUT_OF_DATE",
+          proposed: "EFFECTIVE",
+          signed_verdict: "EFFECTIVE",
+          signed_by: "Riley Reviewer",
+          signed_at: "2026-11-16T09:00:00Z",
+          out_of_date: ["the preparer's conclusion changed"],
+        },
+        conclusion: {
+          ...(sample().conclusion as Record<string, unknown>),
+          signed: false,
+          choice,
+        },
+      }),
+    );
+    assert.equal(stale.signed, false);
+    assert.equal(stale.stale, true);
+    assert.match(stale.standing, /is out of date$/);
+    assert.equal(stale.tone, "warning");
+  });
+
+  it("says the design and the implementation results in the contract's words", () => {
+    assert.deepEqual(
+      [
+        RESULT_WORDS.design.DESIGNED,
+        RESULT_WORDS.implementation.IN_PLACE,
+        RESULT_WORDS.design.EXCEPTIONS,
+        RESULT_WORDS.implementation.OPEN,
+      ],
+      [
+        "Designed to address the risk",
+        "In place in the instance walked through",
+        "Exceptions noted",
+        "Not concluded",
+      ],
+    );
+    const boxes = resultBoxes(
+      parsed({
+        design: {
+          result: "DESIGNED",
+          sentence: "Every attribute is shown.",
+          open: [],
+        },
+        implementation: {
+          result: "OPEN",
+          sentence: "Attributes C and D are not yet shown.",
+          open: ["C", "D"],
+        },
+      }),
+    );
+    assert.deepEqual(boxes, [
+      {
+        label: "Design",
+        words: "Designed to address the risk",
+        sentence: "Every attribute is shown.",
+        open: "",
+        tone: "info",
+      },
+      {
+        label: "Implementation",
+        words: "Not concluded",
+        sentence: "Attributes C and D are not yet shown.",
+        open: "Not yet shown: C, D",
+        tone: "neutral",
+      },
+    ]);
+    // Not sent: not concluded, never settled.
+    assert.deepEqual(
+      resultBoxes(parsed()).map((box) => box.words),
+      ["Not concluded", "Not concluded"],
+    );
+    // Settled is never the green of a sign-off.
+    assert.ok(boxes.every((box) => box.tone !== "success"));
+    assert.deepEqual(SHOWN_BY_WORDS, {
+      IMPLEMENTATION: "In the instance",
+      DESIGN: "As designed",
+    });
+  });
+
+  it("gives the choice what the records say, and offers the deficiency log where it matters", () => {
+    const paper = withConclusion(
+      { proposed_conclusion: "EXCEPTIONS_NOTED" },
+      {
+        attributes: attributesOf().map((item, at) => ({
+          ...item,
+          state: at === 1 ? "EXCEPTION_RECORDED" : item.state,
+        })),
+        design: {
+          result: "EXCEPTIONS",
+          sentence: "An exception stands on attribute B.",
+          open: ["D"],
+        },
+        implementation: {
+          result: "EXCEPTIONS",
+          sentence: "An exception stands on attribute B.",
+          open: ["D"],
+        },
+      },
+    );
+    const facts = choiceFactsOf(paper);
+    assert.deepEqual(facts, {
+      deficiency: false,
+      exceptions: ["B"],
+      design: "EXCEPTIONS",
+      implementation: "EXCEPTIONS",
+      implementationOpen: ["D"],
+    });
+    assert.equal(deficiencyWanted(facts, "EXCEPTIONS_NOTED"), true);
+    // A design deficiency stands exactly where the agent proposes not effective.
+    const deficient = choiceFactsOf(
+      withConclusion({ proposed_conclusion: "NOT_EFFECTIVE" }),
+    );
+    assert.equal(deficient.deficiency, true);
+    // Not effective with no deficiency logged: its sign-off needs one.
+    const clean = choiceFactsOf(
+      withConclusion(
+        { proposed_conclusion: "EFFECTIVE" },
+        {
+          design: { result: "DESIGNED", sentence: "", open: [] },
+          implementation: { result: "IN_PLACE", sentence: "", open: [] },
+        },
+      ),
+    );
+    assert.equal(deficiencyWanted(clean, "EFFECTIVE"), false);
+    assert.equal(deficiencyWanted(clean, "NOT_EFFECTIVE"), true);
+    assert.equal(deficiencyWanted(deficient, "NOT_EFFECTIVE"), false);
+  });
+
+  it("links to section 7 by its anchor", () => {
+    assert.equal(CONCLUSION_ANCHOR, "di-conclusion");
+    assert.equal(
+      conclusionHref("/?organization=o&step=designassessment"),
+      "/?organization=o&step=designassessment#di-conclusion",
+    );
+    assert.equal(conclusionHref("/?step=x#other"), "/?step=x#di-conclusion");
   });
 });

@@ -1245,6 +1245,63 @@
   font-size: var(--fs-sm);
 }
 
+/* D&I Conclusion and Review (docs/design-workpaper.md, section 3.5): the preparer's
+   conclusion and its text, read-only, as section 7 has them. */
+.dc-none,
+.dc-edit-where {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.dc-none a,
+.dc-edit-where a {
+  font-weight: 600;
+}
+
+.dc-chosen {
+  display: grid;
+  gap: 0.2rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.dc-chosen > p { margin: 0; }
+
+.dc-chosen b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.dc-text {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.7rem 0.85rem;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+}
+
+.dc-text h4 {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.dc-text p,
+.dc-text ul,
+.dc-text ol { margin: 0; }
+
+.dc-text :is(ul, ol) { padding-left: 1.2rem; }
+
+.dc-quiet { color: var(--text-secondary); }
+
 /* Why the conclusion cannot be signed while an exception stands, in the server's own
    sentence(s), whole, and what the preparer does next: each wraps, none is cut. */
 .dc-excepted {
