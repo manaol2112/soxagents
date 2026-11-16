@@ -106,7 +106,12 @@ from fastapi import FastAPI, HTTPException, Request
 from psycopg.types.json import Json
 from pydantic import BaseModel, ConfigDict, Field
 
-from ai_workforce_api import attribute_dispositions, file_reliability, independence
+from ai_workforce_api import (
+    attribute_dispositions,
+    file_reliability,
+    independence,
+    workpaper_review_notes,
+)
 from ai_workforce_api.authorization import (
     Action,
     NotVisible,
@@ -631,6 +636,10 @@ class DesignConclusionBody(BaseModel):
     can_choose: bool = False
     design: ResultBody = Field(default_factory=_open_result)
     implementation: ResultBody = Field(default_factory=_open_result)
+    # The review notes of the design workpaper that are urgent and open or responded to
+    # (docs/workpaper-review.md, section 4). While there is one, `blocking` says so and
+    # the sign-off is refused.
+    urgent_review_notes: int = 0
 
 
 class SignOffBody(BaseModel):
@@ -1194,6 +1203,14 @@ def _body(
         # are said as well, as before.
         refusals = [NO_CHOICE, *facts.unanswered()]
     blocking.extend(refusals)
+    # The workpaper's urgent review notes hold the sign-off until each is cleared or
+    # dismissed (docs/workpaper-review.md, section 4).
+    urgent = (
+        0 if paper is None else workpaper_review_notes.urgent_open(connection, UUID(str(paper[0])))
+    )
+    held = workpaper_review_notes.signoff_refusal(urgent)
+    if held is not None:
+        blocking.append(held)
     if status == "SIGNED_OFF":
         blocking.append("the D&I conclusion is signed off")
     reviewer = _is_reviewer(connection, project_id, viewer)
@@ -1242,6 +1259,7 @@ def _body(
         can_choose=can_choose,
         design=results.design,
         implementation=results.implementation,
+        urgent_review_notes=urgent,
     )
 
 
@@ -1454,7 +1472,8 @@ def sign_off(
     effective conclusion has no standing design deficiency, and where the reviewer names
     another conclusion; and, as before, for the preparer (independence, which also covers
     the person who recorded the conclusion), another prepared version, and a sign-off that
-    still holds."""
+    still holds. Refused too while a review note of the workpaper is urgent and open or
+    responded to (workpaper_review_notes)."""
     _reviewer(connection, principal, organization_id, project_id)
     with transaction(connection) as cursor:
         facts = _facts(cursor.connection, project_id, control_id, lock=True, assemble=True)
@@ -1465,6 +1484,14 @@ def sign_off(
             raise DesignConclusionState("the design workpaper changed; review it again")
         if facts.choice is not None and facts.choice.id != body.choice_id:
             raise DesignConclusionState(CHOICE_NOT_STANDING)
+        # An urgent review note of the workpaper that is open or responded to holds the
+        # sign-off (docs/workpaper-review.md, section 4). The workpaper's row is locked
+        # (above), as it is while a note is raised, so none is raised in between.
+        held = workpaper_review_notes.signoff_refusal(
+            workpaper_review_notes.urgent_open(cursor.connection, UUID(str(paper[0])))
+        )
+        if held is not None:
+            raise DesignConclusionState(held)
         results = facts.results()
         refusals = facts.signing_refusals(results)
         if refusals:

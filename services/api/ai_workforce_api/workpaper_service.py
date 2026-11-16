@@ -1204,6 +1204,11 @@ def register_workpapers(app: FastAPI, settings: Settings, scheduler: Any) -> Non
 
     register_workpaper_drafts(app, base, run)
 
+    # Review notes on a workpaper (docs/workpaper-review.md, sections 1 to 5).
+    from ai_workforce_api.workpaper_review_notes import register_workpaper_review_notes
+
+    register_workpaper_review_notes(app, base, run)
+
 
 def _download(name: str, data: bytes) -> Response:
     return Response(
