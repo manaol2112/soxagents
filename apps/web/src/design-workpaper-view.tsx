@@ -71,6 +71,9 @@ import {
 import { AnnotatedDialog } from "./evidence-opener";
 import { fileQuery } from "./evidence-preview-model";
 import { FileBadge } from "./file-badge";
+import { useGuardedLinks } from "./guarded-router";
+import { LeaveDialog } from "./leave-dialog";
+import { setLeaveAsker } from "./leave-guard";
 import { RichText } from "./rich-text";
 import {
   changed,
@@ -98,6 +101,16 @@ import {
   useRecordsRefresh,
 } from "./section-editor";
 import { type IconName, UiIcon } from "./ui-icon";
+import { useKeeping, useWorkingCopies } from "./working-copy";
+import {
+  CONTINUE_EDITING,
+  copyFor,
+  copyIsStale,
+  HAS_COPY,
+  restoredDraft,
+  restoredWords,
+  type WorkingCopy,
+} from "./working-copy-model";
 import type { Workpaper } from "./workpaper-model";
 import { WorkpapersTab } from "./workpaper-view";
 
@@ -144,6 +157,9 @@ type Actions = {
   saved: EditableSection | null;
   /** The page's records are a version behind the views: "Edit" waits for them. */
   behind: boolean;
+  /** The sections the person has a working copy of (section 3.4): their link reads
+   * "Continue editing". */
+  copied: ReadonlySet<EditableSection>;
   /** The count of open matters under a verdict: goes to the document's section 6. */
   onMatters: (() => void) | null;
 };
@@ -289,7 +305,17 @@ type Editing = {
   phase: EditPhase;
   /** Why the last save was not taken; "" where none was refused. */
   refusal: string;
+  /** The working copy it opened with (section 3.4), until it closes or the copy is
+   * discarded; null otherwise. */
+  restored: WorkingCopy | null;
 };
+
+/** "Leave without saving" waits no longer than this for the latest working copy to be
+ * kept before the page goes on (section 3.4). */
+const LEAVE_WAIT_MS = 1000;
+/** A save waits no longer than this for a working copy already on its way, so the copy
+ * lands first and the save deletes it. */
+const SETTLE_MS = 2000;
 
 export function DesignWorkpaper({
   scope,
@@ -531,22 +557,6 @@ export function DesignWorkpaper({
     (link ?? tabs.current.get(view))?.focus();
   }, [closed, editing, view]);
 
-  // Leaving the page with something typed and not saved asks first.
-  const unsaved =
-    editing !== null &&
-    editing.phase !== "refreshing" &&
-    changed(editing.editor, editing.draft);
-  useEffect(() => {
-    if (!unsaved) {
-      return;
-    }
-    const ask = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-    };
-    window.addEventListener("beforeunload", ask);
-    return () => window.removeEventListener("beforeunload", ask);
-  }, [unsaved]);
-
   const returnToOpener = useCallback(
     () => (opener.current?.isConnected ? opener.current : null),
     [],
@@ -573,6 +583,107 @@ export function DesignWorkpaper({
   // The page's records are a version behind the views (a save's reading of them has not
   // landed): "Edit" waits for them, so no editor opens on the text before the save.
   const behind = useMemo(() => recordsBehind(papers, paper), [papers, paper]);
+
+  // The person's working copies of this workpaper (section 3.4): what they typed and did
+  // not save, kept on the server and private to them. Read while "Edit" opens in place.
+  const working = useWorkingCopies(
+    scope,
+    source?.workpaperId ?? null,
+    source?.basedOn ?? null,
+    editing?.editor.key ?? null,
+  );
+  const { copies } = working;
+  const hasCopy =
+    editing !== null &&
+    copies.some((copy) => copy.section === editing.editor.key);
+  const keeper = useKeeping(
+    editing === null
+      ? null
+      : {
+          scope,
+          source: editing.source,
+          editor: editing.editor,
+          draft: editing.draft,
+          phase: editing.phase,
+          hasCopy,
+          restored: editing.restored,
+        },
+    {
+      onKept: working.remember,
+      onDiscarded: working.forget,
+      onGone: working.reread,
+    },
+  );
+  // The sections whose link reads "Continue editing".
+  const copied = useMemo(() => {
+    const found = new Set<EditableSection>();
+    if (source === null) {
+      return found;
+    }
+    const keys = source.sections.map((item) => item.key);
+    for (const section of editable) {
+      const key = sectionKeyFor(section, keys);
+      if (key !== null && copies.some((copy) => copy.section === key)) {
+        found.add(section);
+      }
+    }
+    return found;
+  }, [source, editable, copies]);
+
+  // Closing or reloading the tab (section 3.4): the browser's own prompt only while the
+  // latest changes are not kept yet (what is kept is there on return), and what is not
+  // kept yet is sent as the page goes.
+  const open = editing !== null && editing.phase !== "refreshing";
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const ask = (event: BeforeUnloadEvent) => {
+      if (keeper.unkept()) {
+        event.preventDefault();
+      }
+    };
+    const going = () => keeper.beacon();
+    window.addEventListener("beforeunload", ask);
+    window.addEventListener("pagehide", going);
+    return () => {
+      window.removeEventListener("beforeunload", ask);
+      window.removeEventListener("pagehide", going);
+    };
+  }, [open, keeper.unkept, keeper.beacon]);
+
+  // Going elsewhere in the app with changes not in the workpaper asks first, in a dialog
+  // (section 3.4): a link, another step, another control, closing the panel.
+  const [asking, setAsking] = useState(false);
+  const proceed = useRef<(() => void) | null>(null);
+  const askingNow = asking && editing !== null;
+  const guarding =
+    (editing !== null &&
+      editing.phase === "editing" &&
+      changed(editing.editor, editing.draft)) ||
+    askingNow;
+  useEffect(() => {
+    if (!guarding) {
+      return;
+    }
+    // A second attempt while the dialog is open replaces the first: the latest wins.
+    return setLeaveAsker((next) => {
+      proceed.current = next;
+      setAsking(true);
+    });
+  }, [guarding]);
+  useGuardedLinks(guarding);
+  /** The dialog closes, and the page goes where it was asked to, once. */
+  const goOn = () => {
+    const next = proceed.current;
+    proceed.current = null;
+    setAsking(false);
+    next?.();
+  };
+  const stay = () => {
+    proceed.current = null;
+    setAsking(false);
+  };
   const shown =
     paper === null ? null : startingSelection(paper, selection ?? null);
   // The annotation asked for, as the viewer takes it: a new one each time a person asks.
@@ -604,6 +715,31 @@ export function DesignWorkpaper({
     }
     setEditing(null);
     setClosed(editing.section);
+    // Cancel gives up the working copy too (section 3.4).
+    keeper.discard(
+      scope,
+      editing.source.workpaperId,
+      editing.editor.key,
+      copies.some((copy) => copy.section === editing.editor.key),
+    );
+  };
+  /** "Discard them" over an editor that opened with a working copy: back to what is
+   * stored, asked first where that gives up a change. */
+  const discardRestored = () => {
+    const open = editing;
+    if (open === null || open.phase !== "editing" || open.restored === null) {
+      return;
+    }
+    if (changed(open.editor, open.draft) && !window.confirm(DISCARD_QUESTION)) {
+      return;
+    }
+    setEditing({
+      ...open,
+      draft: draftOf(open.editor),
+      restored: null,
+      refusal: "",
+    });
+    keeper.discard(scope, open.source.workpaperId, open.editor.key, true);
   };
   /** "Save": one request. Nothing reads as saved until the server confirmed it and the
    * views have read the workpaper again; a refusal keeps the editor and what was typed. */
@@ -620,6 +756,8 @@ export function DesignWorkpaper({
     }
     sending.current = true;
     setEditing({ ...open, phase: "saving", refusal: "" });
+    // A working copy on its way lands first, so the save deletes it (section 3.4).
+    await keeper.settle(SETTLE_MS);
     const answer = await sendSection(
       saveRequest(scope, open.source, open.editor, open.draft),
     );
@@ -648,6 +786,9 @@ export function DesignWorkpaper({
       }
       return;
     }
+    // The server deleted this section's working copy with the save (section 3.4).
+    keeper.saved(scope, open.source.workpaperId, open.editor.key);
+    working.reread();
     confirmed.current = open.section;
     setEditing((before) =>
       before === null ? before : { ...before, phase: "refreshing" },
@@ -705,14 +846,18 @@ export function DesignWorkpaper({
             if (view !== "document") {
               choose("document");
             }
+            // What the person typed and did not save, where there is some (section 3.4).
+            const copy = copyFor(editor, copies);
             setSaved(null);
             setEditing({
               section,
               source,
               editor,
-              draft: draftOf(editor),
+              draft:
+                copy === null ? draftOf(editor) : restoredDraft(editor, copy),
               phase: "editing",
               refusal: "",
+              restored: copy,
             });
           },
     editing:
@@ -729,8 +874,18 @@ export function DesignWorkpaper({
               void save();
             },
             onCancel: cancel,
+            keeping: keeper.keeping,
+            restored:
+              editing.restored === null
+                ? null
+                : {
+                    words: restoredWords(editing.restored),
+                    stale: copyIsStale(editing.restored, editing.source),
+                    onDiscard: discardRestored,
+                  },
           },
     saved,
+    copied,
     behind,
     onMatters: () => {
       choose("document");
@@ -942,6 +1097,29 @@ export function DesignWorkpaper({
           }}
         />
       ) : null}
+      {askingNow && editing !== null ? (
+        <LeaveDialog
+          section={editing.editor.title}
+          problem={draftProblem(editing.editor, editing.draft)}
+          onSave={async () => {
+            const section = editing.section;
+            await save();
+            // Only once the server confirmed the save; the page is leaving, so it does
+            // not wait for the views to read again. A refusal stays, said in the bar.
+            if (confirmed.current === section) {
+              goOn();
+            } else {
+              stay();
+            }
+          }}
+          onLeave={async () => {
+            // The latest is kept at once (no pause), and the page does not wait long.
+            await keeper.flush(LEAVE_WAIT_MS);
+            goOn();
+          }}
+          onStay={stay}
+        />
+      ) : null}
       {printing && !stale && paper !== null && paper.workpaper !== null
         ? createPortal(
             <div className="dw-print-root">
@@ -1089,7 +1267,9 @@ function EditLink({
       </span>
     );
   }
-  return (
+  // A working copy of it (section 3.4): the link goes on with it.
+  const copied = actions?.copied.has(section) === true;
+  const link = (
     <button
       type="button"
       className="dw-edit"
@@ -1097,8 +1277,17 @@ function EditLink({
       disabled={editing !== null || actions?.behind === true}
       onClick={() => onEdit(section)}
     >
-      Edit<span className="sr-only"> {what}</span>
+      {copied ? CONTINUE_EDITING : "Edit"}
+      <span className="sr-only"> {what}</span>
     </button>
+  );
+  return copied ? (
+    <span className="dw-edit-group">
+      <span className="pill tone-neutral dw-has-copy">{HAS_COPY}</span>
+      {link}
+    </span>
+  ) : (
+    link
   );
 }
 

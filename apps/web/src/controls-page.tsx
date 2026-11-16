@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import {
   Fragment,
   type ReactNode,
@@ -45,6 +44,7 @@ import {
   toCsv,
   type ViewBy,
 } from "./controls-page-model";
+import { useGuardedRouter } from "./guarded-router";
 import { planningHref } from "./planning-model";
 import {
   CONTROLS_FILTER_EVENT,
@@ -589,7 +589,7 @@ export function ControlsPage({
   // The card view's groups the person folded, for this visit.
   const [folded, setFolded] = useState<string[]>([]);
   const [open, setOpen] = useState<string | null>(null);
-  const router = useRouter();
+  const router = useGuardedRouter();
   const [selected, setSelected] = useState<string[]>([]);
   const [page, setPage] = useState(1);
   const [size, setSize] = useState<number>(DEFAULT_PAGE_VIEW.size);

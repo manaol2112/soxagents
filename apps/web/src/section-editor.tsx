@@ -31,6 +31,12 @@ import {
   UNSAVED,
 } from "./section-edit-model";
 import { UiIcon } from "./ui-icon";
+import {
+  DISCARD_COPY,
+  type Keeping,
+  keepingWords,
+  STALE_COPY,
+} from "./working-copy-model";
 
 /**
  * A section of the D&I workpaper edited where it is (docs/design-workpaper.md, section
@@ -56,6 +62,21 @@ export type EditorProps = {
   onSave: () => void;
   /** "Cancel", and Escape from inside the editor. */
   onCancel: () => void;
+  /** Where the working copy of what is typed stands (section 3.4). */
+  keeping: Keeping;
+  /** The editor opened with a working copy: what it says, until it closes or the copy is
+   * discarded; null otherwise. */
+  restored: Restored | null;
+};
+
+/** Over an editor that opened with the person's working copy (section 3.4). */
+export type Restored = {
+  /** "Your changes from 14 Nov, 10:42 AM are restored." */
+  words: string;
+  /** The workpaper has another version than the one the copy was started from. */
+  stale: boolean;
+  /** "Discard them": back to what is stored. */
+  onDiscard: () => void;
 };
 
 /** The one request a save sends, through the page's own route, which never redirects. An
@@ -171,13 +192,16 @@ function EditorBar({
   draft,
   phase,
   refusal,
+  keeping,
   onSave,
   onCancel,
-}: Omit<EditorProps, "onChange">) {
+}: Omit<EditorProps, "onChange" | "restored">) {
   const uid = useId();
   const busy = phase !== "editing";
   const dirty = changed(editor, draft);
   const problem = draftProblem(editor, draft);
+  // The working copy's line: never "saved", it is not the workpaper.
+  const kept = keepingWords(keeping);
   return (
     <div className="se-bar">
       <div className="se-status">
@@ -190,6 +214,17 @@ function EditorBar({
                 <span className="se-unsaved">
                   <span className="se-dot" aria-hidden="true" />
                   {UNSAVED}
+                </span>
+              ) : null}
+              {kept !== "" ? (
+                <span
+                  className={
+                    keeping.state === "failed"
+                      ? "se-keeping is-failed"
+                      : "se-keeping"
+                  }
+                >
+                  {kept}
                 </span>
               ) : null}
               {problem !== "" ? (
@@ -223,6 +258,38 @@ function EditorBar({
           Save
         </button>
       </div>
+    </div>
+  );
+}
+
+/** Over the box of an editor that opened with a working copy: when it is from, that the
+ * section may have changed since, and "Discard them". */
+function RestoredNote({
+  restored,
+  busy,
+}: {
+  restored: Restored | null;
+  busy: boolean;
+}) {
+  if (restored === null) {
+    return null;
+  }
+  return (
+    <div className="se-restored">
+      <p>
+        {restored.words}
+        {restored.stale ? (
+          <span className="se-restored-stale"> {STALE_COPY}</span>
+        ) : null}
+      </p>
+      <button
+        type="button"
+        className="btn-secondary btn-sm"
+        disabled={busy}
+        onClick={restored.onDiscard}
+      >
+        {DISCARD_COPY}
+      </button>
     </div>
   );
 }
@@ -402,7 +469,7 @@ export function SectionEditorPanel({
   heading?: string | undefined;
 }) {
   const uid = useId();
-  const { editor, draft, phase, onChange, onCancel } = props;
+  const { editor, draft, phase, restored, onChange, onCancel } = props;
   const busy = phase !== "editing";
   const hint = editor.guidance !== "" ? `${uid}-hint` : undefined;
   return (
@@ -413,6 +480,7 @@ export function SectionEditorPanel({
           {editor.guidance}
         </p>
       ) : null}
+      <RestoredNote restored={restored} busy={busy} />
       {editor.kind === "text" && draft.kind === "text" ? (
         <RichTextBox
           label={editor.title}
@@ -442,12 +510,13 @@ export function NotesEditorPanel({
   children,
   ...props
 }: EditorProps & { children: ReactNode }) {
-  const { editor, phase, onCancel } = props;
+  const { editor, phase, restored, onCancel } = props;
   return (
     <Frame title={editor.title} phase={phase} onCancel={onCancel}>
       {editor.guidance !== "" ? (
         <p className="se-hint dw-quiet">{editor.guidance}</p>
       ) : null}
+      <RestoredNote restored={restored} busy={phase !== "editing"} />
       {children}
       <EditorBar {...props} />
     </Frame>

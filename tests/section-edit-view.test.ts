@@ -57,9 +57,14 @@ describe("Edit opens the section's editor where the document shows it", () => {
       /if \(\s*!editable\.has\(section\) \|\|\s*editing !== null \|\|\s*paper === null \|\|\s*behind\s*\) \{\s*return;\s*\}\s*const editor = editorFor\(section, source, paper\);\s*if \(source === null \|\| editor === null\) \{\s*\/\/ [^\n]*\n\s*onEdit\(section\);\s*return;\s*\}/,
     );
     // From the Matrix and the Evidence views it shows the Document, as a tab does.
+    // Rewritten for autosave (product owner, 15 November 2026, docs/design-workpaper.md
+    // section 3.4). Old expectation: the editor always opens on `draftOf(editor)`, what
+    // is stored. New expectation: it opens on the person's working copy where `copyFor`
+    // finds one (`restoredDraft`), and on what is stored otherwise; the copy it opened
+    // with is kept with it for the restored notice.
     assert.match(
       body,
-      /if \(view !== "document"\) \{\s*choose\("document"\);\s*\}\s*setSaved\(null\);\s*setEditing\(\{\s*section,\s*source,\s*editor,\s*draft: draftOf\(editor\),\s*phase: "editing",\s*refusal: "",\s*\}\);/,
+      /if \(view !== "document"\) \{\s*choose\("document"\);\s*\}\s*(?:\/\/ [^\n]*\n\s*)+const copy = copyFor\(editor, copies\);\s*setSaved\(null\);\s*setEditing\(\{\s*section,\s*source,\s*editor,\s*draft:\s*copy === null \? draftOf\(editor\) : restoredDraft\(editor, copy\),\s*phase: "editing",\s*refusal: "",\s*restored: copy,\s*\}\);/,
     );
     // The fold's own way in is as it was.
     const step = component(view, "DesignWorkpaperStep");
@@ -188,7 +193,12 @@ describe("Cancel, Escape and leaving the page", () => {
       body,
       /const cancel = \(\) => \{\s*if \(editing === null \|\| editing\.phase !== "editing"\) \{\s*return;\s*\}\s*if \(\s*changed\(editing\.editor, editing\.draft\) &&\s*!window\.confirm\(DISCARD_QUESTION\)\s*\) \{\s*return;\s*\}\s*setEditing\(null\);\s*setClosed\(editing\.section\);/,
     );
-    assert.equal(count(view, /window\.confirm\(/g), 1);
+    // Rewritten for autosave (product owner, 15 November 2026, docs/design-workpaper.md
+    // section 3.4). Old expectation: one `window.confirm` in the view (Cancel's). New
+    // expectation: two, Cancel's and "Discard them" over a restored working copy, both
+    // asking DISCARD_QUESTION only where something changed.
+    assert.equal(count(view, /window\.confirm\(/g), 2);
+    assert.equal(count(view, /!window\.confirm\(DISCARD_QUESTION\)/g), 2);
     assert.match(
       model,
       /DISCARD_QUESTION = "Discard your changes to this section\?"/,
@@ -208,11 +218,19 @@ describe("Cancel, Escape and leaving the page", () => {
     assert.equal(count(editor, /<Frame title=\{editor\.title\}/g), 2);
   });
 
-  it("asks before the page is left only while something is typed and not saved", () => {
+  it("asks before the page is left only while something is typed and not kept", () => {
+    // Rewritten for autosave (product owner, 15 November 2026, docs/design-workpaper.md
+    // section 3.4). Old expectation: the browser's prompt whenever something changed and
+    // the editor was not refreshing. New expectation: while an editor is open and not
+    // refreshing, the prompt only while the latest change is not kept as the working copy
+    // (`keeper.unkept()`); a kept copy is there on return. tests/autosave-view.test.ts
+    // pins what "not kept" means.
     assert.match(
       body,
-      /const unsaved =\s*editing !== null &&\s*editing\.phase !== "refreshing" &&\s*changed\(editing\.editor, editing\.draft\);\s*useEffect\(\(\) => \{\s*if \(!unsaved\) \{\s*return;\s*\}\s*const ask = \(event: BeforeUnloadEvent\) => \{\s*event\.preventDefault\(\);\s*\};\s*window\.addEventListener\("beforeunload", ask\);\s*return \(\) => window\.removeEventListener\("beforeunload", ask\);\s*\}, \[unsaved\]\);/,
+      /const open = editing !== null && editing\.phase !== "refreshing";\s*useEffect\(\(\) => \{\s*if \(!open\) \{\s*return;\s*\}\s*const ask = \(event: BeforeUnloadEvent\) => \{\s*if \(keeper\.unkept\(\)\) \{\s*event\.preventDefault\(\);\s*\}\s*\};/,
     );
+    assert.match(body, /window\.addEventListener\("beforeunload", ask\);/);
+    assert.match(body, /window\.removeEventListener\("beforeunload", ask\);/);
     assert.equal(count(view, /"beforeunload"/g), 2);
   });
 });
@@ -338,9 +356,13 @@ describe("saving", () => {
       bar,
       /<p role="status" id=\{`\$\{uid\}-state`\}>\s*\{busy \? \(\s*SAVING\s*\) : \(/,
     );
+    // Rewritten for autosave (product owner, 15 November 2026, docs/design-workpaper.md
+    // section 3.4). Old expectation: "Unsaved changes" and then the limit's problem. New
+    // expectation: "Unsaved changes" stays (the workpaper does not have them), then where
+    // the working copy stands (`keepingWords`, never "saved"), then the limit's problem.
     assert.match(
       bar,
-      /\{dirty \? \(\s*<span className="se-unsaved">\s*<span className="se-dot" aria-hidden="true" \/>\s*\{UNSAVED\}\s*<\/span>\s*\) : null\}\s*\{problem !== "" \? \(\s*<span className="se-problem">\{problem\}<\/span>\s*\) : null\}/,
+      /\{dirty \? \(\s*<span className="se-unsaved">\s*<span className="se-dot" aria-hidden="true" \/>\s*\{UNSAVED\}\s*<\/span>\s*\) : null\}\s*\{kept !== "" \? \([\s\S]{0,400}\{kept\}\s*<\/span>\s*\) : null\}\s*\{problem !== "" \? \(\s*<span className="se-problem">\{problem\}<\/span>\s*\) : null\}/,
     );
     assert.equal(count(editor, /readOnly=\{busy\}/g), 2);
     assert.match(
@@ -466,7 +488,11 @@ describe("the editors", () => {
       count(editor, /<button\b/g),
       count(editor, /\btype="button"/g),
     );
-    assert.equal(count(editor, /<button\b/g), 4);
+    // Rewritten for autosave (product owner, 15 November 2026, docs/design-workpaper.md
+    // section 3.4). Old expectation: four buttons (Cancel, Save, Remove, Add). New
+    // expectation: five, with "Discard them" over an editor that opened with a working
+    // copy.
+    assert.equal(count(editor, /<button\b/g), 5);
     assert.match(
       editor,
       /aria-label=\{`Remove \$\{editor\.rowWord\} \$\{at \+ 1\}`\}/,

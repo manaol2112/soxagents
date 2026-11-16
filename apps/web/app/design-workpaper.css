@@ -2011,6 +2011,54 @@ button.se-x:focus-visible:not(:disabled) {
   color: var(--warning);
 }
 
+/* The working copy (docs/design-workpaper.md, section 3.4): the bar's line about it, the
+   note over an editor that opened with one, and the pill beside a section's link. A
+   working copy is not the workpaper, so none of it reads as saved. */
+.se-keeping {
+  margin-right: 0.625rem;
+}
+
+.se-keeping.is-failed {
+  color: var(--warning);
+}
+
+.se-restored {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+  margin-bottom: 0.625rem;
+  padding: 0.5rem 0.75rem;
+  color: var(--text);
+  background: var(--info-soft);
+  border: 1px solid var(--info-border);
+  border-radius: var(--radius);
+  font-size: var(--fs-sm);
+}
+
+.se-restored p {
+  flex: 1 1 16rem;
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.se-restored-stale {
+  font-weight: 600;
+}
+
+.dw-edit-group {
+  display: inline-flex;
+  flex: none;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+/* Asked before leaving with changes not in the workpaper: Save first. */
+.leave-dialog .leave-problem {
+  color: var(--warning);
+}
+
 .se-refusal {
   color: var(--danger);
 }

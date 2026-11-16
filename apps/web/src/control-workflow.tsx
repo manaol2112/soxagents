@@ -2,7 +2,6 @@
 
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import {
   type ReactNode,
   useCallback,
@@ -24,6 +23,7 @@ import {
   workflowFrame,
   workflowLayout,
 } from "./control-workflow-model";
+import { useGuardedRouter } from "./guarded-router";
 import { StepAsk, StepAskContext, type StepAskTarget } from "./step-frame";
 import {
   panelHeadFor,
@@ -113,7 +113,7 @@ export function ControlWorkflow({
    * (10 November 2026). Absent: the nodes say "Next", and the header names them. */
   flags?: Partial<Record<StepKey, string>>;
 }) {
-  const router = useRouter();
+  const router = useGuardedRouter();
   const narrow = useNarrow();
   const open = useCallback(
     (key: StepKey) => router.push(hrefs[key], { scroll: false }),
@@ -284,7 +284,7 @@ export function WorkflowPanel({
   next: { title: string; href: string } | null;
   children: ReactNode;
 }) {
-  const router = useRouter();
+  const router = useGuardedRouter();
   const heading = useRef<HTMLHeadingElement>(null);
   // The person's focus moves to the step they opened (the panel is keyed by its step, so it
   // mounts again for each).

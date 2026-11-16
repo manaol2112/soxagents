@@ -28,6 +28,7 @@ import {
 import { LAYOUT_KEY } from "./controls-toolbar";
 import { CATEGORIES, type ControlRow } from "./engagement-model";
 import { formatDate } from "./format";
+import { useGuardedRouter } from "./guarded-router";
 import { implementationName } from "./shared-plans-model";
 import { UiIcon } from "./ui-icon";
 
@@ -234,7 +235,7 @@ export function ExpandableRow({
 
 /** On the register without a chosen view, open the one the person last chose. */
 export function LayoutMemory({ tableHref }: { tableHref: string }) {
-  const router = useRouter();
+  const router = useGuardedRouter();
   useEffect(() => {
     let saved: string | null = null;
     try {

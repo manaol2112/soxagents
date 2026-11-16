@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import {
   type ReactNode,
   useEffect,
@@ -21,6 +20,7 @@ import {
   STATUS_PRESETS,
 } from "./controls-register-model";
 import { NO_APPLICATION } from "./engagement-model";
+import { useGuardedRouter } from "./guarded-router";
 import { UiIcon } from "./ui-icon";
 
 type Options = {
@@ -66,7 +66,7 @@ export function ControlsToolbar({
   /** Beside the count: opening or closing every group. */
   extra?: ReactNode;
 }) {
-  const router = useRouter();
+  const router = useGuardedRouter();
   const id = useId();
   const [pending, startTransition] = useTransition();
   const [open, setOpen] = useState<Menu | null>(null);

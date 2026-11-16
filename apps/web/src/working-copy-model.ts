@@ -9,6 +9,7 @@ import {
   attributeRow,
   changed,
   type Draft,
+  draftProblem,
   EDIT_LIMITS,
   type EditSource,
   type SectionEditor,
@@ -128,14 +129,16 @@ export function copyIsStale(
 }
 
 /** What the page does about the working copy once the typing has paused: keep what was
- * changed, drop a copy of something changed back to what is stored, or nothing. */
+ * changed, drop a copy of something changed back to what is stored, or nothing. What a
+ * save could not send (a credential, a limit passed) is not sent as a copy either: a copy
+ * already there stays as it was. */
 export function keepAction(
   editor: SectionEditor,
   draft: Draft,
   hasCopy: boolean,
 ): "keep" | "discard" | "none" {
   if (changed(editor, draft)) {
-    return "keep";
+    return draftProblem(editor, draft) === "" ? "keep" : "none";
   }
   return hasCopy ? "discard" : "none";
 }

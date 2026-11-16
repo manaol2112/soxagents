@@ -273,6 +273,29 @@ describe("when a working copy is kept", () => {
     assert.equal(KEEP_RETRY_MS, 15_000);
   });
 
+  it("never keeps what a save could not send: a credential, or a limit passed", () => {
+    // Found while wiring the page (15 November 2026): `keepAction` said "keep" for any
+    // change, so a draft holding a credential, or over 12,000 characters, was sent to the
+    // route (which refuses it, and the refusal then stopped keeping for the editor).
+    // What a save may not send is not sent as a working copy either; a copy already
+    // there stays as it was.
+    const secret = { kind: "text", text: "password: hunter2hunter2" } as const;
+    assert.equal(keepAction(conclusion, secret, false), "none");
+    assert.equal(keepAction(conclusion, secret, true), "none");
+    const long = { kind: "text", text: "x".repeat(12_001) } as const;
+    assert.equal(keepAction(conclusion, long, false), "none");
+    const cell = {
+      kind: "grid",
+      rows: setCell(walk.rows, 0, 2, "api_key=abcdefabcdefabcdef"),
+    } as const;
+    assert.equal(keepAction(walk, cell, true), "none");
+    // Within the limits it is kept as before.
+    assert.equal(
+      keepAction(conclusion, { kind: "text", text: "x".repeat(12_000) }, false),
+      "keep",
+    );
+  });
+
   it("posts a save's own body with the intent, and a discard with the ids and the key", () => {
     const draft = {
       kind: "grid",
