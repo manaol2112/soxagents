@@ -36,6 +36,7 @@ import {
   type Keeping,
   keepingWords,
   STALE_COPY,
+  USE_COPY,
 } from "./working-copy-model";
 
 /**
@@ -75,8 +76,13 @@ export type Restored = {
   words: string;
   /** The workpaper has another version than the one the copy was started from. */
   stale: boolean;
-  /** "Discard them": back to what is stored. */
+  /** "Discard them": back to what is stored (or, for a copy found after the editor opened,
+   * that copy is discarded and what is typed stays). */
   onDiscard: () => void;
+  /** "Use them": a copy found after the editor opened is offered, never put in place of
+   * what the editor holds until the person chooses (independent review, 15 November
+   * 2026). Absent for the copy the editor opened with. */
+  onUse?: () => void;
 };
 
 /** The one request a save sends, through the page's own route, which never redirects. An
@@ -219,7 +225,7 @@ function EditorBar({
               {kept !== "" ? (
                 <span
                   className={
-                    keeping.state === "failed"
+                    keeping.state === "failed" || keeping.state === "off"
                       ? "se-keeping is-failed"
                       : "se-keeping"
                   }
@@ -282,6 +288,16 @@ function RestoredNote({
           <span className="se-restored-stale"> {STALE_COPY}</span>
         ) : null}
       </p>
+      {restored.onUse !== undefined ? (
+        <button
+          type="button"
+          className="btn-secondary btn-sm"
+          disabled={busy}
+          onClick={restored.onUse}
+        >
+          {USE_COPY}
+        </button>
+      ) : null}
       <button
         type="button"
         className="btn-secondary btn-sm"

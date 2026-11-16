@@ -38,9 +38,13 @@ const body = component(view, "DesignWorkpaper");
 
 describe("the working copies are read", () => {
   it("for the stored workpaper Edit opens in place, again when its id or version changes", () => {
+    // Rewritten after the independent review (15 November 2026). Old expectation: the open editor's
+    // section is always passed, so a read that lands after it opened drops the server's
+    // copy of it. New expectation: only for an editor that knows what the server holds;
+    // for one that does not, the read is taken as it is and offered (`afterRead`).
     assert.match(
       body,
-      /const working = useWorkingCopies\(\s*scope,\s*source\?\.workpaperId \?\? null,\s*source\?\.basedOn \?\? null,\s*editing\?\.editor\.key \?\? null,\s*\);/,
+      /const working = useWorkingCopies\(\s*scope,\s*source\?\.workpaperId \?\? null,\s*source\?\.basedOn \?\? null,\s*editing !== null && editing\.known\.state === "known"\s*\? editing\.editor\.key\s*: null,\s*\);\s*const \{ copies \} = working;\s*const gate = editGate\(working\.read\);/,
     );
     const reader = component(hook, "useWorkingCopies");
     assert.match(
@@ -62,18 +66,31 @@ describe("the working copies are read", () => {
     assert.match(hook, /const ROUTE = "\/workspace\/workpapers\/draft";/);
   });
 
-  it("reads them cautiously, and a failed read is quiet and never blocks editing", () => {
+  it("reads them cautiously, and a failed read never blocks editing", () => {
     const reader = component(hook, "useWorkingCopies");
     assert.match(
       reader,
       /found = body\.status === 200 \? parseWorkingCopies\(body\.result\) : null;/,
     );
     assert.match(reader, /\} catch \{\s*found = null;\s*\}/);
+    // Rewritten after the independent review (15 November 2026). Old expectation: a failed read
+    // returns and says nothing, so "Edit" opened as if there were no copy. New
+    // expectation: it is said to the page ("failed", unless a read of this workpaper's
+    // copies answered), where "Edit" opens with keeping off; the page waits only
+    // while the read is out ("reading").
     assert.match(
       reader,
-      /if \(!current \|\| found === null\) \{\s*return;\s*\}/,
+      /if \(!current\) \{\s*return;\s*\}\s*if \(found === null\) \{\s*(?:\/\/ [^\n]*\n\s*)+setStatus\(\(before\) =>\s*before\.target === asked && before\.read === "read"\s*\? before\s*: \{ target: asked, read: "failed" \},\s*\);\s*return;\s*\}/,
     );
-    // Nothing about the read is said on the page, and nothing waits for it.
+    assert.match(
+      reader,
+      /setStatus\(\{ target: asked, read: "read" \}\);\s*setAnswered\(\(count\) => count \+ 1\);/,
+    );
+    assert.match(
+      reader,
+      /const read = status\.target === target \? status\.read : "reading";/,
+    );
+    // Nothing about the read is said as an alert.
     assert.ok(!/role="alert"|setProblem|problem/.test(reader));
     // The open editor's own writes are what the page knows of its section.
     assert.match(
@@ -83,9 +100,12 @@ describe("the working copies are read", () => {
   });
 
   it("reads them again after a save and after a discard", () => {
+    // Rewritten after the independent review (15 November 2026). Old expectation: `saved` takes the
+    // section. New expectation: also the keeps counted as the save was sent (`atSave`),
+    // and a way out taken while the save was out goes on once it is confirmed.
     assert.match(
       body,
-      /keeper\.saved\(scope, open\.source\.workpaperId, open\.editor\.key\);\s*working\.reread\(\);\s*confirmed\.current = open\.section;/,
+      /keeper\.saved\(scope, open\.source\.workpaperId, open\.editor\.key, atSave\);\s*working\.reread\(\);\s*(?:\/\/ [^\n]*\n\s*)+then\?\.\(\);\s*confirmed\.current = open\.section;/,
     );
     assert.match(body, /onGone: working\.reread,/);
     assert.equal(count(hook, /told\.current\.onGone\(\);/g), 2);
@@ -94,17 +114,25 @@ describe("the working copies are read", () => {
 
 describe("opening with a working copy", () => {
   it("opens with the copy, restored, where copyFor finds one", () => {
-    assert.match(body, /const copy = copyFor\(editor, copies\);/);
+    // Rewritten after the independent review (15 November 2026). Old expectation: `copyFor` whatever
+    // the read had answered. New expectation: only once the read answered.
     assert.match(
       body,
-      /draft:\s*copy === null \? draftOf\(editor\) : restoredDraft\(editor, copy\),\s*phase: "editing",\s*refusal: "",\s*restored: copy,/,
+      /const copy = gate === "open" \? copyFor\(editor, copies\) : null;/,
+    );
+    assert.match(
+      body,
+      /draft:\s*copy === null \? draftOf\(editor\) : restoredDraft\(editor, copy\),\s*phase: "editing",\s*refusal: "",\s*restored: copy,\s*known: gate === "open" \? KNOWN : \{ state: "unknown" \},/,
     );
   });
 
   it("says it was restored, and that the section may have changed, over the box", () => {
+    // Rewritten after the independent review (15 November 2026). Old expectation: the note only for
+    // the copy the editor opened with. New expectation: first, a copy found by a read
+    // that landed after it opened is offered (Use them, Discard them).
     assert.match(
       body,
-      /restored:\s*editing\.restored === null\s*\? null\s*: \{\s*words: restoredWords\(editing\.restored\),\s*stale: copyIsStale\(editing\.restored, editing\.source\),\s*onDiscard: discardRestored,\s*\},/,
+      /restored:\s*editing\.known\.state === "found"\s*\? \{\s*words: foundWords\(editing\.known\.copy\),\s*stale: copyIsStale\(editing\.known\.copy, editing\.source\),\s*onDiscard: discardFound,\s*onUse: useFound,\s*\}\s*: editing\.restored === null\s*\? null\s*: \{\s*words: restoredWords\(editing\.restored\),\s*stale: copyIsStale\(editing\.restored, editing\.source\),\s*onDiscard: discardRestored,\s*\},/,
     );
     const note = component(editor, "RestoredNote");
     assert.match(
@@ -137,7 +165,9 @@ describe("keeping as they type", () => {
   it("waits 1.5 s after the last change, and the timer goes with the editor that set it", () => {
     assert.match(
       hook,
-      /wait\.current = window\.setTimeout\(\(\) => \{\s*void keeper\.request\(\);\s*\}, KEEP_AFTER_MS\);\s*return \(\) => window\.clearTimeout\(wait\.current\);\s*\}, \[session, key, phase, hasCopy, keeper\]\);/,
+      // Rewritten after the independent review (15 November 2026). Old expectation: no `off` in what
+      // starts the pause again. New expectation: keeping off, and back on, does too.
+      /wait\.current = window\.setTimeout\(\(\) => \{\s*void keeper\.request\(\);\s*\}, KEEP_AFTER_MS\);\s*return \(\) => window\.clearTimeout\(wait\.current\);\s*\}, \[session, key, phase, hasCopy, off, keeper\]\);/,
     );
     // No pause of its own: the model's.
     assert.ok(!/\b1500\b|\b15_?000\b/.test(hook));
@@ -145,14 +175,22 @@ describe("keeping as they type", () => {
   });
 
   it("is paused while a save is out or the views read again, and never keeps for a closed editor", () => {
+    // Rewritten after the independent review (15 November 2026). Old expectation: the pause and the
+    // sync look at the phase and a refusal only. New expectation: the pause also stops
+    // where keeping is off (and says so), and every send asks `mayKeep` (the phase,
+    // keeping off, a refusal, a save the server confirmed), tested in the model.
     assert.match(
       hook,
-      /const now = latest\.current;\s*if \(now === null \|\| now\.phase !== "editing" \|\| blocked\.current\) \{\s*return;\s*\}\s*const action = keepAction\(now\.editor, now\.draft, now\.hasCopy\);/,
+      /const now = latest\.current;\s*if \(now === null \|\| now\.phase !== "editing" \|\| blocked\.current\) \{\s*return;\s*\}\s*if \(now\.off !== null\) \{\s*(?:\/\/ [^\n]*\n\s*)+setKeeping\(\s*changed\(now\.editor, now\.draft\)\s*\? \{ state: "off", why: now\.off \}\s*: \{ state: "none" \},\s*\);\s*return;\s*\}\s*const action = keepAction\(now\.editor, now\.draft, now\.hasCopy\);/,
     );
     const sync = hook.slice(hook.indexOf("const sync = async"));
     assert.match(
       sync,
-      /queued\.current = false;\s*const now = latest\.current;\s*if \(now === null \|\| now\.phase !== "editing" \|\| blocked\.current\) \{\s*return;\s*\}/,
+      /queued\.current = false;\s*const now = latest\.current;\s*if \(now === null \|\| !may\(now\)\) \{\s*return;\s*\}/,
+    );
+    assert.match(
+      hook,
+      /const may = \(now: KeepingOpen\) =>\s*mayKeep\(now, \{\s*blocked: blocked\.current,\s*saved: savedFor\.current === now\.editor,\s*\}\);/,
     );
     // A new editor (or none) starts again: its own timers gone, nothing kept but its copy.
     assert.match(
@@ -172,9 +210,12 @@ describe("keeping as they type", () => {
       hook,
       /const request = \(\): Promise<void> => \{\s*if \(queued\.current\) \{\s*return chain\.current;\s*\}\s*queued\.current = true;\s*return enqueue\(sync\);\s*\};/,
     );
+    // Rewritten after the independent review (15 November 2026). Old expectation: the editor's own
+    // source. New expectation: `keepBasis`, so a restored copy keeps the version it was
+    // started from (tested in the model).
     assert.match(
       hook,
-      /const \{ editor, draft, scope, source \} = now;\s*const action = keepAction\(editor, draft, now\.hasCopy\);/,
+      /const \{ editor, draft, scope \} = now;\s*(?:\/\/ [^\n]*\n\s*)+const source = keepBasis\(now\.source, now\.restored\);\s*const action = keepAction\(editor, draft, now\.hasCopy\);/,
     );
     // What the server holds is not sent again.
     assert.match(
@@ -225,9 +266,11 @@ describe("keeping as they type", () => {
       hook,
       /told\.current\.onKept\(\{\s*section: editor\.key,\s*basedOn: source\.basedOn,/,
     );
+    // Rewritten after the independent review (15 November 2026). Old expectation: a discard only
+    // forgets the copy. New expectation: it also drops the restored note (`dropRestored`).
     assert.match(
       body,
-      /onKept: working\.remember,\s*onDiscarded: working\.forget,/,
+      /onKept: working\.remember,\s*(?:\/\/ [^\n]*\n\s*)+onDiscarded: \(section\) => \{\s*working\.forget\(section\);\s*setEditing\(\(before\) => dropRestored\(before, section\)\);\s*\},/,
     );
   });
 });
@@ -240,9 +283,11 @@ describe("the bar", () => {
       bar,
       /\{UNSAVED\}\s*<\/span>\s*\) : null\}\s*\{kept !== "" \? \(/,
     );
+    // Rewritten after the independent review (15 November 2026). Old expectation: only a failed keep
+    // reads as a warning. New expectation: keeping off does too.
     assert.match(
       bar,
-      /keeping\.state === "failed"\s*\? "se-keeping is-failed"\s*: "se-keeping"/,
+      /keeping\.state === "failed" \|\| keeping\.state === "off"\s*\? "se-keeping is-failed"\s*: "se-keeping"/,
     );
     assert.match(
       component(editor, "EditorBar"),
@@ -268,22 +313,34 @@ describe("the bar", () => {
 
 describe("saving, and Cancel", () => {
   it("lets a working copy on its way land before the save, which deletes it", () => {
+    // Rewritten after the independent review (15 November 2026). Old expectation: the save is sent
+    // after the settle, and `saved` discards only while a keep is still pending. New
+    // expectation: the keeps are counted as the save is sent (`mark`), and `saved`
+    // discards whenever a keep was out then or sent since (`copyMayOutliveSave`, tested in
+    // the model), even one that answered before the save did; nothing is kept after.
     assert.match(
       body,
-      /setEditing\(\{ \.\.\.open, phase: "saving", refusal: "" \}\);\s*(?:\/\/ [^\n]*\n\s*)+await keeper\.settle\(SETTLE_MS\);\s*const answer = await sendSection\(/,
+      /setEditing\(\{ \.\.\.open, phase: "saving", refusal: "" \}\);\s*(?:\/\/ [^\n]*\n\s*)+await keeper\.settle\(SETTLE_MS\);\s*(?:\/\/ [^\n]*\n\s*)+const atSave = keeper\.mark\(\);\s*const answer = await sendSection\(/,
     );
     assert.match(body.length > 0 ? view : "", /const SETTLE_MS = 2000;/);
-    // A keep that was still out when the save was taken is discarded once it lands.
     assert.match(
       hook,
-      /const saved = \(scope: Scope, workpaperId: string, section: string\) => \{\s*kept\.current = null;\s*told\.current\.onDiscarded\(section\);\s*if \(pending\.current > 0\) \{\s*void enqueue\(discardOp\(scope, workpaperId, section\)\);\s*\}\s*\};/,
+      /const saved = \(\s*scope: Scope,\s*workpaperId: string,\s*section: string,\s*atSave: KeepCount,\s*\) => \{\s*kept\.current = null;\s*savedFor\.current = latest\.current\?\.editor \?\? null;\s*window\.clearTimeout\(wait\.current\);\s*window\.clearTimeout\(retry\.current\);\s*told\.current\.onDiscarded\(section\);\s*if \(copyMayOutliveSave\(atSave, count\.current\)\) \{\s*void enqueue\(discardOp\(scope, workpaperId, section\)\);\s*\}\s*\};/,
+    );
+    // Every keep is counted as it is sent and as it answers.
+    assert.match(
+      hook,
+      /count\.current = \{ \.\.\.count\.current, sent: count\.current\.sent \+ 1 \};\s*const answer = await sendCopy\(keepRequest\(scope, source, editor, draft\)\);\s*count\.current = \{\s*\.\.\.count\.current,\s*answered: count\.current\.answered \+ 1,\s*\};/,
     );
   });
 
   it("Cancel discards the working copy, after asking where something changed", () => {
+    // Rewritten after the independent review (15 November 2026). Old expectation: Cancel always
+    // discards. New expectation: never a copy the editor did not know of (the read
+    // failed, or one was found and the person has not chosen).
     assert.match(
       body,
-      /setEditing\(null\);\s*setClosed\(editing\.section\);\s*(?:\/\/ [^\n]*\n\s*)+keeper\.discard\(\s*scope,\s*editing\.source\.workpaperId,\s*editing\.editor\.key,\s*copies\.some\(\(copy\) => copy\.section === editing\.editor\.key\),\s*\);/,
+      /setEditing\(null\);\s*setClosed\(editing\.section\);\s*(?:\/\/ [^\n]*\n\s*)+if \(editing\.known\.state !== "known"\) \{\s*return;\s*\}\s*keeper\.discard\(\s*scope,\s*editing\.source\.workpaperId,\s*editing\.editor\.key,\s*copies\.some\(\(copy\) => copy\.section === editing\.editor\.key\),\s*\);/,
     );
     // Known to be there, or a keep on its way: discarded, after it.
     assert.match(
@@ -323,19 +380,24 @@ describe("the Edit link of a section with a working copy", () => {
 });
 
 describe("leaving with changes", () => {
-  it("asks only while an editor is open with changes (or the dialog is open), and lets go after", () => {
+  it("asks while an editor is open with changes, while its save is out, or the dialog is open, and lets go after", () => {
+    // Rewritten after the independent review (15 November 2026). Old expectation: only while the
+    // phase is "editing" with changes (or the dialog is open), so a way out taken while
+    // a save was out went unasked. New expectation: the model's `guarding` (tested in
+    // leave-guard.test.ts) also holds it while the save is out, and a way out taken then
+    // waits for the save's answer (`whenAsked`, `afterSave`).
     assert.match(
       body,
-      /const guarding =\s*\(editing !== null &&\s*editing\.phase === "editing" &&\s*changed\(editing\.editor, editing\.draft\)\) \|\|\s*askingNow;/,
+      /const guarding =\s*editing !== null &&\s*guardingNow\(\{\s*phase: editing\.phase,\s*changed: changed\(editing\.editor, editing\.draft\),\s*asking: askingNow,\s*\}\);/,
     );
     assert.match(
       body,
-      /useEffect\(\(\) => \{\s*if \(!guarding\) \{\s*return;\s*\}\s*(?:\/\/ [^\n]*\n\s*)+return setLeaveAsker\(\(next\) => \{\s*proceed\.current = next;\s*setAsking\(true\);\s*\}\);\s*\}, \[guarding\]\);\s*useGuardedLinks\(guarding\);/,
+      /useEffect\(\(\) => \{\s*if \(!guarding\) \{\s*return;\s*\}\s*(?:\/\/ [^\n]*\n\s*)+return setLeaveAsker\(\(next\) => \{\s*const now = asked\.current;\s*if \(\s*now\.phase !== null &&\s*whenAsked\(\{ phase: now\.phase, asking: now\.asking \}\) === "after-save"\s*\) \{\s*afterSave\.current = next;\s*return;\s*\}\s*proceed\.current = next;\s*setWaited\(false\);\s*setAsking\(true\);\s*\}\);\s*\}, \[guarding\]\);\s*useGuardedLinks\(guarding\);/,
     );
     // Going on happens once: the pending destination is taken before it is used.
     assert.match(
       body,
-      /const goOn = \(\) => \{\s*const next = proceed\.current;\s*proceed\.current = null;\s*setAsking\(false\);\s*next\?\.\(\);\s*\};/,
+      /const goOn = \(\) => \{\s*const next = proceed\.current;\s*proceed\.current = null;\s*setAsking\(false\);\s*setWaited\(false\);\s*next\?\.\(\);\s*\};/,
     );
   });
 
@@ -348,10 +410,18 @@ describe("leaving with changes", () => {
     assert.equal(count(view, /sendSection\(/g), 1);
   });
 
-  it("Leave without saving sends the latest at once and waits about a second at most", () => {
+  it("Leave without saving sends the latest at once, waits about a second at most, and goes on only once it is kept", () => {
+    // Rewritten after the independent review (15 November 2026). Old expectation: after the flush the
+    // page goes on whatever happened. New expectation: only where the keep was confirmed,
+    // or where the person was told the changes are not kept and chose to lose them;
+    // otherwise the dialog stays and says so (`waited`, worded by `leaveWords`).
     assert.match(
       body,
-      /onLeave=\{async \(\) => \{\s*(?:\/\/ [^\n]*\n\s*)+await keeper\.flush\(LEAVE_WAIT_MS\);\s*goOn\(\);\s*\}\}/,
+      /onLeave=\{async \(lose\) => \{\s*(?:\/\/ [^\n]*\n\s*)+await keeper\.flush\(LEAVE_WAIT_MS\);\s*if \(lose \|\| !keeper\.unkept\(\)\) \{\s*goOn\(\);\s*\} else \{\s*setWaited\(true\);\s*\}\s*\}\}/,
+    );
+    assert.match(
+      body,
+      /words=\{leaveWords\(\{\s*keeping: keeper\.keeping,\s*problem: draftProblem\(editing\.editor, editing\.draft\),\s*unkept: keeper\.unkept\(\),\s*waited,\s*\}\)\}/,
     );
     assert.match(view, /const LEAVE_WAIT_MS = 1000;/);
     assert.match(
@@ -370,9 +440,20 @@ describe("leaving with changes", () => {
       box,
       /<h2 id=\{`\$\{id\}-title`\}>\{LEAVE\.title\(section\)\}<\/h2>/,
     );
-    assert.match(box, /<p id=\{`\$\{id\}-body`\}>\{LEAVE\.body\}<\/p>/);
+    // Rewritten after the independent review (15 November 2026). Old expectation: the fixed
+    // LEAVE.body and LEAVE.leave. New expectation: the model's words for where the
+    // working copy stands (`leaveWords`), and the refusal of a save, if any.
+    assert.match(box, /<p id=\{`\$\{id\}-body`\}>\{words\.body\}<\/p>/);
+    assert.match(
+      box,
+      /\{refusal !== "" \? <p className="leave-problem">\{refusal\}<\/p> : null\}/,
+    );
+    assert.match(
+      box,
+      /onClick=\{\(\) => run\("leave", \(\) => onLeave\(words\.lose\)\)\}\s*>\s*\{words\.leave\}/,
+    );
     const save = box.indexOf("LEAVE.save}");
-    const leave = box.indexOf("{LEAVE.leave}");
+    const leave = box.indexOf("{words.leave}");
     const stay = box.indexOf("{LEAVE.stay}");
     assert.ok(
       save > 0 && save < leave && leave < stay,
@@ -465,22 +546,31 @@ describe("closing or reloading the tab", () => {
     );
   });
 
-  it("sends what is not kept yet with keepalive as the page goes", () => {
+  it("sends what is not kept yet with keepalive as the page goes, and a large body as the tab is hidden", () => {
+    // Rewritten after the independent review (15 November 2026). Old expectation: pagehide sends a
+    // keepalive keep of any size, and the editor going without being asked sends one
+    // outside the queue, even while a save is out. New expectation: what is sent is
+    // `goingKeep`'s (tested in the model): keepalive within its limit; a larger body is
+    // kept, in the queue, as the tab is hidden; the Back button keeps in the queue; never
+    // while a save is out, after one, or with keeping off. Kept only once answered.
     assert.match(
       body,
-      /const going = \(\) => keeper\.beacon\(\);\s*window\.addEventListener\("beforeunload", ask\);\s*window\.addEventListener\("pagehide", going\);/,
+      /const going = \(\) => keeper\.beacon\(\);\s*(?:\/\/ [^\n]*\n\s*)+const hidden = \(\) => \{\s*if \(document\.visibilityState === "hidden"\) \{\s*keeper\.hidden\(\);\s*\}\s*\};\s*window\.addEventListener\("beforeunload", ask\);\s*window\.addEventListener\("pagehide", going\);\s*document\.addEventListener\("visibilitychange", hidden\);/,
     );
     assert.match(body, /window\.removeEventListener\("pagehide", going\);/);
-    assert.match(hook, /beacon: \(\) => send\(true\),/);
+    assert.match(
+      body,
+      /document\.removeEventListener\("visibilitychange", hidden\);/,
+    );
+    assert.match(hook, /beacon: \(\) => send\("pagehide"\),/);
+    assert.match(hook, /hidden: \(\) => send\("hidden"\),/);
+    assert.match(hook, /leave: \(\) => send\("unmount"\),/);
     assert.match(
       hook,
-      /void sendCopy\(\s*keepRequest\(now\.scope, now\.source, now\.editor, now\.draft\),\s*keepalive,\s*\);/,
+      /const plan = goingKeep\(\{\s*when,\s*may: may\(now\),\s*unkept: unkept\(\),\s*action: keepAction\(now\.editor, now\.draft, now\.hasCopy\),\s*key,\s*beaconed: beaconed\.current,\s*sending: sending\.current,\s*bytes: bodyBytes\(body\),\s*\}\);\s*if \(plan === "keepalive"\) \{\s*beaconed\.current = key;\s*void sendCopy\(body, true\);\s*\} else if \(plan === "queue"\) \{\s*(?:\/\/ [^\n]*\n\s*)+window\.clearTimeout\(wait\.current\);\s*void request\(\);\s*\}/,
     );
-    // Only what may be kept is sent; a credential or a limit passed is never.
-    assert.match(
-      hook,
-      /!unkept\(\) \|\|\s*keepAction\(now\.editor, now\.draft, now\.hasCopy\) !== "keep"/,
-    );
+    // A keepalive keep is never sent outside `goingKeep`.
+    assert.equal(count(hook, /sendCopy\([^)]*true\)/g), 1);
   });
 });
 

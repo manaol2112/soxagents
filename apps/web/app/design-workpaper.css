@@ -2054,6 +2054,12 @@ button.se-x:focus-visible:not(:disabled) {
   align-items: center;
 }
 
+/* "Edit" waits while the working copies are read, and says so beside it. */
+.dw-checking {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
 /* Asked before leaving with changes not in the workpaper: Save first. */
 .leave-dialog .leave-problem {
   color: var(--warning);

@@ -11,14 +11,22 @@ import {
 } from "./section-edit-model";
 import type { EditPhase } from "./section-editor";
 import {
+  bodyBytes,
+  type CopiesRead,
   copiesQuery,
+  copyMayOutliveSave,
   discardRequest,
+  goingKeep,
   KEEP_AFTER_MS,
   KEEP_RETRY_MS,
+  type KeepCount,
   type Keeping,
+  type KeepingOff,
   keepAction,
+  keepBasis,
   keepProblem,
   keepRequest,
+  mayKeep,
   parseWorkingCopies,
   type WorkingCopy,
 } from "./working-copy-model";
@@ -72,9 +80,15 @@ export async function sendCopy(
 /**
  * The caller's working copies of a workpaper: read once, and again when the workpaper or
  * its version changes or a write asks for it. A newer read stops the one before it, and an
- * answer that arrives late is dropped. A read that fails says nothing and never blocks
- * editing: what the page already knows stays. For the section open in its editor the
- * page's own writes are what is known, so a read made before one of them does not undo it.
+ * answer that arrives late is dropped. A read that fails never blocks editing: what the page
+ * already knows stays, and `read` says so ("failed"), so an editor opened then keeps nothing
+ * over a copy that may be there. `read` is "reading" until a read of this workpaper's copies
+ * has answered: "Edit" waits for it (independent review, 15 November 2026).
+ *
+ * For the section open in an editor that knows what the server holds (`openKey`), the
+ * page's own writes are what is known, so a read made before one of them does not undo it;
+ * for an editor that does not know, the caller passes null and the read is taken as it is.
+ * `answered` counts the reads that answered, so the page sees one land.
  */
 export function useWorkingCopies(
   scope: Scope,
@@ -83,12 +97,24 @@ export function useWorkingCopies(
   openKey: string | null,
 ): {
   copies: WorkingCopy[];
+  read: CopiesRead;
+  answered: number;
   reread: () => void;
   remember: (copy: WorkingCopy) => void;
   forget: (section: string) => void;
 } {
   const [copies, setCopies] = useState<WorkingCopy[]>([]);
   const [attempt, setAttempt] = useState(0);
+  const [answered, setAnswered] = useState(0);
+  // What "Edit" waits for is a read of this workpaper's copies: they are the caller's own,
+  // whatever the version (a copy's own `based_on` says whether it is stale), so a newer
+  // version's read keeps what is known while it is out, and "Edit" (and the focus a save
+  // hands back to it) is not taken away after every save.
+  const target = workpaperId;
+  const [status, setStatus] = useState<{
+    target: string | null;
+    read: CopiesRead;
+  }>({ target: null, read: "reading" });
   const open = useRef(openKey);
   open.current = openKey;
   const { organizationId, projectId } = scope;
@@ -99,6 +125,7 @@ export function useWorkingCopies(
     }
     const control = new AbortController();
     let current = true;
+    const asked = target;
     (async () => {
       let found: WorkingCopy[] | null = null;
       try {
@@ -114,7 +141,16 @@ export function useWorkingCopies(
       } catch {
         found = null;
       }
-      if (!current || found === null) {
+      if (!current) {
+        return;
+      }
+      if (found === null) {
+        // Once a read of this workpaper's copies answered, the page knows them.
+        setStatus((before) =>
+          before.target === asked && before.read === "read"
+            ? before
+            : { target: asked, read: "failed" },
+        );
         return;
       }
       const read = found;
@@ -127,6 +163,8 @@ export function useWorkingCopies(
               ...before.filter((copy) => copy.section === key),
             ];
       });
+      setStatus({ target: asked, read: "read" });
+      setAnswered((count) => count + 1);
     })();
     return () => {
       current = false;
@@ -148,7 +186,8 @@ export function useWorkingCopies(
     }),
     [],
   );
-  return { copies, ...calls };
+  const read = status.target === target ? status.read : "reading";
+  return { copies, read, answered, ...calls };
 }
 
 /** The open editor, as keeping its working copy needs it. */
@@ -160,8 +199,11 @@ export type KeepingOpen = {
   phase: EditPhase;
   /** The server holds a working copy of this section (as far as the page knows). */
   hasCopy: boolean;
-  /** The working copy the editor opened with: what it holds is already kept. */
+  /** The working copy the editor holds (it opened with it, or the person chose it): what
+   * it holds is already kept, and a keep is based on the copy's own version. */
   restored: WorkingCopy | null;
+  /** Keeping is off: the editor does not know what the server holds for it. */
+  off: KeepingOff | null;
 };
 
 /** What a keep holds, as one string: two drafts that would send the same are the same. */
@@ -187,13 +229,25 @@ export type Keeper = {
     section: string,
     known: boolean,
   ) => void;
+  /** How many keeps were sent and answered: taken as a save is sent. */
+  mark: () => KeepCount;
   /** The server took a save of the section, and deleted its working copy with it. A keep
-   * that was still on its way could land after that: its copy is discarded once it has. */
-  saved: (scope: Scope, workpaperId: string, section: string) => void;
-  /** Something changed is not kept yet: what the browser's own prompt asks about. */
+   * that was out as the save was sent (`atSave`), or sent after, could land after that: its
+   * copy is discarded once it has. Nothing is kept for this editor after it. */
+  saved: (
+    scope: Scope,
+    workpaperId: string,
+    section: string,
+    atSave: KeepCount,
+  ) => void;
+  /** Something changed is not kept yet (not confirmed by the server): what the browser's
+   * own prompt asks about. A keep sent as the page goes is not confirmed, so it still is. */
   unkept: () => boolean;
-  /** The page is going: what is not kept yet is sent with `keepalive`, unanswered. */
+  /** The page is going: what is not kept yet is sent with `keepalive`, unanswered (a body
+   * too large for it was kept as the tab was hidden, or is not kept). */
   beacon: () => void;
+  /** The tab is hidden: a body too large for `keepalive` is kept now, as a keep is. */
+  hidden: () => void;
 };
 
 /**
@@ -226,6 +280,10 @@ export function useKeeping(
   const beaconed = useRef<string | null>(null);
   // The server refused in its own words: not tried again for this editor.
   const blocked = useRef(false);
+  // The editor whose save the server confirmed: nothing more is kept for it.
+  const savedFor = useRef<SectionEditor | null>(null);
+  // Keeps sent, and answered (independent review, 15 November 2026).
+  const count = useRef<KeepCount>({ sent: 0, answered: 0 });
   const wait = useRef(0);
   const retry = useRef(0);
   const chain = useRef<Promise<void>>(Promise.resolve());
@@ -246,16 +304,23 @@ export function useKeeping(
       return next;
     };
     const same = (editor: SectionEditor) => latest.current?.editor === editor;
+    const may = (now: KeepingOpen) =>
+      mayKeep(now, {
+        blocked: blocked.current,
+        saved: savedFor.current === now.editor,
+      });
 
     /** Keeps the latest, or drops a copy of something changed back: read when it runs,
      * so whatever is sent is the latest there is. */
     const sync = async (): Promise<void> => {
       queued.current = false;
       const now = latest.current;
-      if (now === null || now.phase !== "editing" || blocked.current) {
+      if (now === null || !may(now)) {
         return;
       }
-      const { editor, draft, scope, source } = now;
+      const { editor, draft, scope } = now;
+      // A restored copy keeps the version it was started from.
+      const source = keepBasis(now.source, now.restored);
       const action = keepAction(editor, draft, now.hasCopy);
       if (action === "none") {
         return;
@@ -280,7 +345,12 @@ export function useKeeping(
         return;
       }
       sending.current = key;
+      count.current = { ...count.current, sent: count.current.sent + 1 };
       const answer = await sendCopy(keepRequest(scope, source, editor, draft));
+      count.current = {
+        ...count.current,
+        answered: count.current.answered + 1,
+      };
       sending.current = null;
       const problem = keepProblem(answer.status, answer.detail);
       if (problem === null) {
@@ -367,10 +437,19 @@ export function useKeeping(
         void enqueue(discardOp(scope, workpaperId, section));
       }
     };
-    const saved = (scope: Scope, workpaperId: string, section: string) => {
+    const mark = (): KeepCount => ({ ...count.current });
+    const saved = (
+      scope: Scope,
+      workpaperId: string,
+      section: string,
+      atSave: KeepCount,
+    ) => {
       kept.current = null;
+      savedFor.current = latest.current?.editor ?? null;
+      window.clearTimeout(wait.current);
+      window.clearTimeout(retry.current);
       told.current.onDiscarded(section);
-      if (pending.current > 0) {
+      if (copyMayOutliveSave(atSave, count.current)) {
         void enqueue(discardOp(scope, workpaperId, section));
       }
     };
@@ -385,37 +464,51 @@ export function useKeeping(
         keyOf(now.editor, now.draft) !== kept.current
       );
     };
-    const send = (keepalive: boolean) => {
+    /** As the page goes, the tab is hidden, or the editor goes without being asked: what
+     * is not kept yet, as `goingKeep` decides. Never while a save is out or after one the
+     * server confirmed, never with keeping off. */
+    const send = (when: "pagehide" | "hidden" | "unmount") => {
       const now = latest.current;
-      if (
-        now === null ||
-        now.phase === "refreshing" ||
-        blocked.current ||
-        !unkept() ||
-        keepAction(now.editor, now.draft, now.hasCopy) !== "keep"
-      ) {
+      if (now === null) {
         return;
       }
-      const key = keyOf(now.editor, now.draft);
-      // In the app the keep on its way goes on; a page that unloads stops it.
-      if (key === beaconed.current || (!keepalive && key === sending.current)) {
-        return;
-      }
-      beaconed.current = key;
-      void sendCopy(
-        keepRequest(now.scope, now.source, now.editor, now.draft),
-        keepalive,
+      const body = keepRequest(
+        now.scope,
+        keepBasis(now.source, now.restored),
+        now.editor,
+        now.draft,
       );
+      const key = keyOf(now.editor, now.draft);
+      const plan = goingKeep({
+        when,
+        may: may(now),
+        unkept: unkept(),
+        action: keepAction(now.editor, now.draft, now.hasCopy),
+        key,
+        beaconed: beaconed.current,
+        sending: sending.current,
+        bytes: bodyBytes(body),
+      });
+      if (plan === "keepalive") {
+        beaconed.current = key;
+        void sendCopy(body, true);
+      } else if (plan === "queue") {
+        // In the page's own queue, counted, and kept only once the server answered.
+        window.clearTimeout(wait.current);
+        void request();
+      }
     };
     return {
       request,
       flush,
       settle,
       discard,
+      mark,
       saved,
       unkept,
-      beacon: () => send(true),
-      leave: () => send(false),
+      beacon: () => send("pagehide"),
+      hidden: () => send("hidden"),
+      leave: () => send("unmount"),
     };
   }, []);
 
@@ -428,25 +521,43 @@ export function useKeeping(
     kept.current = null;
     keptAt.current = "";
     blocked.current = false;
-    const now = latest.current;
-    if (now !== null && now.restored !== null) {
-      kept.current = keyOf(now.editor, now.draft);
-      keptAt.current = now.restored.updatedAt;
-      setKeeping({ state: "kept", at: now.restored.updatedAt });
-    } else {
-      setKeeping({ state: "none" });
-    }
+    savedFor.current = null;
+    setKeeping({ state: "none" });
   }, [session]);
+
+  // The editor holds a working copy (it opened with it, or the person chose one found
+  // later): what it holds is what the server holds.
+  const holding = open?.restored ?? null;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the copy the editor takes up is what is kept.
+  useEffect(() => {
+    const now = latest.current;
+    if (now === null || holding === null) {
+      return;
+    }
+    kept.current = keyOf(now.editor, now.draft);
+    keptAt.current = holding.updatedAt;
+    setKeeping({ state: "kept", at: holding.updatedAt });
+  }, [session, holding]);
 
   // The pause after the last change. Paused while a save is out or the views read again;
   // the timer goes with the editor that set it.
   const phase = open?.phase ?? null;
   const key = open === null ? null : keyOf(open.editor, open.draft);
   const hasCopy = open?.hasCopy ?? false;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a change of the text, the phase or the copy is what starts the pause again.
+  const off = open?.off ?? null;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a change of the text, the phase, the copy or keeping off is what starts the pause again.
   useEffect(() => {
     const now = latest.current;
     if (now === null || now.phase !== "editing" || blocked.current) {
+      return;
+    }
+    if (now.off !== null) {
+      // Nothing is kept, nor discarded, over a copy that may be there: the bar says so.
+      setKeeping(
+        changed(now.editor, now.draft)
+          ? { state: "off", why: now.off }
+          : { state: "none" },
+      );
       return;
     }
     const action = keepAction(now.editor, now.draft, now.hasCopy);
@@ -462,10 +573,10 @@ export function useKeeping(
       void keeper.request();
     }, KEEP_AFTER_MS);
     return () => window.clearTimeout(wait.current);
-  }, [session, key, phase, hasCopy, keeper]);
+  }, [session, key, phase, hasCopy, off, keeper]);
 
   // Gone to another page of the app without being asked (the browser's Back button): what
-  // is not kept yet is sent.
+  // is not kept yet is kept, in the queue (never while a save is out, or after one).
   useEffect(() => {
     gone.current = false;
     return () => {
@@ -481,8 +592,10 @@ export function useKeeping(
     flush: keeper.flush,
     settle: keeper.settle,
     discard: keeper.discard,
+    mark: keeper.mark,
     saved: keeper.saved,
     unkept: keeper.unkept,
     beacon: keeper.beacon,
+    hidden: keeper.hidden,
   };
 }

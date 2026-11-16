@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 
 import { useFocusTrap } from "./use-focus-trap";
-import { LEAVE } from "./working-copy-model";
+import { LEAVE, type LeaveWords } from "./working-copy-model";
 
 /**
  * Asked before a person goes elsewhere in the app with changes that are not in the
@@ -12,20 +12,32 @@ import { LEAVE } from "./working-copy-model";
  * working copy is kept, and is there on return), or Keep editing. Escape is Keep editing,
  * and the focus goes back to where it was. One press does one thing: while a button's
  * work is out, none of them does anything.
+ *
+ * What it says is the model's `leaveWords` (independent review, 15 November 2026): where
+ * the latest changes are not kept it says so, and why, and the second button reads "Leave
+ * and lose these changes".
  */
 export function LeaveDialog({
   section,
   problem,
+  refusal,
+  words,
   onSave,
   onLeave,
   onStay,
 }: {
   /** The section's title, as the editor names it. */
   section: string;
-  /** Why the changes cannot be saved as they are (a limit); "" where they can. */
+  /** Why the changes cannot be saved as they are (a limit); "" where they can. Said in
+   * the body, from `words`. */
   problem: string;
+  /** Why the last save was not taken; "" where none was refused. */
+  refusal: string;
+  /** What it says, and what its second button reads. */
+  words: LeaveWords;
   onSave: () => Promise<void>;
-  onLeave: () => Promise<void>;
+  /** Called with whether the person was told the changes are not kept. */
+  onLeave: (lose: boolean) => Promise<void>;
   onStay: () => void;
 }) {
   const id = useId();
@@ -97,8 +109,8 @@ export function LeaveDialog({
     >
       <div className="confirm-dialog-body">
         <h2 id={`${id}-title`}>{LEAVE.title(section)}</h2>
-        <p id={`${id}-body`}>{LEAVE.body}</p>
-        {problem !== "" ? <p className="leave-problem">{problem}</p> : null}
+        <p id={`${id}-body`}>{words.body}</p>
+        {refusal !== "" ? <p className="leave-problem">{refusal}</p> : null}
         <div className="confirm-dialog-actions leave-actions">
           <button
             type="button"
@@ -111,9 +123,9 @@ export function LeaveDialog({
             type="button"
             className="btn-secondary"
             disabled={doing !== null}
-            onClick={() => run("leave", onLeave)}
+            onClick={() => run("leave", () => onLeave(words.lose))}
           >
-            {LEAVE.leave}
+            {words.leave}
           </button>
           <button
             type="button"

@@ -14,28 +14,45 @@ import {
   type TextEditor,
 } from "../apps/web/src/section-edit-model.ts";
 import {
+  afterRead,
+  bodyBytes,
+  CANNOT_KEEP,
+  CHECKING_COPIES,
+  CHOOSE_FIRST,
   CONTINUE_EDITING,
+  type CopyKnown,
   copiesPath,
   copiesQuery,
   copyFor,
   copyIsStale,
+  copyMayOutliveSave,
   copyWrite,
   discardRequest,
+  dropRestored,
+  editGate,
+  foundWords,
+  goingKeep,
   HAS_COPY,
   KEEP_AFTER_MS,
   KEEP_RETRY_MS,
+  KEEPALIVE_MAX_BYTES,
   KEEPING,
   keepAction,
+  keepBasis,
+  keepingOff,
   keepingWords,
   keepProblem,
   keepRequest,
   keptWhen,
   LEAVE,
+  leaveWords,
+  mayKeep,
   NOT_KEPT,
   parseWorkingCopies,
   restoredDraft,
   restoredWords,
   STALE_COPY,
+  USE_COPY,
   type WorkingCopy,
 } from "../apps/web/src/working-copy-model.ts";
 import type { WorkpaperSection } from "../apps/web/src/workpaper-model.ts";
@@ -485,5 +502,268 @@ describe("the route", () => {
     assert.equal(/console\./.test(route), false);
     assert.equal(/request\.headers/.test(route), false);
     assert.match(route, /headers\.set\("cookie", `aw_session=\$\{token\}`\);/);
+  });
+});
+
+/* Independent review, 15 November 2026: the decisions the page's queue and dialog take,
+   executed here (no timers: the counts and states are passed in). */
+
+describe("an editor never opens without, or keeps over, a working copy that is there", () => {
+  const copies = parseWorkingCopies([
+    sent({ text: "Typed yesterday, not saved." }),
+  ]);
+  const copy = copies[0] as WorkingCopy;
+
+  it("Edit waits while the read is out, opens once it answered, and opens unread where it failed", () => {
+    assert.equal(editGate("reading"), "wait");
+    assert.equal(editGate("read"), "open");
+    // Editing is never blocked by a failed read: keeping is off instead.
+    assert.equal(editGate("failed"), "unread");
+    assert.equal(CHECKING_COPIES, "Checking for your unsaved changes…");
+  });
+
+  it("keeps nothing while the editor does not know what the server holds", () => {
+    assert.equal(keepingOff({ state: "known" }), null);
+    assert.equal(keepingOff({ state: "unknown" }), "unread");
+    assert.equal(keepingOff({ state: "found", copy }), "found");
+    assert.equal(keepingWords({ state: "off", why: "unread" }), CANNOT_KEEP);
+    assert.equal(
+      CANNOT_KEEP,
+      "Your changes cannot be kept right now: save them to keep them.",
+    );
+    assert.equal(keepingWords({ state: "off", why: "found" }), CHOOSE_FIRST);
+    for (const words of [CANNOT_KEEP, CHOOSE_FIRST]) {
+      assert.equal(/\bsaved\b/i.test(words), false);
+    }
+  });
+
+  it("a read that lands after the editor opened offers a copy of its section, and never puts it in place", () => {
+    const unknown: CopyKnown = { state: "unknown" };
+    const found = afterRead(unknown, conclusion, copies);
+    assert.deepEqual(found, { state: "found", copy });
+    // Keeping stays off until the person chooses.
+    assert.equal(keepingOff(found), "found");
+    // No copy of its section (or only of another one): nothing to keep over.
+    assert.deepEqual(afterRead(unknown, conclusion, []), { state: "known" });
+    assert.deepEqual(afterRead(unknown, walk, copies), { state: "known" });
+    // A newer read while it is offered: the latest copy, or none.
+    assert.deepEqual(afterRead(found, conclusion, []), { state: "known" });
+  });
+
+  it("for an editor that knows, the page's own writes are what is known", () => {
+    const known: CopyKnown = { state: "known" };
+    assert.equal(afterRead(known, conclusion, copies), known);
+  });
+
+  it("says what was found, and offers Use them and Discard them", () => {
+    const now = new Date(2026, 10, 15, 11, 0, 0);
+    assert.equal(
+      foundWords(
+        { updatedAt: new Date(2026, 10, 14, 10, 42).toISOString() },
+        now,
+      ),
+      "You have changes from 14 Nov, 10:42 AM that were not saved.",
+    );
+    assert.equal(
+      foundWords({ updatedAt: "not a time" }, now),
+      "You have earlier changes that were not saved.",
+    );
+    assert.equal(USE_COPY, "Use them");
+  });
+});
+
+describe("the leave dialog says whether the latest is kept", () => {
+  const ask = (over: Partial<Parameters<typeof leaveWords>[0]> = {}) =>
+    leaveWords({
+      keeping: { state: "kept", at: "2026-11-15T10:42:00Z" },
+      problem: "",
+      unkept: false,
+      waited: false,
+      ...over,
+    });
+
+  it("where everything is kept, says they are kept either way, and offers Leave without saving", () => {
+    assert.deepEqual(ask(), {
+      body: LEAVE.body,
+      leave: "Leave without saving",
+      lose: false,
+    });
+    // A keep on its way with nothing wrong: kept once it answered (the press waits).
+    assert.equal(
+      ask({ keeping: { state: "keeping" }, unkept: true }).lose,
+      false,
+    );
+  });
+
+  it("where the server could not be reached, says plainly they are not kept, and why", () => {
+    const words = ask({
+      keeping: { state: "failed", detail: "" },
+      unkept: true,
+    });
+    assert.equal(
+      words.body,
+      "Your latest changes are not kept yet. The server could not be reached.",
+    );
+    assert.equal(words.leave, "Leave and lose these changes");
+    assert.equal(words.lose, true);
+    assert.equal(/either way/.test(words.body), false);
+  });
+
+  it("where the server refused, or the draft cannot be kept, or keeping is off, says why", () => {
+    assert.equal(
+      ask({
+        keeping: {
+          state: "failed",
+          detail: "this section cannot be edited here any more.",
+        },
+        unkept: true,
+      }).body,
+      "Your latest changes are not kept yet. This section cannot be edited here any more.",
+    );
+    const limit = ask({
+      keeping: { state: "none" },
+      problem: "The text is 12,001 characters; the most is 12,000.",
+      unkept: true,
+    });
+    assert.equal(
+      limit.body,
+      "Your latest changes are not kept yet. The text is 12,001 characters; the most is 12,000.",
+    );
+    assert.equal(limit.lose, true);
+    assert.equal(
+      ask({ keeping: { state: "off", why: "unread" }, unkept: true }).body,
+      `${LEAVE.notKept} ${LEAVE.unread}`,
+    );
+    assert.equal(
+      ask({ keeping: { state: "off", why: "found" }, unkept: true }).leave,
+      LEAVE.lose,
+    );
+  });
+
+  it("after a Leave without saving that was not confirmed, says so; once it is, says kept", () => {
+    const waited = ask({
+      keeping: { state: "keeping" },
+      unkept: true,
+      waited: true,
+    });
+    assert.equal(
+      waited.body,
+      "Your latest changes are not kept yet. The server has not answered yet.",
+    );
+    assert.equal(waited.lose, true);
+    assert.equal(ask({ waited: true }).lose, false);
+  });
+});
+
+describe("what the page's queue may send", () => {
+  it("nothing while a save is out, after one was confirmed, with keeping off, or after a refusal", () => {
+    const open = (
+      phase: "editing" | "saving" | "refreshing",
+      off: "unread" | "found" | null = null,
+    ) => ({ phase, off });
+    const ok = { blocked: false, saved: false };
+    assert.equal(mayKeep(open("editing"), ok), true);
+    assert.equal(mayKeep(open("saving"), ok), false);
+    assert.equal(mayKeep(open("refreshing"), ok), false);
+    assert.equal(mayKeep(open("editing"), { ...ok, saved: true }), false);
+    assert.equal(mayKeep(open("editing"), { ...ok, blocked: true }), false);
+    assert.equal(mayKeep(open("editing", "unread"), ok), false);
+    assert.equal(mayKeep(open("editing", "found"), ok), false);
+  });
+
+  it("a restored copy keeps the version it was started from, keep after keep", () => {
+    const restored = { basedOn: 1 };
+    const typed = {
+      kind: "text" as const,
+      text: "Typed on a copy of version one.",
+    };
+    for (let keep = 0; keep < 3; keep += 1) {
+      const body = keepRequest(
+        scope,
+        keepBasis(SOURCE, restored),
+        conclusion,
+        typed,
+      );
+      assert.equal(body.based_on, 1);
+    }
+    // Discarded or saved, it is no longer held: what the editor opened on.
+    assert.equal(keepBasis(SOURCE, null).basedOn, 3);
+    assert.equal(keepBasis(SOURCE, null), SOURCE);
+    // The save itself is always based on the version the editor opened on.
+    assert.equal(saveRequest(scope, SOURCE, conclusion, typed).based_on, 3);
+    // So the copy is still said to be stale when the person comes back.
+    assert.equal(copyIsStale({ basedOn: 1 }, SOURCE), true);
+  });
+
+  it("after a confirmed save, discards a copy a keep may have made again", () => {
+    // No keep out as the save was sent, none since: nothing to discard.
+    assert.equal(
+      copyMayOutliveSave({ sent: 2, answered: 2 }, { sent: 2, answered: 2 }),
+      false,
+    );
+    // A keep still out as the save was sent (it took over the 2 s the save waits), and
+    // answered before the save did: its copy may have landed after the save.
+    assert.equal(
+      copyMayOutliveSave({ sent: 3, answered: 2 }, { sent: 3, answered: 3 }),
+      true,
+    );
+    // A keep sent after the save was sent.
+    assert.equal(
+      copyMayOutliveSave({ sent: 2, answered: 2 }, { sent: 3, answered: 3 }),
+      true,
+    );
+  });
+
+  it("as the page goes: keepalive within its limit; a larger body is kept as the tab is hidden", () => {
+    const base = {
+      may: true,
+      unkept: true,
+      action: "keep" as const,
+      key: "latest",
+      beaconed: null,
+      sending: null,
+      bytes: 2_000,
+    };
+    assert.equal(goingKeep({ ...base, when: "pagehide" }), "keepalive");
+    assert.equal(goingKeep({ ...base, when: "hidden" }), "none");
+    const large = { ...base, bytes: KEEPALIVE_MAX_BYTES + 1 };
+    assert.equal(goingKeep({ ...large, when: "pagehide" }), "none");
+    assert.equal(goingKeep({ ...large, when: "hidden" }), "queue");
+    // Gone without being asked (the Back button): in the queue, counted.
+    assert.equal(goingKeep({ ...base, when: "unmount" }), "queue");
+    assert.equal(
+      goingKeep({ ...base, when: "unmount", sending: "latest" }),
+      "none",
+    );
+    // Never while a save is out or after one, or for what is kept, or sent already.
+    for (const when of ["pagehide", "hidden", "unmount"] as const) {
+      assert.equal(goingKeep({ ...large, when, may: false }), "none");
+      assert.equal(goingKeep({ ...base, when, may: false }), "none");
+      assert.equal(goingKeep({ ...base, when, unkept: false }), "none");
+      assert.equal(goingKeep({ ...base, when, action: "none" }), "none");
+      assert.equal(goingKeep({ ...base, when, beaconed: "latest" }), "none");
+    }
+  });
+
+  it("measures a body as it is sent, in bytes", () => {
+    assert.equal(bodyBytes({ text: "abc" }), 14);
+    assert.equal(bodyBytes({ text: "é" }), 13);
+    const rows = Array.from({ length: 80 }, () => ["x".repeat(900)]);
+    assert.ok(bodyBytes({ rows }) > KEEPALIVE_MAX_BYTES);
+    assert.equal(KEEPALIVE_MAX_BYTES, 60_000);
+  });
+
+  it("a copy discarded by any way no longer reads as restored", () => {
+    const copy = parseWorkingCopies([sent()])[0] as WorkingCopy;
+    const open = { editor: { key: "design-conclusion" }, restored: copy };
+    assert.deepEqual(dropRestored(open, "design-conclusion"), {
+      ...open,
+      restored: null,
+    });
+    // Another section's discard, no copy, or no editor: as it was.
+    assert.equal(dropRestored(open, "walkthrough-of-one-instance"), open);
+    const none = { editor: { key: "design-conclusion" }, restored: null };
+    assert.equal(dropRestored(none, "design-conclusion"), none);
+    assert.equal(dropRestored(null, "design-conclusion"), null);
   });
 });

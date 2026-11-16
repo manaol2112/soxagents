@@ -82,3 +82,42 @@ export function guardedHref(
   }
   return `${to.pathname}${to.search}${to.hash}`;
 }
+
+/**
+ * Whether the open editor asks before the person goes (independent review, 15 November
+ * 2026): while it has changes that are not in the workpaper, while a save of them is out
+ * (the person is not let go before the server answered), and while the dialog is open.
+ */
+export function guarding(open: {
+  phase: "editing" | "saving" | "refreshing";
+  changed: boolean;
+  asking: boolean;
+}): boolean {
+  return (
+    open.asking ||
+    open.phase === "saving" ||
+    (open.phase === "editing" && open.changed)
+  );
+}
+
+/** What a way out does when it is asked about: opens the dialog, or, while a save is out
+ * and the dialog is not open, waits for the save's answer (it goes on once the server
+ * confirmed the save; a refusal opens the dialog with it). */
+export function whenAsked(open: {
+  phase: "editing" | "saving" | "refreshing";
+  asking: boolean;
+}): "ask" | "after-save" {
+  return !open.asking && open.phase === "saving" ? "after-save" : "ask";
+}
+
+/** How a held link goes once the person goes on: a link to another view of this same page
+ * (only its query changes, as the step switcher's, the panel's and the toolbar's links do)
+ * keeps the scroll where it is, as those links are written with `scroll={false}`. */
+export function linkScroll(href: string, here: string): { scroll: boolean } {
+  try {
+    const from = new URL(here);
+    return { scroll: new URL(href, from).pathname !== from.pathname };
+  } catch {
+    return { scroll: true };
+  }
+}

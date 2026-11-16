@@ -73,7 +73,11 @@ import { fileQuery } from "./evidence-preview-model";
 import { FileBadge } from "./file-badge";
 import { useGuardedLinks } from "./guarded-router";
 import { LeaveDialog } from "./leave-dialog";
-import { setLeaveAsker } from "./leave-guard";
+import {
+  guarding as guardingNow,
+  setLeaveAsker,
+  whenAsked,
+} from "./leave-guard";
 import { RichText } from "./rich-text";
 import {
   changed,
@@ -103,10 +107,18 @@ import {
 import { type IconName, UiIcon } from "./ui-icon";
 import { useKeeping, useWorkingCopies } from "./working-copy";
 import {
+  afterRead,
+  CHECKING_COPIES,
   CONTINUE_EDITING,
+  type CopyKnown,
   copyFor,
   copyIsStale,
+  dropRestored,
+  editGate,
+  foundWords,
   HAS_COPY,
+  keepingOff,
+  leaveWords,
   restoredDraft,
   restoredWords,
   type WorkingCopy,
@@ -160,6 +172,9 @@ type Actions = {
   /** The sections the person has a working copy of (section 3.4): their link reads
    * "Continue editing". */
   copied: ReadonlySet<EditableSection>;
+  /** The working copies are being read: "Edit" waits, so no editor opens without an
+   * earlier copy that is there (independent review, 15 November 2026). */
+  checking: boolean;
   /** The count of open matters under a verdict: goes to the document's section 6. */
   onMatters: (() => void) | null;
 };
@@ -305,10 +320,15 @@ type Editing = {
   phase: EditPhase;
   /** Why the last save was not taken; "" where none was refused. */
   refusal: string;
-  /** The working copy it opened with (section 3.4), until it closes or the copy is
-   * discarded; null otherwise. */
+  /** The working copy it holds (section 3.4: it opened with it, or the person chose one
+   * found later), until it closes or the copy is discarded by any way; null otherwise. */
   restored: WorkingCopy | null;
+  /** What it knows of the server's working copy of its section; keeping is off while it
+   * does not know (independent review, 15 November 2026). */
+  known: CopyKnown;
 };
+
+const KNOWN: CopyKnown = { state: "known" };
 
 /** "Leave without saving" waits no longer than this for the latest working copy to be
  * kept before the page goes on (section 3.4). */
@@ -590,9 +610,12 @@ export function DesignWorkpaper({
     scope,
     source?.workpaperId ?? null,
     source?.basedOn ?? null,
-    editing?.editor.key ?? null,
+    editing !== null && editing.known.state === "known"
+      ? editing.editor.key
+      : null,
   );
   const { copies } = working;
+  const gate = editGate(working.read);
   const hasCopy =
     editing !== null &&
     copies.some((copy) => copy.section === editing.editor.key);
@@ -607,13 +630,35 @@ export function DesignWorkpaper({
           phase: editing.phase,
           hasCopy,
           restored: editing.restored,
+          off: keepingOff(editing.known),
         },
     {
       onKept: working.remember,
-      onDiscarded: working.forget,
+      // A copy discarded by any way: the editor no longer says it was restored.
+      onDiscarded: (section) => {
+        working.forget(section);
+        setEditing((before) => dropRestored(before, section));
+      },
       onGone: working.reread,
     },
   );
+  // A read that answered after an editor opened that did not know what the server holds
+  // for it: a copy of its section is offered, never put in place of what it holds; none,
+  // and keeping goes on (independent review, 15 November 2026).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a read that answered is what is looked at.
+  useEffect(() => {
+    setEditing((before) => {
+      if (before === null || before.known.state === "known") {
+        return before;
+      }
+      const known = afterRead(before.known, before.editor, copies);
+      return known.state === before.known.state &&
+        (known.state !== "found" ||
+          (before.known.state === "found" && known.copy === before.known.copy))
+        ? before
+        : { ...before, known };
+    });
+  }, [working.answered]);
   // The sections whose link reads "Continue editing".
   const copied = useMemo(() => {
     const found = new Set<EditableSection>();
@@ -644,31 +689,58 @@ export function DesignWorkpaper({
       }
     };
     const going = () => keeper.beacon();
+    // A body too large for keepalive is kept as the tab is hidden, and is not kept (the
+    // prompt above still asks) until the server answered it.
+    const hidden = () => {
+      if (document.visibilityState === "hidden") {
+        keeper.hidden();
+      }
+    };
     window.addEventListener("beforeunload", ask);
     window.addEventListener("pagehide", going);
+    document.addEventListener("visibilitychange", hidden);
     return () => {
       window.removeEventListener("beforeunload", ask);
       window.removeEventListener("pagehide", going);
+      document.removeEventListener("visibilitychange", hidden);
     };
-  }, [open, keeper.unkept, keeper.beacon]);
+  }, [open, keeper.unkept, keeper.beacon, keeper.hidden]);
 
   // Going elsewhere in the app with changes not in the workpaper asks first, in a dialog
   // (section 3.4): a link, another step, another control, closing the panel.
   const [asking, setAsking] = useState(false);
   const proceed = useRef<(() => void) | null>(null);
+  // A way out taken while a save is out: it waits for the save's answer.
+  const afterSave = useRef<(() => void) | null>(null);
+  // "Leave without saving" waited for the keep, and it was not confirmed.
+  const [waited, setWaited] = useState(false);
   const askingNow = asking && editing !== null;
+  // While a save is out too (independent review, 15 November 2026).
   const guarding =
-    (editing !== null &&
-      editing.phase === "editing" &&
-      changed(editing.editor, editing.draft)) ||
-    askingNow;
+    editing !== null &&
+    guardingNow({
+      phase: editing.phase,
+      changed: changed(editing.editor, editing.draft),
+      asking: askingNow,
+    });
+  const asked = useRef({ phase: editing?.phase ?? null, asking: askingNow });
+  asked.current = { phase: editing?.phase ?? null, asking: askingNow };
   useEffect(() => {
     if (!guarding) {
       return;
     }
     // A second attempt while the dialog is open replaces the first: the latest wins.
     return setLeaveAsker((next) => {
+      const now = asked.current;
+      if (
+        now.phase !== null &&
+        whenAsked({ phase: now.phase, asking: now.asking }) === "after-save"
+      ) {
+        afterSave.current = next;
+        return;
+      }
       proceed.current = next;
+      setWaited(false);
       setAsking(true);
     });
   }, [guarding]);
@@ -678,11 +750,13 @@ export function DesignWorkpaper({
     const next = proceed.current;
     proceed.current = null;
     setAsking(false);
+    setWaited(false);
     next?.();
   };
   const stay = () => {
     proceed.current = null;
     setAsking(false);
+    setWaited(false);
   };
   const shown =
     paper === null ? null : startingSelection(paper, selection ?? null);
@@ -715,7 +789,11 @@ export function DesignWorkpaper({
     }
     setEditing(null);
     setClosed(editing.section);
-    // Cancel gives up the working copy too (section 3.4).
+    // Cancel gives up the working copy too (section 3.4); never one the editor did not
+    // know of (independent review, 15 November 2026).
+    if (editing.known.state !== "known") {
+      return;
+    }
     keeper.discard(
       scope,
       editing.source.workpaperId,
@@ -741,6 +819,43 @@ export function DesignWorkpaper({
     });
     keeper.discard(scope, open.source.workpaperId, open.editor.key, true);
   };
+  /** "Use them" over a working copy found after the editor opened: the editor takes it up,
+   * asked first where that gives up a change; keeping goes on from it. */
+  const useFound = () => {
+    const open = editing;
+    if (
+      open === null ||
+      open.phase !== "editing" ||
+      open.known.state !== "found"
+    ) {
+      return;
+    }
+    if (changed(open.editor, open.draft) && !window.confirm(DISCARD_QUESTION)) {
+      return;
+    }
+    const copy = open.known.copy;
+    setEditing({
+      ...open,
+      draft: restoredDraft(open.editor, copy),
+      restored: copy,
+      known: KNOWN,
+      refusal: "",
+    });
+  };
+  /** "Discard them" over a working copy found after the editor opened: it is discarded,
+   * and what the editor holds stays; keeping goes on from it, after the discard. */
+  const discardFound = () => {
+    const open = editing;
+    if (
+      open === null ||
+      open.phase !== "editing" ||
+      open.known.state !== "found"
+    ) {
+      return;
+    }
+    setEditing({ ...open, known: KNOWN });
+    keeper.discard(scope, open.source.workpaperId, open.editor.key, true);
+  };
   /** "Save": one request. Nothing reads as saved until the server confirmed it and the
    * views have read the workpaper again; a refusal keeps the editor and what was typed. */
   const save = async () => {
@@ -758,6 +873,8 @@ export function DesignWorkpaper({
     setEditing({ ...open, phase: "saving", refusal: "" });
     // A working copy on its way lands first, so the save deletes it (section 3.4).
     await keeper.settle(SETTLE_MS);
+    // The keeps out as the save goes: one that lands after it is discarded after it.
+    const atSave = keeper.mark();
     const answer = await sendSection(
       saveRequest(scope, open.source, open.editor, open.draft),
     );
@@ -773,10 +890,19 @@ export function DesignWorkpaper({
     if (!mounted.current) {
       return;
     }
+    // A way out taken while the save was out (independent review, 15 November 2026).
+    const then = afterSave.current;
+    afterSave.current = null;
     if (refusal !== "") {
       setEditing((before) =>
         before === null ? before : { ...before, phase: "editing", refusal },
       );
+      if (then !== null) {
+        // Refused: the person is asked, with the reason.
+        proceed.current = then;
+        setWaited(false);
+        setAsking(true);
+      }
       if (answer.status === 409) {
         // The workpaper is not as this page has it: the records and the views are read
         // again, so "Edit" after "Cancel" opens the latest. The editor and what was
@@ -787,8 +913,10 @@ export function DesignWorkpaper({
       return;
     }
     // The server deleted this section's working copy with the save (section 3.4).
-    keeper.saved(scope, open.source.workpaperId, open.editor.key);
+    keeper.saved(scope, open.source.workpaperId, open.editor.key, atSave);
     working.reread();
+    // Confirmed: a way out taken while it was out goes on.
+    then?.();
     confirmed.current = open.section;
     setEditing((before) =>
       before === null ? before : { ...before, phase: "refreshing" },
@@ -843,11 +971,21 @@ export function DesignWorkpaper({
               onEdit(section);
               return;
             }
+            // Not before the working copies are read (independent review, 15 November
+            // 2026): an editor never opens without an earlier copy that is there.
+            if (gate === "wait") {
+              return;
+            }
             if (view !== "document") {
               choose("document");
             }
             // What the person typed and did not save, where there is some (section 3.4).
-            const copy = copyFor(editor, copies);
+            // Where the read failed, the editor opens with keeping off, and they are read
+            // again: a copy found then is offered, never kept over.
+            const copy = gate === "open" ? copyFor(editor, copies) : null;
+            if (gate === "unread") {
+              working.reread();
+            }
             setSaved(null);
             setEditing({
               section,
@@ -858,6 +996,7 @@ export function DesignWorkpaper({
               phase: "editing",
               refusal: "",
               restored: copy,
+              known: gate === "open" ? KNOWN : { state: "unknown" },
             });
           },
     editing:
@@ -876,16 +1015,24 @@ export function DesignWorkpaper({
             onCancel: cancel,
             keeping: keeper.keeping,
             restored:
-              editing.restored === null
-                ? null
-                : {
-                    words: restoredWords(editing.restored),
-                    stale: copyIsStale(editing.restored, editing.source),
-                    onDiscard: discardRestored,
-                  },
+              editing.known.state === "found"
+                ? {
+                    words: foundWords(editing.known.copy),
+                    stale: copyIsStale(editing.known.copy, editing.source),
+                    onDiscard: discardFound,
+                    onUse: useFound,
+                  }
+                : editing.restored === null
+                  ? null
+                  : {
+                      words: restoredWords(editing.restored),
+                      stale: copyIsStale(editing.restored, editing.source),
+                      onDiscard: discardRestored,
+                    },
           },
     saved,
     copied,
+    checking: source !== null && gate === "wait",
     behind,
     onMatters: () => {
       choose("document");
@@ -1101,6 +1248,13 @@ export function DesignWorkpaper({
         <LeaveDialog
           section={editing.editor.title}
           problem={draftProblem(editing.editor, editing.draft)}
+          refusal={editing.refusal}
+          words={leaveWords({
+            keeping: keeper.keeping,
+            problem: draftProblem(editing.editor, editing.draft),
+            unkept: keeper.unkept(),
+            waited,
+          })}
           onSave={async () => {
             const section = editing.section;
             await save();
@@ -1112,10 +1266,17 @@ export function DesignWorkpaper({
               stay();
             }
           }}
-          onLeave={async () => {
-            // The latest is kept at once (no pause), and the page does not wait long.
+          onLeave={async (lose) => {
+            // The latest is kept at once (no pause), and the page does not wait long. It
+            // goes on only once the keep was confirmed, or where the person was told the
+            // changes are not kept and chose to leave anyway (independent review, 15
+            // November 2026); otherwise the dialog stays and says so.
             await keeper.flush(LEAVE_WAIT_MS);
-            goOn();
+            if (lose || !keeper.unkept()) {
+              goOn();
+            } else {
+              setWaited(true);
+            }
           }}
           onStay={stay}
         />
@@ -1269,18 +1430,28 @@ function EditLink({
   }
   // A working copy of it (section 3.4): the link goes on with it.
   const copied = actions?.copied.has(section) === true;
+  const checking = actions?.checking === true;
   const link = (
     <button
       type="button"
       className="dw-edit"
       data-edit={section}
-      disabled={editing !== null || actions?.behind === true}
+      disabled={editing !== null || actions?.behind === true || checking}
       onClick={() => onEdit(section)}
     >
       {copied ? CONTINUE_EDITING : "Edit"}
       <span className="sr-only"> {what}</span>
     </button>
   );
+  // While the working copies are read, "Edit" waits and says why.
+  if (checking && editing === null) {
+    return (
+      <span className="dw-edit-group">
+        <span className="dw-checking">{CHECKING_COPIES}</span>
+        {link}
+      </span>
+    );
+  }
   return copied ? (
     <span className="dw-edit-group">
       <span className="pill tone-neutral dw-has-copy">{HAS_COPY}</span>

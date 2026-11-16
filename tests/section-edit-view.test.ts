@@ -62,9 +62,14 @@ describe("Edit opens the section's editor where the document shows it", () => {
     // is stored. New expectation: it opens on the person's working copy where `copyFor`
     // finds one (`restoredDraft`), and on what is stored otherwise; the copy it opened
     // with is kept with it for the restored notice.
+    // Rewritten again after the independent review (15 November 2026). Old expectation:
+    // the editor opens at once on `copyFor(editor, copies)`, whatever the read of the
+    // copies had answered. New expectation: it waits while that read is out (`gate` is
+    // "wait"); where the read failed it opens on what is stored, keeping off ("unknown"),
+    // and reads them again; only after a read that answered does it open on the copy.
     assert.match(
       body,
-      /if \(view !== "document"\) \{\s*choose\("document"\);\s*\}\s*(?:\/\/ [^\n]*\n\s*)+const copy = copyFor\(editor, copies\);\s*setSaved\(null\);\s*setEditing\(\{\s*section,\s*source,\s*editor,\s*draft:\s*copy === null \? draftOf\(editor\) : restoredDraft\(editor, copy\),\s*phase: "editing",\s*refusal: "",\s*restored: copy,\s*\}\);/,
+      /if \(gate === "wait"\) \{\s*return;\s*\}\s*if \(view !== "document"\) \{\s*choose\("document"\);\s*\}\s*(?:\/\/ [^\n]*\n\s*)+const copy = gate === "open" \? copyFor\(editor, copies\) : null;\s*if \(gate === "unread"\) \{\s*working\.reread\(\);\s*\}\s*setSaved\(null\);\s*setEditing\(\{\s*section,\s*source,\s*editor,\s*draft:\s*copy === null \? draftOf\(editor\) : restoredDraft\(editor, copy\),\s*phase: "editing",\s*refusal: "",\s*restored: copy,\s*known: gate === "open" \? KNOWN : \{ state: "unknown" \},\s*\}\);/,
     );
     // The fold's own way in is as it was.
     const step = component(view, "DesignWorkpaperStep");
@@ -82,9 +87,12 @@ describe("Edit opens the section's editor where the document shows it", () => {
       link,
       /if \(editing !== null && editing\.section === section\) \{\s*return \(\s*<span className="pill tone-info dw-editing">\s*Editing<span className="sr-only"> \{what\}<\/span>/,
     );
+    // Rewritten after the independent review (15 November 2026). Old expectation: off
+    // while another editor is open or the records are behind. New expectation: also off
+    // while the working copies are read (`checking`), so no editor opens without them.
     assert.match(
       link,
-      /<button\s+type="button"\s+className="dw-edit"\s+data-edit=\{section\}\s+disabled=\{editing !== null \|\| actions\?\.behind === true\}\s+onClick=\{\(\) => onEdit\(section\)\}/,
+      /<button\s+type="button"\s+className="dw-edit"\s+data-edit=\{section\}\s+disabled=\{editing !== null \|\| actions\?\.behind === true \|\| checking\}\s+onClick=\{\(\) => onEdit\(section\)\}/,
     );
     // Still only where the model says the section may be edited.
     assert.match(
@@ -197,8 +205,11 @@ describe("Cancel, Escape and leaving the page", () => {
     // section 3.4). Old expectation: one `window.confirm` in the view (Cancel's). New
     // expectation: two, Cancel's and "Discard them" over a restored working copy, both
     // asking DISCARD_QUESTION only where something changed.
-    assert.equal(count(view, /window\.confirm\(/g), 2);
-    assert.equal(count(view, /!window\.confirm\(DISCARD_QUESTION\)/g), 2);
+    // Rewritten after the independent review (15 November 2026). Old expectation: two.
+    // New expectation: three, with "Use them" over a working copy found after the editor
+    // opened, which also gives up what was typed only where the person says so.
+    assert.equal(count(view, /window\.confirm\(/g), 3);
+    assert.equal(count(view, /!window\.confirm\(DISCARD_QUESTION\)/g), 3);
     assert.match(
       model,
       /DISCARD_QUESTION = "Discard your changes to this section\?"/,
@@ -298,9 +309,13 @@ describe("saving", () => {
   });
 
   it("keeps the editor and what was typed when the server refuses, and says why", () => {
+    // Rewritten after the independent review (15 November 2026). Old expectation: the
+    // refusal is set straight after the mounted check. New expectation: a way out taken
+    // while the save was out is taken up first (`afterSave`), and on a refusal the dialog
+    // opens with it; the editor and what was typed stay as before.
     assert.match(
       body,
-      /sending\.current = false;\s*const refusal = saveProblem\(answer\.status, answer\.detail\);[\s\S]{0,420}if \(!mounted\.current\) \{\s*return;\s*\}\s*if \(refusal !== ""\) \{\s*setEditing\(\(before\) =>\s*before === null \? before : \{ \.\.\.before, phase: "editing", refusal \},\s*\);\s*if \(answer\.status === 409\) \{\s*(?:\/\/ [^\n]*\n\s*)+refreshRecords\(\);\s*setAttempt\(\(count\) => count \+ 1\);\s*\}\s*return;\s*\}/,
+      /sending\.current = false;\s*const refusal = saveProblem\(answer\.status, answer\.detail\);[\s\S]{0,420}if \(!mounted\.current\) \{\s*return;\s*\}\s*(?:\/\/ [^\n]*\n\s*)+const then = afterSave\.current;\s*afterSave\.current = null;\s*if \(refusal !== ""\) \{\s*setEditing\(\(before\) =>\s*before === null \? before : \{ \.\.\.before, phase: "editing", refusal \},\s*\);\s*if \(then !== null\) \{\s*(?:\/\/ [^\n]*\n\s*)+proceed\.current = then;\s*setWaited\(false\);\s*setAsking\(true\);\s*\}\s*if \(answer\.status === 409\) \{\s*(?:\/\/ [^\n]*\n\s*)+refreshRecords\(\);\s*setAttempt\(\(count\) => count \+ 1\);\s*\}\s*return;\s*\}/,
     );
     const bar = component(editor, "EditorBar");
     assert.match(
@@ -492,7 +507,10 @@ describe("the editors", () => {
     // section 3.4). Old expectation: four buttons (Cancel, Save, Remove, Add). New
     // expectation: five, with "Discard them" over an editor that opened with a working
     // copy.
-    assert.equal(count(editor, /<button\b/g), 5);
+    // Rewritten after the independent review (15 November 2026). Old expectation: five.
+    // New expectation: six, with "Use them" over a working copy found after the editor
+    // opened (offered, never put in place of what the editor holds).
+    assert.equal(count(editor, /<button\b/g), 6);
     assert.match(
       editor,
       /aria-label=\{`Remove \$\{editor\.rowWord\} \$\{at \+ 1\}`\}/,

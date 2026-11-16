@@ -4,9 +4,12 @@ import { describe, it } from "node:test";
 
 import {
   guardedHref,
+  guarding,
   hasLeaveAsker,
   leaving,
+  linkScroll,
   setLeaveAsker,
+  whenAsked,
 } from "../apps/web/src/leave-guard.ts";
 
 // Asking before a person leaves with changes that are not in the workpaper
@@ -153,6 +156,8 @@ describe("the router that asks first", () => {
 
   it("holds a link's click only while it is active, and goes where the link went", () => {
     assert.match(source, /if \(!active\) \{\s*return;\s*\}/);
+    // Held in the capture phase: next/link goes in its own onClick unless the default is
+    // already prevented, so a listener in the bubble phase would come after it.
     assert.match(
       source,
       /document\.addEventListener\("click", onClick, true\);/,
@@ -161,9 +166,53 @@ describe("the router that asks first", () => {
       source,
       /return \(\) => document\.removeEventListener\("click", onClick, true\);/,
     );
+    // Rewritten after the independent review (15 November 2026). Old expectation: the
+    // click's default is prevented and its propagation stopped, so the link's own onClick
+    // never ran (the toolbar's layout links did not store the layout, a row menu stayed
+    // open), and the push kept no scroll. New expectation: only the default is prevented;
+    // once the click is done, a link whose own handler prevented the default is left
+    // alone, and otherwise the way out is asked about, with the link's scroll.
+    assert.ok(!/stopPropagation/.test(source));
     assert.match(
       source,
-      /if \(href === null\) \{\s*return;\s*\}\s*event\.preventDefault\(\);\s*event\.stopPropagation\(\);\s*leaving\(\(\) => router\.push\(href\)\);/,
+      /if \(href === null\) \{\s*return;\s*\}\s*event\.preventDefault\(\);\s*const own = noteOwnPrevent\(event\);\s*const options = linkScroll\(href, here\);\s*(?:\/\/ [^\n]*\n\s*)+window\.setTimeout\(\(\) => \{\s*if \(!own\.prevented\) \{\s*leaving\(\(\) => router\.push\(href, options\)\);\s*\}\s*\}, 0\);/,
     );
+  });
+});
+
+describe("when the open editor asks (independent review, 15 November 2026)", () => {
+  it("asks while there are changes, while a save is out, and while the dialog is open", () => {
+    const at = (
+      phase: "editing" | "saving" | "refreshing",
+      changed: boolean,
+      asking = false,
+    ) => guarding({ phase, changed, asking });
+    assert.equal(at("editing", false), false);
+    assert.equal(at("editing", true), true);
+    // Before the review a save on its way let the person go unasked.
+    assert.equal(at("saving", true), true);
+    assert.equal(at("saving", false), true);
+    // Confirmed: the editor closes once the views read again; nothing is held.
+    assert.equal(at("refreshing", true), false);
+    assert.equal(at("refreshing", false, true), true);
+    assert.equal(at("editing", false, true), true);
+  });
+
+  it("waits for a save's answer when asked while it is out, and asks otherwise", () => {
+    assert.equal(whenAsked({ phase: "saving", asking: false }), "after-save");
+    // The dialog's own Save: a second way out while it is out replaces the first.
+    assert.equal(whenAsked({ phase: "saving", asking: true }), "ask");
+    assert.equal(whenAsked({ phase: "editing", asking: false }), "ask");
+    assert.equal(whenAsked({ phase: "refreshing", asking: false }), "ask");
+  });
+
+  it("keeps the scroll for a link to another view of this page, as the app's links do", () => {
+    assert.deepEqual(linkScroll("/?section=controls&control=2", HERE), {
+      scroll: false,
+    });
+    assert.deepEqual(linkScroll("/?layout=table", HERE), { scroll: false });
+    assert.deepEqual(linkScroll("/engagements/1", HERE), { scroll: true });
+    assert.deepEqual(linkScroll("/elsewhere?x=1", HERE), { scroll: true });
+    assert.deepEqual(linkScroll("/x", "not a url"), { scroll: true });
   });
 });
