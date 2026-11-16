@@ -425,6 +425,138 @@ export function eventWords(event: NoteEvent): string {
   }
 }
 
+/* The note's card ------------------------------------------------------------------------ */
+
+/** The events that are a person's own words, shown under the note as its replies: a
+ * reply, a response, a reopening's text and a dismissal's reason. RAISED is the note
+ * itself (its text is the note's); a change of criticality or of owner, and a clearing,
+ * are kept on the server and not shown in the thread (product owner, 16 November 2026). */
+export const WORD_EVENTS: readonly EventKind[] = [
+  "REPLIED",
+  "RESPONDED",
+  "REOPENED",
+  "DISMISSED",
+];
+
+/** The note's replies, in order: its events that are words a person wrote. */
+export function threadEvents(note: Pick<ReviewNote, "events">): NoteEvent[] {
+  return note.events.filter(
+    (event) =>
+      event.kind !== "OTHER" &&
+      WORD_EVENTS.includes(event.kind) &&
+      event.text.trim() !== "",
+  );
+}
+
+/** What a reply says it was, after its time: "responded", "reopened", "dismissed"; ""
+ * for a plain reply. */
+export function threadTag(event: Pick<NoteEvent, "kind">): string {
+  switch (event.kind) {
+    case "RESPONDED":
+      return "responded";
+    case "REOPENED":
+      return "reopened";
+    case "DISMISSED":
+      return "dismissed";
+    default:
+      return "";
+  }
+}
+
+/** The card's quiet second line: "#2 · 4 Attributes · C, result · owner Dana Lee". */
+export function cardLine(
+  note: Pick<ReviewNote, "number" | "anchorKind" | "field" | "owner">,
+  context: FieldContext = NO_CONTEXT,
+): string {
+  return `#${note.number} · ${whereWords(note, context)} · owner ${note.owner.name}`;
+}
+
+/** The first words of a text, for a resolved note's one line: cut at a word, with an
+ * ellipsis where cut. */
+export function firstWords(text: string, most = 56): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  if ([...flat].length <= most) {
+    return flat;
+  }
+  const cut = [...flat].slice(0, most).join("");
+  const space = cut.lastIndexOf(" ");
+  return `${(space > most / 2 ? cut.slice(0, space) : cut).replace(/[\s,.;:]+$/, "")}…`;
+}
+
+/** A resolved note's word at the right of its line: "resolved" (cleared), "dismissed";
+ * "" for a note that is not closed. */
+export function closedWord(note: Pick<ReviewNote, "status">): string {
+  return note.status === "CLEARED"
+    ? "resolved"
+    : note.status === "DISMISSED"
+      ? "dismissed"
+      : "";
+}
+
+/** Who closed the note and when, for a closed note's card: "Cleared by Dana Lee · Nov 16,
+ * 2:04 PM", "Dismissed by …"; "" for a note that is not closed. The evidence of review a
+ * reviewer reads on screen (docs/workpaper-review.md, section 2; independent review, 16
+ * November 2026: before, a closed card said only "resolved"). */
+export function closedLine(
+  note: Pick<
+    ReviewNote,
+    "status" | "clearedBy" | "clearedAt" | "dismissedBy" | "dismissedAt"
+  >,
+  timeZone?: string,
+): string {
+  const line = (verb: string, by: Person | null, at: string) =>
+    [
+      by === null || by.name.trim() === ""
+        ? verb
+        : `${verb} by ${by.name.trim()}`,
+      at === "" ? "" : whenWords(at, timeZone),
+    ]
+      .filter((part) => part !== "")
+      .join(" · ");
+  return note.status === "CLEARED"
+    ? line("Cleared", note.clearedBy, note.clearedAt)
+    : note.status === "DISMISSED"
+      ? line("Dismissed", note.dismissedBy, note.dismissedAt)
+      : "";
+}
+
+/** The note's whole history, on request (section 2, "the thread on screen is these
+ * rows"): every event as `eventWords` says it, the criticality's and the owner's changes
+ * and the clearing included, in order, with the person's own words where it has some. */
+export function historyOf(
+  note: Pick<ReviewNote, "events">,
+): Array<{ id: string; at: string; words: string; text: string }> {
+  return note.events.map((event) => ({
+    id: event.id,
+    at: event.at,
+    words: eventWords(event),
+    text: event.text.trim(),
+  }));
+}
+
+/** How the card's reply box sends: as the response (it marks the note responded to)
+ * where the person may respond and the note is open, else as a plain reply where they may
+ * reply; null where they may do neither (no reply box). */
+export function replyMode(
+  note: Pick<ReviewNote, "can" | "status">,
+): "respond" | "reply" | null {
+  if (note.can.respond && note.status === "OPEN") {
+    return "respond";
+  }
+  return note.can.reply ? "reply" : null;
+}
+
+/** The keys that set a selected note's criticality: 1 Urgent, 2 Normal, 3 Follow-up. */
+export function criticalityForKey(key: string): Criticality | null {
+  return key === "1"
+    ? "URGENT"
+    : key === "2"
+      ? "NORMAL"
+      : key === "3"
+        ? "FOLLOW_UP"
+        : null;
+}
+
 /** A member as the owner picker lists them: "Dana Lee · Preparer". */
 export function memberWords(member: Member): string {
   return member.role === "" ? member.name : `${member.name} · ${member.role}`;
@@ -862,24 +994,53 @@ function matchesOf(text: string, quote: string): number[] {
   return found;
 }
 
-/**
- * The anchor of a selection in a field's text (`start`, `end`: offsets in the text, in
- * either order): the words with the space at their ends left out, up to 60 characters
- * before and after them (never half a character), and which match of the words in the
- * text they are, from 0. Null where nothing but space is selected, or more than the 500
- * characters a note's words can be.
- */
-export function anchorOf(
+/** The characters the server leaves out of a note's words and the text around them
+ * (workpaper_review_notes.clean_quote): zero-width, joiner and direction-override
+ * characters, and the C0 and C1 controls other than tab, line feed and carriage return.
+ * The page leaves the same ones out where it anchors and where it finds the words again,
+ * or a note on text pasted with them (from a PDF or Word) would read as changed the
+ * moment it was raised (independent review, 16 November 2026). */
+const STRIPPED =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: the controls the server strips are matched on purpose
+  /[\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/;
+const STRIPPED_ALL = new RegExp(STRIPPED.source, "g");
+
+/** The text as the server keeps words of it: less the characters it leaves out. */
+export function cleanQuote(text: string): string {
+  return text.replace(STRIPPED_ALL, "");
+}
+
+/** The text less the characters the server leaves out, and where each character kept
+ * is in the text (`at`, one more entry for the end). */
+function cleaned(text: string): { text: string; at: number[] } {
+  const at: number[] = [];
+  let kept = "";
+  for (let index = 0; index < text.length; index++) {
+    const char = text.charAt(index);
+    if (!STRIPPED.test(char)) {
+      kept += char;
+      at.push(index);
+    }
+  }
+  at.push(text.length);
+  return { text: kept, at };
+}
+
+const blank = (char: string) => /\s/.test(char) || STRIPPED.test(char);
+
+/** The selection's words, with the space (and the characters the server leaves out) at
+ * their ends left out, never half a character: its range in the text. */
+function wordsRange(
   text: string,
   start: number,
   end: number,
-): (TextAnchor & { start: number; end: number }) | null {
+): { from: number; to: number } {
   let from = Math.max(0, Math.min(start, end, text.length));
   let to = Math.min(text.length, Math.max(start, end, 0));
-  while (from < to && /\s/.test(text.charAt(from))) {
+  while (from < to && blank(text.charAt(from))) {
     from++;
   }
-  while (to > from && /\s/.test(text.charAt(to - 1))) {
+  while (to > from && blank(text.charAt(to - 1))) {
     to--;
   }
   // Never half of a pair: a selection that splits a character takes all of it.
@@ -897,7 +1058,38 @@ export function anchorOf(
   ) {
     to++;
   }
-  const quote = text.slice(from, to);
+  return { from, to };
+}
+
+/** Whether the selection is more words than a note can hold (the 500 characters of
+ * `quoteMax`): the margin then says so, and never falls back to the whole field. */
+export function selectionTooLong(
+  text: string,
+  start: number,
+  end: number,
+): boolean {
+  const { from, to } = wordsRange(text, start, end);
+  return [...cleanQuote(text.slice(from, to))].length > NOTE_BOUNDS.quoteMax;
+}
+
+/** What the margin says where the selected words are too many for a note. */
+export const TOO_LONG_WORDS = `Select at most ${NOTE_BOUNDS.quoteMax} characters to note them`;
+
+/**
+ * The anchor of a selection in a field's text (`start`, `end`: offsets in the text, in
+ * either order): the words with the space at their ends left out, up to 60 characters
+ * before and after them (never half a character), and which match of the words in the
+ * text they are, from 0. The words and the text around them are as the server keeps
+ * them (`cleanQuote`); `start` and `end` are in the text as given. Null where nothing but
+ * space is selected, or more than the 500 characters a note's words can be.
+ */
+export function anchorOf(
+  text: string,
+  start: number,
+  end: number,
+): (TextAnchor & { start: number; end: number }) | null {
+  const { from, to } = wordsRange(text, start, end);
+  const quote = cleanQuote(text.slice(from, to));
   if (quote === "" || [...quote].length > NOTE_BOUNDS.quoteMax) {
     return null;
   }
@@ -909,11 +1101,13 @@ export function anchorOf(
   if (after < text.length && isLow(text.charCodeAt(after))) {
     after--;
   }
+  const clean = cleaned(text);
+  const cleanFrom = clean.at.findIndex((index) => index >= from);
   return {
     quote,
-    prefix: text.slice(before, from),
-    suffix: text.slice(to, after),
-    occurrence: matchesOf(text, quote).indexOf(from),
+    prefix: cleanQuote(text.slice(before, from)),
+    suffix: cleanQuote(text.slice(to, after)),
+    occurrence: matchesOf(clean.text, quote).indexOf(cleanFrom),
     start: from,
     end: to,
   };
@@ -948,9 +1142,13 @@ function sameStart(a: string, b: string): number {
  * more: the note then says GONE_WORDS.
  */
 export function findAnchor(
-  text: string,
+  given: string,
   anchor: TextAnchor,
 ): { start: number; end: number } | null {
+  // Found in the text as the server keeps words of it, and given back in the text's
+  // own offsets.
+  const clean = cleaned(given);
+  const text = clean.text;
   const found = matchesOf(text, anchor.quote);
   if (found.length === 0) {
     return null;
@@ -971,7 +1169,11 @@ export function findAnchor(
       bestDistance = distance;
     }
   });
-  return { start: best, end: best + anchor.quote.length };
+  const last = best + anchor.quote.length - 1;
+  return {
+    start: clean.at[best] ?? best,
+    end: (clean.at[last] ?? last) + 1,
+  };
 }
 
 /** The note's place in its field's text now: its range, or null where its words are
@@ -1702,6 +1904,19 @@ export function notesProblem(status: number, detail = ""): string | null {
     default:
       return "The change did not reach the server. Nothing was saved: try again.";
   }
+}
+
+/** Said where a write's answer leaves it unknown whether the server took it: no answer
+ * (the route's timeout, status 0), a server error, or a 200 the page cannot read. The
+ * write may be on record, so "Nothing was changed: try again" would invite a second note
+ * (independent review, 16 November 2026): the notes are read again instead. */
+export const WRITE_IN_DOUBT =
+  "The answer did not come back, so this may or may not have been saved. The notes are read again to show what is on record: check them before trying again.";
+
+/** Whether a write's answer leaves it in doubt (`WRITE_IN_DOUBT`): status 0, a 5xx, or a
+ * 200 whose note the page could not read (`readable` false). */
+export function writeInDoubt(status: number, readable: boolean): boolean {
+  return status === 0 || status >= 500 || (status === 200 && !readable);
 }
 
 /** What is said once the server confirmed an action. */

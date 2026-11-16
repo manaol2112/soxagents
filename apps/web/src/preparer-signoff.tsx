@@ -1,17 +1,20 @@
 "use client";
 
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import {
   ATTESTATION,
   NOTE_LABEL,
   preparedLine,
   REOPEN_TO_CHANGE,
+  REOPENED_READING,
   SIGN_AS_PREPARER,
+  SIGNED_READING,
   type SignOffFacts,
   signOffProblems,
   signOffRefusal,
   signOffRequest,
+  signOffRereads,
 } from "./preparer-signoff-model";
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
@@ -50,6 +53,17 @@ async function send(
  * while it needs something, and the note for the reviewer only once asked for ("Add a
  * note for the reviewer"). Once signed: who and which version on the left, "Reopen to
  * change" as a quiet link on the right.
+ *
+ * After the independent review (16 November 2026):
+ * - A press the server confirmed is said at once ("Signed. Reading the workpaper
+ *   again…", in a status) and nothing can be pressed again until the workpaper read
+ *   again shows it: the state before is never left live, to be refused as stale.
+ * - A refusal is cleared when the workpaper's status changes, and a refusal as changed
+ *   (409), no answer or a server error read the workpaper again; an answer that did not
+ *   come back is said as "may not have been taken", never "Not signed".
+ * - The focus is never dropped: into the reason when "Reopen to change" opens it, back
+ *   to "Reopen to change" on Cancel, and to the sign-off's heading once a confirmed
+ *   press is shown.
  */
 export function PreparerSignOff({
   ids,
@@ -68,6 +82,8 @@ export function PreparerSignOff({
   prepared: { by: string | null; on: string | null; version: number | null };
   /** The viewer may update the workpaper (the server still decides). */
   mayAct: boolean;
+  /** The views and the page's records are read again: after a press the server
+   * confirmed, and after an answer that leaves them in doubt (`signOffRereads`). */
   onDone: () => void;
 }) {
   const uid = useId();
@@ -77,15 +93,40 @@ export function PreparerSignOff({
   const [noting, setNoting] = useState(false);
   const [sending, setSending] = useState(false);
   const [refusal, setRefusal] = useState("");
+  // A press the server confirmed, until the workpaper read again shows it (its status
+  // changes): nothing is pressed meanwhile.
+  const [confirmed, setConfirmed] = useState<"prepare" | "reopen" | null>(null);
   const busy = useRef(false);
   const alert = useRef<HTMLParagraphElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const reopenButton = useRef<HTMLButtonElement>(null);
+  // A press was answered and the workpaper is read again: when it shows another status,
+  // the control that had the focus is gone, and the focus goes to the heading.
+  const landing = useRef(false);
   const problems = signOffProblems(facts);
 
+  // The workpaper read again shows another status: what was said before it (a refusal,
+  // a confirmed press) no longer holds.
+  const status = useRef(facts.status);
+  useEffect(() => {
+    if (status.current === facts.status) {
+      return;
+    }
+    status.current = facts.status;
+    setRefusal("");
+    setConfirmed(null);
+    if (landing.current) {
+      landing.current = false;
+      window.requestAnimationFrame(() => heading.current?.focus());
+    }
+  }, [facts.status]);
+
   const press = async (intent: "prepare" | "reopen") => {
-    if (busy.current) {
+    if (busy.current || confirmed !== null) {
       return;
     }
     busy.current = true;
+    landing.current = false;
     setSending(true);
     setRefusal("");
     const answer = await send(
@@ -97,38 +138,69 @@ export function PreparerSignOff({
     if (said !== "") {
       setRefusal(said);
       window.requestAnimationFrame(() => alert.current?.focus());
+      if (signOffRereads(answer.status)) {
+        // Changed meanwhile, or the press may have been taken: read what the server
+        // holds, so a retry is made on it.
+        landing.current = true;
+        onDone();
+      }
       return;
     }
     setText("");
     setReopening(false);
     onDone();
+    // Confirmed: said at once, and held until the workpaper read again shows it.
+    landing.current = true;
+    setConfirmed(intent);
+    if (intent === "reopen") {
+      // Its form goes: the focus goes to the heading, and the status says it.
+      window.requestAnimationFrame(() => heading.current?.focus());
+    }
   };
+
+  // Said while a confirmed press waits for the workpaper read again.
+  const reading = (
+    <p className="ps-status" role="status">
+      {confirmed === "prepare"
+        ? SIGNED_READING
+        : confirmed === "reopen"
+          ? REOPENED_READING
+          : ""}
+    </p>
+  );
 
   if (facts.status === "PREPARED") {
     return (
       <section className="ps ps-signed" aria-labelledby={`${uid}-h`}>
         <div className="ps-row">
           <div className="ps-copy">
-            <h6 id={`${uid}-h`}>Preparer's sign-off</h6>
+            <h6 id={`${uid}-h`} ref={heading} tabIndex={-1}>
+              Preparer's sign-off
+            </h6>
             <p className="ps-line">
               {preparedLine(prepared.by, prepared.on, prepared.version)}
             </p>
           </div>
-          {mayAct && !reopening ? (
+          {mayAct && !reopening && confirmed === null ? (
             <button
+              ref={reopenButton}
               type="button"
               className="dw-link"
               onClick={() => {
                 setReopening(true);
                 // The note's box is the sign-off's: it opens again only when asked.
                 setNoting(false);
+                window.requestAnimationFrame(() =>
+                  document.getElementById(`${uid}-r`)?.focus(),
+                );
               }}
             >
               {REOPEN_TO_CHANGE}
             </button>
           ) : null}
         </div>
-        {mayAct ? (
+        {reading}
+        {mayAct && confirmed === null ? (
           reopening ? (
             <form
               autoComplete="off"
@@ -156,6 +228,9 @@ export function PreparerSignOff({
                     setReopening(false);
                     setText("");
                     setRefusal("");
+                    window.requestAnimationFrame(() =>
+                      reopenButton.current?.focus(),
+                    );
                   }}
                 >
                   Cancel
@@ -195,28 +270,31 @@ export function PreparerSignOff({
       <form
         autoComplete="off"
         className="ps-form"
-        aria-busy={sending}
+        aria-busy={sending || confirmed !== null}
         onSubmit={(event) => {
           event.preventDefault();
-          if (ready) {
+          if (ready && confirmed === null) {
             void press("prepare");
           }
         }}
       >
         <div className="ps-row">
           <div className="ps-copy">
-            <h6 id={`${uid}-h`}>Preparer's sign-off</h6>
+            <h6 id={`${uid}-h`} ref={heading} tabIndex={-1}>
+              Preparer's sign-off
+            </h6>
             <p className="ps-attest">{ATTESTATION}</p>
           </div>
           <button
             type="submit"
             className="dw-ink btn-sm"
-            aria-disabled={!ready || sending}
+            aria-disabled={!ready || sending || confirmed !== null}
             aria-describedby={problems.length > 0 ? `${uid}-needs` : undefined}
           >
             {sending ? "Signing…" : SIGN_AS_PREPARER}
           </button>
         </div>
+        {reading}
         {problems.length > 0 ? (
           <ul className="ps-needs" id={`${uid}-needs`}>
             {problems.map((problem) => (
@@ -232,11 +310,11 @@ export function PreparerSignOff({
               rows={2}
               maxLength={500}
               value={text}
-              disabled={sending}
+              disabled={sending || confirmed !== null}
               onChange={(event) => setText(event.currentTarget.value)}
             />
           </div>
-        ) : ready ? (
+        ) : ready && confirmed === null ? (
           <p className="ps-add-note">
             <button
               type="button"

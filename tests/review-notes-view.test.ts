@@ -109,15 +109,20 @@ describe("nothing is set as HTML", () => {
     }
     assert.match(globals, /--note-urgent: var\(--danger\);/);
     assert.match(globals, /--note-normal: var\(--accent-strong\);/);
-    // --rn-c colours only the dot, the card's rule, the highlighted words and their
-    // underline.
+    // --rn-c colours only the dots (and the current dot's ring), the card's rule, the
+    // highlighted words and their underline.
+    // Rewritten. Old: ["mark.rn-hl", ".rn-dot", ".rn-card::before,\n.rn-detail-note::before"].
+    // New: the card's rule alone (All notes' pane is the same card) and the ring of the
+    // current criticality's dot. Product owner, 16 November 2026: note card B, margin
+    // icon, form on the right.
     const uses = [...css.matchAll(/([^{}]+)\{[^{}]*var\(--rn-c[^{}]*\}/g)].map(
       (match) => (match[1] ?? "").replace(/\/\*[\s\S]*?\*\//g, "").trim(),
     );
     assert.deepEqual(uses, [
       "mark.rn-hl",
+      ".rn-card::before",
+      ".rn-dot-pick:has(input:checked) .rn-dot",
       ".rn-dot",
-      ".rn-card::before,\n.rn-detail-note::before",
     ]);
     // No filled pill, no accent fill.
     assert.ok(!/var\(--accent\)/.test(css));
@@ -167,24 +172,80 @@ describe("a write is shown as done only once the server confirmed it", () => {
   });
 
   it("offers only what the server's `can` allows", () => {
-    const actions = component(view, "NoteActions");
-    for (const flag of [
-      "reply",
-      "respond",
-      "clear",
-      "reopen",
-      "dismiss",
-      "owner",
-      "criticality",
-    ]) {
-      assert.match(actions, new RegExp(`can\\.${flag}\\b`), flag);
+    // Rewritten. Old: one NoteActions menu held every action (reply, respond, clear,
+    // reopen, dismiss, owner, criticality). New: the reply box (reply or respond, by
+    // replyMode), Resolve (can.clear), the dots (can.criticality) and a small "···" menu
+    // for the rest (owner, dismiss, reopen). Product owner, 16 November 2026: note card
+    // B, margin icon, form on the right.
+    const menu = component(view, "NoteMenu");
+    for (const flag of ["reopen", "dismiss", "owner"]) {
+      assert.match(menu, new RegExp(`can\\.${flag}\\b`), flag);
+    }
+    // A compact menu (the existing RowMenu), not a row of buttons.
+    has(menu, "<RowMenu");
+    const body = component(view, "NoteBody");
+    has(body, "const answer = replyMode(note);");
+    has(body, 'responds: answer === "respond"');
+    has(body, "{note.can.clear ? (");
+    has(body, "if (!selected || !note.can.criticality) {");
+    const dots = component(view, "CritDots");
+    has(dots, "if (!note.can.criticality) {");
+    for (const flag of ["respond", "reply"]) {
+      assert.match(
+        component(model, "replyMode"),
+        new RegExp(`can\\.${flag}\\b`),
+        flag,
+      );
     }
     has(
       component(view, "OnField"),
       "const canRaise = ui.set?.canRaise === true;",
     );
-    // A compact menu (the existing RowMenu), not a row of buttons.
-    has(actions, "<RowMenu");
+    has(
+      component(view, "NotesMargin"),
+      "const canRaise = ui?.set?.canRaise === true;",
+    );
+  });
+
+  it("changes the criticality in one press, shown only once confirmed", () => {
+    const dots = component(view, "CritDots");
+    // The checked dot is the note's criticality as the server has it.
+    has(dots, "checked={item === note.criticality}");
+    has(dots, "aria-label={CRITICALITY_WORDS[item]}");
+    has(dots, 'type="radio"');
+    const body = component(view, "NoteBody");
+    has(
+      body,
+      'run({ intent: "criticality", noteId: note.id, version: note.version, criticality: value, })',
+    );
+    // Keys 1, 2, 3 on the selected card, never while typing.
+    has(body, "const value = criticalityForKey(event.key);");
+    has(body, "typingIn(event.target)");
+  });
+
+  it("resolves with a typed reply: the reply first, then the clearing, each confirmed", () => {
+    const body = squash(component(view, "NoteBody"));
+    const at = (written: string) => body.indexOf(squash(written));
+    const replied = at("const replied = await reply();");
+    const stop = at("if (replied === null) { return; }");
+    const moved = at("version = replied.version;");
+    const clear = at(
+      'await run({ intent: "clear", noteId: note.id, version });',
+    );
+    assert.ok(replied > 0, "the reply first");
+    assert.ok(stop > replied, "stops at the first refusal");
+    // The clearing goes on the version the reply's answer gave.
+    assert.ok(moved > stop && clear > moved, "then the clearing");
+  });
+
+  it("shows in the thread only words people wrote, and no quote on the card", () => {
+    has(component(view, "Thread"), "const events = threadEvents(note);");
+    const card = `${component(view, "NoteCard")}${component(view, "NoteBody")}${component(view, "Thread")}`;
+    assert.ok(!/note\.quote|rn-quote/.test(card), "no highlighted words");
+    assert.ok(!/eventWords|CRITICALITY"|"OWNER"|"CLEARED"/.test(card));
+    // A resolved note is one faint line until it is selected.
+    has(component(view, "NoteCard"), "if (isClosed(note) && !selected) {");
+    has(component(view, "NoteCard"), "{firstWords(note.text)}");
   });
 
   it("says refusals in role=alert", () => {
@@ -216,21 +277,53 @@ describe("keyboard, screen reader and phone", () => {
     has(rail, '<ol className="rn-list">');
     has(rail, "aria-pressed={ui.chips[chip.key]}");
     const form = component(view, "RaiseForm");
-    has(form, 'role="dialog"');
+    // Rewritten. Old: the form was a modal dialog over the document (role="dialog",
+    // useFocusTrap(box), drawn through createPortal). New: a card in the rail's column
+    // (a sheet at the bottom on a narrow window), never over the document, so the page
+    // stays readable; labelled, with Escape to close. Product owner, 16 November 2026:
+    // note card B, margin icon, form on the right.
+    assert.ok(!/role="dialog"|useFocusTrap|createPortal/.test(form));
+    assert.ok(!/createPortal/.test(view));
+    has(form, "<form ref={box}");
     has(form, "aria-labelledby={`@{id}-head`}");
-    has(form, "useFocusTrap(box);");
     has(form, 'event.key === "Escape"');
     assert.ok(count(form, /htmlFor=/g) >= 2);
+    // It opens in the rail, which a note started while it is off turns on.
+    has(component(view, "NotesRail"), "<RaiseForm");
+    has(component(view, "ReviewNotesProvider"), "if (!railOn) { onRailOn(); }");
+    assert.match(
+      css,
+      /@media \(max-width: 1100px\) \{[\s\S]*?\.rn-new \{\s*position: fixed;\s*right: 0;\s*bottom: 0;\s*left: 0;/,
+    );
     // The criticality is three labelled radios in a fieldset with its legend.
     const choice = component(view, "CriticalityChoice");
     has(choice, "<legend>Criticality</legend>");
     has(choice, 'type="radio"');
     // A field's "Add review note" is a button, reachable from the keyboard.
+    // Rewritten (independent review, 16 November 2026). Old: its label was always
+    // `aria-label={`Add review note on ${where}`}`, as it always noted the whole field.
+    // New: the same label where no words are selected in the field, given through
+    // `addLabel`, which names the selected words where some are (finding 12).
+    has(component(view, "OnField"), ": `Add review note on @{where}`;");
+    has(component(view, "OnField"), "aria-label={addLabel}");
+    // Rewritten. Old: a "+" on the field's corner, shown with the pointer or the focus
+    // (button.rn-add:focus-visible { opacity: 1 }). New: the field's button takes no
+    // room, and while the focus is in the field the margin shows its comment icon,
+    // ringed, level with it; with the pointer, the icon follows the field pointed at.
+    // Product owner, 16 November 2026: note card B, margin icon, form on the right.
+    const margin = component(view, "NotesMargin");
+    has(margin, 'root.addEventListener("focusin", focusIn);');
     has(
-      component(view, "OnField"),
-      "aria-label={`Add review note on @{where}`}",
+      margin,
+      'root.addEventListener("pointermove", move, { passive: true });',
     );
-    assert.match(css, /button\.rn-add:focus-visible \{\s*opacity: 1;/);
+    has(margin, 'document.addEventListener("selectionchange", check);');
+    assert.match(margin, /"Add review note"/);
+    assert.match(
+      css,
+      /button\.rn-margin-add\.is-focus \{\s*box-shadow: var\(--ring\);/,
+    );
+    assert.ok(!/rn-corner|rn-offer/.test(view + css), "no corner +");
   });
 
   it("keeps the filters for the session in the browser, not in the address", () => {
@@ -265,9 +358,12 @@ describe("keyboard, screen reader and phone", () => {
       /@media \(max-width: 1100px\) \{\s*\.rn-with-rail \{\s*grid-template-columns: minmax\(0, 1fr\);/,
     );
     // And none of it is printed.
+    // Rewritten. Old: .rn-rail, .rn-corner, .rn-offer, .rn-pop. New: the rail, the
+    // margin, the fields' keyboard buttons and the new note's form. Product owner, 16
+    // November 2026: note card B, margin icon, form on the right.
     assert.match(
       css,
-      /@media print \{\s*\.rn-rail,\s*\.rn-corner,\s*\.rn-offer,\s*\.rn-pop \{\s*display: none !important;/,
+      /@media print \{\s*\.rn-rail,\s*\.rn-margin,\s*\.rn-add,\s*\.rn-new \{\s*display: none !important;/,
     );
     assert.match(layout, /import "\.\/review-notes\.css";/);
   });
@@ -281,6 +377,9 @@ describe("wired in the four places", () => {
     has(body, "aria-pressed={railOn}");
     has(body, "{railOn ? <NotesRail id={`@{uid}-rail`} /> : null}");
     has(body, "<ReviewNotesProvider");
+    // The margin is drawn inside the sheet's box; the provider turns the rail on.
+    has(body, "<NotesMargin />");
+    has(body, "railOn={railOn} onRailOn={showRail}");
     // The printed sheet carries none of it.
     has(body, "!printing &&");
     has(body, "<DocumentSheet paper={paper} actions={null} />");
@@ -309,6 +408,13 @@ describe("wired in the four places", () => {
     ]) {
       has(doc, written);
     }
+    // Added (independent review, 16 November 2026): section 3 lists the conclusion
+    // chosen too, `conclusion.choice`, which was in the model and never wired. A note on
+    // it is on the field (it has no words to highlight).
+    has(
+      component(sheet, "ConclusionHead"),
+      "<NoteField field={CONCLUSION_CHOICE}> <strong>{named}</strong> </NoteField>",
+    );
   });
 
   it("the Notes view, fourth beside Document, Matrix and Evidence", () => {
@@ -334,5 +440,117 @@ describe("wired in the four places", () => {
       makefile,
       /tests\/review-notes-model\.test\.ts tests\/review-notes-view\.test\.ts/,
     );
+  });
+});
+
+describe("the independent review of 16 November 2026", () => {
+  it("10: a write in doubt reads the notes again and says it may be saved", () => {
+    const hook = component(view, "useReviewNotes");
+    has(
+      hook,
+      'if (writeInDoubt(answer.status, false)) { // It may be on record: never "nothing was changed". The notes are read again, // so the list shows what the server holds before anyone tries again. read(true).catch(() => undefined); return { ok: false, problem: WRITE_IN_DOUBT, status: answer.status }; }',
+    );
+    // Before the 409 and 404 branch, which stays as it was.
+    assert.ok(
+      hook.indexOf("writeInDoubt(answer.status, false)") <
+        hook.indexOf("if (answer.status === 409 || answer.status === 404) {"),
+    );
+  });
+
+  it("11: a closed card says who closed it and when, and the history opens on request", () => {
+    const body = component(view, "NoteBody");
+    has(
+      body,
+      '{isClosed(note) && closedLine(note) !== "" ? ( // Who closed it and when: the evidence of review, on the card (section 2). <p className="rn-card-line rn-closed-line">{closedLine(note)}</p> ) : null}',
+    );
+    has(body, "{selected ? <History note={note} /> : null}");
+    const history = component(view, "History");
+    has(history, "const rows = historyOf(note);");
+    has(history, '<details className="rn-history"> <summary>History</summary>');
+    // Plain text only, as the thread.
+    has(history, "<span>{row.words}</span>");
+  });
+
+  it("12: the field's keyboard button notes the words selected in it", () => {
+    const field = component(view, "OnField");
+    has(field, "const offer = offerOf(ui.rootRef.current, ui.texts);");
+    has(
+      field,
+      "return offer !== null && offer.field === field ? offer : null;",
+    );
+    has(
+      field,
+      'if (offer?.anchor != null) { ui.startRaise({ anchorKind: "TEXT", field, anchor: offer.anchor,',
+    );
+    has(field, "? `Add review note on the selected words in @{where}`");
+    has(field, "aria-label={addLabel}");
+    // The keyboard button is still reached by Tab: no tabIndex of -1 on it.
+    const button = field.slice(
+      field.indexOf('className="rn-add"'),
+      field.indexOf("/>", field.indexOf('className="rn-add"')),
+    );
+    assert.doesNotMatch(button, /tabIndex/);
+  });
+
+  it("13: the focus goes to the new note's card, and stays with a note just resolved or dismissed", () => {
+    const form = component(view, "RaiseForm");
+    const done = form.indexOf("ui.endRaise();");
+    assert.ok(form.indexOf("focusCard(result.note.id, target.opener);") > done);
+    const focus = component(view, "focusCard");
+    has(focus, '`[data-rn-card="@{noteId}"] .rn-card-pick`');
+    has(
+      focus,
+      "if (at !== null && at !== document.body && at.isConnected) { return; }",
+    );
+    const body = component(view, "NoteBody");
+    has(
+      body,
+      'if (action.intent === "clear" || action.intent === "dismiss") {',
+    );
+    has(body, "focusCard(note.id);");
+    // The rail keeps the selected note listed, as the document draws it.
+    const provider = component(view, "ReviewNotesProvider");
+    has(
+      provider,
+      "return selected === null || chosen.some((note) => note.id === selected) ? chosen",
+    );
+  });
+
+  it("15: a note being written is kept when its form is replaced, and no pending highlight outlives the rail", () => {
+    const provider = component(view, "ReviewNotesProvider");
+    has(provider, "const drafts = useRef(new Map<string, string>());");
+    has(
+      provider,
+      "if (railWas.current && !railOn) { setRaising(null); } railWas.current = railOn;",
+    );
+    const form = component(view, "RaiseForm");
+    has(
+      form,
+      'const [text, setText] = useState(() => ui?.draftFor(key) ?? "");',
+    );
+    has(form, "ui.keepDraft(key, event.target.value);");
+    // Cancel lets it go; Escape only closes.
+    has(form, 'const cancel = () => { ui?.keepDraft(key, ""); close(); };');
+    has(form, "onClick={cancel}");
+    has(
+      form,
+      'if (event.key === "Escape" && !event.defaultPrevented) { event.preventDefault(); close();',
+    );
+    // The rail keys the form by the same place.
+    has(component(view, "NotesRail"), "key={raiseKey(ui.raising)}");
+  });
+
+  it("16: too many words selected: the icon says so and notes nothing", () => {
+    const margin = component(view, "NotesMargin");
+    has(margin, "const tooLong = offer !== null && offer.anchor === null;");
+    has(margin, "if (field === null || tooLong) { return; }");
+    has(margin, 'aria-disabled={tooLong ? "true" : undefined}');
+    has(margin, '{tooLong ? TOO_LONG_WORDS : "Add review note"}');
+    const offer = component(view, "offerOf");
+    has(offer, "if (anchor === null && !selectionTooLong(text, from, to)) {");
+    // The keyboard button says it too, and does not note the field instead.
+    const field = component(view, "OnField");
+    has(field, "ui.announce(`@{TOO_LONG_WORDS}.`);");
+    assert.match(rule(css, "button.rn-margin-add.is-refused"), /dashed/);
   });
 });

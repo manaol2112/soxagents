@@ -1,9 +1,11 @@
-/* Workpaper review notes (docs/workpaper-review.md, section 6): the markers and the
-   highlighted words in the Document view, the rail beside it, the form of a new note,
-   All notes, and the reviewer's step line. Calm: the criticality's colour (--note-*) is
-   its dot, its card's thin rule and its highlighted words, and nothing else; status,
-   owner and time are quiet text; no filled pills; buttons are black, white and grey.
-   Motion is short and off when asked (globals.css). */
+/* Workpaper review notes (docs/workpaper-review.md, section 6): the highlighted words in
+   the Document view, its right margin (the numbered markers and "Add review note"), the
+   rail beside it with the new note's form and the notes' cards, All notes, and the
+   reviewer's step line. Calm: the criticality's colour (--note-*) is its dots, its card's
+   thin rule and its highlighted words, and nothing else; status, owner and time are quiet
+   text; no filled pills; buttons are black, white and grey. Motion is short and off when
+   asked (globals.css). The card is option B and the margin icon option 2 (product owner,
+   16 November 2026). */
 
 .rn-urgent {
   --rn-c: var(--note-urgent);
@@ -82,14 +84,14 @@ button.rn-btn.is-quiet:hover:not(:disabled) {
 
 /* A field in the document ------------------------------------------------------------ */
 
+.rn-sheet {
+  position: relative;
+}
+
 .rn-field {
   position: relative;
   border-radius: 4px;
   transition: box-shadow 150ms ease;
-}
-
-div.rn-field {
-  padding-right: 4px;
 }
 
 .rn-field.is-selected {
@@ -129,144 +131,138 @@ mark.rn-hl.is-pending {
   text-decoration-style: dashed;
 }
 
-.rn-corner {
-  position: absolute;
-  top: -9px;
-  right: -9px;
-  z-index: 2;
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-}
-
-/* Inside a line of text the markers follow the words, and the "+" takes no room of the
-   line (it would otherwise wrap onto a line of its own while unseen). */
-.rn-field.is-inline > .rn-corner {
-  position: relative;
-  top: auto;
-  right: auto;
-  vertical-align: 1px;
-}
-
-.rn-field.is-inline .rn-marker {
-  margin-left: 4px;
-}
-
-.rn-field.is-inline button.rn-add {
-  position: absolute;
-  top: 50%;
-  left: calc(100% + 4px);
-  transform: translateY(-50%);
-}
-
-button.rn-marker {
-  display: inline-grid;
-  place-items: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 4px;
-  color: var(--surface);
-  background: var(--text-strong);
-  border: 0;
-  border-radius: 999px;
-  box-shadow: 0 0 0 2px var(--surface);
-  font-size: 10.5px;
-  font-weight: 650;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-}
-
-button.rn-marker:hover {
-  color: var(--surface);
-  background: var(--text);
-}
-
-button.rn-marker.is-selected {
-  box-shadow:
-    0 0 0 2px var(--surface),
-    0 0 0 3px var(--text-strong);
-}
-
-button.rn-marker:focus-visible:not(:disabled),
-button.rn-add:focus-visible:not(:disabled) {
-  box-shadow: var(--ring);
-}
-
-/* "Add review note": a small + that appears with the pointer or the focus, and its
-   words once it is pointed at or focused. */
+/* A field's "Add review note" from the keyboard: it takes no room and is not seen; while
+   it has the focus, the margin shows its icon, ringed, level with the field. */
 button.rn-add {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.3rem;
-  height: 18px;
-  min-width: 18px;
-  padding: 0 3px;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
   overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The margin: inside the sheet's right padding, never over the text. */
+.rn-margin {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.rn-margin > button {
+  position: absolute;
+  pointer-events: auto;
+}
+
+/* Narrow sheets have a thin padding: it is widened while the notes are on, so the margin
+   has room. */
+@container dw (max-width: 760px) {
+  .rn-sheet.is-noting .dw-sheet {
+    padding-right: 2.5rem;
+  }
+}
+
+button.rn-margin-add {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   color: var(--text-secondary);
   background: var(--surface);
   border: 1px solid var(--border-strong);
-  border-radius: 999px;
+  border-radius: 8px;
   box-shadow: var(--shadow-xs);
-  font-size: var(--fs-2xs);
-  font-weight: 550;
-  opacity: 0;
+  animation: rn-fade 120ms ease-out;
   transition:
-    opacity 120ms ease,
-    color 120ms ease;
+    color 120ms ease,
+    border-color 120ms ease;
 }
 
-.rn-add-words {
-  display: none;
-  padding-right: 4px;
-  white-space: nowrap;
-}
-
-.rn-field:hover > .rn-corner > button.rn-add,
-.rn-field:focus-within > .rn-corner > button.rn-add,
-button.rn-add:focus-visible {
-  opacity: 1;
-}
-
-button.rn-add:hover,
-button.rn-add:focus-visible {
+button.rn-margin-add:hover,
+button.rn-margin-add.is-focus {
   color: var(--text-strong);
   background: var(--surface);
   border-color: var(--border-control);
 }
 
-button.rn-add:hover .rn-add-words,
-button.rn-add:focus-visible .rn-add-words {
-  display: inline;
+button.rn-margin-add.is-focus {
+  box-shadow: var(--ring);
 }
 
-@media (hover: none) {
-  button.rn-add {
-    opacity: 1;
-  }
-}
-
-/* Beside a selection. */
-button.rn-offer {
-  position: fixed;
-  z-index: 60;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  height: 30px;
-  padding: 0 0.7rem;
+.rn-tip {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: -2px;
+  padding: 4px 8px;
   color: var(--surface);
   background: var(--text-strong);
-  border: 0;
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-pop);
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  animation: rn-in 150ms ease-out;
+  border-radius: 6px;
+  font-size: var(--fs-xs);
+  font-weight: 550;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
 }
 
-button.rn-offer:hover {
+button.rn-margin-add:hover .rn-tip,
+button.rn-margin-add.is-focus .rn-tip {
+  opacity: 1;
+}
+
+/* Words selected that are too many for a note: the icon is quiet and its tip says why,
+   shown at once (independent review, 16 November 2026). */
+button.rn-margin-add.is-refused {
+  color: var(--text-tertiary);
+  border-style: dashed;
+  cursor: not-allowed;
+}
+
+button.rn-margin-add.is-refused .rn-tip {
+  opacity: 1;
+}
+
+/* A field's notes: small, quiet numbers in the margin. */
+button.rn-marker {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  box-shadow: none;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  transition:
+    color 120ms ease,
+    border-color 120ms ease,
+    top 150ms ease;
+}
+
+button.rn-marker:hover {
+  color: var(--text-strong);
+  background: var(--surface);
+  border-color: var(--border-control);
+}
+
+button.rn-marker.is-selected {
   color: var(--surface);
-  background: var(--text);
+  background: var(--text-strong);
+  border-color: var(--text-strong);
+}
+
+button.rn-marker:focus-visible:not(:disabled) {
+  box-shadow: var(--ring);
 }
 
 @keyframes rn-in {
@@ -276,161 +272,10 @@ button.rn-offer:hover {
   }
 }
 
-/* The form of a new note ------------------------------------------------------------- */
-
-.rn-pop {
-  position: fixed;
-  z-index: 70;
-  width: min(380px, calc(100vw - 32px));
-  max-height: calc(100vh - 32px);
-  overflow: auto;
-  padding: 1rem;
-  color: var(--text);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-pop);
-  animation: rn-in 200ms ease-out;
-}
-
-.rn-pop.is-placing {
-  visibility: hidden;
-}
-
-.rn-pop h3 {
-  margin: 0;
-  color: var(--text-strong);
-  font-size: var(--fs-md);
-  font-weight: 650;
-}
-
-.rn-pop-where {
-  margin: 0.2rem 0 0.75rem;
-  color: var(--text-tertiary);
-  font-size: var(--fs-sm);
-}
-
-.rn-label,
-.rn-seg legend {
-  display: block;
-  margin: 0.75rem 0 0.3rem;
-  padding: 0;
-  color: var(--text-secondary);
-  font-size: var(--fs-2xs);
-  font-weight: 650;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.rn-pop .rn-label:first-of-type {
-  margin-top: 0;
-}
-
-.rn-pop textarea,
-.rn-compose textarea,
-.rn-pop select,
-.rn-compose select {
-  width: 100%;
-  padding: 0.5rem 0.6rem;
-  color: var(--text-strong);
-  background: var(--surface);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-  font: inherit;
-  font-size: var(--fs-base);
-  line-height: 1.45;
-  resize: vertical;
-}
-
-.rn-pop select,
-.rn-compose select {
-  height: 34px;
-  padding-block: 0;
-}
-
-.rn-pop textarea:focus-visible,
-.rn-compose textarea:focus-visible,
-.rn-pop select:focus-visible,
-.rn-compose select:focus-visible {
-  border-color: var(--border-control);
-  outline: 0;
-  box-shadow: var(--ring);
-}
-
-.rn-seg {
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.rn-seg-row {
-  display: inline-flex;
-  overflow: hidden;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-}
-
-.rn-seg-item {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  height: 30px;
-  padding: 0 0.7rem;
-  color: var(--text-secondary);
-  font-size: var(--fs-sm);
-  font-weight: 550;
-  cursor: pointer;
-  transition: background 120ms ease;
-}
-
-.rn-seg-item + .rn-seg-item {
-  border-left: 1px solid var(--border-strong);
-}
-
-.rn-seg-item input {
-  position: absolute;
-  inset: 0;
-  margin: 0;
-  opacity: 0;
-  cursor: pointer;
-}
-
-.rn-seg-item:hover {
-  background: var(--surface-hover);
-}
-
-.rn-seg-item:has(input:checked) {
-  color: var(--text-strong);
-  background: var(--surface-sunken);
-  box-shadow: inset 0 -2px 0 var(--text-strong);
-}
-
-.rn-seg-item:has(input:focus-visible) {
-  outline: 2px solid var(--border-control);
-  outline-offset: -2px;
-}
-
-.rn-dot {
-  flex: none;
-  width: 7px;
-  height: 7px;
-  background: var(--rn-c, var(--neutral));
-  border-radius: 999px;
-}
-
-.rn-pop-actions,
-.rn-compose-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.5rem;
-  margin-top: 0.9rem;
-}
-
-.rn-quote {
-  color: var(--text-secondary);
-  font-style: italic;
-  quotes: "\201C" "\201D";
+@keyframes rn-fade {
+  from {
+    opacity: 0;
+  }
 }
 
 /* The rail --------------------------------------------------------------------------- */
@@ -446,6 +291,7 @@ button.rn-offer:hover {
   position: sticky;
   top: 12px;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
   max-height: calc(100vh - 24px);
   overflow: auto;
@@ -500,17 +346,25 @@ button.rn-chip.is-set {
   margin: -4px 0 0;
 }
 
+.rn-rail > *,
+.rn-list > * {
+  min-width: 0;
+}
+
 .rn-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
+/* The card (option B) ------------------------------------------------------------------ */
+
 .rn-card {
   position: relative;
-  padding: 0.65rem 0.8rem 0.7rem 0.9rem;
+  padding: 12px 14px 12px 20px;
   color: var(--text);
   background: var(--surface);
   border: 1px solid var(--border);
@@ -522,12 +376,11 @@ button.rn-chip.is-set {
 }
 
 /* The thin rule in the criticality's colour. */
-.rn-card::before,
-.rn-detail-note::before {
+.rn-card::before {
   position: absolute;
-  top: 10px;
-  bottom: 10px;
-  left: 0;
+  top: 12px;
+  bottom: 12px;
+  left: 9px;
   width: 2px;
   background: var(--rn-c);
   border-radius: 2px;
@@ -539,28 +392,35 @@ button.rn-chip.is-set {
   box-shadow: var(--shadow-sm);
 }
 
-.rn-card.is-closed {
-  color: var(--text-secondary);
+.rn-card p {
+  margin: 0;
 }
 
-.rn-card p {
-  margin: 0.25rem 0 0;
+.rn-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
 }
 
 button.rn-card-pick {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  width: 100%;
+  display: inline-flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: flex-start;
+  gap: 0 8px;
+  min-width: 0;
   height: auto;
   padding: 0;
   color: var(--text-strong);
   background: transparent;
   border: 0;
   box-shadow: none;
-  font-size: var(--fs-sm);
-  font-weight: 600;
+  font-size: var(--fs-base);
+  font-weight: 400;
   text-align: left;
+  white-space: normal;
 }
 
 button.rn-card-pick:hover {
@@ -573,152 +433,426 @@ button.rn-card-pick:focus-visible:not(:disabled) {
   box-shadow: var(--ring);
 }
 
-.rn-num {
-  display: inline-grid;
-  place-items: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 4px;
-  color: var(--surface);
-  background: var(--text-strong);
-  border-radius: 999px;
-  font-size: 10.5px;
-  font-weight: 650;
-}
-
-.rn-crit {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
+.rn-author {
   color: var(--text-strong);
   font-weight: 600;
 }
 
-.rn-status {
-  margin-left: auto;
-  color: var(--text-tertiary);
-  font-weight: 550;
-}
-
-.rn-where {
+.rn-card-pick time {
   color: var(--text-tertiary);
   font-size: var(--fs-sm);
 }
 
-.rn-quote-line {
+.rn-card-line {
+  margin-top: 2px !important;
+  color: var(--text-tertiary);
   font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.rn-text-body {
+  margin-top: 8px !important;
+  color: var(--text-strong);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
 }
 
 .rn-gone {
-  display: block;
+  margin-top: 6px !important;
   color: var(--text-tertiary);
   font-size: var(--fs-sm);
   font-style: normal;
 }
 
-.rn-text-body {
-  color: var(--text-strong);
-  line-height: 1.45;
-  overflow-wrap: anywhere;
-  white-space: pre-line;
+/* The criticality: three small dots, the current one ringed. */
+.rn-dots {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 1px;
+  min-width: 0;
+  margin: 0;
+  padding: 2px;
+  background: var(--surface-sunken);
+  border: 0;
+  border-radius: 999px;
+  transition: opacity 120ms ease;
 }
 
-.rn-meta {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  gap: 0.25rem 0.75rem;
+.rn-dots.is-busy {
+  opacity: 0.6;
+}
+
+.rn-dots.is-still {
+  padding: 6px;
+  background: transparent;
+}
+
+.rn-dot-pick {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.rn-dot-pick input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.rn-dot-pick .rn-dot {
+  width: 9px;
+  height: 9px;
+  opacity: 0.32;
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.rn-dot-pick:hover .rn-dot {
+  opacity: 0.7;
+}
+
+.rn-dot-pick:has(input:checked) .rn-dot {
+  opacity: 1;
+  box-shadow:
+    0 0 0 2px var(--surface-sunken),
+    0 0 0 3.5px var(--rn-c);
+  transform: scale(1.05);
+}
+
+.rn-dot-pick:has(input:focus-visible) {
+  box-shadow: var(--ring);
+}
+
+.rn-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  background: var(--rn-c, var(--neutral));
+  border-radius: 999px;
+}
+
+/* "···" */
+.rn-card-head .row-menu-button {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  color: var(--text-tertiary);
+}
+
+.rn-card-head .row-menu-button:hover {
+  color: var(--text-strong);
+}
+
+/* The replies: a soft grey block each. */
+/* The note's whole history, on request (independent review, 16 November 2026). */
+.rn-history {
+  margin-top: 8px;
   color: var(--text-tertiary);
   font-size: var(--fs-sm);
 }
 
-.rn-body {
-  margin-top: 0.6rem;
-  padding-top: 0.6rem;
-  border-top: 1px solid var(--border-subtle);
-  animation: rn-in 180ms ease-out;
+.rn-history summary {
+  width: fit-content;
+  cursor: pointer;
 }
 
-.rn-thread {
+.rn-history ol {
   display: grid;
-  gap: 0.55rem;
-  margin: 0 0 0.6rem;
+  gap: 4px;
+  margin: 6px 0 0;
   padding: 0;
   list-style: none;
 }
 
-.rn-ev-head {
+.rn-history time {
+  white-space: nowrap;
+}
+
+.rn-history-text {
+  display: block;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.rn-thread {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rn-reply {
+  padding: 8px 10px 9px;
+  background: var(--surface-sunken);
+  border-radius: var(--radius);
+}
+
+.rn-reply-head {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: 0.25rem 0.5rem;
-  margin: 0;
-  color: var(--text-secondary);
+  gap: 0 6px;
+  color: var(--text-tertiary);
   font-size: var(--fs-sm);
 }
 
-.rn-ev-head b {
+.rn-reply-head b {
   color: var(--text-strong);
   font-weight: 600;
 }
 
-.rn-ev-head time {
-  color: var(--text-tertiary);
-}
-
-.rn-ev-head .rn-crit {
-  margin-left: auto;
-}
-
-.rn-ev-text {
-  margin: 0.15rem 0 0;
+.rn-reply-text {
+  margin-top: 2px !important;
   color: var(--text-strong);
-  line-height: 1.45;
+  line-height: 1.5;
   overflow-wrap: anywhere;
   white-space: pre-line;
 }
 
+/* The reply box: one line that grows. */
 .rn-compose {
-  margin-bottom: 0.5rem;
+  margin-top: 10px;
 }
 
-.rn-compose .rn-label {
-  margin-top: 0;
+textarea.rn-input {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  color: var(--text-strong);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font: inherit;
+  font-size: var(--fs-base);
+  line-height: 1.45;
+  resize: none;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
 }
 
-.rn-check {
+textarea.rn-reply-box {
+  min-height: 36px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+textarea.rn-input:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+
+textarea.rn-input:focus-visible,
+textarea.rn-input:focus {
+  background: var(--surface);
+  border-color: var(--border-control);
+  outline: 0;
+  box-shadow: var(--ring);
+}
+
+.rn-compose-row {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  margin-top: 0.45rem;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+  animation: rn-fade 150ms ease-out;
+}
+
+.rn-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-right: auto;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.rn-hint.is-shown {
+  opacity: 1;
+}
+
+.rn-hint kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 11px;
+}
+
+.rn-owner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
   color: var(--text-secondary);
   font-size: var(--fs-sm);
 }
 
-.rn-body-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.row-menu-trigger.rn-menu-trigger {
-  height: 28px;
+.rn-owner select {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 0.5rem;
   color: var(--text-strong);
   background: var(--surface);
-  border-color: var(--border-strong);
-  box-shadow: none;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  font: inherit;
   font-size: var(--fs-sm);
 }
 
-.row-menu-trigger.rn-menu-trigger:hover:not(:disabled) {
-  color: var(--text-strong);
-  background: var(--surface-hover);
+.rn-owner select:focus-visible {
   border-color: var(--border-control);
+  outline: 0;
+  box-shadow: var(--ring);
 }
 
-.rn-body-actions .row-menu-list {
-  right: auto;
-  left: 0;
+.rn-compose .rn-owner {
+  margin-top: 0;
+}
+
+/* A resolved note: one faint line. */
+.rn-card.is-folded {
+  padding: 0;
+  background: transparent;
+  border-color: var(--border-subtle);
+}
+
+.rn-card.is-folded::before {
+  content: none;
+}
+
+button.rn-fold {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 9px 14px;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+button.rn-fold:hover {
+  color: var(--text-secondary);
+  background: var(--surface-hover);
+}
+
+.rn-fold-words {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rn-fold-tag {
+  flex: none;
+}
+
+.rn-card.is-closed .rn-text-body {
+  color: var(--text-secondary);
+}
+
+/* The new note, in the rail (on a narrow window, a sheet at the bottom). */
+.rn-new {
+  border-color: var(--border-control);
+  box-shadow: var(--shadow-sm);
+  animation: rn-in 200ms ease-out;
+}
+
+.rn-new-head {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-base);
+  font-weight: 600;
+}
+
+.rn-new textarea.rn-input {
+  margin-top: 10px;
+  min-height: 72px;
+  background: var(--surface);
+  resize: vertical;
+}
+
+.rn-seg {
+  margin: 10px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.rn-seg legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.rn-seg-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.rn-seg-item {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  height: 28px;
+  padding: 0 0.6rem;
+  color: var(--text-secondary);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: var(--fs-sm);
+  font-weight: 550;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.rn-seg-item input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.rn-seg-item:hover {
+  background: var(--surface-hover);
+}
+
+.rn-seg-item:has(input:checked) {
+  color: var(--text-strong);
+  border-color: var(--border-strong);
+}
+
+.rn-seg-item:has(input:focus-visible) {
+  box-shadow: var(--ring);
 }
 
 .rn-empty {
@@ -743,6 +877,20 @@ button.rn-card-pick:focus-visible:not(:disabled) {
 
 button.rn-whole {
   justify-self: start;
+}
+
+.rn-quote {
+  color: var(--text-secondary);
+  font-style: italic;
+  quotes: "\201C" "\201D";
+}
+
+.rn-crit {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--text-strong);
+  font-weight: 550;
 }
 
 /* All notes -------------------------------------------------------------------------- */
@@ -902,12 +1050,6 @@ button.rn-whole {
   font-variant-numeric: tabular-nums;
 }
 
-.rn-table .is-note .rn-quote {
-  display: block;
-  margin-top: 0.2rem;
-  font-size: var(--fs-sm);
-}
-
 .rn-table .is-where small {
   display: block;
   color: var(--text-tertiary);
@@ -928,7 +1070,7 @@ button.rn-row-pick {
   border: 0;
   box-shadow: none;
   font-size: inherit;
-  font-weight: 600;
+  font-weight: 550;
   line-height: 1.4;
   text-align: left;
   white-space: normal;
@@ -946,13 +1088,19 @@ button.rn-row-pick:hover {
   top: 12px;
   display: grid;
   gap: 10px;
-  padding: 12px 14px;
+}
+
+.rn-detail-foot {
+  display: grid;
+  gap: 6px;
+  padding: 0 4px;
 }
 
 .rn-detail-head {
   margin: 0;
   color: var(--text-tertiary);
-  font-size: var(--fs-sm);
+  font-size: var(--fs-xs);
+  font-weight: 600;
 }
 
 .rn-passage {
@@ -973,23 +1121,6 @@ button.rn-row-pick:hover {
 
 .rn-passage mark.rn-hl {
   cursor: default;
-}
-
-.rn-detail-note {
-  position: relative;
-  padding: 0.55rem 0.7rem 0.6rem 0.85rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-
-.rn-detail-note p {
-  margin: 0.2rem 0 0;
-}
-
-.rn-detail .rn-body {
-  margin-top: 0;
-  padding-top: 0;
-  border-top: 0;
 }
 
 button.rn-open-at {
@@ -1034,8 +1165,9 @@ button.rn-open-at:hover {
   text-underline-offset: 2px;
 }
 
-/* Narrower windows: the rail under the document; at a phone's width, the form is a
-   sheet at the bottom and the table a list. */
+/* Narrower windows: the rail under the document, and the new note's form a sheet at the
+   bottom of the window, over the lower part only (the words above stay readable); at a
+   phone's width, the table a list. */
 
 @media (max-width: 1100px) {
   .rn-with-rail {
@@ -1055,19 +1187,28 @@ button.rn-open-at:hover {
   .rn-detail {
     position: static;
   }
+
+  .rn-new {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 70;
+    max-height: 55vh;
+    overflow: auto;
+    padding-bottom: max(14px, env(safe-area-inset-bottom));
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    box-shadow: var(--shadow-pop);
+  }
+
+  .rn-new::before {
+    top: 14px;
+    bottom: auto;
+    height: 22px;
+  }
 }
 
 @media (max-width: 640px) {
-  .rn-pop {
-    top: auto !important;
-    right: 0;
-    bottom: 0;
-    left: 0 !important;
-    width: 100%;
-    max-height: 85vh;
-    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
-  }
-
   .rn-search {
     max-width: none;
   }
@@ -1109,17 +1250,13 @@ button.rn-open-at:hover {
     grid-column: 1;
     width: auto;
   }
-
-  .rn-seg-item {
-    padding: 0 0.55rem;
-  }
 }
 
 @media print {
   .rn-rail,
-  .rn-corner,
-  .rn-offer,
-  .rn-pop {
+  .rn-margin,
+  .rn-add,
+  .rn-new {
     display: none !important;
   }
 

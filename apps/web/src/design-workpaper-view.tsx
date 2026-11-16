@@ -94,6 +94,7 @@ import { PreparerSignOff } from "./preparer-signoff";
 import {
   AllNotesView,
   NoteField,
+  NotesMargin,
   NotesRail,
   openedAtNotes,
   ReviewNotesProvider,
@@ -102,6 +103,7 @@ import {
 import {
   attributeKey,
   CONCLUSION,
+  CONCLUSION_CHOICE,
   controlKey,
   isOpen,
   matterKey,
@@ -232,6 +234,9 @@ type Actions = {
     ids: { organizationId: string; projectId: string; controlId: string };
     unsaved: boolean;
     behind: boolean;
+    /** The viewer may act on the engagement's work (the card's `canAct`: the role, and
+     * the engagement open): "Reopen to change" is offered only then. */
+    canAct: boolean;
     onDone: () => void;
   } | null;
 };
@@ -246,7 +251,8 @@ type CardProps = Omit<
 /**
  * Where the D&I workpaper is shown (docs/design-workpaper.md, section 3.1): the three
  * views first, and under them one fold holding today's workpaper card unchanged, with the
- * section editor, Draft again, Prepare, Reopen, the versions and the Excel export. It
+ * section editor, Draft again, Reopen, the versions and the Excel export (the preparer
+ * signs at the end of section 7, section 3.7: the fold shows no Prepare for it). It
  * takes the card's own props.
  */
 export function DesignWorkpaperStep(props: CardProps) {
@@ -346,6 +352,7 @@ export function DesignWorkpaperStep(props: CardProps) {
         onDraft={() => reveal(null)}
         deficiencyHref={deficiencyHref}
         onBehind={setBehind}
+        canAct={props.canAct}
       />
       <details
         ref={fold}
@@ -360,8 +367,8 @@ export function DesignWorkpaperStep(props: CardProps) {
           <span className="dw-fold-copy">
             <strong>Edit, prepare and versions</strong>
             <small>
-              The section editor, drafting, Prepare, Reopen, the version history
-              and the Excel export
+              The section editor, drafting, Reopen, the version history and the
+              Excel export
             </small>
           </span>
         </summary>
@@ -422,6 +429,7 @@ export function DesignWorkpaper({
   onDraft,
   deficiencyHref = null,
   onBehind,
+  canAct = false,
 }: {
   scope: WorkpaperScope;
   /** Changes when the workpaper record does: the views then read again. */
@@ -438,6 +446,9 @@ export function DesignWorkpaper({
   /** Told whether the page's records are behind the views (by the content's version or
    * the record's): the fold's Prepare waits while they are. */
   onBehind?: (behind: boolean) => void;
+  /** The viewer may act on the engagement's work (the card's `canAct`): section 7's
+   * "Reopen to change" is offered only then, as the fold's Reopen is. */
+  canAct?: boolean;
 }) {
   const uid = useId();
   const query = designWorkpaperQuery(scope);
@@ -448,6 +459,10 @@ export function DesignWorkpaper({
     loading: true,
   });
   const [attempt, setAttempt] = useState(0);
+  // A conclusion the server just recorded moved the workpaper's version, which its answer
+  // does not carry: the sign-off and the fold's Prepare wait until the views read the
+  // new version (independent review, 16 November 2026), so neither posts the one before.
+  const [rereading, setRereading] = useState(false);
   const [opened, setOpened] = useState<Opened | null>(null);
   const [selection, setSelection] = useState<
     (Selection & { from: string }) | null
@@ -518,6 +533,11 @@ export function DesignWorkpaper({
         return;
       }
       const paper = status === 200 ? parseDesignWorkpaper(result) : null;
+      if (paper !== null) {
+        // The views hold the version the server holds now: a recorded conclusion's
+        // version is read, and the sign-off may post it.
+        setRereading(false);
+      }
       setState((before) =>
         paper !== null
           ? { paper, problem: null, loading: false }
@@ -731,6 +751,11 @@ export function DesignWorkpaper({
   // note is open.
   const [railChoice, setRailChoice] = useState<boolean | null>(null);
   const railOn = railChoice ?? openNotes > 0;
+  const showRail = useCallback(() => setRailChoice(true), []);
+  // The Document view with its notes: its fields offer a note in the margin, and with
+  // the rail on the highlights and markers are drawn. Never on the printed sheet.
+  const notesShown =
+    view === "document" && !printing && reviewNotes.status === "ready";
   const sheetRef = useRef<HTMLDivElement>(null);
   const editable = useMemo(
     () =>
@@ -749,8 +774,8 @@ export function DesignWorkpaper({
     [behind, papers, paper],
   );
   useEffect(() => {
-    onBehind?.(held);
-  }, [onBehind, held]);
+    onBehind?.(held || rereading);
+  }, [onBehind, held, rereading]);
 
   // The person's working copies of this workpaper (section 3.4): what they typed and did
   // not save, kept on the server and private to them. Read while "Edit" opens in place.
@@ -1207,6 +1232,7 @@ export function DesignWorkpaper({
                 },
               },
         );
+        setRereading(true);
         setAttempt((n) => n + 1);
       },
       // Refused as the records changed: they are read again, what was chosen stays.
@@ -1218,7 +1244,11 @@ export function DesignWorkpaper({
     signOff: {
       ids: scope,
       unsaved: editing !== null,
-      behind,
+      // Held, not only `behind` (independent review, 16 November 2026): the record's
+      // own version behind the views, or a recorded conclusion not read yet, would post
+      // a version the server refuses as stale.
+      behind: held || rereading,
+      canAct,
       // Signed or reopened: the views and the page's records are read again, as after
       // any confirmed write; nothing is shown as done before the server confirmed.
       onDone: () => {
@@ -1252,7 +1282,8 @@ export function DesignWorkpaper({
               ? ` (${paper.evidence.length} ${paper.evidence.length === 1 ? "file" : "files"} so far)`
               : ""}
             , and the document, the matrix and the evidence view appear here for
-            you to edit and prepare.
+            you to edit. The preparer signs at the end of section 7, the
+            conclusion.
           </p>
           {onDraft !== undefined ? (
             <button
@@ -1267,12 +1298,18 @@ export function DesignWorkpaper({
       </div>
     ) : view === "document" ? (
       <div className={railOn ? "rn-with-rail" : undefined}>
-        <div ref={sheetRef}>
+        <div
+          ref={sheetRef}
+          className={`rn-sheet${notesShown ? " is-noting" : ""}`}
+        >
           <DocumentSheet
             paper={paper}
             actions={actions}
             mattersId={`${uid}-matters`}
           />
+          {/* The margin: the markers and "Add review note" (docs/workpaper-review.md,
+              section 6). */}
+          <NotesMargin />
         </div>
         {railOn ? <NotesRail id={`${uid}-rail`} /> : null}
       </div>
@@ -1306,12 +1343,11 @@ export function DesignWorkpaper({
       notes={reviewNotes}
       paper={paper}
       // Off while the sheet prints: the printed copy carries no marker or highlight.
-      on={
-        view === "document" &&
-        railOn &&
-        !printing &&
-        reviewNotes.status === "ready"
-      }
+      on={notesShown}
+      // The highlights and the markers with the rail; a note started while it is off
+      // turns it on, and its form opens there.
+      railOn={railOn}
+      onRailOn={showRail}
       workpaperVersion={
         paper?.workpaper?.shownVersion || paper?.workpaper?.currentVersion || 1
       }
@@ -1774,7 +1810,12 @@ function ConclusionHead({
     <div className="dw-concl-head">
       <small>Design and implementation</small>
       {named !== "" ? (
-        <strong>{named}</strong>
+        // The conclusion chosen: a reviewer's note may be raised on it (section 3 of
+        // docs/workpaper-review.md, `conclusion.choice`; independent review, 16
+        // November 2026). It has no words to highlight.
+        <NoteField field={CONCLUSION_CHOICE}>
+          <strong>{named}</strong>
+        </NoteField>
       ) : (
         <strong className="is-none">No conclusion recorded yet</strong>
       )}
@@ -1806,7 +1847,10 @@ const RESULT_MARKS: Readonly<Record<string, string>> = {
 /** The design and the implementation result on one line (section 3.6; option A), each a
  * mark, its name and its words, and "Why" at the right, which shows the agent's reasons
  * and the results' sentences and open letters as a short quiet list. Nothing where the
- * server sends neither; no "Why" on paper (`why`). */
+ * server sends neither. On paper (`why` false) there is no toggle: the list is printed,
+ * open, so the sheet keeps each result's sentence and the agent's reasons (contract 3.6,
+ * "Each with one sentence"; independent review, 16 November 2026: before, the printed
+ * sheet carried the marks and the words only). */
 function Results({ paper, why }: { paper: Paper; why: boolean }) {
   const uid = useId();
   const [open, setOpen] = useState(false);
@@ -1826,7 +1870,7 @@ function Results({ paper, why }: { paper: Paper; why: boolean }) {
         .join(" "),
     }))
     .filter((item) => item.said !== "");
-  const any = why && (reasons.length > 0 || more.length > 0);
+  const any = reasons.length > 0 || more.length > 0;
   return (
     <div className="dw-results">
       <ul className="dw-results-line" aria-label="Results">
@@ -1842,7 +1886,7 @@ function Results({ paper, why }: { paper: Paper; why: boolean }) {
           </li>
         ))}
       </ul>
-      {any ? (
+      {any && why ? (
         <button
           type="button"
           className="dw-link dw-why-toggle"
@@ -1855,7 +1899,7 @@ function Results({ paper, why }: { paper: Paper; why: boolean }) {
         </button>
       ) : null}
       {any ? (
-        <ul id={`${uid}-why`} className="dw-why" hidden={!open}>
+        <ul id={`${uid}-why`} className="dw-why" hidden={why && !open}>
           {keyed(reasons, (reason) => reason).map(({ key, item }) => (
             <li key={key}>{item}</li>
           ))}
@@ -1891,7 +1935,10 @@ function SignOffOf({
       ids={sign.ids}
       workpaperId={workpaper.id}
       version={workpaper.version}
-      mayAct={paper.canEdit || workpaper.status === "PREPARED"}
+      // A draft: the server's `can_edit` (the role and the engagement open). Prepared:
+      // "Reopen to change" only for a viewer who may act, as the fold's Reopen
+      // (independent review, 16 November 2026: before, anyone who could read it).
+      mayAct={paper.canEdit || (workpaper.status === "PREPARED" && sign.canAct)}
       facts={{
         status: workpaper.status,
         drafting: workpaper.drafting,

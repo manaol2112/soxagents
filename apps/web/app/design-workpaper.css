@@ -2925,3 +2925,19 @@ button.se-tool:focus-visible:not(:disabled) {
   color: var(--danger);
   font-size: var(--fs-sm);
 }
+
+/* A confirmed press, until the workpaper read again shows it (independent review, 16
+   November 2026). Empty, it takes no room, and stays in the page to be announced. */
+.ps-status {
+  margin: 0.375rem 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.ps-status:empty {
+  margin: 0;
+}
+
+.ps h6[tabindex="-1"]:focus {
+  outline: none;
+}

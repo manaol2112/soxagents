@@ -428,6 +428,25 @@ describe("the independent review of the conclusion's screens", () => {
   });
 });
 
+describe("the independent review of 16 November 2026", () => {
+  it("1: the standing “Exceptions noted”, word for word, reads “Record again”, never “Nothing changed yet”", () => {
+    assert.match(
+      choice,
+      /const again = recordsAgain\(draft, problems\.reasonNeeded, standing\);/,
+    );
+    assert.match(
+      choice,
+      /\{sending\s*\? "Recording…"\s*: again\s*\? "Record again"\s*: "Record conclusion"\}/,
+    );
+    assert.match(choice, /: again\s*\? RECORD_AGAIN_HINT/);
+    // Whether it is recordable is still the model's: `draftUnchanged` lets it through.
+    assert.match(
+      choice,
+      /const recordable = editing && problems\.ready && !unchanged && !unread;/,
+    );
+  });
+});
+
 describe("the standards", () => {
   it("sets no HTML, and keeps the words plain", () => {
     for (const source of [view, choice, panel, conclusionModel]) {

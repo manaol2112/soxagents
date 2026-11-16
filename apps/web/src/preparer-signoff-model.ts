@@ -21,6 +21,12 @@ export const NEEDS_LATEST =
   "An earlier version is on screen: open the latest to sign it.";
 export const NEEDS_READ = "Reading the workpaper again…";
 
+/** Said in a status once the server confirmed a press, until the workpaper read again
+ * shows it (independent review, 16 November 2026: before, the old state stayed live and
+ * a second press was refused as stale). */
+export const SIGNED_READING = "Signed. Reading the workpaper again…";
+export const REOPENED_READING = "Reopened. Reading the workpaper again…";
+
 /** What the sign-off rests on, as the page has it. */
 export type SignOffFacts = {
   status: "DRAFT" | "PREPARED" | "OTHER";
@@ -113,7 +119,16 @@ export function signOffWrite(fields: Record<string, unknown>) {
   return workpaperWrite(strings);
 }
 
-/** Why a press was not taken, in one sentence; "" where the server confirmed. */
+/** Whether the answer leaves the page's reading of the workpaper in doubt, so it is read
+ * again: a refusal as changed (409), or no answer, or a server error, after which the
+ * press may have been taken (status 0 or 5xx). */
+export function signOffRereads(status: number): boolean {
+  return status === 409 || status === 0 || status >= 500;
+}
+
+/** Why a press was not taken, in one sentence; "" where the server confirmed. Where the
+ * answer did not come back (0, 5xx) it may have been taken: it is said so, never "Not
+ * signed", and the workpaper is read again (`signOffRereads`). */
 export function signOffRefusal(
   intent: "prepare" | "reopen",
   status: number,
@@ -124,8 +139,16 @@ export function signOffRefusal(
   }
   const said = detail.trim().replace(/[.\s]+$/, "");
   const lead = intent === "prepare" ? "Not signed" : "Not reopened";
+  if (status === 0 || status >= 500) {
+    return intent === "prepare"
+      ? "The sign-off may not have been taken: the server's answer did not come back. Reading the workpaper again, to show what it holds."
+      : "The workpaper may not have been reopened: the server's answer did not come back. Reading the workpaper again, to show what it holds.";
+  }
   if ((status === 409 || status === 403) && said !== "") {
     return `${lead}: ${said}.`;
+  }
+  if (status === 409) {
+    return `${lead}: the workpaper changed meanwhile. It is being read again: try once it is shown.`;
   }
   if (status === 401) {
     return `${lead}: your session has ended. Sign in again, then try again.`;
@@ -138,5 +161,5 @@ export function signOffRefusal(
       ? `${lead}: say why, in at least 3 characters (500 at most).`
       : `${lead}: the note is too long, or reads as a credential.`;
   }
-  return `${lead}: the server could not be reached. Try again.`;
+  return `${lead}: the server did not take it. Try again.`;
 }

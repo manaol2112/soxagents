@@ -11,10 +11,13 @@ import {
   NEEDS_READ,
   NEEDS_SAVED,
   preparedLine,
+  REOPENED_READING,
+  SIGNED_READING,
   type SignOffFacts,
   signOffProblems,
   signOffRefusal,
   signOffRequest,
+  signOffRereads,
   signOffWrite,
 } from "../apps/web/src/preparer-signoff-model.ts";
 
@@ -161,8 +164,46 @@ describe("what it sends", () => {
       "Not reopened: only the preparer or a lead reopens it.",
     );
     assert.match(signOffRefusal("prepare", 401, ""), /session has ended/);
-    assert.match(signOffRefusal("prepare", 0, ""), /could not be reached/);
+    // Rewritten (independent review, 16 November 2026). Old: status 0 read "Not signed:
+    // the server could not be reached. Try again.", while the prepare may be on record
+    // (the route's timeout, or an answer lost after the commit). New: it may not have
+    // been taken, and the workpaper is read again; never "Not signed".
+    for (const status of [0, 500, 502, 504]) {
+      for (const intent of ["prepare", "reopen"] as const) {
+        const said = signOffRefusal(intent, status, "");
+        assert.match(said, /may not have been/, `${intent} ${status}`);
+        assert.match(
+          said,
+          /Reading the workpaper again/,
+          `${intent} ${status}`,
+        );
+        assert.doesNotMatch(
+          said,
+          /^Not (signed|reopened)/,
+          `${intent} ${status}`,
+        );
+      }
+    }
     assert.match(signOffRefusal("reopen", 422, ""), /at least 3 characters/);
+  });
+
+  it("a 409 without the server's sentence has its own, and what leaves the workpaper in doubt reads it again", () => {
+    assert.equal(
+      signOffRefusal("prepare", 409, ""),
+      "Not signed: the workpaper changed meanwhile. It is being read again: try once it is shown.",
+    );
+    assert.doesNotMatch(
+      signOffRefusal("reopen", 409, " "),
+      /could not be reached/,
+    );
+    for (const status of [409, 0, 500, 503]) {
+      assert.equal(signOffRereads(status), true, String(status));
+    }
+    for (const status of [200, 401, 403, 404, 422]) {
+      assert.equal(signOffRereads(status), false, String(status));
+    }
+    assert.equal(SIGNED_READING, "Signed. Reading the workpaper again…");
+    assert.equal(REOPENED_READING, "Reopened. Reading the workpaper again…");
   });
 });
 
@@ -193,12 +234,62 @@ describe("the screen", () => {
       widget,
       /const said = signOffRefusal\(intent, answer\.status, answer\.detail\);\s*if \(said !== ""\) \{[\s\S]*?return;\s*\}\s*setText\(""\);\s*setReopening\(false\);\s*onDone\(\);/,
     );
-    assert.match(widget, /aria-disabled=\{!ready \|\| sending\}/);
+    // Rewritten (independent review, 16 November 2026). Old: `aria-disabled={!ready ||
+    // sending}`. New: also off while a confirmed press waits for the workpaper read
+    // again, so it is never pressed again on the state before.
+    assert.match(
+      widget,
+      /aria-disabled=\{!ready \|\| sending \|\| confirmed !== null\}/,
+    );
     assert.equal(/innerHTML|dangerouslySetInnerHTML/.test(widget), false);
     assert.match(route, /const write = signOffWrite\(fields\);/);
+    // Confirmed: said in a status at once, and held until the workpaper read again shows
+    // another status, which clears what was said before it (independent review, 16
+    // November 2026).
+    assert.match(
+      widget,
+      /onDone\(\);\s*\/\/[^\n]*\n\s*landing\.current = true;\s*setConfirmed\(intent\);/,
+    );
+    assert.match(widget, /<p className="ps-status" role="status">/);
+    assert.match(
+      widget,
+      /if \(busy\.current \|\| confirmed !== null\) \{\s*return;/,
+    );
+    assert.match(
+      widget,
+      /status\.current = facts\.status;\s*setRefusal\(""\);\s*setConfirmed\(null\);/,
+    );
+    assert.match(widget, /mayAct && !reopening && confirmed === null \?/);
+    // A refusal as changed, or an answer in doubt, reads the workpaper again.
+    assert.match(
+      widget,
+      /if \(signOffRereads\(answer\.status\)\) \{[\s\S]*?onDone\(\);\s*\}\s*return;/,
+    );
     assert.equal(
       /redirect|console\./.test(route.replace(/\/\*\*[\s\S]*?\*\//, "")),
       false,
+    );
+  });
+
+  it("never drops the focus: into the reason, back to Reopen to change, then to the heading", () => {
+    // "Reopen to change" opens the reason and moves the focus into it.
+    assert.match(
+      widget,
+      /setReopening\(true\);[\s\S]{0,200}?requestAnimationFrame\(\(\) =>\s*document\.getElementById\(`\$\{uid\}-r`\)\?\.focus\(\),?\s*\)/,
+    );
+    // Cancel gives it back to "Reopen to change".
+    assert.match(
+      widget,
+      /setReopening\(false\);\s*setText\(""\);\s*setRefusal\(""\);\s*window\.requestAnimationFrame\(\(\) =>\s*reopenButton\.current\?\.focus\(\),?\s*\);/,
+    );
+    // Once the press is shown, the heading (focusable from script only) takes it.
+    assert.equal(
+      (widget.match(/ref=\{heading\} tabIndex=\{-1\}/g) ?? []).length,
+      2,
+    );
+    assert.match(
+      widget,
+      /if \(landing\.current\) \{\s*landing\.current = false;\s*window\.requestAnimationFrame\(\(\) => heading\.current\?\.focus\(\)\);/,
     );
   });
 });

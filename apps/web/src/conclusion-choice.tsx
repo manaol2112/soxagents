@@ -26,8 +26,10 @@ import {
   draftUnchanged,
   parseDesignConclusion,
   REASON_MAX,
+  RECORD_AGAIN_HINT,
   RECORDED_UNREAD,
   reasonOnChoosing,
+  recordsAgain,
   type TypedReasons,
 } from "./design-conclusion-model";
 import { CONCLUSION_ANCHOR } from "./design-workpaper-model";
@@ -228,6 +230,9 @@ export function ConclusionChoicePanel({
   // another conclusion is never sent with it.
   const reason = problems.reasonNeeded ? draft.reason.trim() : "";
   const unchanged = draftUnchanged(draft, problems.reasonNeeded, standing);
+  // The standing "Exceptions noted", word for word: recorded again where an exception
+  // was noted after it (the server's EXCEPTION_SINCE), as "Record again".
+  const again = recordsAgain(draft, problems.reasonNeeded, standing);
   // What could be recorded; `ready` is that, while no request is out.
   const recordable = editing && problems.ready && !unchanged && !unread;
   const ready = recordable && !sending;
@@ -245,7 +250,9 @@ export function ConclusionChoicePanel({
               ? problems.reason
               : unchanged
                 ? "Nothing changed yet."
-                : "";
+                : again
+                  ? RECORD_AGAIN_HINT
+                  : "";
 
   async function record(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -530,7 +537,11 @@ export function ConclusionChoicePanel({
               aria-disabled={sending ? "true" : undefined}
               aria-describedby={why !== "" ? whyId : undefined}
             >
-              {sending ? "Recording…" : "Record conclusion"}
+              {sending
+                ? "Recording…"
+                : again
+                  ? "Record again"
+                  : "Record conclusion"}
             </button>
             <button
               type="button"

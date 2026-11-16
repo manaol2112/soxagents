@@ -1071,7 +1071,10 @@ export function kindRefusal(kind: ConclusionKind, facts: ChoiceFacts): string {
     // on record, and every other attribute shown or settled by a closing tickmark. The
     // others are judged only where the page knows which attributes the exceptions stand
     // on (an excepted attribute is itself listed as open); where it does not, the server
-    // decides.
+    // decides. "Shown" is shown in the records of an instance, as the server's
+    // `others_open` reads it (independent review, 16 November 2026: old, the letters not
+    // shown at all, `designOpen`, so an attribute shown only as designed was let through
+    // and refused by the server; new, `implementationOpen`, the server's own list).
     const excepted =
       facts.exceptions.length > 0 ||
       facts.design === "EXCEPTIONS" ||
@@ -1079,7 +1082,9 @@ export function kindRefusal(kind: ConclusionKind, facts: ChoiceFacts): string {
     const others =
       facts.exceptions.length === 0
         ? []
-        : facts.designOpen.filter((code) => !facts.exceptions.includes(code));
+        : facts.implementationOpen.filter(
+            (code) => !facts.exceptions.includes(code),
+          );
     if (!excepted || others.length > 0) {
       return EXCEPTIONS_NEED;
     }
@@ -1186,12 +1191,46 @@ export function draftUnchanged(
   standing: Pick<ConclusionChoice, "kind" | "basis" | "reason"> | null,
 ): boolean {
   return (
+    sameAsStanding(draft, reasonNeeded, standing) &&
+    !recordsAgain(draft, reasonNeeded, standing)
+  );
+}
+
+function sameAsStanding(
+  draft: ChoiceDraft,
+  reasonNeeded: boolean,
+  standing: Pick<ConclusionChoice, "kind" | "basis" | "reason"> | null,
+): boolean {
+  return (
     standing !== null &&
     draft.kind === standing.kind &&
     (draft.kind !== "NOT_EFFECTIVE" || draft.basis === standing.basis) &&
     (!reasonNeeded || draft.reason.trim() === standing.reason.trim())
   );
 }
+
+/**
+ * Whether the draft is the standing "Exceptions noted", word for word, which is still
+ * worth recording: the server's own fix where an exception was noted after it was
+ * recorded (design_conclusions.EXCEPTION_SINCE: "the preparer records it again"), which
+ * this page cannot see, as it is not told when a check's run finished. The button then
+ * reads "Record again" (independent review, 16 November 2026: before, "Nothing changed
+ * yet" kept it off, and only rewording the reason let the preparer through).
+ */
+export function recordsAgain(
+  draft: ChoiceDraft,
+  reasonNeeded: boolean,
+  standing: Pick<ConclusionChoice, "kind" | "basis" | "reason"> | null,
+): boolean {
+  return (
+    draft.kind === "EXCEPTIONS_NOTED" &&
+    sameAsStanding(draft, reasonNeeded, standing)
+  );
+}
+
+/** What "Record again" says beside it: why the same conclusion is recorded once more. */
+export const RECORD_AGAIN_HINT =
+  "Records the same conclusion again, now: needed where an exception was noted after it was recorded.";
 
 /** A 200 whose body the page could not read: the conclusion is recorded, and nothing the
  * page holds is taken as gone. */

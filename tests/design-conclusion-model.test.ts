@@ -23,6 +23,7 @@ import {
   RECORDED_BY_VIEWER,
   RECORDED_UNREAD,
   reasonOnChoosing,
+  recordsAgain,
   signBlockedReason,
   signHolds,
   standingKind,
@@ -953,11 +954,26 @@ describe("the independent review of the preparer's conclusion", () => {
           design: "EXCEPTIONS",
           implementation: "EXCEPTIONS",
           designOpen: ["B"],
+          implementationOpen: ["B"],
           ...over,
         }),
       ).unavailable.EXCEPTIONS_NOTED;
     assert.equal(excepted({}), "");
-    assert.equal(excepted({ designOpen: ["B", "D"] }), EXCEPTIONS_NEED);
+    // Rewritten (independent review, 16 November 2026). Old: only `designOpen` was
+    // varied, `excepted({ designOpen: ["B", "D"] })`, which encoded the wrong list: the
+    // server's `others_open` is the letters not yet shown in the records of an instance
+    // (`implementationOpen`). New: D not shown at all is in both lists, as the server
+    // sends them, and is still refused.
+    assert.equal(
+      excepted({ designOpen: ["B", "D"], implementationOpen: ["B", "D"] }),
+      EXCEPTIONS_NEED,
+    );
+    // D shown only as designed: open in an instance, so the server refuses "Exceptions
+    // noted" (its proposal is not concluded), and the page does not offer it.
+    assert.equal(
+      excepted({ designOpen: ["B"], implementationOpen: ["B", "D"] }),
+      EXCEPTIONS_NEED,
+    );
     assert.equal(
       excepted({ exceptions: [], design: "DESIGNED", implementation: "OPEN" }),
       EXCEPTIONS_NEED,
@@ -1050,6 +1066,55 @@ describe("the independent review of the preparer's conclusion", () => {
       ),
       false,
     );
+  });
+
+  it("the standing “Exceptions noted”, word for word, can be recorded again (the server's EXCEPTION_SINCE)", () => {
+    const standing = {
+      kind: "EXCEPTIONS_NOTED" as const,
+      basis: null,
+      reason: "The exception on B is a one-off, not a design gap.",
+    };
+    const same = {
+      kind: "EXCEPTIONS_NOTED" as const,
+      basis: null,
+      reason: reasonOnChoosing("EXCEPTIONS_NOTED", {}, standing),
+    };
+    // The server's own fix where an exception was noted after it was recorded is to
+    // record it again: "Nothing changed yet" never keeps it off.
+    assert.equal(draftUnchanged(same, true, standing), false);
+    assert.equal(recordsAgain(same, true, standing), true);
+    assert.equal(
+      choiceProblems(
+        same,
+        "EXCEPTIONS_NOTED",
+        facts({
+          exceptions: ["B"],
+          design: "EXCEPTIONS",
+          implementation: "EXCEPTIONS",
+          designOpen: ["B"],
+          implementationOpen: ["B"],
+        }),
+      ).ready,
+      true,
+    );
+    // Reworded, it is an ordinary change; any other conclusion is never "again".
+    assert.equal(
+      recordsAgain(
+        { ...same, reason: "Another reason, typed." },
+        true,
+        standing,
+      ),
+      false,
+    );
+    assert.equal(
+      recordsAgain(
+        { kind: "NOT_CONCLUDED", basis: null, reason: "Waiting on C." },
+        true,
+        { kind: "NOT_CONCLUDED", basis: null, reason: "Waiting on C." },
+      ),
+      false,
+    );
+    assert.equal(recordsAgain(same, true, null), false);
   });
 
   it("10: a refused sign-off says the server's own sentence; a 200 the page cannot read is said as recorded", () => {

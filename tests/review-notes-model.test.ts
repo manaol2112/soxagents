@@ -5,16 +5,23 @@ import {
   anchorOf,
   attributeKey,
   CONCLUSION,
+  cardLine,
   chipCount,
   choiceCounts,
+  cleanQuote,
+  closedLine,
+  closedWord,
   contextOf,
   countsOf,
+  criticalityForKey,
   documentOrder,
   eventWords,
   fieldTextsOf,
   filterNotes,
   findAnchor,
+  firstWords,
   GONE_WORDS,
+  historyOf,
   isClosed,
   isFiltered,
   isOpen,
@@ -39,6 +46,7 @@ import {
   type ReviewNote,
   railNotes,
   reasonProblem,
+  replyMode,
   replyProblem,
   reportKey,
   reviewNoteWrite,
@@ -47,12 +55,18 @@ import {
   STARTING_FILTERS,
   searchHit,
   sectionOf,
+  selectionTooLong,
+  TOO_LONG_WORDS,
+  threadEvents,
+  threadTag,
   UNDERSTANDING,
+  WRITE_IN_DOUBT,
   walkthroughColumnsOf,
   walkthroughKey,
   whereWords,
   withNote,
   wordsGone,
+  writeInDoubt,
 } from "../apps/web/src/review-notes-model.ts";
 
 // Workpaper review notes (docs/workpaper-review.md, sections 3 to 6), as the page reads
@@ -1058,6 +1072,246 @@ describe("what the person is told", () => {
     assert.equal(
       notesHref("/?step=designassessment#di-conclusion"),
       "/?step=designassessment#review-notes",
+    );
+  });
+});
+
+describe("the note's card (product owner, 16 November 2026: note card B)", () => {
+  const event = (n: number, kind: string, text: string, data = {}) => ({
+    id: uuid(700 + n),
+    kind,
+    by: { id: DANA, name: "Dana Lee" },
+    at: `2026-11-15T15:0${n}:00Z`,
+    text,
+    data,
+  });
+  const threaded = () =>
+    note(1, {
+      events: [
+        event(0, "RAISED", ""),
+        event(1, "CRITICALITY", "", { from: "NORMAL", to: "URGENT" }),
+        event(2, "RESPONDED", "The HRIS Security Owner.", { from: "OPEN" }),
+        event(3, "OWNER", "", { from: DANA, to: RILEY, to_name: "Riley Park" }),
+        event(4, "REPLIED", "Thanks, that reads well now."),
+        event(5, "CLEARED", "", { from: "RESPONDED", to: "CLEARED" }),
+        event(6, "REOPENED", "The dates still disagree."),
+        event(7, "DISMISSED", "Not triggered is the right result."),
+        event(8, "REPLIED", "   "),
+        event(9, "SOMETHING_NEW", "From a later server."),
+      ],
+    });
+
+  it("shows in the thread only the words people wrote, in order", () => {
+    const shown = threadEvents(threaded());
+    assert.deepEqual(
+      shown.map((item) => item.kind),
+      ["RESPONDED", "REPLIED", "REOPENED", "DISMISSED"],
+    );
+    assert.deepEqual(
+      shown.map((item) => item.text),
+      [
+        "The HRIS Security Owner.",
+        "Thanks, that reads well now.",
+        "The dates still disagree.",
+        "Not triggered is the right result.",
+      ],
+    );
+    // The criticality, owner and clearing events stay on the note (nothing is lost).
+    assert.equal(threaded().events.length, 10);
+    assert.deepEqual(threadEvents(note(2)), []);
+  });
+
+  it("says what a reply was after its time", () => {
+    assert.deepEqual(threadEvents(threaded()).map(threadTag), [
+      "responded",
+      "",
+      "reopened",
+      "dismissed",
+    ]);
+  });
+
+  it("writes the quiet second line: number, where, owner; never the highlighted words", () => {
+    const words = note(2, {
+      anchor_kind: "TEXT",
+      field: attributeKey(ATTR_C, "result"),
+      quote: "10/01 10:18 AM",
+    });
+    const context = { ...contextOf(PAPER_FIELDS) };
+    const line = cardLine(words, context);
+    assert.equal(line, `#2 · ${whereWords(words, context)} · owner Dana Lee`);
+    assert.ok(!line.includes("10/01 10:18 AM"));
+    assert.equal(
+      cardLine(note(3, { anchor_kind: "WORKPAPER", field: "" })),
+      "#3 · The workpaper as a whole · owner Dana Lee",
+    );
+  });
+
+  it("folds a resolved note to its first words, cut at a word", () => {
+    assert.equal(firstWords("Date format in step 3"), "Date format in step 3");
+    assert.equal(
+      firstWords(
+        "Does the 1 business day run from the HR effective date or from the date HR enters it?",
+        40,
+      ),
+      "Does the 1 business day run from the HR…",
+    );
+    assert.equal(firstWords("  two\n lines  "), "two lines");
+    assert.ok([...firstWords("x".repeat(300))].length <= 57);
+    assert.equal(closedWord(note(1, { status: "CLEARED" })), "resolved");
+    assert.equal(closedWord(note(1, { status: "DISMISSED" })), "dismissed");
+    assert.equal(closedWord(note(1)), "");
+    assert.equal(closedWord(note(1, { status: "WITHDRAWN" })), "");
+  });
+
+  it("sends the reply box as the response only where the person may respond to an open note", () => {
+    assert.equal(replyMode(note(1)), "respond");
+    assert.equal(replyMode(note(1, { status: "RESPONDED" })), "reply");
+    assert.equal(
+      replyMode(note(1, { can: { ...CAN_ALL, respond: false } })),
+      "reply",
+    );
+    assert.equal(
+      replyMode(note(1, { can: { ...CAN_ALL, reply: false } })),
+      "respond",
+    );
+    assert.equal(
+      replyMode(
+        note(1, {
+          status: "CLEARED",
+          can: { ...CAN_ALL, reply: false, respond: false },
+        }),
+      ),
+      null,
+    );
+    // Anything the server did not say is no.
+    assert.equal(replyMode(note(1, { can: {} })), null);
+  });
+
+  it("maps keys 1, 2, 3 to Urgent, Normal, Follow-up, and nothing else", () => {
+    assert.equal(criticalityForKey("1"), "URGENT");
+    assert.equal(criticalityForKey("2"), "NORMAL");
+    assert.equal(criticalityForKey("3"), "FOLLOW_UP");
+    for (const key of ["0", "4", "u", "Enter", "", "11"]) {
+      assert.equal(criticalityForKey(key), null, key);
+    }
+  });
+});
+
+describe("the independent review of 16 November 2026", () => {
+  it("10: a write whose answer did not come back is said as maybe saved, never 'nothing was changed'", () => {
+    for (const status of [0, 500, 502, 504]) {
+      assert.equal(writeInDoubt(status, false), true, String(status));
+    }
+    // A 200 whose note the page cannot read: it may well be on record.
+    assert.equal(writeInDoubt(200, false), true);
+    assert.equal(writeInDoubt(200, true), false);
+    for (const status of [401, 403, 404, 409, 422]) {
+      assert.equal(writeInDoubt(status, false), false, String(status));
+    }
+    assert.match(WRITE_IN_DOUBT, /may or may not have been saved/);
+    assert.match(WRITE_IN_DOUBT, /read again/);
+    assert.doesNotMatch(WRITE_IN_DOUBT, /Nothing was (changed|saved)/);
+  });
+
+  it("11: a closed note says who cleared or dismissed it, and when; its whole history is there on request", () => {
+    const cleared = note(1, {
+      status: "CLEARED",
+      cleared_by: { id: RILEY, name: "Riley Park" },
+      cleared_at: "2026-11-16T14:04:00Z",
+      events: [
+        {
+          id: uuid(601),
+          kind: "RAISED",
+          by: { id: RILEY, name: "Riley Park" },
+          at: "2026-11-15T14:04:00Z",
+          text: "",
+          data: {},
+        },
+        {
+          id: uuid(602),
+          kind: "CRITICALITY",
+          by: { id: RILEY, name: "Riley Park" },
+          at: "2026-11-16T13:00:00Z",
+          text: "",
+          data: { from: "URGENT", to: "NORMAL" },
+        },
+        {
+          id: uuid(603),
+          kind: "CLEARED",
+          by: { id: RILEY, name: "Riley Park" },
+          at: "2026-11-16T14:04:00Z",
+          text: "",
+          data: {},
+        },
+      ],
+    });
+    assert.equal(
+      closedLine(cleared, "UTC"),
+      "Cleared by Riley Park · Nov 16, 2:04 PM",
+    );
+    const dismissed = note(2, {
+      status: "DISMISSED",
+      dismissed_by: { id: SAM, name: "Sam Ortiz" },
+      dismissed_at: "2026-11-16T09:30:00Z",
+    });
+    assert.equal(
+      closedLine(dismissed, "UTC"),
+      "Dismissed by Sam Ortiz · Nov 16, 9:30 AM",
+    );
+    assert.equal(closedLine(note(3)), "");
+    // The thread shows only words; the history shows every row, the downgrade and the
+    // clearing included.
+    assert.equal(threadEvents(cleared).length, 0);
+    const history = historyOf(cleared).map((row) => row.words);
+    assert.equal(history.length, 3);
+    assert.equal(history[0], "Riley Park raised the note");
+    assert.match(history[1] ?? "", /criticality/);
+    assert.equal(history[2], "Riley Park cleared the note");
+  });
+
+  it("14: words with zero-width or direction characters are anchored and found as the server keeps them", () => {
+    const text =
+      "Access was re\u200bmoved on 09/30 by the \u202aadministrator\u202c.";
+    const start = text.indexOf("Access");
+    const end = text.indexOf(" on");
+    const anchor = anchorOf(text, start, end);
+    assert.ok(anchor !== null);
+    // The server's clean_quote leaves the invisible character out of what it keeps.
+    assert.equal(anchor.quote, "Access was removed");
+    assert.equal(anchor.quote, cleanQuote(text.slice(start, end)));
+    assert.equal(anchor.suffix.includes("\u202a"), false);
+    // The stored note is found again in the field as it reads, at its own offsets.
+    const stored = {
+      quote: anchor.quote,
+      prefix: anchor.prefix,
+      suffix: anchor.suffix,
+      occurrence: anchor.occurrence,
+    };
+    assert.deepEqual(findAnchor(text, stored), { start, end });
+    const word = anchorOf(
+      text,
+      text.indexOf("administrator"),
+      text.indexOf("administrator") + "administrator".length,
+    );
+    assert.ok(word !== null);
+    assert.deepEqual(findAnchor(text, word), {
+      start: word.start,
+      end: word.end,
+    });
+    // Nothing changes for a text without them.
+    assert.equal(cleanQuote("plain words"), "plain words");
+  });
+
+  it("16: a selection of more words than a note holds is said, never taken as the field", () => {
+    const long = "z".repeat(600);
+    assert.equal(anchorOf(long, 0, 501), null);
+    assert.equal(selectionTooLong(long, 0, 501), true);
+    assert.equal(selectionTooLong(long, 0, 500), false);
+    // Space alone is not "too long": it is nothing.
+    assert.equal(selectionTooLong("a    b", 1, 5), false);
+    assert.equal(
+      TOO_LONG_WORDS,
+      `Select at most ${NOTE_BOUNDS.quoteMax} characters to note them`,
     );
   });
 });

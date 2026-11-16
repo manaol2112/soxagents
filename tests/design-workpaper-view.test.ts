@@ -61,9 +61,13 @@ describe("one switcher, three views", () => {
     // New: the Document view is the sheet with the review notes' rail beside it while
     // the rail is on, and a fourth view, Notes (All notes), comes before the Matrix in
     // the chain of views drawn; each is still drawn only while it is the one shown.
+    // Rewritten again. Old: the sheet's box was `<div ref={sheetRef}>` around the sheet
+    // alone. New: the box is `rn-sheet` (widened padding while the notes are on) and
+    // holds the notes' margin, `<NotesMargin />`, after the sheet. Product owner, 16
+    // November 2026: note card B, margin icon, form on the right.
     assert.match(
       body,
-      /view === "document" \? \(\s*<div className=\{railOn \? "rn-with-rail" : undefined\}>\s*<div ref=\{sheetRef\}>\s*<DocumentSheet[\s\S]{0,120}<\/div>\s*\{railOn \? <NotesRail id=\{`\$\{uid\}-rail`\} \/> : null\}\s*<\/div>\s*\) : view === "notes" \? \(\s*<AllNotesView[\s\S]{0,240}\) : view === "matrix" \? \(\s*<MatrixBoard[\s\S]{0,160}\) : \(\s*<EvidenceSplit/,
+      /view === "document" \? \(\s*<div className=\{railOn \? "rn-with-rail" : undefined\}>\s*<div\s+ref=\{sheetRef\}\s+className=\{`rn-sheet\$\{notesShown \? " is-noting" : ""\}`\}\s*>\s*<DocumentSheet[\s\S]{0,320}<NotesMargin \/>\s*<\/div>\s*\{railOn \? <NotesRail id=\{`\$\{uid\}-rail`\} \/> : null\}\s*<\/div>\s*\) : view === "notes" \? \(\s*<AllNotesView[\s\S]{0,240}\) : view === "matrix" \? \(\s*<MatrixBoard[\s\S]{0,160}\) : \(\s*<EvidenceSplit/,
     );
   });
 
@@ -789,5 +793,69 @@ describe("the review's fixes, in the screen's own files", () => {
     );
     // The printed copy is a second sheet: it does not repeat the id.
     assert.match(body, /<DocumentSheet paper=\{paper\} actions=\{null\} \/>/);
+  });
+});
+
+describe("the independent review of 16 November 2026, in the screen's own files", () => {
+  it("3: holds the sign-off and Prepare from a recorded conclusion until the views read its version", () => {
+    const body = component(view, "DesignWorkpaper");
+    // Recorded: the views are read again, and nothing posts the version before.
+    assert.match(
+      body,
+      /conclusion: \{ \.\.\.before\.paper\.conclusion, choice \},[\s\S]{0,120}?setRereading\(true\);\s*setAttempt\(\(n\) => n \+ 1\);/,
+    );
+    // A read that lands with a paper is the one that holds the new version.
+    assert.match(
+      body,
+      /if \(paper !== null\) \{[\s\S]{0,200}?setRereading\(false\);\s*\}/,
+    );
+    // The sign-off is held as the fold's Prepare is: by `held`, never `behind` alone.
+    assert.match(body, /behind: held \|\| rereading,/);
+    assert.match(body, /onBehind\?\.\(held \|\| rereading\);/);
+  });
+
+  it("4: offers Reopen to change only to a viewer who may act, as the fold's Reopen", () => {
+    assert.match(
+      component(view, "SignOffOf"),
+      /mayAct=\{\s*paper\.canEdit \|\| \(workpaper\.status === "PREPARED" && sign\.canAct\)\s*\}/,
+    );
+    assert.doesNotMatch(
+      view,
+      /mayAct=\{paper\.canEdit \|\| workpaper\.status === "PREPARED"\}/,
+    );
+    assert.match(
+      component(view, "DesignWorkpaperStep"),
+      /canAct=\{props\.canAct\}/,
+    );
+    assert.match(component(view, "DesignWorkpaper"), /\bcanAct,\n/);
+    // The step's canAct is the card's: the role, and the engagement open.
+    assert.match(
+      controls,
+      /const canAct =\s*canRequestEvidence\(model\.organization\.role\) &&\s*model\.selectedProject\?\.status === "ACTIVE";/,
+    );
+  });
+
+  it("8: prints each result's sentence and the agent's reasons, open, with no toggle", () => {
+    const results = component(view, "Results");
+    assert.match(
+      results,
+      /const any = reasons\.length > 0 \|\| more\.length > 0;/,
+    );
+    assert.match(results, /\{any && why \? \(\s*<button/);
+    assert.match(results, /hidden=\{why && !open\}/);
+    // The printed sheet is the document with no actions: `why` is false there.
+    assert.match(view, /<Results paper=\{paper\} why=\{actions !== null\} \/>/);
+  });
+
+  it("9: the fold no longer sends the preparer to a Prepare that is not there", () => {
+    const step = component(view, "DesignWorkpaperStep");
+    assert.doesNotMatch(step, /drafting, Prepare,/);
+    assert.match(
+      step,
+      /The section editor, drafting, Reopen, the version history and the\s+Excel export/,
+    );
+    const body = component(view, "DesignWorkpaper");
+    assert.doesNotMatch(body, /for you to edit and prepare/);
+    assert.match(body, /The preparer signs at the end of section 7/);
   });
 });
