@@ -386,6 +386,103 @@ to update the conclusion … Then in the last step, probably the D&I Conclusion 
   section, read by the step through the existing workpaper read; the verdict and the
   sign-off are the existing D&I conclusion's.
 
+## 3.6 The preparer concludes; the agent proposes (product owner, 15 November 2026)
+
+"Agent should propose but user should finalize the conclusion. Give the option to Not
+Effective, Effective, Control Not Concluded, or Exceptions noted. Any other status I
+missed?", then "Okay proceed" to the recommended set below. This replaces "the records
+propose the verdict and the reviewer signs exactly it" (design_conclusions.py, header):
+the records and the agent propose, the preparer chooses, the reviewer signs the
+preparer's choice.
+
+**The conclusions** (`DesignConclusionKind`):
+
+| Kind | Words | Needs | OE |
+| --- | --- | --- | --- |
+| `EFFECTIVE` | Effective | a reason only where it differs from the proposal | clears OE once signed |
+| `EXCEPTIONS_NOTED` | Exceptions noted | a reason, always: why the exceptions are not a deficiency | clears OE once signed |
+| `NOT_EFFECTIVE` | Not effective | a basis (`DESIGN`, `IMPLEMENTATION`, `BOTH`) and a reason, always | OE is not performed (as today) |
+| `NO_INSTANCE` | Design effective, no instance to walk through | a reason, always | clears OE once signed |
+| `NOT_CONCLUDED` | Not concluded | a reason only where it differs from the proposal | can never be signed |
+
+A reason is 10 to 1000 characters, the person's own, cleaned as text is (untrusted).
+Deficiency severity (deficiency, significant deficiency, material weakness) is the
+deficiency evaluation's, not this; "not tested / not relied on" is planning's.
+
+**Design and implementation, said apart** (from the records, in the assembled view): per
+approved attribute, `shown_by` is `IMPLEMENTATION` where a current check shows it in the
+records of an instance (`Reading.implementation`), `DESIGN` where checks show it only as a
+document requires it, null otherwise. Two results for the control:
+- *Implementation*: `IN_PLACE` where every approved attribute is shown by the instance's
+  records or carries a person's closing tickmark; `EXCEPTIONS` where any attribute's
+  state is an exception (the check's or one a person recorded); otherwise `OPEN`, with
+  the letters not yet shown in the instance.
+- *Design*: `DESIGNED` where every approved attribute is shown (by design or by the
+  instance) or carries a closing tickmark; `EXCEPTIONS` as above; otherwise `OPEN`, with
+  the letters.
+Each with one sentence. Section 3 is headed "Implementation: walkthrough of one instance";
+section 4's Result keeps one result per attribute and says under it "In the instance" or
+"As designed" (`shown_by`); section 7 shows the Design and the Implementation result
+beside the conclusion.
+
+**The proposal** (`proposed_conclusion`, with `proposed_reasons`, one sentence each),
+computed whenever the D&I conclusion is read, not only once prepared:
+1. `NOT_EFFECTIVE` where a design deficiency stands (basis not proposed);
+2. else `EXCEPTIONS_NOTED` where any attribute's state is an exception;
+3. else `NOT_CONCLUDED` where Design or Implementation is `OPEN` (the product owner's
+   rule: design alone, without the instance, is not effective);
+4. else `EFFECTIVE`.
+The agent's drafted text (the workpaper's `design-conclusion` section) stays the text.
+
+**The preparer's choice** (migration 0165, `design_conclusion_choices`, written once and
+ended once, no delete, archived guard, as 0162/0163): `kind`, `basis` (NOT_EFFECTIVE
+only), `reason`, `proposed_kind` (the proposal when it was recorded), `workpaper_id`,
+`workpaper_version` (the current version then), `recorded_by`, `recorded_at`; `ended_at`,
+`ended_by`, `ended_as` (`REPLACED` by the next choice). One stands per control.
+- `POST /organizations/{o}/projects/{p}/design-conclusions/{control_id}/choice`
+  `{kind, basis?, reason?, replaces}` (`replaces`: the id of the choice it replaces, or
+  null; a stale `replaces` is a 409). A person with TASK_UPDATE, never an agent; only
+  while the design workpaper is a draft that is not being drafted (a prepared one is
+  reopened first); answers the D&I conclusion's body. Audit event
+  `design_conclusion.chosen` with kind, basis, proposed kind, workpaper version (never the
+  reason's text beyond 200 characters).
+- Refused (409, one sentence): `EFFECTIVE` while a design deficiency stands, an
+  exception stands (the check's or a person's), or Design or Implementation is open;
+  `EXCEPTIONS_NOTED` or `NO_INSTANCE` while a design deficiency stands; a missing
+  basis or reason where the table says one is needed (422).
+**Sign-off.** The reviewer signs the preparer's standing choice: `SignOffBody`
+`{conclusion, workpaper_version, note}`; refused where no choice stands, where it is
+`NOT_CONCLUDED`, where `conclusion` is not the standing choice's kind, where the choice
+was recorded after the workpaper was prepared (a choice is recorded on the draft, then
+the workpaper is prepared: `recorded_at` ≤ the preparation), and where the choice's rules
+above no longer hold (checked again in the transaction);
+`NOT_EFFECTIVE` also needs a standing design deficiency ("log the design deficiency
+first"). The existing refusals stay (independence, prepared version, out of date). The
+standing exceptions no longer block a sign-off of `EXCEPTIONS_NOTED` or `NOT_EFFECTIVE`
+(they are what it concludes on); they block `EFFECTIVE` as before.
+- `design_conclusions` gains `conclusion` (the kind), `conclusion_basis`,
+  `conclusion_reason`, `choice_id` (migration 0165, additive; existing rows are given
+  `conclusion = verdict` in the migration). `verdict` stays the OE-facing two values
+  every reader uses today: `NOT_EFFECTIVE` for `NOT_EFFECTIVE`, `EFFECTIVE` for
+  `EFFECTIVE`, `EXCEPTIONS_NOTED` and `NO_INSTANCE`. `NOT_CONCLUDED` is never signed.
+- Out of date also when the standing choice changed after the sign-off ("the preparer's
+  conclusion changed").
+
+**The body** of `GET …/design-conclusions/{control_id}` gains `proposed_conclusion`,
+`proposed_reasons`, `choice` (`{id, kind, basis, reason, proposed_kind, recorded_by,
+recorded_at, workpaper_version}` or null), `can_choose`, `design` and `implementation`
+(`{result, sentence, open: [letters]}`), and `signed.conclusion` / `signed.basis` /
+`signed.reason` in the sign-off. `proposed` (the two-value verdict) stays for existing
+readers.
+
+**On screen.** Section 7 (3.5) holds the choice: the agent's proposal with its reasons
+("Proposed by the agent · review it"), the five conclusions as a radio group (with the
+basis for Not effective and the reason box where needed), "Record conclusion" (shown as
+recorded only after the server confirms), the Design and Implementation results, and the
+text with Edit conclusion. D&I Conclusion and Review shows the recorded conclusion, its
+reason and basis, read-only, with the sign-off (the button reads "Sign off: <the
+conclusion's words>").
+
 ## 4. Tests
 
 Server: the assembly from synthetic records (each attribute state, the evidence numbering
@@ -404,5 +501,5 @@ source-level checks that the existing actions are kept and appear once.
 | The three views, the switcher, print | built 14 November 2026 (`design-workpaper-view.tsx`, `design-workpaper-model.ts`, `design-workpaper.css`, route `/workspace/design-workpaper`; mounted at the two D&I workpaper places with today's card in a fold); independently reviewed; checked in a headless browser against scripted answers in both themes and at phone width, not yet by eye in the running app, a real print dialog, or with a PDF file beside the workpaper |
 | A When column in the standard walkthrough; a thumbnail route; a readable title per file | planned |
 | A section edited where it is (3.2) | built 15 November 2026, web only (`section-edit-model.ts`, `section-editor.tsx`, route `/workspace/workpapers/section`; the server's existing section edit); independently reviewed the same day and tightened (the fold's editor made anew per version, "Edit" off while the page's records are behind a save, a 409 reads again, spaces alone are no change); checked in a headless browser on synthetic data (72 checks), not yet against the live API. Leaving by in-app navigation is not asked about until 3.4 |
-| Formatting (3.3); autosave and leaving (3.4) | being built |
-| One conclusion (3.5) | agreed 15 November 2026; to build after 3.4 |
+| Formatting (3.3); autosave and leaving (3.4) | built 15 November 2026 (web: rich-editor, working copies, leave dialog; server: workpaper_marks, workpaper_drafts, migration 0164 applied to dev); checked in headless browsers on synthetic data (149 and 210 checks); independent review pending |
+| One conclusion (3.5); the preparer concludes (3.6) | agreed 15 November 2026; being built |
