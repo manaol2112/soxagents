@@ -195,7 +195,7 @@ class _Notes:
             """
             SELECT (SELECT array_agg(n::text ORDER BY n.id) FROM workpaper_review_notes n),
                    (SELECT count(*) FROM workpaper_review_note_events),
-                   (SELECT count(*) FROM audit_events WHERE action LIKE 'workpaper_review_note.%')
+                   (SELECT count(*) FROM audit_events WHERE action LIKE 'workpaper_review_note.%%')
             """
         )
         return tuple(row)
@@ -588,7 +588,10 @@ def test_a_notes_thread_its_statuses_and_who_may_do_what(migrated: Database) -> 
             note_id, event["id"], event["kind"],
         )  # fmt: skip
         assert payload["workpaper_id"] == desk.paper_id and payload["number"] == note["number"]
-        assert payload["text"] == event["text"][:200]
+        # The audit payload carries at most 200 characters of the text written: for a
+        # raised note its own text (its RAISED event carries none), else the event's.
+        written = last["text"] if event["kind"] == "RAISED" else event["text"]
+        assert payload["text"] == written[:200]
         if event["kind"] in ("RAISED", "REPLIED"):
             assert "from" not in payload
         else:
@@ -974,9 +977,11 @@ def test_the_tables_keep_what_a_note_records_and_never_lose_a_note_or_an_event(
         "'workpaper_review_note_events'::regclass)"
     )
     assert len(keys) == 9 and {(deleted, updated) for _n, deleted, updated in keys} == {("r", "r")}
+    # The workpaper is never deleted under its notes: refused by a restricting key
+    # (workpaper_versions' own key may answer first, so any integrity refusal counts).
     refused(
-        "DELETE FROM workpapers WHERE id = %s", psycopg.errors.ForeignKeyViolation,
-        "workpapers", desk.paper_id,
+        "DELETE FROM workpapers WHERE id = %s", psycopg.errors.IntegrityError,
+        "workpaper", desk.paper_id,
     )  # fmt: skip
     assert [n["number"] for n in notes.read()["notes"]] == [1]
     assert len(notes.trail(note_id)) == 3
