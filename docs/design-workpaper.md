@@ -448,7 +448,10 @@ only), `reason`, `proposed_kind` (the proposal when it was recorded), `workpaper
   reason's text beyond 200 characters).
 - Refused (409, one sentence): `EFFECTIVE` while a design deficiency stands, an
   exception stands (the check's or a person's), or Design or Implementation is open;
-  `EXCEPTIONS_NOTED` or `NO_INSTANCE` while a design deficiency stands; a missing
+  `EXCEPTIONS_NOTED` or `NO_INSTANCE` while a design deficiency stands; `NO_INSTANCE`
+  also unless Design is `DESIGNED` ("the design is not shown yet: Design effective needs
+  every attribute shown as designed or settled by a tickmark"), at the choice and again
+  at the sign-off; a missing
   basis or reason where the table says one is needed (422).
 **Sign-off.** The reviewer signs the preparer's standing choice: `SignOffBody`
 `{conclusion, workpaper_version, note}`; refused where no choice stands, where it is

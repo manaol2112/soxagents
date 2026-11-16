@@ -606,10 +606,12 @@ def test_an_engine_1_check_gives_states_and_shows_marks_only(migrated: Database)
 def test_a_conclusion_is_signed_only_from_its_sign_off_record(migrated: Database) -> None:
     """Section 3.6 (product owner, 15 November 2026, docs/design-workpaper.md section 3.6).
     Old expectation: the workpaper was prepared with no conclusion recorded and the
-    reviewer signed the records' verdict ("verdict": "EFFECTIVE"). New: the preparer
-    records the conclusion on the draft first (nothing checked the evidence, so the design
-    as effective with no instance to walk through), the view carries it, and the reviewer
-    signs it. Every other assertion is kept: a proposal is never presented as signed, a
+    reviewer signed the records' verdict, effective; a design deficiency logged afterwards
+    put it out of date. New: nothing checked the evidence, so the records leave the design
+    and the instance open and neither effective nor no instance can be recorded; the
+    preparer records not effective on a logged design deficiency on the draft first, the
+    view carries it, and the reviewer signs it; the deficiency closed afterwards puts it
+    out of date. Every other assertion is kept: a proposal is never presented as signed, a
     read signs nothing, and a sign-off that no longer holds is not presented as signed."""
     bench = _Bench(migrated, "dw-sign")
     paper = _draft_design(bench, None)
@@ -617,15 +619,22 @@ def test_a_conclusion_is_signed_only_from_its_sign_off_record(migrated: Database
     assert (drafted["workpaper"]["status"], drafted["can_edit"]) == ("DRAFT", True)
     assert drafted["review"]["status"] == "NOT_READY" and drafted["conclusion"]["signed"] is False
     assert drafted["conclusion"]["words"] == "Not concluded yet"
-    reason = "No change was made in the period, so there is no instance to walk."
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "INSERT INTO deficiencies (organization_id, project_id, reference, "
+            "engagement_control_id, title, deficiency_type, identified_by) "
+            "VALUES (%s, %s, 'D-901', %s, 'No approval step in the design', 'DESIGN', %s)",
+            (bench.team["org"], bench.team["project"], bench.control, bench.team["owner_id"]),
+        )
+    reason = "The design has no approval step, as the deficiency logged says."
     chosen = bench.owner.post(
         f"{bench.base}/design-conclusions/{bench.control}/choice",
-        json={"kind": "NO_INSTANCE", "reason": reason, "replaces": None},
+        json={"kind": "NOT_EFFECTIVE", "basis": "DESIGN", "reason": reason, "replaces": None},
     )
     assert chosen.status_code == 200, chosen.text
     choice = _view(bench)["conclusion"]["choice"]
     assert (choice["kind"], choice["reason"], choice["proposed_kind"]) == (
-        "NO_INSTANCE", reason, "NOT_CONCLUDED",
+        "NOT_EFFECTIVE", reason, "NOT_EFFECTIVE",
     )  # fmt: skip
 
     prepared = bench.owner.post(
@@ -639,12 +648,12 @@ def test_a_conclusion_is_signed_only_from_its_sign_off_record(migrated: Database
     assert body["workpaper"]["prepared_by"] == bench.name(bench.team["owner_id"])
     assert body["workpaper"]["prepared_at"] is not None
     assert body["review"] == {
-        "status": "TO_SIGN", "proposed": "EFFECTIVE", "signed_verdict": None, "signed_by": None,
-        "signed_at": None, "out_of_date": [],
+        "status": "TO_SIGN", "proposed": "NOT_EFFECTIVE", "signed_verdict": None,
+        "signed_by": None, "signed_at": None, "out_of_date": [],
     }  # fmt: skip
     conclusion = body["conclusion"]
     assert (conclusion["proposed"], conclusion["words"], conclusion["signed"]) == (
-        "EFFECTIVE", "Effective", False,
+        "NOT_EFFECTIVE", "Not effective", False,
     )  # fmt: skip
     # Reading the view signs nothing.
     assert bench.rows("SELECT count(*) FROM design_conclusions") == [(0,)]
@@ -661,7 +670,7 @@ def test_a_conclusion_is_signed_only_from_its_sign_off_record(migrated: Database
     signed = reviewer.post(
         f"{bench.base}/design-conclusions/{bench.control}/sign-off",
         json={
-            "conclusion": "NO_INSTANCE",
+            "conclusion": "NOT_EFFECTIVE",
             "workpaper_version": version,
             "note": "Walked through.",
         },  # fmt: skip
@@ -670,29 +679,31 @@ def test_a_conclusion_is_signed_only_from_its_sign_off_record(migrated: Database
     body = _view(bench)
     review = body["review"]
     assert (review["status"], review["signed_verdict"], review["out_of_date"]) == (
-        "SIGNED_OFF", "EFFECTIVE", [],
+        "SIGNED_OFF", "NOT_EFFECTIVE", [],
     )  # fmt: skip
     assert review["signed_by"] == bench.name(reviewer_id) and review["signed_at"] is not None
-    assert body["conclusion"]["signed"] is True and body["conclusion"]["words"] == "Effective"
+    assert body["conclusion"]["signed"] is True
+    assert body["conclusion"]["words"] == "Not effective"
 
-    # A design deficiency logged afterwards: the sign-off no longer holds, and the view
+    # The design deficiency closed afterwards: the sign-off no longer holds, and the view
     # no longer presents the conclusion as signed.
     with connect(migrated.url) as connection:
         connection.execute(
-            "INSERT INTO deficiencies (organization_id, project_id, reference, "
-            "engagement_control_id, title, deficiency_type, identified_by) "
-            "VALUES (%s, %s, 'D-901', %s, 'No approval step in the design', 'DESIGN', %s)",
-            (bench.team["org"], bench.team["project"], bench.control, bench.team["owner_id"]),
+            "UPDATE deficiencies SET status = 'CLOSED', closed_at = clock_timestamp() "
+            "WHERE engagement_control_id = %s",
+            (bench.control,),
         )
     body = _view(bench)
     review = body["review"]
     assert (review["status"], review["proposed"], review["signed_verdict"]) == (
-        "OUT_OF_DATE", "NOT_EFFECTIVE", "EFFECTIVE",
+        "OUT_OF_DATE", "EFFECTIVE", "NOT_EFFECTIVE",
     )  # fmt: skip
-    assert review["out_of_date"] == ["a design deficiency was logged after the sign-off"]
+    assert review["out_of_date"] == [
+        "a design deficiency was remediated or closed after the sign-off"
+    ]
     conclusion = body["conclusion"]
     assert (conclusion["signed"], conclusion["proposed"], conclusion["words"]) == (
-        False, "NOT_EFFECTIVE", "Not effective",
+        False, "EFFECTIVE", "Effective",
     )  # fmt: skip
     assert bench.rows("SELECT count(*) FROM design_conclusions") == [(1,)]
 

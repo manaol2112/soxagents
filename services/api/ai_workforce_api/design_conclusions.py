@@ -46,7 +46,8 @@ the verdict and the reviewer signs exactly it":
   drafted. One choice stands per control; the next replaces it, and a stale `replaces`
   is refused. Effective is refused while a design deficiency or an exception stands or
   the design or the implementation is open; exceptions noted and no instance while a
-  design deficiency stands.
+  design deficiency stands; no instance also unless the design result is DESIGNED (its
+  words say the design is effective).
 - The reviewer signs the preparer's standing choice, recorded before the workpaper was
   prepared, while its rules still hold; not effective also needs a standing design
   deficiency. A person's standing exception blocks a sign-off of effective (and of no
@@ -138,6 +139,11 @@ RECORDED_AFTER = (
     "reopen the workpaper and prepare it again"
 )
 DEFICIENCY_FIRST = "log the design deficiency first"
+# No instance says the design is effective: refused unless the design result is DESIGNED.
+DESIGN_NOT_SHOWN = (
+    "the design is not shown yet: Design effective needs every attribute shown as designed "
+    "or settled by a tickmark"
+)
 CHOICE_CHANGED = "the preparer's conclusion changed"
 REASON_NEEDED = f"give the reason in a sentence of at least {REASON_MIN} characters"
 REASON_TOO_LONG = f"the reason can be at most {REASON_MAX} characters"
@@ -378,8 +384,10 @@ def choice_refusal(kind: str, deficiencies: int, results: Results) -> str | None
     """Why the conclusion cannot be recorded, or signed, on the records as they are; None
     where it can. Effective: while a design deficiency or an exception stands, or the
     design or the implementation is open. Exceptions noted and no instance: while a
-    design deficiency stands. Not effective and not concluded: never refused here (a
-    sign-off of not effective also needs a standing design deficiency: DEFICIENCY_FIRST)."""
+    design deficiency stands. No instance also unless the design result is DESIGNED: its
+    words say the design is effective (DESIGN_NOT_SHOWN). Not effective and not
+    concluded: never refused here (a sign-off of not effective also needs a standing
+    design deficiency: DEFICIENCY_FIRST)."""
     words = KIND_WORDS.get(kind, kind)
     if kind == "EFFECTIVE":
         if deficiencies:
@@ -402,6 +410,8 @@ def choice_refusal(kind: str, deficiencies: int, results: Results) -> str | None
         return None
     if kind in ("EXCEPTIONS_NOTED", "NO_INSTANCE") and deficiencies:
         return f"a design deficiency is logged, so the conclusion cannot be “{words}”"
+    if kind == "NO_INSTANCE" and results.design.result != "DESIGNED":
+        return DESIGN_NOT_SHOWN
     return None
 
 

@@ -9,7 +9,8 @@ Audit integrity:
   engagement, and a stale page records nothing;
 - the records' rules refuse what they must (effective while a deficiency, an exception or
   anything open stands; exceptions noted and no instance while a deficiency stands), and a
-  basis or reason missing where the table needs one is a 422;
+  basis or reason missing where the table needs one is a 422; no instance is refused,
+  at the choice and at the sign-off, unless the design result is DESIGNED;
 - the reviewer signs exactly the preparer's standing conclusion, recorded before the
   preparation, with its rules read again in the transaction; not concluded is never
   signed; not effective needs a standing design deficiency and opens the control's review
@@ -45,6 +46,7 @@ from test_evidence_flow import _project
 from test_execution import _add_user
 from test_file_reliability import _first_check as _first_check_with_a_report
 from test_file_reliability import _record as _decide_reliability
+from test_file_reliability import _reopen as _reopen_decision
 from test_outbound import _session, migrated
 from test_phase_release import _launched
 
@@ -59,6 +61,7 @@ from ai_workforce_api.design_conclusions import (
     CHOICE_RECORDED_SINCE,
     CHOICE_STALE,
     DEFICIENCY_FIRST,
+    DESIGN_NOT_SHOWN,
     DRAFT_FIRST,
     GATE_DESIGN,
     GATE_NOT_EFFECTIVE,
@@ -451,6 +454,8 @@ def test_the_records_rules_refuse_what_they_must(migrated: Database) -> None:
         "attribute B is not yet shown in the records of an instance, so the conclusion "
         "cannot be “Effective”",
     )  # fmt: skip
+    # No instance says the design is effective: refused while the design is open.
+    _refused(case.choose("NO_INSTANCE", reason=NO_INSTANCE_REASON), 409, DESIGN_NOT_SHOWN)
     # A closing tickmark settles it: effective is proposed and can be recorded.
     assert _tickmark(case.bench, ids["B"], "NOT_APPLICABLE").status_code == 200
     body = case.body()
@@ -469,6 +474,8 @@ def test_the_records_rules_refuse_what_they_must(migrated: Database) -> None:
         "an exception stands on attribute A, so the conclusion cannot be “Effective”",
     )  # fmt: skip
     case.chosen("EXCEPTIONS_NOTED")
+    # The design reads as an exception, not as designed: no instance is refused.
+    _refused(case.choose("NO_INSTANCE", reason=NO_INSTANCE_REASON), 409, DESIGN_NOT_SHOWN)
     # A design deficiency: not effective is proposed; effective, exceptions noted and no
     # instance are refused; not effective and not concluded are recorded.
     case.deficiency()
@@ -563,6 +570,21 @@ def test_the_reviewer_signs_the_preparers_conclusion_and_the_oe_gate_reads_its_v
     case.engagement_role(owner_id, "REVIEWER")
     own = case.sign_as("NO_INSTANCE", case.bench.owner)
     assert own.status_code == 409 and "another reviewer" in own.json()["detail"]
+    # Recorded while the design was shown, it can no longer be signed once the design is
+    # open: the only file is decided not relied on, so nothing shows the attributes.
+    assert _decide_reliability(case.bench, case.ticket, "NOT_RELIED_ON").status_code == 200
+    body = case.body(case.reviewer)
+    assert body["design"]["result"] == "OPEN"
+    assert (body["blocking"], body["can_sign"]) == ([DESIGN_NOT_SHOWN], False)
+    _refused(case.sign_as("NO_INSTANCE"), 409, DESIGN_NOT_SHOWN)
+    assert case.gate() == GATE_DESIGN
+    # The decision reopened: the design is shown again, and the reviewer signs.
+    [(decision,)] = case.rows(
+        "SELECT id FROM file_reliability_decisions WHERE ended_at IS NULL "
+        "AND engagement_control_id = %s",
+        UUID(case.bench.control),
+    )
+    assert _reopen_decision(case.bench, case.ticket, str(decision)).status_code == 200
     signed = case.sign_as("NO_INSTANCE")
     assert signed.status_code == 200, signed.text
     assert case.signed_row()[:4] == ("EFFECTIVE", "NO_INSTANCE", None, NO_INSTANCE_REASON)

@@ -391,45 +391,65 @@ def _design_workpaper(ctx: Context, ref: str, control_id: UUID) -> None:
     )  # fmt: skip
 
 
-# Why the preparer concludes as they do, where the records leave something to say. The demo
-# seeds no check of the D&I evidence, so the records leave the instance open: the design is
-# evaluated from the control's description and the organization's configuration, and no
-# instance is walked through in the demo's records.
-DEMO_NO_INSTANCE = (
-    "Design evaluated from the control's description and the organization's configuration; "
-    "the demo walks through no instance."
-)
+# The D&I conclusion (docs/design-workpaper.md, section 3.6). The demo seeds no check of
+# the D&I evidence, so the records leave the design and the instance open and the rules
+# would refuse "Effective". The demo's controls conclude effective all the same, as they did
+# before section 3.6: the preparer's choice, and the reviewer's sign-off of it, are written
+# here as synthetic seed data, the way tests/support.sign_off_design writes them. Where
+# the records propose not effective (a design deficiency stands), the preparer records it
+# and the reviewer signs it through the service, as for a person.
+DEMO_REASON = "Demo data: concluded from the control's description; no instance is seeded."
 DEMO_NOT_EFFECTIVE = "The design deficiency logged against the control stands."
-DEMO_EXCEPTIONS = "The exceptions recorded are evaluated and are not a design deficiency."
+DEMO_SIGNOFF_NOTE = "Design and implementation reviewed (prepared with the demo)."
 
 
 def _design_choice(ctx: Context, control_id: UUID) -> None:
-    """Morgan, the preparer, records the D&I conclusion on the draft design workpaper
-    (docs/design-workpaper.md, section 3.6): the records' proposal where it is effective,
-    not effective or exceptions noted, each with the reason it needs; where the records
-    leave the instance open, the design as effective with no instance to walk through."""
+    """Morgan, the preparer, concludes on the draft design workpaper, before it is
+    prepared: not effective through the service where the records propose it; otherwise
+    effective, written as demo seed data."""
     from ai_workforce_api.design_conclusions import ChoiceBody, choose, read
 
     morgan = ctx.principal("morgan")
     found = read(ctx.connection, morgan, ctx.organization_id, ctx.project_id, control_id)
     replaces = None if found.choice is None else found.choice.id
-    proposed = found.proposed_conclusion
-    if proposed == "EFFECTIVE":
-        body = ChoiceBody(kind="EFFECTIVE", replaces=replaces)
-    elif proposed == "NOT_EFFECTIVE":
+    if found.proposed_conclusion == "NOT_EFFECTIVE":
         body = ChoiceBody(
             kind="NOT_EFFECTIVE", basis="DESIGN", reason=DEMO_NOT_EFFECTIVE, replaces=replaces
         )
-    elif proposed == "EXCEPTIONS_NOTED":
-        body = ChoiceBody(kind="EXCEPTIONS_NOTED", reason=DEMO_EXCEPTIONS, replaces=replaces)
-    else:
-        body = ChoiceBody(kind="NO_INSTANCE", reason=DEMO_NO_INSTANCE, replaces=replaces)
-    choose(ctx.connection, morgan, ctx.organization_id, ctx.project_id, control_id, body)
+        choose(ctx.connection, morgan, ctx.organization_id, ctx.project_id, control_id, body)
+        return
+    if found.workpaper is None:
+        return
+    # Demo seeding: the preparer's choice, effective, written directly (the rules of
+    # section 3.6 refuse it on records with no check of the evidence). The proposal it
+    # was recorded against is kept as the records give it.
+    ctx.cursor.execute(
+        """
+        UPDATE design_conclusion_choices
+        SET ended_at = clock_timestamp(), ended_by = %s, ended_as = 'REPLACED'
+        WHERE engagement_control_id = %s AND ended_at IS NULL
+        """,
+        (ctx.team["morgan"], control_id),
+    )
+    ctx.cursor.execute(
+        """
+        INSERT INTO design_conclusion_choices (
+            organization_id, project_id, engagement_control_id, workpaper_id,
+            workpaper_version, kind, reason, proposed_kind, recorded_by
+        )
+        SELECT organization_id, project_id, engagement_control_id, id, current_version,
+               'EFFECTIVE', %s, %s, %s
+        FROM workpapers WHERE id = %s
+        """,
+        (DEMO_REASON, found.proposed_conclusion, ctx.team["morgan"], found.workpaper.id),
+    )
 
 
 def _design_conclusion(ctx: Context, control_id: UUID) -> None:
-    """The reviewer signs off the preparer's D&I conclusion, as OE follows it (B0, 8
-    November 2026; section 3.6). Riley reviews; Morgan prepared the design workpaper."""
+    """Riley, the reviewer, signs off the preparer's D&I conclusion, as OE follows it (B0,
+    8 November 2026; section 3.6); Morgan prepared the design workpaper. A conclusion the
+    rules allow is signed through the service; the demo's seeded effective one is written
+    as demo seed data, with the audit event a sign-off gives."""
     from ai_workforce_api.design_conclusions import SignOffBody, read, sign_off
 
     riley = ctx.principal("riley")
@@ -444,10 +464,42 @@ def _design_conclusion(ctx: Context, control_id: UUID) -> None:
         or choice.kind == "NOT_CONCLUDED"
     ):
         return
-    sign_off(
-        ctx.connection, riley, ctx.organization_id, ctx.project_id, control_id,
-        SignOffBody(conclusion=choice.kind, workpaper_version=paper.prepared_version,
-                    note="Design and implementation reviewed (prepared with the demo)."),
+    # Only the seeded effective choice, on records that propose neither effective nor not
+    # effective, is seeded here; anything else goes through the service and its refusals.
+    seeded = choice.kind == "EFFECTIVE" and found.proposed_conclusion not in (
+        "EFFECTIVE", "NOT_EFFECTIVE",
+    )  # fmt: skip
+    if not seeded:
+        sign_off(
+            ctx.connection, riley, ctx.organization_id, ctx.project_id, control_id,
+            SignOffBody(conclusion=choice.kind, workpaper_version=paper.prepared_version,
+                        note=DEMO_SIGNOFF_NOTE),
+        )  # fmt: skip
+        return
+    # Demo seeding: the reviewer's sign-off of the seeded effective choice, written
+    # directly (the service re-reads the rules, which refuse it on these records).
+    row = ctx.cursor.execute(
+        """
+        INSERT INTO design_conclusions (
+            organization_id, project_id, engagement_control_id, workpaper_id,
+            workpaper_version, verdict, signed_by, signoff_note, conclusion,
+            conclusion_reason, choice_id
+        )
+        VALUES (%s, %s, %s, %s, %s, 'EFFECTIVE', %s, %s, 'EFFECTIVE', %s, %s)
+        RETURNING id
+        """,
+        (
+            ctx.organization_id, ctx.project_id, control_id, paper.id, paper.prepared_version,
+            ctx.team["riley"], DEMO_SIGNOFF_NOTE, choice.reason, choice.id,
+        ),
+    ).fetchone()  # fmt: skip
+    assert row is not None
+    _audit(
+        ctx, "design_conclusion.signed_off", "design_conclusion", UUID(str(row[0])),
+        ctx.team["riley"],
+        {"control_id": str(control_id), "verdict": "EFFECTIVE", "conclusion": "EFFECTIVE",
+         "basis": None, "choice_id": str(choice.id), "workpaper_version": paper.prepared_version,
+         "deficiencies": [], "seeded": True},
     )  # fmt: skip
 
 

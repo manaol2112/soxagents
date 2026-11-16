@@ -13,7 +13,8 @@ Audit integrity:
   then exceptions noted, then not concluded while the design or the implementation is
   open (design alone, without the instance, is not effective), then effective;
 - effective is refused while a deficiency or an exception stands or anything is open;
-  exceptions noted and no instance while a deficiency stands; a reason is needed where
+  exceptions noted and no instance while a deficiency stands, and no instance unless the
+  design result is DESIGNED (its words say the design is effective); a reason is needed where
   the table says so, and is the person's own text, cleaned and bounded;
 - the OE-facing verdict keeps its two values; not concluded has none.
 """
@@ -36,6 +37,7 @@ from test_design_workpaper_model import (
 )
 
 from ai_workforce_api.design_conclusions import (
+    DESIGN_NOT_SHOWN,
     DESIGNED_SENTENCE,
     IN_PLACE_SENTENCE,
     NO_ATTRIBUTES,
@@ -289,17 +291,36 @@ def test_the_rules_of_each_conclusion() -> None:
     assert choice_refusal("EFFECTIVE", 0, results_of([])) == (
         f"no attribute of the control is approved yet, {cannot} “Effective”"
     )
-    for kind, words in (
-        ("EXCEPTIONS_NOTED", "Exceptions noted"),
-        ("NO_INSTANCE", "Design effective, no instance to walk through"),
+    # Exceptions noted: refused only while a design deficiency stands; an exception, or
+    # what is open, is what it concludes on.
+    assert choice_refusal("EXCEPTIONS_NOTED", 0, excepted) is None
+    assert choice_refusal("EXCEPTIONS_NOTED", 0, designed_only) is None
+    assert choice_refusal("EXCEPTIONS_NOTED", 0, results_of([])) is None
+    assert choice_refusal("EXCEPTIONS_NOTED", 1, settled) == (
+        f"a design deficiency is logged, {cannot} “Exceptions noted”"
+    )
+    # No instance says the design is effective: refused while a design deficiency stands,
+    # and unless every attribute is shown as designed (or in the instance) or settled by a
+    # tickmark. Shown only as designed is enough: no instance is walked through.
+    assert choice_refusal("NO_INSTANCE", 0, settled) is None
+    assert choice_refusal("NO_INSTANCE", 0, designed_only) is None
+    closed = results_of([_stand("A", by="DESIGN"), _stand("B", "NOT_APPLICABLE", None)])
+    assert choice_refusal("NO_INSTANCE", 0, closed) is None
+    assert choice_refusal("NO_INSTANCE", 1, settled) == (
+        f"a design deficiency is logged, {cannot} “Design effective, no instance to walk through”"
+    )
+    for not_designed in (
+        excepted,
+        results_of([_stand("A", by="DESIGN"), _stand("B", "NOT_TESTED", None)]),
+        results_of([_stand("A"), _stand("B", "SHOWN_IN_PART", None)]),
+        results_of([]),
     ):
-        # Refused only while a design deficiency stands: an exception, or what is open,
-        # is what they conclude on.
-        assert choice_refusal(kind, 0, excepted) is None
-        assert choice_refusal(kind, 0, designed_only) is None
-        assert choice_refusal(kind, 1, settled) == (
-            f"a design deficiency is logged, {cannot} “{words}”"
-        )
+        assert not_designed.design.result != "DESIGNED"
+        assert choice_refusal("NO_INSTANCE", 0, not_designed) == DESIGN_NOT_SHOWN
+    assert DESIGN_NOT_SHOWN == (
+        "the design is not shown yet: Design effective needs every attribute shown as "
+        "designed or settled by a tickmark"
+    )
     # Not effective and not concluded are never refused by the records here.
     for kind in ("NOT_EFFECTIVE", "NOT_CONCLUDED"):
         for deficiencies, results in ((0, settled), (1, excepted), (0, designed_only)):
