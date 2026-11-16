@@ -1843,3 +1843,346 @@
     display: inline;
   }
 }
+
+/* Focus mode (product owner, 16 November 2026: focus mode, option A) --------------------
+   A toggle in the step panel's header, or Shift+F, widens the panel to the whole content
+   area: the workflow is under it, the navigation folds to its icons, the header names the
+   control before the step, a strip of every step sits under the header, and the work is
+   centred at a readable width. Kept per person in this browser (step-focus.tsx). At
+   1100 px and under the panel is already full width: no toggle, and the strip is shown.
+   The width animates 200 ms only when toggled, never under reduced motion; print is not
+   affected (screen only). */
+
+:root {
+  --focus-rail: 64px;
+}
+
+/* The body and the side column (the review notes in focus), side by side. */
+.wf-panel-main {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.wf-panel-main > .wf-panel-body {
+  min-width: 0;
+}
+
+.wf-panel-side {
+  display: flex;
+  flex: none;
+  min-height: 0;
+}
+
+.wf-panel-side:empty {
+  display: none;
+}
+
+/* The step strip: one pill per step, scrolling sideways inside itself. */
+.wf-strip {
+  display: none;
+  flex: none;
+  min-width: 0;
+  padding: 8px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.wf-strip ol {
+  display: flex;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  list-style: none;
+  scrollbar-width: none;
+}
+
+.wf-strip ol::-webkit-scrollbar {
+  display: none;
+}
+
+.wf-strip li {
+  flex: none;
+}
+
+.wf-strip-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 12px 0 6px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  text-decoration: none;
+  border-radius: 999px;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.wf-strip-pill:hover {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+}
+
+.wf-strip-pill:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.wf-strip-mark {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  background: var(--surface-sunken);
+  border-radius: 999px;
+}
+
+.wf-strip-pill.is-done .wf-strip-mark {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.wf-strip-pill.is-skipped {
+  color: var(--text-tertiary);
+}
+
+/* The open step: dark, in either theme (the strong text on the surface, inverted). */
+.wf-strip-pill.is-current,
+.wf-strip-pill.is-current:hover {
+  color: var(--surface);
+  background: var(--text-strong);
+}
+
+.wf-strip-pill.is-current .wf-strip-mark {
+  color: var(--surface);
+  background: color-mix(in srgb, var(--surface) 18%, transparent);
+}
+
+/* The control's name, quiet, before the step's title. */
+.wf-crumb {
+  min-width: 0;
+  max-width: 42ch;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.wf-crumb-sep {
+  color: var(--border-strong, var(--text-tertiary));
+  font-size: 15px;
+}
+
+@media (max-width: 1100px) {
+  .wf-strip {
+    display: block;
+  }
+}
+
+@media (max-width: 767px) {
+  .wf-strip {
+    padding: 6px 12px;
+  }
+}
+
+@media screen and (min-width: 1101px) {
+  /* The page under the panel does not scroll (and has no scroll bar to count). */
+  :root[data-step-focus] {
+    overflow: hidden;
+  }
+
+  .wf-panel.is-focus {
+    width: calc(100vw - var(--focus-rail));
+    box-shadow: none;
+    animation: none;
+  }
+
+  .wf-panel.is-focus .wf-strip {
+    display: block;
+  }
+
+  .wf-panel.is-focus .wf-panel-head.is-minimal {
+    align-items: center;
+    padding: 14px 20px 14px 28px;
+  }
+
+  /* The strip names the step's number: the header is one line. */
+  .wf-panel.is-focus .wf-panel-kicker {
+    display: none;
+  }
+
+  .wf-panel.is-focus .wf-panel-line {
+    flex-wrap: nowrap;
+    min-width: 0;
+    margin-top: 0;
+  }
+
+  .wf-panel.is-focus .wf-panel-line h2 {
+    flex: none;
+    font-size: 19px;
+  }
+
+  .wf-panel.is-focus .wf-panel-body {
+    flex: 1 1 auto;
+    padding: 28px 32px 40px;
+    animation: wf-focus-body 160ms ease-out;
+  }
+
+  /* A readable measure on a wide screen, centred. */
+  .wf-panel.is-focus .wf-panel-body > * {
+    max-width: 1100px;
+    margin-inline: auto;
+  }
+
+  .wf-panel.is-focus .wf-strip {
+    padding-left: 22px;
+  }
+
+  :root[data-step-focus-moving] .wf-panel {
+    transition: width 200ms ease;
+  }
+
+  /* The navigation as an icon rail: icons only, each named in a tooltip on hover and on
+     keyboard focus; the names stay readable to assistive technology. */
+  :root[data-step-focus] .shell {
+    grid-template-columns: var(--focus-rail) minmax(0, 1fr);
+  }
+
+  :root[data-step-focus-moving] .shell {
+    transition: grid-template-columns 200ms ease;
+  }
+
+  /* Over the panel only while it is pointed at or holds the focus, for its tooltips: a
+     dialog's backdrop (z-index 60) still covers it. */
+  :root[data-step-focus] .shell .sidebar:is(:hover, :focus-within) {
+    z-index: 61;
+  }
+
+  :root[data-step-focus] .shell .sidebar {
+    align-items: center;
+    gap: 10px;
+    padding: 12px 8px;
+    overflow: visible;
+  }
+
+  :root[data-step-focus] .shell .sidebar .brand {
+    justify-content: center;
+    width: 100%;
+    padding: 4px 0 12px;
+  }
+
+  :root[data-step-focus] .shell .sidebar :is(.brand-text, .nav-label) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  :root[data-step-focus] .shell .sidebar :is(.sidebar-foot, .sidebar-note) {
+    display: none;
+  }
+
+  :root[data-step-focus] .shell .sidebar nav {
+    gap: 8px;
+  }
+
+  :root[data-step-focus] .shell .sidebar .nav-group + .nav-group {
+    padding-top: 8px;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  :root[data-step-focus] .shell .sidebar nav ul {
+    gap: 2px;
+  }
+
+  :root[data-step-focus] .shell .sidebar nav a {
+    position: relative;
+    justify-content: center;
+    width: 40px;
+    height: 36px;
+    padding: 0;
+    gap: 0;
+  }
+
+  :root[data-step-focus] .shell .sidebar nav a > svg + span {
+    position: absolute;
+    top: 50%;
+    left: calc(100% + 12px);
+    z-index: 2;
+    padding: 5px 9px;
+    color: var(--surface);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.3;
+    white-space: nowrap;
+    pointer-events: none;
+    background: var(--text-strong);
+    border-radius: 6px;
+    box-shadow: var(--shadow-pop, var(--shadow-sm));
+    opacity: 0;
+    transform: translate(-4px, -50%);
+    transition:
+      opacity 120ms ease,
+      transform 120ms ease;
+  }
+
+  :root[data-step-focus] .shell .sidebar nav a:is(:hover, :focus-visible) > svg + span {
+    opacity: 1;
+    transform: translate(0, -50%);
+  }
+
+  :root[data-step-focus] .shell .sidebar nav .nav-badge {
+    position: absolute;
+    top: 1px;
+    right: -2px;
+    min-width: 16px;
+    height: 16px;
+    margin: 0;
+    padding: 0 4px;
+    font-size: 10px;
+  }
+
+  :root[data-step-focus] .shell .sidebar nav .nav-badge + .nav-badge {
+    top: auto;
+    bottom: 1px;
+    margin: 0;
+  }
+}
+
+@keyframes wf-focus-body {
+  from {
+    opacity: 0.4;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wf-strip-pill {
+    transition: none;
+  }
+
+  .wf-panel.is-focus .wf-panel-body {
+    animation: none;
+  }
+
+  :root[data-step-focus-moving] .wf-panel,
+  :root[data-step-focus-moving] .shell,
+  :root[data-step-focus] .shell .sidebar nav a > svg + span {
+    transition: none;
+  }
+}

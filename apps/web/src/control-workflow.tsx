@@ -24,6 +24,15 @@ import {
   workflowLayout,
 } from "./control-workflow-model";
 import { useGuardedRouter } from "./guarded-router";
+import { FocusSide, setStepFocus, useStepFocus } from "./step-focus";
+import {
+  focusCrumbOf,
+  focusToggleOf,
+  isFocusShortcut,
+  type StepPill,
+  type StripStep,
+  stepStripOf,
+} from "./step-focus-model";
 import { StepAsk, StepAskContext, type StepAskTarget } from "./step-frame";
 import {
   panelHeadFor,
@@ -255,12 +264,98 @@ function WorkflowList({
   );
 }
 
+/** Focus mode's toggle, beside the panel's arrows: hidden at 1100 px and under, where the
+ * panel is already full width. */
+function FocusToggle({ on, ghost }: { on: boolean; ghost: boolean }) {
+  const words = focusToggleOf(on);
+  return (
+    <button
+      type="button"
+      className={`wf-icon-btn wf-focus-toggle${ghost ? " is-ghost" : ""}`}
+      onClick={() => setStepFocus(!on)}
+      aria-label={words.label}
+      aria-keyshortcuts="Shift+F"
+      title={words.tip}
+    >
+      <UiIcon name={on ? "collapse" : "expand"} size={15} />
+    </button>
+  );
+}
+
+/** Focus mode's step strip, under the header: one pill per step, in order, each leading to
+ * its step; it scrolls sideways inside itself, with the open step brought into view. */
+function StepStrip({ pills, focus }: { pills: StepPill[]; focus: boolean }) {
+  const strip = useRef<HTMLOListElement>(null);
+  // Shown at 1100 px and under, or in focus: the open step is brought into view whenever
+  // the strip is shown (a hidden strip has no width), and again once a toggle's width
+  // change has ended. Its own scroll only, and only as far as needed: scrollIntoView
+  // would move the panel too.
+  useLayoutEffect(() => {
+    const bring = () => {
+      const list = strip.current;
+      const current = list?.querySelector<HTMLElement>('[aria-current="step"]');
+      if (list == null || current == null || list.clientWidth === 0) {
+        return;
+      }
+      const room = 24;
+      const left =
+        current.getBoundingClientRect().left -
+        list.getBoundingClientRect().left;
+      const right = left + current.offsetWidth;
+      if (left < room) {
+        list.scrollLeft += left - room;
+      } else if (right > list.clientWidth - room) {
+        list.scrollLeft += right - list.clientWidth + room;
+      }
+    };
+    bring();
+    const later = window.setTimeout(bring, focus ? 280 : 0);
+    return () => window.clearTimeout(later);
+  }, [focus]);
+  if (pills.length === 0) {
+    return null;
+  }
+  return (
+    <nav className="wf-strip" aria-label="All steps">
+      <ol ref={strip}>
+        {pills.map((pill) => (
+          <li key={pill.key}>
+            <Link
+              className={`wf-strip-pill is-${pill.state}`}
+              href={pill.href}
+              scroll={false}
+              aria-label={pill.label}
+              aria-current={pill.state === "current" ? "step" : undefined}
+              title={pill.title}
+            >
+              <span className="wf-strip-mark" aria-hidden="true">
+                {pill.mark === "check" ? (
+                  <UiIcon name="check" size={12} />
+                ) : (
+                  pill.mark
+                )}
+              </span>
+              <span className="wf-strip-title">{pill.title}</span>
+            </Link>
+          </li>
+        ))}
+      </ol>
+    </nav>
+  );
+}
+
 /**
  * A step's work, in a wide panel over the workflow's right side (product owner, 8 November 2026):
  * the workflow stays in view on the left. Escape or Close returns to the workflow; the arrows
  * move to the step before or after. Every step's header is the minimalist one (11 November
  * 2026): its kind and number, its title with one status, and Ask; Control Understanding and
  * the activity keep the header they had.
+ *
+ * Focus mode (product owner, 16 November 2026: focus mode, option A): a toggle beside the
+ * arrows, or Shift+F outside a text box, widens the panel to the whole content area; the
+ * navigation folds to its icons, the header names the control before the step, a strip of
+ * every step sits under it, and the work is centred at a readable width. The choice is kept
+ * in this browser (step-focus), never in the address. Escape does not leave it.
  */
 export function WorkflowPanel({
   kicker,
@@ -271,6 +366,8 @@ export function WorkflowPanel({
   closeHref,
   previous,
   next,
+  control = null,
+  strip = null,
   children,
 }: {
   kicker: string;
@@ -282,10 +379,73 @@ export function WorkflowPanel({
   closeHref: string;
   previous: { title: string; href: string } | null;
   next: { title: string; href: string } | null;
+  /** The control the step belongs to: focus mode names it before the step's title. */
+  control?: { ref: string; title: string } | null;
+  /** Every step, in order, with its address: focus mode's step strip. */
+  strip?: {
+    steps: readonly StripStep[];
+    hrefs: Readonly<Record<string, string | undefined>>;
+  } | null;
   children: ReactNode;
 }) {
   const router = useGuardedRouter();
   const heading = useRef<HTMLHeadingElement>(null);
+  const { chosen, wide, focus } = useStepFocus();
+  // The navigation folds to its icons while the panel is in focus (control-workflow.css);
+  // before paint, so moving between steps does not draw the full navigation for a frame.
+  useLayoutEffect(() => {
+    if (!focus) {
+      return;
+    }
+    const root = document.documentElement;
+    root.dataset.stepFocus = "";
+    return () => {
+      delete root.dataset.stepFocus;
+    };
+  }, [focus]);
+  // Shift+F toggles focus where the toggle is shown, outside a text box and a dialog.
+  useEffect(() => {
+    if (!wide) {
+      return;
+    }
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      if (
+        !isFocusShortcut({
+          key: event.key,
+          shiftKey: event.shiftKey,
+          ctrlKey: event.ctrlKey,
+          metaKey: event.metaKey,
+          altKey: event.altKey,
+          repeat: event.repeat,
+          defaultPrevented: event.defaultPrevented,
+          target:
+            target === null
+              ? null
+              : {
+                  tagName: target.tagName,
+                  type: target instanceof HTMLInputElement ? target.type : "",
+                  editable: target.isContentEditable,
+                },
+        }) ||
+        document.querySelector(
+          "dialog[open], [role='dialog'][aria-modal='true']",
+        ) !== null
+      ) {
+        return;
+      }
+      event.preventDefault();
+      setStepFocus(!chosen);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [wide, chosen]);
+  // The side column at the right edge in focus: the review notes' strip and rail.
+  const [side, setSide] = useState<HTMLDivElement | null>(null);
+  const pills =
+    strip === null ? [] : stepStripOf(strip.steps, step, strip.hrefs);
+  const crumb = control === null ? "" : focusCrumbOf(control);
+  const focusClass = focus ? " is-focus" : "";
   // The person's focus moves to the step they opened (the panel is keyed by its step, so it
   // mounts again for each).
   useEffect(() => {
@@ -316,6 +476,7 @@ export function WorkflowPanel({
   const pill = tone !== null ? statusPill(tone, status) : null;
   const stepNav = (
     <nav className="wf-panel-nav" aria-label="Steps">
+      {wide ? <FocusToggle on={chosen} ghost={minimal} /> : null}
       {previous !== null ? (
         <Link
           className={`wf-icon-btn${minimal ? " is-ghost" : ""}`}
@@ -350,7 +511,10 @@ export function WorkflowPanel({
   );
   if (minimal) {
     return (
-      <aside className="wf-panel is-minimal" aria-labelledby="wf-panel-title">
+      <aside
+        className={`wf-panel is-minimal${focusClass}`}
+        aria-labelledby="wf-panel-title"
+      >
         <header className="wf-panel-head is-minimal">
           <div className="wf-panel-titles">
             <p className="wf-panel-kicker">
@@ -363,6 +527,16 @@ export function WorkflowPanel({
               {head.label}
             </p>
             <div className="wf-panel-line">
+              {focus && crumb !== "" ? (
+                <>
+                  <span className="wf-crumb" title={crumb}>
+                    {crumb}
+                  </span>
+                  <span className="wf-crumb-sep" aria-hidden="true">
+                    /
+                  </span>
+                </>
+              ) : null}
               <h2 id="wf-panel-title" ref={heading} tabIndex={-1}>
                 {title}
               </h2>
@@ -384,19 +558,37 @@ export function WorkflowPanel({
             {stepNav}
           </div>
         </header>
-        <div className="wf-panel-body">
-          <StepAskContext.Provider value={setAsk}>
-            {children}
-          </StepAskContext.Provider>
+        <StepStrip pills={pills} focus={focus} />
+        <div className="wf-panel-main">
+          <div className="wf-panel-body">
+            <FocusSide.Provider value={focus ? side : null}>
+              <StepAskContext.Provider value={setAsk}>
+                {children}
+              </StepAskContext.Provider>
+            </FocusSide.Provider>
+          </div>
+          <div className="wf-panel-side" ref={setSide} />
         </div>
       </aside>
     );
   }
   return (
-    <aside className="wf-panel" aria-labelledby="wf-panel-title">
+    <aside className={`wf-panel${focusClass}`} aria-labelledby="wf-panel-title">
       <header className="wf-panel-head">
         <div className="wf-panel-titles">
-          <p className="wf-peek-kicker">{kicker}</p>
+          <p className="wf-peek-kicker">
+            {focus && crumb !== "" ? (
+              <>
+                <span className="wf-crumb" title={crumb}>
+                  {crumb}
+                </span>
+                <span className="wf-crumb-sep" aria-hidden="true">
+                  /
+                </span>
+              </>
+            ) : null}
+            {kicker}
+          </p>
           <h2 id="wf-panel-title" ref={heading} tabIndex={-1}>
             {title}
             {tone !== null ? <StatusChip tone={tone} /> : null}
@@ -404,6 +596,7 @@ export function WorkflowPanel({
           {status !== "" ? <p className="wf-panel-status">{status}</p> : null}
         </div>
         <nav className="wf-panel-nav" aria-label="Steps">
+          {wide ? <FocusToggle on={chosen} ghost={false} /> : null}
           {previous !== null ? (
             <Link
               className="wf-icon-btn"
@@ -436,7 +629,15 @@ export function WorkflowPanel({
           </Link>
         </nav>
       </header>
-      <div className="wf-panel-body">{children}</div>
+      <StepStrip pills={pills} focus={focus} />
+      <div className="wf-panel-main">
+        <div className="wf-panel-body">
+          <FocusSide.Provider value={focus ? side : null}>
+            {children}
+          </FocusSide.Provider>
+        </div>
+        <div className="wf-panel-side" ref={setSide} />
+      </div>
     </aside>
   );
 }

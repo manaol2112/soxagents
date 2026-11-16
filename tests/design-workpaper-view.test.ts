@@ -65,9 +65,14 @@ describe("one switcher, three views", () => {
     // alone. New: the box is `rn-sheet` (widened padding while the notes are on) and
     // holds the notes' margin, `<NotesMargin />`, after the sheet. Product owner, 16
     // November 2026: note card B, margin icon, form on the right.
+    // Rewritten again. Old: the rail was in the sheet's grid whenever it was on
+    // (`railOn ? "rn-with-rail"`, `{railOn ? <NotesRail …/> : null}` and nothing after it).
+    // New: it is there while it is on outside focus (`railBeside`); in focus the notes
+    // are portalled into the panel's side column, the rail (while on) and its folded
+    // strip, after it. Product owner, 16 November 2026: focus mode (option A).
     assert.match(
       body,
-      /view === "document" \? \(\s*<div className=\{railOn \? "rn-with-rail" : undefined\}>\s*<div\s+ref=\{sheetRef\}\s+className=\{`rn-sheet\$\{notesShown \? " is-noting" : ""\}`\}\s*>\s*<DocumentSheet[\s\S]{0,320}<NotesMargin \/>\s*<\/div>\s*\{railOn \? <NotesRail id=\{`\$\{uid\}-rail`\} \/> : null\}\s*<\/div>\s*\) : view === "notes" \? \(\s*<AllNotesView[\s\S]{0,240}\) : view === "matrix" \? \(\s*<MatrixBoard[\s\S]{0,160}\) : \(\s*<EvidenceSplit/,
+      /view === "document" \? \(\s*<div className=\{railBeside \? "rn-with-rail" : undefined\}>\s*<div\s+ref=\{sheetRef\}\s+className=\{`rn-sheet\$\{notesShown \? " is-noting" : ""\}`\}\s*>\s*<DocumentSheet[\s\S]{0,320}<NotesMargin \/>\s*<\/div>\s*\{railBeside \? <NotesRail id=\{`\$\{uid\}-rail`\} \/> : null\}\s*\{notesAside && focusSide !== null\s*\? createPortal\([\s\S]{0,360}<NotesStrip[\s\S]{0,200}focusSide,\s*\)\s*: null\}\s*<\/div>\s*\) : view === "notes" \? \(\s*<AllNotesView[\s\S]{0,240}\) : view === "matrix" \? \(\s*<MatrixBoard[\s\S]{0,160}\) : \(\s*<EvidenceSplit/,
     );
   });
 

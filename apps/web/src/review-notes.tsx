@@ -100,6 +100,7 @@ import {
 } from "./review-notes-model";
 import { parseRich, type Run } from "./rich-text-model";
 import { RowMenu, type RowMenuItem } from "./row-menu";
+import { notesStripOf } from "./step-focus-model";
 import { UiIcon } from "./ui-icon";
 
 /**
@@ -2828,6 +2829,65 @@ export function NotesRail({ id }: { id?: string }) {
         </>
       )}
     </aside>
+  );
+}
+
+/**
+ * The review notes folded, in focus mode (product owner, 16 November 2026: focus mode,
+ * option A): a slim strip at the panel's right edge, with the notes icon, the open count
+ * and one dot per open note by its criticality. Its button opens the rail (NotesRail, as
+ * it is) as a column beside the document, and folds it again.
+ */
+export function NotesStrip({
+  open,
+  onToggle,
+  railId,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  railId: string;
+}) {
+  const ui = useNotesUi();
+  if (ui === null) {
+    return null;
+  }
+  // While the notes are read, or where the read failed, the button is still there: the
+  // rail it opens says so, with "Read them again".
+  const strip = notesStripOf(ui.set?.notes ?? []);
+  return (
+    <div className={`rn-strip${open ? " is-open" : ""}`}>
+      <button
+        type="button"
+        className="rn-strip-btn"
+        aria-expanded={open}
+        aria-controls={open ? railId : undefined}
+        aria-label={`${open ? "Fold" : "Open"} the ${strip.label.charAt(0).toLowerCase()}${strip.label.slice(1)}`}
+        title={open ? "Fold the review notes" : "Open the review notes"}
+        onClick={onToggle}
+      >
+        <UiIcon name="message" size={16} />
+        {strip.open > 0 ? (
+          <span className="rn-strip-count" aria-hidden="true">
+            {strip.open}
+          </span>
+        ) : null}
+      </button>
+      {strip.dots.length > 0 ? (
+        <span className="rn-strip-dots" aria-hidden="true">
+          {strip.dots.map((tone, index) => (
+            <span
+              // The dots are drawn in order and never reordered by themselves.
+              // biome-ignore lint/suspicious/noArrayIndexKey: a dot has no identity of its own
+              key={index}
+              className={`rn-dot rn-${tone}`}
+            />
+          ))}
+          {strip.more > 0 ? (
+            <span className="rn-strip-more">+{strip.more}</span>
+          ) : null}
+        </span>
+      ) : null}
+    </div>
   );
 }
 

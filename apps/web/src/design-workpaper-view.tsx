@@ -96,6 +96,7 @@ import {
   NoteField,
   NotesMargin,
   NotesRail,
+  NotesStrip,
   openedAtNotes,
   ReviewNotesProvider,
   useReviewNotes,
@@ -142,6 +143,7 @@ import {
   sendSection,
   useRecordsRefresh,
 } from "./section-editor";
+import { useFocusSide } from "./step-focus";
 import { type IconName, UiIcon } from "./ui-icon";
 import { useKeeping, useWorkingCopies } from "./working-copy";
 import {
@@ -767,10 +769,22 @@ export function DesignWorkpaper({
   );
   const reviewNotes = useReviewNotes(notesScope);
   const openNotes = (reviewNotes.set?.notes ?? []).filter(isOpen).length;
+  // Focus mode (product owner, 16 November 2026: focus mode, option A): the panel's side
+  // column at its right edge, where the notes fold to a strip and open as a column beside
+  // the document. Null outside focus: the rail stays beside the sheet, as before.
+  const focusSide = useFocusSide();
+  const notesAside =
+    focusSide !== null &&
+    view === "document" &&
+    paper !== null &&
+    paper.workpaper !== null &&
+    reviewNotes.status !== "off";
   // The rail beside the document: as the person set it, or, until they do, on where a
-  // note is open.
+  // note is open (folded in focus until it is opened).
   const [railChoice, setRailChoice] = useState<boolean | null>(null);
-  const railOn = railChoice ?? openNotes > 0;
+  const railOn = railChoice ?? (!notesAside && openNotes > 0);
+  // The rail in the sheet's grid; in focus it is in the side column instead.
+  const railBeside = railOn && !notesAside;
   const showRail = useCallback(() => setRailChoice(true), []);
   // The Document view with its notes: its fields offer a note in the margin, and with
   // the rail on the highlights and markers are drawn. Never on the printed sheet.
@@ -1330,7 +1344,7 @@ export function DesignWorkpaper({
         </div>
       </div>
     ) : view === "document" ? (
-      <div className={railOn ? "rn-with-rail" : undefined}>
+      <div className={railBeside ? "rn-with-rail" : undefined}>
         <div
           ref={sheetRef}
           className={`rn-sheet${notesShown ? " is-noting" : ""}`}
@@ -1344,7 +1358,20 @@ export function DesignWorkpaper({
               section 6). */}
           <NotesMargin />
         </div>
-        {railOn ? <NotesRail id={`${uid}-rail`} /> : null}
+        {railBeside ? <NotesRail id={`${uid}-rail`} /> : null}
+        {notesAside && focusSide !== null
+          ? createPortal(
+              <div className={`rn-side${railOn ? " is-open" : ""}`}>
+                {railOn ? <NotesRail id={`${uid}-rail`} /> : null}
+                <NotesStrip
+                  open={railOn}
+                  onToggle={() => setRailChoice(!railOn)}
+                  railId={`${uid}-rail`}
+                />
+              </div>,
+              focusSide,
+            )
+          : null}
       </div>
     ) : view === "notes" ? (
       <AllNotesView
@@ -1438,8 +1465,10 @@ export function DesignWorkpaper({
             {view === "document" &&
             paper !== null &&
             paper.workpaper !== null &&
-            reviewNotes.status !== "off" ? (
-              // The review notes beside the sheet (docs/workpaper-review.md, section 6).
+            reviewNotes.status !== "off" &&
+            !notesAside ? (
+              // The review notes beside the sheet (docs/workpaper-review.md, section 6);
+              // in focus, the strip at the panel's edge is their switch.
               <button
                 type="button"
                 className={`dw-notes-switch${railOn ? " is-on" : ""}`}

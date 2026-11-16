@@ -1722,3 +1722,117 @@ fieldset.rn-filters {
   padding: 0;
   border: 0;
 }
+
+/* Focus mode (product owner, 16 November 2026: focus mode, option A): the notes at the
+   step panel's right edge, a slim strip (the notes icon, the open count, one dot per open
+   note) that opens the rail as a column beside the document, not over it. Outside focus
+   the rail is beside the sheet, as above. */
+
+.rn-side {
+  display: flex;
+  min-height: 0;
+  background: var(--surface);
+  border-left: 1px solid var(--border-subtle);
+}
+
+.rn-side > .rn-rail {
+  position: static;
+  width: 340px;
+  max-height: none;
+  border: 0;
+  border-right: 1px solid var(--border-subtle);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.rn-side > .rn-rail .rn-rail-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.rn-strip {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  width: 52px;
+  padding: 14px 0;
+}
+
+button.rn-strip-btn {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+button.rn-strip-btn:hover {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+}
+
+button.rn-strip-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+.rn-strip.is-open button.rn-strip-btn {
+  color: var(--text-strong);
+  background: var(--surface-sunken);
+  border-color: var(--border-strong, var(--border));
+}
+
+.rn-strip-count {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  display: grid;
+  place-items: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  color: var(--surface);
+  font-size: 10px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  background: var(--text-strong);
+  border: 2px solid var(--surface);
+  border-radius: 999px;
+  box-sizing: content-box;
+}
+
+.rn-strip-dots {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+}
+
+.rn-strip-dots .rn-dot {
+  width: 6px;
+  height: 6px;
+}
+
+.rn-strip-more {
+  color: var(--text-tertiary);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button.rn-strip-btn {
+    transition: none;
+  }
+}

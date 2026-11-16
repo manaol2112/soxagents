@@ -3579,6 +3579,10 @@ function ControlRecord({
           closeHref={wsHrefs.flow}
           previous={around(-1)}
           next={around(1)}
+          // Focus mode: the control named before the step, and every step's address
+          // (the arrows' own) for the step strip (16 November 2026).
+          control={{ ref: control.controlRef, title: control.title }}
+          strip={{ steps: workflow, hrefs: stepHrefsWf }}
         >
           {stepPanel}
         </WorkflowPanel>
