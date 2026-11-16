@@ -5,8 +5,6 @@ import {
   anchorOf,
   attributeKey,
   CONCLUSION,
-  cardLine,
-  chipCount,
   choiceCounts,
   cleanQuote,
   closedLine,
@@ -21,9 +19,12 @@ import {
   findAnchor,
   firstWords,
   GONE_WORDS,
+  groupsOf,
+  headLine,
   historyOf,
   isClosed,
   isFiltered,
+  isMine,
   isOpen,
   NO_FILTERS,
   NOTE_BOUNDS,
@@ -44,8 +45,10 @@ import {
   positionsOf,
   RAIL_START,
   type ReviewNote,
+  railFiltered,
   railNotes,
   reasonProblem,
+  replyCount,
   replyMode,
   replyProblem,
   reportKey,
@@ -57,12 +60,15 @@ import {
   sectionOf,
   selectionTooLong,
   TOO_LONG_WORDS,
+  tabCount,
   threadEvents,
   threadTag,
+  timeLabel,
   UNDERSTANDING,
   WRITE_IN_DOUBT,
   walkthroughColumnsOf,
   walkthroughKey,
+  whereLine,
   whereWords,
   withNote,
   wordsGone,
@@ -735,43 +741,127 @@ describe("filters", () => {
     assert.equal(parseFilters({ section: 99 })?.section, null);
   });
 
-  it("gives the rail's chips, each with its count", () => {
+  // Rewritten. Old: the rail's four one-press chips (Open, Urgent, Mine, This section),
+  // each a filter of its own with its count (RailChips, chipCount). New: one switch, Open
+  // · Mine · Resolved, each with its count (tabCount), and a filter menu (Urgent only,
+  // Mine, This section, an owner) and a search over it (RailView). Product owner, 16
+  // November 2026: notes rail, inbox (option 3).
+  it("gives the rail's switch, its filters and its search, each tab with its count", () => {
     const viewer = RILEY;
+    const numbers = (list: readonly ReviewNote[]) =>
+      list.map((item) => item.number);
+    // Open: open and responded to, in the order given.
     assert.deepEqual(
-      railNotes(notes, RAIL_START, viewer, null).map((item) => item.number),
+      numbers(railNotes(notes, RAIL_START, viewer, null)),
       [1, 2, 5],
     );
+    // Resolved: cleared and dismissed.
     assert.deepEqual(
-      railNotes(notes, { ...RAIL_START, urgent: true }, viewer, null).map(
-        (item) => item.number,
+      numbers(
+        railNotes(notes, { ...RAIL_START, tab: "resolved" }, viewer, null),
       ),
-      [1],
+      [3, 4],
     );
-    // Mine: the notes the person owns or raised.
+    // Mine: open, and the person owns it or raised it; nobody's without a session.
     assert.deepEqual(
-      railNotes(
-        notes,
-        { open: false, urgent: false, mine: true, section: false },
-        SAM,
-        null,
-      ).map((item) => item.number),
+      numbers(railNotes(notes, { ...RAIL_START, tab: "mine" }, SAM, null)),
       [2],
     );
     assert.equal(
-      railNotes(notes, { ...RAIL_START, mine: true }, null, null).length,
+      railNotes(notes, { ...RAIL_START, tab: "mine" }, null, null).length,
+      0,
+    );
+    assert.ok(isMine(notes[0] as ReviewNote, RILEY));
+    assert.ok(!isMine(notes[0] as ReviewNote, SAM));
+    assert.ok(!isMine(notes[0] as ReviewNote, null));
+    // The menu's filters narrow any tab: Urgent only, Mine, This section, an owner.
+    assert.deepEqual(
+      numbers(railNotes(notes, { ...RAIL_START, urgent: true }, viewer, null)),
+      [1],
+    );
+    assert.deepEqual(
+      numbers(
+        railNotes(
+          notes,
+          { ...RAIL_START, tab: "resolved", mine: true },
+          viewer,
+          null,
+        ),
+      ),
+      [3],
+    );
+    assert.deepEqual(
+      numbers(
+        railNotes(
+          notes,
+          { ...RAIL_START, tab: "resolved", section: true },
+          viewer,
+          4,
+        ),
+      ),
+      [3],
+    );
+    // This section with no section known lists nothing.
+    assert.equal(
+      railNotes(notes, { ...RAIL_START, section: true }, viewer, null).length,
       0,
     );
     assert.deepEqual(
-      railNotes(
-        notes,
-        { open: false, urgent: false, mine: false, section: true },
-        viewer,
-        4,
-      ).map((item) => item.number),
-      [3],
+      numbers(railNotes(notes, { ...RAIL_START, owner: SAM }, viewer, null)),
+      [2],
     );
-    assert.equal(chipCount(notes, RAIL_START, "urgent", viewer, null), 1);
-    assert.equal(chipCount(notes, RAIL_START, "open", viewer, null), 3);
+    // The search: the note, its replies, its highlighted words.
+    assert.deepEqual(
+      numbers(
+        railNotes(notes, { ...RAIL_START, search: "10:28" }, viewer, null),
+      ),
+      [5],
+    );
+    // Each tab's count, with the filters as they are.
+    assert.equal(tabCount(notes, RAIL_START, "open", viewer, null), 3);
+    assert.equal(tabCount(notes, RAIL_START, "resolved", viewer, null), 2);
+    assert.equal(tabCount(notes, RAIL_START, "mine", viewer, null), 3);
+    assert.equal(tabCount(notes, RAIL_START, "mine", SAM, null), 1);
+    const urgent = { ...RAIL_START, urgent: true };
+    assert.equal(tabCount(notes, urgent, "open", viewer, null), 1);
+    assert.equal(tabCount(notes, urgent, "resolved", viewer, null), 0);
+    // Whether the menu narrows the list (the search apart).
+    assert.equal(railFiltered(RAIL_START), false);
+    assert.equal(railFiltered({ ...RAIL_START, search: "x" }), false);
+    assert.equal(railFiltered(urgent), true);
+    assert.equal(railFiltered({ ...RAIL_START, owner: SAM }), true);
+  });
+
+  it("groups the rail's notes Urgent, Normal, Follow-up, only those that have some", () => {
+    const groups = groupsOf(notes);
+    assert.deepEqual(
+      groups.map((group) => [
+        group.key,
+        group.label,
+        group.notes.map((item) => item.number),
+      ]),
+      [
+        ["URGENT", "Urgent", [1]],
+        ["NORMAL", "Normal", [2, 4]],
+        ["FOLLOW_UP", "Follow-up", [3, 5]],
+      ],
+    );
+    assert.deepEqual(
+      groupsOf([note(6, { criticality: "FOLLOW_UP" })]).map((g) => g.key),
+      ["FOLLOW_UP"],
+    );
+    // A criticality this page does not know is its own group, last; never Urgent.
+    assert.deepEqual(
+      groupsOf([note(7, { criticality: "SEVERE" }), note(8)]).map((g) => [
+        g.key,
+        g.label,
+      ]),
+      [
+        ["NORMAL", "Normal"],
+        ["OTHER", "Other"],
+      ],
+    );
+    assert.deepEqual(groupsOf([]), []);
   });
 });
 
@@ -1119,6 +1209,9 @@ describe("the note's card (product owner, 16 November 2026: note card B)", () =>
     // The criticality, owner and clearing events stay on the note (nothing is lost).
     assert.equal(threaded().events.length, 10);
     assert.deepEqual(threadEvents(note(2)), []);
+    // The reply count on a note's line is these replies.
+    assert.equal(replyCount(threaded()), 4);
+    assert.equal(replyCount(note(2)), 0);
   });
 
   it("says what a reply was after its time", () => {
@@ -1130,20 +1223,63 @@ describe("the note's card (product owner, 16 November 2026: note card B)", () =>
     ]);
   });
 
-  it("writes the quiet second line: number, where, owner; never the highlighted words", () => {
+  // Rewritten. Old: the card's quiet second line, "#2 · <where> · owner Dana Lee"
+  // (cardLine). New: the open note's quiet line, "<where> · <author>" (whereLine); the
+  // owner is in the line's accessible name and in Change owner. Product owner, 16
+  // November 2026: notes rail, inbox (option 3).
+  it("writes the open note's quiet line: where and who raised it; never the highlighted words", () => {
     const words = note(2, {
       anchor_kind: "TEXT",
       field: attributeKey(ATTR_C, "result"),
       quote: "10/01 10:18 AM",
     });
     const context = { ...contextOf(PAPER_FIELDS) };
-    const line = cardLine(words, context);
-    assert.equal(line, `#2 · ${whereWords(words, context)} · owner Dana Lee`);
+    const line = whereLine(words, context);
+    assert.equal(line, `${whereWords(words, context)} · Riley Park`);
     assert.ok(!line.includes("10/01 10:18 AM"));
     assert.equal(
-      cardLine(note(3, { anchor_kind: "WORKPAPER", field: "" })),
-      "#3 · The workpaper as a whole · owner Dana Lee",
+      whereLine(note(3, { anchor_kind: "WORKPAPER", field: "" })),
+      "The workpaper as a whole · Riley Park",
     );
+  });
+
+  it("gives an open note its bold first line: its first sentence where short, else its first words", () => {
+    assert.equal(
+      headLine(
+        "This is a test review note. Is the approval dated before the grant?",
+      ),
+      "This is a test review note.",
+    );
+    assert.equal(
+      headLine("Who approves access?  On Workday."),
+      "Who approves access?",
+    );
+    // A point inside a word does not end the sentence.
+    assert.equal(
+      headLine("Version 4.2 shows 10:28"),
+      "Version 4.2 shows 10:28",
+    );
+    assert.equal(headLine("  two\n lines  "), "two lines");
+    const long = `${"word ".repeat(30)}end.`;
+    assert.equal(headLine(long), firstWords(long, 72));
+    assert.ok([...headLine(long)].length <= 73);
+  });
+
+  it("gives a note's line its time today, its date otherwise", () => {
+    const now = Date.parse("2026-11-16T15:00:00Z");
+    const plain = (words: string) => words.replace(/\s/g, " ");
+    assert.equal(
+      plain(timeLabel("2026-11-16T07:14:00Z", now, "UTC")),
+      "7:14 AM",
+    );
+    assert.equal(timeLabel("2026-11-15T14:04:00Z", now, "UTC"), "Nov 15");
+    assert.equal(timeLabel("2025-11-15T14:04:00Z", now, "UTC"), "Nov 15, 2025");
+    // The day is the person's: 23:30 on the 15th in UTC is the 16th in Manila.
+    assert.equal(
+      plain(timeLabel("2026-11-15T23:30:00Z", now, "Asia/Manila")),
+      "7:30 AM",
+    );
+    assert.equal(timeLabel("not a time", now, "UTC"), "not a time");
   });
 
   it("folds a resolved note to its first words, cut at a word", () => {

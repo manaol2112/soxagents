@@ -463,12 +463,14 @@ export function threadTag(event: Pick<NoteEvent, "kind">): string {
   }
 }
 
-/** The card's quiet second line: "#2 · 4 Attributes · C, result · owner Dana Lee". */
-export function cardLine(
-  note: Pick<ReviewNote, "number" | "anchorKind" | "field" | "owner">,
+/** An open note's quiet line, under its first line: where it is and who raised it, "4
+ * Attributes · C, result · Riley Park" (product owner, 16 November 2026: notes rail,
+ * inbox (option 3)). Never the highlighted words: they are in the document. */
+export function whereLine(
+  note: Pick<ReviewNote, "anchorKind" | "field" | "raisedBy">,
   context: FieldContext = NO_CONTEXT,
 ): string {
-  return `#${note.number} · ${whereWords(note, context)} · owner ${note.owner.name}`;
+  return `${whereWords(note, context)} · ${note.raisedBy.name}`;
 }
 
 /** The first words of a text, for a resolved note's one line: cut at a word, with an
@@ -1493,67 +1495,162 @@ export function parseFilters(value: unknown): NoteFilters | null {
 export const filtersKey = (workpaperId: string): string =>
   `aw.review-notes.filters.${workpaperId}`;
 
-/** The rail's one-press filters (section 6): Open, Urgent, Mine, This section. */
-export type RailChips = {
-  open: boolean;
+/* The rail (product owner, 16 November 2026: notes rail, inbox (option 3)) ------------- */
+
+/** The rail's switch: Open (open or responded to), Mine (open, and the person owns or
+ * raised it), Resolved (cleared or dismissed). */
+export type RailTab = "open" | "mine" | "resolved";
+
+export const RAIL_TABS: ReadonlyArray<{ key: RailTab; label: string }> = [
+  { key: "open", label: "Open" },
+  { key: "mine", label: "Mine" },
+  { key: "resolved", label: "Resolved" },
+];
+
+/** What the rail lists: its switch, the filter menu's choices (Urgent only, Mine, This
+ * section, an owner) and the search in its header. */
+export type RailView = {
+  tab: RailTab;
   urgent: boolean;
   mine: boolean;
   section: boolean;
+  /** A member's id; null for anyone. */
+  owner: string | null;
+  search: string;
 };
 
-export const RAIL_START: RailChips = {
-  open: true,
+export const RAIL_START: RailView = {
+  tab: "open",
   urgent: false,
   mine: false,
   section: false,
+  owner: null,
+  search: "",
 };
 
-/** Whether a note passes one chip: Open (open or responded to), Urgent, Mine (the
- * person owns it or raised it), This section (`section`: the section in view). */
-export function chipPasses(
-  note: ReviewNote,
-  chip: keyof RailChips,
+/** Whether the note is the person's: they own it or raised it. Nobody's where the
+ * session is not known. */
+export function isMine(
+  note: Pick<ReviewNote, "owner" | "raisedBy">,
   viewerId: string | null,
-  section: number | null,
 ): boolean {
-  switch (chip) {
-    case "open":
-      return isOpen(note);
-    case "urgent":
-      return note.criticality === "URGENT";
-    case "mine":
-      return (
-        viewerId !== null &&
-        (note.owner.id === viewerId || note.raisedBy.id === viewerId)
-      );
-    default:
-      return section !== null && sectionOf(note) === section;
-  }
+  return (
+    viewerId !== null &&
+    (note.owner.id === viewerId || note.raisedBy.id === viewerId)
+  );
 }
 
+/** The notes the rail lists, in the order given (the document's): the switch's, then
+ * each filter that is on, then the search. "This section" with no section known lists
+ * nothing. */
 export function railNotes(
   notes: readonly ReviewNote[],
-  chips: RailChips,
+  view: RailView,
   viewerId: string | null,
   section: number | null,
 ): ReviewNote[] {
-  const on = (Object.keys(chips) as Array<keyof RailChips>).filter(
-    (key) => chips[key],
-  );
-  return notes.filter((note) =>
-    on.every((chip) => chipPasses(note, chip, viewerId, section)),
+  return notes.filter(
+    (note) =>
+      (view.tab === "resolved"
+        ? isClosed(note)
+        : isOpen(note) && (view.tab === "open" || isMine(note, viewerId))) &&
+      (!view.urgent || note.criticality === "URGENT") &&
+      (!view.mine || isMine(note, viewerId)) &&
+      (!view.section || (section !== null && sectionOf(note) === section)) &&
+      (view.owner === null || note.owner.id === view.owner) &&
+      searchHit(note, view.search),
   );
 }
 
-/** A chip's count: the notes it would show pressed, with the other chips as they are. */
-export function chipCount(
+/** A switch's count: the notes it would list, with the filters and the search as they
+ * are. */
+export function tabCount(
   notes: readonly ReviewNote[],
-  chips: RailChips,
-  chip: keyof RailChips,
+  view: RailView,
+  tab: RailTab,
   viewerId: string | null,
   section: number | null,
 ): number {
-  return railNotes(notes, { ...chips, [chip]: true }, viewerId, section).length;
+  return railNotes(notes, { ...view, tab }, viewerId, section).length;
+}
+
+/** Whether a choice of the filter menu narrows the list (the search apart). */
+export function railFiltered(view: RailView): boolean {
+  return view.urgent || view.mine || view.section || view.owner !== null;
+}
+
+export type NoteGroup = {
+  key: Criticality | "OTHER";
+  label: string;
+  notes: ReviewNote[];
+};
+
+const GROUP_ORDER: ReadonlyArray<Criticality | "OTHER"> = [
+  "URGENT",
+  "NORMAL",
+  "FOLLOW_UP",
+  "OTHER",
+];
+
+/** The rail's groups: Urgent, Normal, Follow-up (and a criticality this page does not
+ * know, last), each with its notes in the order given; only the groups that have some. */
+export function groupsOf(notes: readonly ReviewNote[]): NoteGroup[] {
+  return GROUP_ORDER.map((key) => ({
+    key,
+    label: key === "OTHER" ? "Other" : CRITICALITY_WORDS[key],
+    notes: notes.filter((note) => note.criticality === key),
+  })).filter((group) => group.notes.length > 0);
+}
+
+/** An open note's bold first line: its first sentence where that is short, else its
+ * first words. */
+export function headLine(text: string, most = 72): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  const sentence = /^(.+?[.?!])(?:\s|$)/.exec(flat)?.[1] ?? flat;
+  return [...sentence].length <= most ? sentence : firstWords(flat, most);
+}
+
+const DAY = (timeZone: string | undefined) =>
+  new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    ...(timeZone === undefined ? {} : { timeZone }),
+  });
+
+/** A note's time on its line: the time where it is today ("7:14 AM"), the date otherwise
+ * ("Nov 15"; "Nov 15, 2025" in another year); the value as sent where it is not a
+ * time. */
+export function timeLabel(
+  value: string,
+  now: number = Date.now(),
+  timeZone?: string,
+): string {
+  const time = Date.parse(value);
+  if (Number.isNaN(time)) {
+    return value;
+  }
+  const day = DAY(timeZone);
+  const [at, today] = [day.format(time), day.format(now)];
+  const zone = timeZone === undefined ? {} : { timeZone };
+  if (at === today) {
+    return new Intl.DateTimeFormat("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      ...zone,
+    }).format(time);
+  }
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    ...(at.slice(0, 4) === today.slice(0, 4) ? {} : { year: "numeric" }),
+    ...zone,
+  }).format(time);
+}
+
+/** How many replies a note has: the words people wrote under it (threadEvents). */
+export function replyCount(note: Pick<ReviewNote, "events">): number {
+  return threadEvents(note).length;
 }
 
 /* The writes --------------------------------------------------------------------------- */

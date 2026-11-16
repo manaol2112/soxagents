@@ -109,21 +109,15 @@ describe("nothing is set as HTML", () => {
     }
     assert.match(globals, /--note-urgent: var\(--danger\);/);
     assert.match(globals, /--note-normal: var\(--accent-strong\);/);
-    // --rn-c colours only the dots (and the current dot's ring), the card's rule, the
-    // highlighted words and their underline.
-    // Rewritten. Old: ["mark.rn-hl", ".rn-dot", ".rn-card::before,\n.rn-detail-note::before"].
-    // New: the card's rule alone (All notes' pane is the same card) and the ring of the
-    // current criticality's dot. Product owner, 16 November 2026: note card B, margin
-    // icon, form on the right.
+    // --rn-c colours only the dots, the highlighted words and their underline.
+    // Rewritten. Old: ["mark.rn-hl", ".rn-card::before", ".rn-dot-pick:has(input:checked)
+    // .rn-dot", ".rn-dot"]: the card's rule and the ring of the current dot as well. New:
+    // the highlighted words and the dot alone (on the note's line, the pill, its menu);
+    // the open note's rule is the ink's, not a colour. Product owner, 16 November 2026: notes rail, inbox (option 3).
     const uses = [...css.matchAll(/([^{}]+)\{[^{}]*var\(--rn-c[^{}]*\}/g)].map(
       (match) => (match[1] ?? "").replace(/\/\*[\s\S]*?\*\//g, "").trim(),
     );
-    assert.deepEqual(uses, [
-      "mark.rn-hl",
-      ".rn-card::before",
-      ".rn-dot-pick:has(input:checked) .rn-dot",
-      ".rn-dot",
-    ]);
+    assert.deepEqual(uses, ["mark.rn-hl", ".rn-dot"]);
     // No filled pill, no accent fill.
     assert.ok(!/var\(--accent\)/.test(css));
     assert.match(
@@ -188,8 +182,10 @@ describe("a write is shown as done only once the server confirmed it", () => {
     has(body, 'responds: answer === "respond"');
     has(body, "{note.can.clear ? (");
     has(body, "if (!selected || !note.can.criticality) {");
-    const dots = component(view, "CritDots");
-    has(dots, "if (!note.can.criticality) {");
+    // Rewritten. Old: the card's three dots (CritDots), the current one alone where
+    // `can.criticality` was false. New: the open note's criticality pill, drawn only where
+    // `can.criticality`. Product owner, 16 November 2026: notes rail, inbox (option 3).
+    has(body, "{note.can.criticality ? ( <CritPill");
     for (const flag of ["respond", "reply"]) {
       assert.match(
         component(model, "replyMode"),
@@ -208,12 +204,18 @@ describe("a write is shown as done only once the server confirmed it", () => {
   });
 
   it("changes the criticality in one press, shown only once confirmed", () => {
-    const dots = component(view, "CritDots");
-    // The checked dot is the note's criticality as the server has it.
-    has(dots, "checked={item === note.criticality}");
-    has(dots, "aria-label={CRITICALITY_WORDS[item]}");
-    has(dots, 'type="radio"');
+    // Rewritten. Old: three radio dots on the card, the checked one the note's
+    // criticality (CritDots: checked={item === note.criticality}). New: a pill whose menu
+    // lists Urgent, Normal, Follow-up as menuitemradio, the checked one the note's
+    // criticality as the server has it; a pick asks the server and nothing moves before
+    // it answers. Product owner, 16 November 2026: notes rail, inbox (option 3).
+    const pill = component(view, "CritPill");
+    has(pill, 'role="menuitemradio"');
+    has(pill, "aria-checked={item === value}");
+    has(pill, "if (item !== value) { onPick(item); }");
+    has(pill, "{CRITICALITY_WORDS[value]}");
     const body = component(view, "NoteBody");
+    has(body, "<CritPill value={note.criticality}");
     has(
       body,
       'run({ intent: "criticality", noteId: note.id, version: note.version, criticality: value, })',
@@ -243,9 +245,17 @@ describe("a write is shown as done only once the server confirmed it", () => {
     const card = `${component(view, "NoteCard")}${component(view, "NoteBody")}${component(view, "Thread")}`;
     assert.ok(!/note\.quote|rn-quote/.test(card), "no highlighted words");
     assert.ok(!/eventWords|CRITICALITY"|"OWNER"|"CLEARED"/.test(card));
-    // A resolved note is one faint line until it is selected.
-    has(component(view, "NoteCard"), "if (isClosed(note) && !selected) {");
-    has(component(view, "NoteCard"), "{firstWords(note.text)}");
+    // Rewritten. Old: a resolved note's card folded to one line of its first words until
+    // selected (NoteCard: `if (isClosed(note) && !selected)`, `{firstWords(note.text)}`).
+    // New: every note is one line (its first words), a resolved one with a check, and the
+    // selected one opens in place with a bold first line. Product owner, 16 November 2026: notes rail, inbox (option 3).
+    const body = component(view, "NoteBody");
+    has(
+      body,
+      '{closed ? ( <span className="rn-check" aria-hidden="true"> ✓ </span>',
+    );
+    has(body, "{selected ? headLine(note.text) : firstWords(note.text, 90)}");
+    has(body, '{selected ? ( <div className="rn-item-body">');
   });
 
   it("says refusals in role=alert", () => {
@@ -271,11 +281,32 @@ describe("the route", () => {
 });
 
 describe("keyboard, screen reader and phone", () => {
-  it("makes the rail a list, the chips toggles and the form labelled", () => {
+  it("makes the rail a list, the switch toggles and the form labelled", () => {
     const rail = component(view, "NotesRail");
     has(rail, '<aside className="rn-rail" id={id} aria-label="Review notes"');
-    has(rail, '<ol className="rn-list">');
-    has(rail, "aria-pressed={ui.chips[chip.key]}");
+    // Rewritten. Old: one list of cards in NotesRail and four chips, each a toggle
+    // (aria-pressed={ui.chips[chip.key]}). New: the notes grouped by criticality, each
+    // group a labelled list of one-line buttons that the arrow keys move between, the
+    // open one closed by Escape with the focus back on its line; and one switch, Open ·
+    // Mine · Resolved, each a toggle. Product owner, 16 November 2026: notes rail, inbox (option 3).
+    has(rail, "<RailList ui={ui} />");
+    const list = component(view, "RailList");
+    has(list, '<ol className="rn-list">{group.notes.map(card)}</ol>');
+    has(list, "aria-labelledby={`@{id}-@{group.key}`}");
+    has(
+      component(view, "RailHead"),
+      "aria-pressed={ui.railView.tab === tab.key}",
+    );
+    const moves = component(view, "moveInList");
+    has(moves, '["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)');
+    has(moves, "lines[next]?.focus();");
+    const card = component(view, "NoteCard");
+    has(card, 'event.key !== "Escape" ||');
+    has(card, 'ui.select(null, "rail"); line?.focus({ preventScroll: true });');
+    has(
+      component(view, "NoteBody"),
+      'aria-expanded={place === "rail" ? selected : undefined}',
+    );
     const form = component(view, "RaiseForm");
     // Rewritten. Old: the form was a modal dialog over the document (role="dialog",
     // useFocusTrap(box), drawn through createPortal). New: a card in the rail's column
@@ -295,10 +326,18 @@ describe("keyboard, screen reader and phone", () => {
       css,
       /@media \(max-width: 1100px\) \{[\s\S]*?\.rn-new \{\s*position: fixed;\s*right: 0;\s*bottom: 0;\s*left: 0;/,
     );
-    // The criticality is three labelled radios in a fieldset with its legend.
-    const choice = component(view, "CriticalityChoice");
-    has(choice, "<legend>Criticality</legend>");
-    has(choice, 'type="radio"');
+    // Rewritten. Old: the form's criticality was three labelled radios in a fieldset with
+    // its legend (CriticalityChoice). New: the same pill as the open note's, Normal to
+    // start, a labelled button that opens a menu of the three. Product owner, 16 November 2026: notes rail, inbox (option 3).
+    has(form, '<CritPill value={criticality} label="Criticality"');
+    const pill = component(view, "CritPill");
+    has(pill, 'aria-haspopup="menu"');
+    has(pill, 'role="menu"');
+    has(pill, "aria-label={`@{label}: @{CRITICALITY_WORDS[value]}`}");
+    has(
+      component(view, "ReviewNotesProvider"),
+      'setPendingCriticality("NORMAL");',
+    );
     // A field's "Add review note" is a button, reachable from the keyboard.
     // Rewritten (independent review, 16 November 2026). Old: its label was always
     // `aria-label={`Add review note on ${where}`}`, as it always noted the whole field.
@@ -463,10 +502,18 @@ describe("the independent review of 16 November 2026", () => {
       body,
       '{isClosed(note) && closedLine(note) !== "" ? ( // Who closed it and when: the evidence of review, on the card (section 2). <p className="rn-card-line rn-closed-line">{closedLine(note)}</p> ) : null}',
     );
-    has(body, "{selected ? <History note={note} /> : null}");
+    // Rewritten. Old: on the selected card, a "History" disclosure
+    // (`{selected ? <History note={note} /> : null}`, <details> with its <summary>). New:
+    // History is in the open note's "···" and shows the same rows under the note.
+    // Product owner, 16 November 2026: notes rail, inbox (option 3).
+    has(body, "{history ? <History note={note} /> : null}");
+    has(
+      component(view, "NoteMenu"),
+      'label: history ? "Hide history" : "History", icon: "clock", onSelect: onHistory',
+    );
     const history = component(view, "History");
     has(history, "const rows = historyOf(note);");
-    has(history, '<details className="rn-history"> <summary>History</summary>');
+    has(history, '<p className="rn-history-head">History</p>');
     // Plain text only, as the thread.
     has(history, "<span>{row.words}</span>");
   });

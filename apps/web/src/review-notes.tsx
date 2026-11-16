@@ -2,10 +2,12 @@
 
 import {
   createContext,
+  type Dispatch,
   Fragment,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   type RefObject,
+  type SetStateAction,
   useCallback,
   useContext,
   useEffect,
@@ -24,8 +26,6 @@ import {
   CRITICALITY_TONE,
   CRITICALITY_WORDS,
   type Criticality,
-  cardLine,
-  chipCount,
   choiceCounts,
   closedLine,
   closedWord,
@@ -40,6 +40,8 @@ import {
   filtersKey,
   firstWords,
   GONE_WORDS,
+  groupsOf,
+  headLine,
   historyOf,
   isClosed,
   isFiltered,
@@ -66,11 +68,14 @@ import {
   placeIn,
   positionsOf,
   RAIL_START,
-  type RailChips,
+  RAIL_TABS,
+  type RailView,
   type ReviewNote,
   type ReviewNotes,
+  railFiltered,
   railNotes,
   reasonProblem,
+  replyCount,
   replyMode,
   replyProblem,
   SECTIONS,
@@ -81,11 +86,14 @@ import {
   selectionTooLong,
   type TextAnchor,
   TOO_LONG_WORDS,
+  tabCount,
   threadEvents,
   threadTag,
+  timeLabel,
   type WorkpaperNotesScope,
   WRITE_IN_DOUBT,
   whenWords,
+  whereLine,
   whereWords,
   withNote,
   wordsGone,
@@ -357,7 +365,7 @@ type NotesUi = {
   context: FieldContext;
   /** Every note, in the order of the document. */
   ordered: ReviewNote[];
-  /** What the rail lists: its chips over the ordered notes. */
+  /** What the rail lists: its switch, filters and search over the ordered notes. */
   listed: ReviewNote[];
   /** What the document draws: the listed notes that are not closed, and the selected
    * one whatever it is. */
@@ -376,8 +384,8 @@ type NotesUi = {
   /** The criticality chosen in the open form: the pending words take its colour. */
   pendingCriticality: Criticality;
   setPendingCriticality: (value: Criticality) => void;
-  chips: RailChips;
-  setChips: (chips: RailChips) => void;
+  railView: RailView;
+  setRailView: Dispatch<SetStateAction<RailView>>;
   section: number | null;
   setSection: (section: number | null) => void;
   workpaperVersion: number;
@@ -454,7 +462,7 @@ export function ReviewNotesProvider({
   const [raising, setRaising] = useState<RaiseTarget | null>(null);
   const [pendingCriticality, setPendingCriticality] =
     useState<Criticality>("NORMAL");
-  const [chips, setChips] = useState<RailChips>(RAIL_START);
+  const [railView, setRailView] = useState<RailView>(RAIL_START);
   const [section, setSection] = useState<number | null>(null);
   const [said, setSaid] = useState("");
   const set = notes.set;
@@ -474,18 +482,18 @@ export function ReviewNotesProvider({
         : documentOrder(set.notes, context, positionsOf(set.notes, texts)),
     [set, context, texts],
   );
-  // What the rail lists: the chips' notes, and the selected one whatever it is (as the
-  // document draws it), so a note just cleared or dismissed from its card stays there,
-  // and the focus with it (independent review, 16 November 2026).
+  // What the rail lists: its switch's and filters' notes, and the selected one whatever
+  // it is (as the document draws it), so a note just cleared or dismissed from its card
+  // stays there, and the focus with it (independent review, 16 November 2026).
   const listed = useMemo(() => {
-    const chosen = railNotes(ordered, chips, set?.viewerId ?? null, section);
+    const chosen = railNotes(ordered, railView, set?.viewerId ?? null, section);
     return selected === null || chosen.some((note) => note.id === selected)
       ? chosen
       : ordered.filter(
           (note) =>
             note.id === selected || chosen.some((item) => item.id === note.id),
         );
-  }, [ordered, chips, set, section, selected]);
+  }, [ordered, railView, set, section, selected]);
   const drawn = useMemo(
     () =>
       ordered.filter(
@@ -615,8 +623,8 @@ export function ReviewNotesProvider({
     keepDraft,
     pendingCriticality,
     setPendingCriticality,
-    chips,
-    setChips,
+    railView,
+    setRailView,
     section,
     setSection,
     workpaperVersion,
@@ -1311,46 +1319,168 @@ function CommentPlus() {
   );
 }
 
-/* The form of a new note: a card in the rail ------------------------------------------- */
+/* The criticality: a pill and its menu ------------------------------------------------- */
 
-function CriticalityChoice({
+/**
+ * The criticality as a small pill ("● Normal ▾"): one press opens Urgent, Normal and
+ * Follow-up, each with its key (1, 2, 3). The pill shows `value`: a note's as the server
+ * has it, so a change shows only once its write is confirmed; or the new note's, as
+ * chosen. Escape, a press outside or the focus leaving closes the menu; the arrow keys
+ * move in it (product owner, 16 November 2026: notes rail, inbox (option 3)).
+ */
+function CritPill({
   value,
-  onChange,
-  name,
-  disabled = false,
+  label,
+  busy = false,
+  onPick,
 }: {
-  value: Criticality;
-  onChange: (value: Criticality) => void;
-  name: string;
-  disabled?: boolean;
+  value: Criticality | "OTHER";
+  /** What it sets, for its accessible name: "Criticality of note 2". */
+  label: string;
+  busy?: boolean;
+  onPick: (value: Criticality) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const [up, setUp] = useState(false);
+  const id = useId();
+  const root = useRef<HTMLDivElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) {
+      setUp(false);
+      return;
+    }
+    // Opens above the pill where the rail's list would cut it off below.
+    const menu = root.current?.querySelector<HTMLElement>(".rn-menu");
+    const box = root.current?.closest<HTMLElement>(".rn-rail-body");
+    const bottom = Math.min(
+      window.innerHeight,
+      box?.getBoundingClientRect().bottom ?? window.innerHeight,
+    );
+    if (menu != null && menu.getBoundingClientRect().bottom > bottom - 4) {
+      setUp(true);
+    }
+    const outside = (event: MouseEvent) => {
+      if (!root.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    // Escape closes the menu only: caught first, so the open note stays open.
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        event.preventDefault();
+        setOpen(false);
+        button.current?.focus();
+      }
+    };
+    // The focus leaving the pill and its menu closes it.
+    const away = (event: FocusEvent) => {
+      if (
+        event.relatedTarget instanceof Node &&
+        !root.current?.contains(event.relatedTarget)
+      ) {
+        setOpen(false);
+      }
+    };
+    const node = root.current;
+    node?.addEventListener("focusout", away);
+    document.addEventListener("mousedown", outside);
+    document.addEventListener("keydown", onKey, true);
+    (
+      root.current?.querySelector<HTMLElement>('[aria-checked="true"]') ??
+      root.current?.querySelector<HTMLElement>('[role="menuitemradio"]')
+    )?.focus();
+    return () => {
+      node?.removeEventListener("focusout", away);
+      document.removeEventListener("mousedown", outside);
+      document.removeEventListener("keydown", onKey, true);
+    };
+  }, [open]);
+  const pick = (item: Criticality) => {
+    setOpen(false);
+    button.current?.focus();
+    if (item !== value) {
+      onPick(item);
+    }
+  };
+  const onMenuKey = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const items = [
+      ...event.currentTarget.querySelectorAll<HTMLElement>(
+        '[role="menuitemradio"]',
+      ),
+    ];
+    const at = items.indexOf(document.activeElement as HTMLElement);
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const step = event.key === "ArrowDown" ? 1 : items.length - 1;
+      items[(Math.max(at, 0) + step) % items.length]?.focus();
+      return;
+    }
+    const chosen = criticalityForKey(event.key);
+    if (chosen !== null) {
+      event.preventDefault();
+      pick(chosen);
+    }
+  };
   return (
-    <fieldset className="rn-seg" disabled={disabled}>
-      <legend>Criticality</legend>
-      <div className="rn-seg-row">
-        {CRITICALITIES.map((item) => (
-          <label
-            key={item}
-            className={`rn-seg-item rn-${CRITICALITY_TONE[item]}`}
-          >
-            <input
-              type="radio"
-              name={name}
-              value={item}
-              checked={value === item}
-              onChange={() => onChange(item)}
-            />
-            <span className="rn-dot" aria-hidden="true" />
-            {CRITICALITY_WORDS[item]}
-          </label>
-        ))}
-      </div>
-    </fieldset>
+    <div className={`rn-pill-wrap${open ? " is-open" : ""}`} ref={root}>
+      <button
+        ref={button}
+        type="button"
+        className={`rn-pill rn-${CRITICALITY_TONE[value]}${busy ? " is-busy" : ""}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={open ? `${id}-menu` : undefined}
+        aria-label={`${label}: ${CRITICALITY_WORDS[value]}`}
+        aria-busy={busy}
+        aria-disabled={busy ? "true" : undefined}
+        onClick={() => {
+          if (!busy) {
+            setOpen((now) => !now);
+          }
+        }}
+      >
+        <span className="rn-dot" aria-hidden="true" />
+        {CRITICALITY_WORDS[value]}
+        <UiIcon name="chevronDown" size={12} />
+      </button>
+      {open ? (
+        <div
+          className={`rn-menu${up ? " is-up" : ""}`}
+          id={`${id}-menu`}
+          role="menu"
+          aria-label={label}
+          onKeyDown={onMenuKey}
+        >
+          {CRITICALITIES.map((item, index) => (
+            <button
+              key={item}
+              type="button"
+              role="menuitemradio"
+              aria-checked={item === value}
+              className={`rn-menu-item rn-${CRITICALITY_TONE[item]}`}
+              onClick={() => pick(item)}
+            >
+              <span className="rn-dot" aria-hidden="true" />
+              <span className="rn-menu-word">{CRITICALITY_WORDS[item]}</span>
+              <span className="rn-key" aria-hidden="true">
+                {index + 1}
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
+/* The form of a new note: at the top of the rail's list ------------------------------- */
+
 /** The new note, written in the rail (on a narrow window, a sheet at the bottom of it),
- * never over the document: its words stay in view, in the chosen criticality's colour. */
+ * never over the document: its words stay in view, in the chosen criticality's colour.
+ * One note box, the owner, then the criticality's pill (Normal to start), Cancel and Add
+ * note. */
 function RaiseForm({ target }: { target: RaiseTarget }) {
   const ui = useNotesUi();
   const id = useId();
@@ -1375,9 +1505,9 @@ function RaiseForm({ target }: { target: RaiseTarget }) {
   // window (a sheet at the bottom) the words are brought up above it.
   useEffect(() => {
     area.current?.focus({ preventScroll: true });
-    const rail = box.current?.closest<HTMLElement>(".rn-rail");
-    if (rail !== null && rail !== undefined) {
-      rail.scrollTop = 0;
+    const list = box.current?.closest<HTMLElement>(".rn-rail-body");
+    if (list !== null && list !== undefined) {
+      list.scrollTop = 0;
     }
     if (!railBelow() || root?.current === null || root === undefined) {
       return;
@@ -1477,7 +1607,7 @@ function RaiseForm({ target }: { target: RaiseTarget }) {
     <form
       ref={box}
       autoComplete="off"
-      className={`rn-card rn-new rn-${CRITICALITY_TONE[criticality]}`}
+      className={`rn-new rn-${CRITICALITY_TONE[criticality]}`}
       aria-labelledby={`${id}-head`}
       aria-describedby={`${id}-where`}
       onKeyDown={onKey}
@@ -1486,11 +1616,9 @@ function RaiseForm({ target }: { target: RaiseTarget }) {
         submit().catch(() => undefined);
       }}
     >
-      <div className="rn-card-head">
-        <h3 id={`${id}-head`} className="rn-new-head">
-          New review note
-        </h3>
-      </div>
+      <h3 id={`${id}-head`} className="rn-new-head">
+        New review note
+      </h3>
       <p id={`${id}-where`} className="rn-card-line">
         {target.where}
         {on === "" ? "" : ` · ${on}`}
@@ -1513,16 +1641,13 @@ function RaiseForm({ target }: { target: RaiseTarget }) {
         }}
         placeholder="What should change, or what is unclear?"
       />
-      <CriticalityChoice
-        name={`${id}-crit`}
-        value={criticality}
-        onChange={ui.setPendingCriticality}
-        disabled={sending}
-      />
-      <div className="rn-owner">
-        <label htmlFor={`${id}-owner`}>Owner</label>
+      <div className="rn-new-row">
+        <label className="rn-new-owner" htmlFor={`${id}-owner`}>
+          Owner
+        </label>
         <select
           id={`${id}-owner`}
+          className="rn-select"
           value={owner}
           disabled={sending || members.length === 0}
           onChange={(event) => setOwner(event.target.value)}
@@ -1543,7 +1668,13 @@ function RaiseForm({ target }: { target: RaiseTarget }) {
         </p>
       ) : null}
       <div className="rn-compose-row">
-        <SendHint shown={text.trim() !== ""} sendKey={sendKey} />
+        <CritPill
+          value={criticality}
+          label="Criticality"
+          busy={sending}
+          onPick={ui.setPendingCriticality}
+        />
+        <span className="rn-act-gap" />
         <button
           type="button"
           className="rn-btn is-quiet"
@@ -1552,7 +1683,12 @@ function RaiseForm({ target }: { target: RaiseTarget }) {
         >
           Cancel
         </button>
-        <button type="submit" className="rn-btn is-primary" disabled={sending}>
+        <button
+          type="submit"
+          className="rn-btn is-primary"
+          title={`Add note (${sendKey} ↵)`}
+          disabled={sending}
+        >
           {sending ? "Adding…" : "Add note"}
         </button>
       </div>
@@ -1569,7 +1705,7 @@ function SendHint({ shown, sendKey }: { shown: boolean; sendKey: string }) {
   );
 }
 
-/* A note's card ------------------------------------------------------------------------ */
+/* A note: its line, and opened, the note ---------------------------------------------- */
 
 /** The agent's help with a note (docs/workpaper-review.md, section 7) goes here, in a
  * later increment. Nothing is drawn yet. */
@@ -1577,8 +1713,8 @@ function AgentHelpSlot(_props: { note: ReviewNote }) {
   return null;
 }
 
-/** The replies under the note: only the words people wrote (threadEvents), each a soft
- * grey block with its author, its time and what it was. */
+/** The replies under the note: only the words people wrote (threadEvents), a thin ruled
+ * thread, each with its author, its time and what it was. */
 function Thread({ note }: { note: ReviewNote }) {
   const events = threadEvents(note);
   if (events.length === 0) {
@@ -1592,7 +1728,9 @@ function Thread({ note }: { note: ReviewNote }) {
           <li key={event.id} className="rn-reply">
             <p className="rn-reply-head">
               <b>{event.by.name}</b>
-              <time dateTime={event.at}>{whenWords(event.at)}</time>
+              <time dateTime={event.at} title={whenWords(event.at)}>
+                {timeLabel(event.at)}
+              </time>
               {tag !== "" ? <span>· {tag}</span> : null}
             </p>
             <p className="rn-reply-text">{event.text}</p>
@@ -1603,18 +1741,21 @@ function Thread({ note }: { note: ReviewNote }) {
   );
 }
 
-/** The note's whole history, on request (docs/workpaper-review.md, section 2): every
- * event, the criticality's and the owner's changes and who cleared or dismissed it
- * included, as the server keeps them. Folded until opened; only on the selected card. */
+/** The note's whole history, on request from its "···" (docs/workpaper-review.md,
+ * section 2): every event, the criticality's and the owner's changes and who cleared or
+ * dismissed it included, as the server keeps them. */
 function History({ note }: { note: ReviewNote }) {
   const rows = historyOf(note);
   if (rows.length === 0) {
     return null;
   }
   return (
-    <details className="rn-history">
-      <summary>History</summary>
-      <ol aria-label={`History of note ${note.number}`}>
+    <section
+      className="rn-history"
+      aria-label={`History of note ${note.number}`}
+    >
+      <p className="rn-history-head">History</p>
+      <ol>
         {rows.map((row) => (
           <li key={row.id}>
             <span>{row.words}</span>{" "}
@@ -1625,7 +1766,7 @@ function History({ note }: { note: ReviewNote }) {
           </li>
         ))}
       </ol>
-    </details>
+    </section>
   );
 }
 
@@ -1669,76 +1810,19 @@ function Passage({ ui, note }: { ui: NotesUi; note: ReviewNote }) {
   );
 }
 
-/**
- * The criticality, at the card's top right: three small dots (Urgent, Normal,
- * Follow-up), the current one ringed. One press changes it; the ring moves only once the
- * server has confirmed. A radio group from the keyboard (the arrow keys). Where the
- * person may not change it, the current dot alone.
- */
-function CritDots({
-  note,
-  name,
-  busy,
-  onPick,
-}: {
-  note: ReviewNote;
-  /** The radios' group name, unique on the page. */
-  name: string;
-  busy: boolean;
-  onPick: (value: Criticality) => void;
-}) {
-  if (!note.can.criticality) {
-    return (
-      <span
-        className={`rn-dots is-still rn-${CRITICALITY_TONE[note.criticality]}`}
-        role="img"
-        aria-label={`Criticality: ${CRITICALITY_WORDS[note.criticality]}`}
-        title={CRITICALITY_WORDS[note.criticality]}
-      >
-        <span className="rn-dot" />
-      </span>
-    );
-  }
-  // Native radios: the arrow keys move between them, and each move asks the server. The
-  // checked one is the note's criticality as the server has it, so the ring moves only
-  // once it confirmed.
-  return (
-    <fieldset className={`rn-dots${busy ? " is-busy" : ""}`} aria-busy={busy}>
-      <legend className="sr-only">Criticality of note {note.number}</legend>
-      {CRITICALITIES.map((item) => (
-        <label
-          key={item}
-          className={`rn-dot-pick rn-${CRITICALITY_TONE[item]}`}
-          title={CRITICALITY_WORDS[item]}
-        >
-          <input
-            type="radio"
-            name={`${name}-crit`}
-            value={item}
-            checked={item === note.criticality}
-            aria-label={CRITICALITY_WORDS[item]}
-            onChange={() => {
-              if (!busy && item !== note.criticality) {
-                onPick(item);
-              }
-            }}
-          />
-          <span className="rn-dot" aria-hidden="true" />
-        </label>
-      ))}
-    </fieldset>
-  );
-}
-
 type Composer = "reply" | "reopen" | "dismiss" | "owner";
 
-/** The card's "···": what the reply box and the dots do not already offer, as `can`
- * allows. */
+/** The open note's "···": what its action row does not already offer, as `can` allows,
+ * and its whole history. */
 function NoteMenu({
   note,
+  history,
+  onHistory,
   onCompose,
 }: {
   note: ReviewNote;
+  history: boolean;
+  onHistory: () => void;
   onCompose: (composer: Composer) => void;
 }) {
   const { can } = note;
@@ -1764,17 +1848,20 @@ function NoteMenu({
       onSelect: () => onCompose("reopen"),
     });
   }
-  if (items.length === 0) {
-    return null;
-  }
+  items.push({
+    label: history ? "Hide history" : "History",
+    icon: "clock",
+    onSelect: onHistory,
+  });
   return <RowMenu label={`note ${note.number}`} items={items} />;
 }
 
 /**
- * A note's card (option B), in the rail and in All notes' pane: the header (author, time,
- * the criticality's dots, "···"), the quiet line of where and who owns it, the note, its
- * replies, and the reply box, always there. A resolved note (cleared or dismissed) is one
- * faint line until it is selected.
+ * A note in the rail: one line (its criticality's dot, its first words, how many replies,
+ * its time; a resolved one faint, with ✓). Selected, it opens in place under its line,
+ * one at a time; Escape closes it and gives its line the focus. In All notes' pane the
+ * same note, always open, so the two look the same (product owner, 16 November 2026:
+ * notes rail, inbox (option 3)).
  */
 function NoteCard({
   ui,
@@ -1787,40 +1874,36 @@ function NoteCard({
 }) {
   const selected = place === "panel" || ui.selected === note.id;
   const Tag = place === "rail" ? "li" : "div";
-  if (isClosed(note) && !selected) {
-    return (
-      <Tag className="rn-card is-folded" data-rn-card={note.id}>
-        <button
-          type="button"
-          className="rn-card-pick rn-fold"
-          aria-expanded={false}
-          aria-label={`Note ${note.number}, ${STATUS_WORDS[note.status].toLowerCase()}: ${note.text}`}
-          onClick={() => ui.select(note.id, "rail")}
-        >
-          <span className="rn-fold-check" aria-hidden="true">
-            ✓
-          </span>
-          <span className="rn-fold-words">{firstWords(note.text)}</span>
-          <span className="rn-fold-tag">{closedWord(note)}</span>
-        </button>
-      </Tag>
-    );
-  }
   return (
     <Tag
-      className={`rn-card rn-${CRITICALITY_TONE[note.criticality]}${selected ? " is-selected" : ""}${isClosed(note) ? " is-closed" : ""}`}
+      className={`rn-item rn-${CRITICALITY_TONE[note.criticality]}${selected ? " is-open" : ""}${isClosed(note) ? " is-closed" : ""}${place === "panel" ? " is-panel" : ""}`}
       data-rn-card={note.id}
-      onClick={(event) => {
-        // A press on the card (not on what it holds) selects it.
-        if (
-          place === "rail" &&
-          !selected &&
-          event.target instanceof Element &&
-          event.target.closest("button, a, textarea, select, input, label") ===
-            null
-        ) {
-          ui.select(note.id, "rail");
+      onKeyDown={(event) => {
+        if (place === "rail") {
+          moveInList(event);
         }
+        if (
+          event.key !== "Escape" ||
+          event.defaultPrevented ||
+          place !== "rail" ||
+          !selected
+        ) {
+          return;
+        }
+        event.preventDefault();
+        const line =
+          event.currentTarget.querySelector<HTMLElement>(".rn-card-pick");
+        ui.select(null, "rail");
+        line?.focus({ preventScroll: true });
+        // A note listed only while it was selected (just resolved) leaves the list: the
+        // focus goes to the first line there is.
+        window.requestAnimationFrame(() => {
+          if (line !== null && !line.isConnected) {
+            document
+              .querySelector<HTMLElement>(".rn-rail .rn-card-pick")
+              ?.focus({ preventScroll: true });
+          }
+        });
       }}
     >
       <NoteBody ui={ui} note={note} place={place} selected={selected} />
@@ -1828,7 +1911,7 @@ function NoteCard({
   );
 }
 
-/** The card's content and what may be done from it. */
+/** The note's line, and, opened, the note and what may be done from it. */
 function NoteBody({
   ui,
   note,
@@ -1843,11 +1926,11 @@ function NoteBody({
   const id = useId();
   const sendKey = useSendKey();
   const [composer, setComposer] = useState<Composer>("reply");
+  const [history, setHistory] = useState(false);
   const [text, setText] = useState("");
   const [owner, setOwner] = useState(note.owner.id);
   const [problem, setProblem] = useState<string | null>(null);
   const [sending, setSending] = useState<NoteIntent | null>(null);
-  const [typing, setTyping] = useState(false);
   const area = useRef<HTMLTextAreaElement>(null);
   const ownerBox = useRef<HTMLSelectElement>(null);
   const answer = replyMode(note);
@@ -1857,6 +1940,18 @@ function NoteBody({
     composer === "reply" || note.can[composer] ? composer : "reply";
   const where = whereWords(note, ui.context);
   const gone = wordsGone(note, ui.texts);
+  const closed = isClosed(note);
+  const replies = replyCount(note);
+
+  // A note closed again shows its line only: its history and a composer it had open go
+  // (a reply typed and not sent stays, for when it is opened again).
+  useEffect(() => {
+    if (!selected) {
+      setHistory(false);
+      setComposer("reply");
+      setProblem(null);
+    }
+  }, [selected]);
 
   // The reply box grows with what is typed.
   // biome-ignore lint/correctness/useExhaustiveDependencies: measured again for each text.
@@ -1866,7 +1961,7 @@ function NoteBody({
       node.style.height = "auto";
       node.style.height = `${node.scrollHeight + 2}px`;
     }
-  }, [text, shown]);
+  }, [text, shown, selected]);
 
   const run = async (action: NoteAction): Promise<ReviewNote | null> => {
     setSending(action.intent);
@@ -1901,7 +1996,7 @@ function NoteBody({
       criticality: value,
     }).catch(() => undefined);
   };
-  // Keys 1, 2, 3 set the selected card's criticality (not while typing).
+  // Keys 1, 2, 3 set the selected note's criticality (not while typing).
   const pickRef = useRef(pickCriticality);
   pickRef.current = pickCriticality;
   useEffect(() => {
@@ -2035,9 +2130,8 @@ function NoteBody({
     }
   };
 
-  const hasBox = shown !== "reply" || answer !== null;
-  const actions = selected || typing || text !== "" || shown !== "reply";
   const busy = sending !== null;
+  const typed = text.trim() !== "";
   const label =
     shown === "dismiss"
       ? `Why note ${note.number} is dismissed`
@@ -2046,158 +2140,219 @@ function NoteBody({
         : answer === "respond"
           ? `Respond to note ${note.number}`
           : `Reply to note ${note.number}`;
+  const hasRow = note.can.criticality || answer !== null || note.can.clear;
   return (
     <>
-      <div className="rn-card-head">
+      <div className="rn-item-head">
         <button
           type="button"
           className="rn-card-pick"
-          aria-pressed={selected}
-          aria-label={`Note ${note.number} by ${note.raisedBy.name}: ${CRITICALITY_WORDS[note.criticality]}, ${STATUS_WORDS[note.status].toLowerCase()}, on ${where}`}
+          aria-expanded={place === "rail" ? selected : undefined}
+          aria-label={`Note ${note.number} by ${note.raisedBy.name}: ${CRITICALITY_WORDS[note.criticality]}, ${STATUS_WORDS[note.status].toLowerCase()}, on ${where}, owner ${note.owner.name}${replies > 0 ? `, ${replies} ${replies === 1 ? "reply" : "replies"}` : ""}`}
           onClick={() =>
-            ui.select(note.id, place === "rail" ? "rail" : "table")
+            place === "rail"
+              ? ui.select(selected ? null : note.id, "rail")
+              : ui.select(note.id, "table")
           }
         >
-          <b className="rn-author">{note.raisedBy.name}</b>
-          <time dateTime={note.raisedAt}>{whenWords(note.raisedAt)}</time>
-        </button>
-        <CritDots
-          note={note}
-          name={id}
-          busy={sending === "criticality"}
-          onPick={pickCriticality}
-        />
-        {busy ? null : <NoteMenu note={note} onCompose={compose} />}
-      </div>
-      <p className="rn-card-line">
-        {cardLine(note, ui.context)}
-        {isClosed(note) ? ` · ${closedWord(note)}` : ""}
-      </p>
-      {isClosed(note) && closedLine(note) !== "" ? (
-        // Who closed it and when: the evidence of review, on the card (section 2).
-        <p className="rn-card-line rn-closed-line">{closedLine(note)}</p>
-      ) : null}
-      {gone ? <p className="rn-gone">{GONE_WORDS}.</p> : null}
-      <p className="rn-text-body">{note.text}</p>
-      <Thread note={note} />
-      {selected ? <History note={note} /> : null}
-      <AgentHelpSlot note={note} />
-      {problem !== null ? (
-        <p className="rn-problem" role="alert">
-          {problem}
-        </p>
-      ) : null}
-      {hasBox || (actions && note.can.clear) ? (
-        <form
-          autoComplete="off"
-          className="rn-compose"
-          onKeyDown={onKey}
-          onSubmit={(event) => {
-            event.preventDefault();
-            send();
-          }}
-        >
-          {shown === "owner" ? (
-            <div className="rn-owner">
-              <label htmlFor={`${id}-owner`}>New owner</label>
-              <select
-                id={`${id}-owner`}
-                ref={ownerBox}
-                value={owner}
-                disabled={busy}
-                onChange={(event) => setOwner(event.target.value)}
-              >
-                {(ui.set?.members ?? []).map((member) => (
-                  <option key={member.id} value={member.id}>
-                    {memberWords(member)}
-                  </option>
-                ))}
-              </select>
-            </div>
-          ) : hasBox ? (
-            <>
-              <label className="sr-only" htmlFor={`${id}-box`}>
-                {label}
-              </label>
-              <textarea
-                id={`${id}-box`}
-                ref={area}
-                className="rn-input rn-reply-box"
-                rows={1}
-                value={text}
-                maxLength={4000}
-                disabled={busy}
-                placeholder={
-                  shown === "dismiss"
-                    ? "Why it is dismissed…"
-                    : shown === "reopen"
-                      ? "Why it is reopened…"
-                      : "Reply…"
-                }
-                onFocus={() => setTyping(true)}
-                onBlur={() => setTyping(false)}
-                onChange={(event) => setText(event.target.value)}
-              />
-            </>
+          {closed ? (
+            <span className="rn-check" aria-hidden="true">
+              ✓
+            </span>
+          ) : (
+            <span className="rn-dot" aria-hidden="true" />
+          )}
+          <span className="rn-line-words">
+            {selected ? headLine(note.text) : firstWords(note.text, 90)}
+          </span>
+          {!selected && replies > 0 ? (
+            <span className="rn-count" aria-hidden="true">
+              {replies}
+            </span>
           ) : null}
-          {actions ? (
-            <div className="rn-compose-row">
-              <SendHint
-                shown={text.trim() !== "" && shown !== "owner"}
-                sendKey={sendKey}
-              />
-              {shown === "reply" ? (
-                <>
-                  {note.can.clear ? (
-                    <button
-                      type="button"
-                      className="rn-btn is-quiet"
-                      disabled={busy}
-                      onClick={() => {
-                        resolve().catch(() => undefined);
-                      }}
-                    >
-                      {sending === "clear" ? "Resolving…" : "Resolve"}
-                    </button>
-                  ) : null}
-                  {answer !== null ? (
-                    <button
-                      type="submit"
-                      className="rn-btn is-primary"
-                      disabled={busy}
-                    >
-                      {sending === "reply" ? "Sending…" : "Reply"}
-                    </button>
-                  ) : null}
-                </>
+          {closed && !selected ? (
+            <span className="rn-line-tag">{closedWord(note)}</span>
+          ) : (
+            <time dateTime={note.raisedAt} title={whenWords(note.raisedAt)}>
+              {timeLabel(note.raisedAt)}
+            </time>
+          )}
+        </button>
+        {selected && !busy ? (
+          <NoteMenu
+            note={note}
+            history={history}
+            onHistory={() => setHistory((now) => !now)}
+            onCompose={compose}
+          />
+        ) : null}
+      </div>
+      {selected ? (
+        <div className="rn-item-body">
+          <p className="rn-card-line">{whereLine(note, ui.context)}</p>
+          {isClosed(note) && closedLine(note) !== "" ? (
+            // Who closed it and when: the evidence of review, on the card (section 2).
+            <p className="rn-card-line rn-closed-line">{closedLine(note)}</p>
+          ) : null}
+          {gone ? <p className="rn-gone">{GONE_WORDS}.</p> : null}
+          <p className="rn-text-body">{note.text}</p>
+          <Thread note={note} />
+          {history ? <History note={note} /> : null}
+          <AgentHelpSlot note={note} />
+          {problem !== null ? (
+            <p className="rn-problem" role="alert">
+              {problem}
+            </p>
+          ) : null}
+          {shown !== "reply" ? (
+            <form
+              autoComplete="off"
+              className="rn-compose"
+              onKeyDown={onKey}
+              onSubmit={(event) => {
+                event.preventDefault();
+                send();
+              }}
+            >
+              {shown === "owner" ? (
+                <div className="rn-owner">
+                  <label htmlFor={`${id}-owner`}>New owner</label>
+                  <select
+                    id={`${id}-owner`}
+                    ref={ownerBox}
+                    className="rn-select"
+                    value={owner}
+                    disabled={busy}
+                    onChange={(event) => setOwner(event.target.value)}
+                  >
+                    {(ui.set?.members ?? []).map((member) => (
+                      <option key={member.id} value={member.id}>
+                        {memberWords(member)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               ) : (
                 <>
-                  <button
-                    type="button"
-                    className="rn-btn is-quiet"
+                  <label className="sr-only" htmlFor={`${id}-box`}>
+                    {label}
+                  </label>
+                  <textarea
+                    id={`${id}-box`}
+                    ref={area}
+                    className="rn-input rn-reply-box"
+                    rows={2}
+                    value={text}
+                    maxLength={4000}
                     disabled={busy}
-                    onClick={back}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="rn-btn is-primary"
-                    disabled={busy}
-                  >
-                    {busy
-                      ? "Saving…"
-                      : shown === "dismiss"
-                        ? "Dismiss"
-                        : shown === "reopen"
-                          ? "Reopen"
-                          : "Change owner"}
-                  </button>
+                    placeholder={
+                      shown === "dismiss"
+                        ? "Why it is dismissed…"
+                        : "Why it is reopened…"
+                    }
+                    onChange={(event) => setText(event.target.value)}
+                  />
                 </>
               )}
-            </div>
+              <div className="rn-compose-row">
+                <SendHint
+                  shown={typed && shown !== "owner"}
+                  sendKey={sendKey}
+                />
+                <button
+                  type="button"
+                  className="rn-btn is-quiet"
+                  disabled={busy}
+                  onClick={back}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="rn-btn is-primary"
+                  disabled={busy}
+                >
+                  {busy
+                    ? "Saving…"
+                    : shown === "dismiss"
+                      ? "Dismiss"
+                      : shown === "reopen"
+                        ? "Reopen"
+                        : "Change owner"}
+                </button>
+              </div>
+            </form>
+          ) : hasRow ? (
+            // One row: the criticality's pill, the reply box with its send arrow, and
+            // Resolve as a quiet check.
+            <form
+              autoComplete="off"
+              className="rn-compose rn-act"
+              onKeyDown={onKey}
+              onSubmit={(event) => {
+                event.preventDefault();
+                send();
+              }}
+            >
+              {note.can.criticality ? (
+                <CritPill
+                  value={note.criticality}
+                  label={`Criticality of note ${note.number}`}
+                  busy={sending === "criticality"}
+                  onPick={pickCriticality}
+                />
+              ) : null}
+              {answer !== null ? (
+                <div className="rn-reply-wrap">
+                  <label className="sr-only" htmlFor={`${id}-box`}>
+                    {label}
+                  </label>
+                  <textarea
+                    id={`${id}-box`}
+                    ref={area}
+                    className="rn-input rn-reply-box"
+                    rows={1}
+                    value={text}
+                    maxLength={4000}
+                    disabled={busy}
+                    placeholder={answer === "respond" ? "Respond…" : "Reply…"}
+                    onChange={(event) => setText(event.target.value)}
+                  />
+                  <button
+                    type="submit"
+                    className={`rn-send${typed ? " is-ready" : ""}`}
+                    aria-label={
+                      answer === "respond"
+                        ? "Send the response"
+                        : "Send the reply"
+                    }
+                    title={`Send (${sendKey} ↵)`}
+                    disabled={busy}
+                  >
+                    <UiIcon name="arrowUp" size={14} />
+                  </button>
+                </div>
+              ) : (
+                <span className="rn-act-gap" />
+              )}
+              {note.can.clear ? (
+                <button
+                  type="button"
+                  className={`rn-icon-btn rn-resolve${sending === "clear" ? " is-busy" : ""}`}
+                  aria-label={typed ? "Send the reply and resolve" : "Resolve"}
+                  title={typed ? "Send the reply and resolve" : "Resolve"}
+                  aria-busy={sending === "clear"}
+                  disabled={busy}
+                  onClick={() => {
+                    resolve().catch(() => undefined);
+                  }}
+                >
+                  <UiIcon name="check" size={16} />
+                </button>
+              ) : null}
+            </form>
           ) : null}
-        </form>
+        </div>
       ) : null}
     </>
   );
@@ -2213,13 +2368,6 @@ function CritWord({ criticality }: { criticality: ReviewNote["criticality"] }) {
 }
 
 /* The rail ----------------------------------------------------------------------------- */
-
-const CHIPS: ReadonlyArray<{ key: keyof RailChips; label: string }> = [
-  { key: "open", label: "Open" },
-  { key: "urgent", label: "Urgent" },
-  { key: "mine", label: "Mine" },
-  { key: "section", label: "This section" },
-];
 
 /** The section in view: that of the last field of the sheet whose top is above a third
  * of the window (the first field where none is). */
@@ -2245,15 +2393,370 @@ function sectionInView(root: HTMLElement | null): number | null {
   return found ?? first;
 }
 
-/** The rail beside the Document view (section 6): a new note's form where one is being
- * written, the one-press filters, then the notes in the order of the document, each
- * numbered as its marker. */
+/** The rail's filter menu: Urgent only, Mine, This section, and an owner. */
+function RailFilter({ ui }: { ui: NotesUi }) {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  const root = useRef<HTMLDivElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const outside = (event: MouseEvent) => {
+      if (!root.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        event.preventDefault();
+        setOpen(false);
+        button.current?.focus();
+      }
+    };
+    document.addEventListener("mousedown", outside);
+    document.addEventListener("keydown", onKey, true);
+    root.current?.querySelector<HTMLInputElement>("input")?.focus();
+    return () => {
+      document.removeEventListener("mousedown", outside);
+      document.removeEventListener("keydown", onKey, true);
+    };
+  }, [open]);
+  const view = ui.railView;
+  const viewer = ui.set?.viewerId ?? null;
+  const owners = [
+    ...new Map(ui.ordered.map((note) => [note.owner.id, note.owner.name])),
+  ].sort((a, b) => a[1].localeCompare(b[1]));
+  const change = (next: Partial<RailView>) => {
+    if (next.section === true) {
+      ui.setSection(sectionInView(ui.rootRef.current));
+    }
+    ui.setRailView((current) => ({ ...current, ...next }));
+  };
+  const on = railFiltered(view);
+  return (
+    <div className={`rn-filter-wrap${open ? " is-open" : ""}`} ref={root}>
+      <button
+        ref={button}
+        type="button"
+        className={`rn-icon-btn${on ? " is-set" : ""}`}
+        aria-expanded={open}
+        aria-controls={open ? `${id}-pop` : undefined}
+        aria-label={on ? "Filter the notes (filters on)" : "Filter the notes"}
+        title="Filter"
+        onClick={() => setOpen((now) => !now)}
+      >
+        <UiIcon name="filter" size={15} />
+      </button>
+      {open ? (
+        <fieldset className="rn-pop" id={`${id}-pop`}>
+          <legend className="sr-only">Filter the notes</legend>
+          <label className="rn-pop-item">
+            <input
+              type="checkbox"
+              checked={view.urgent}
+              onChange={(event) => change({ urgent: event.target.checked })}
+            />
+            <span>Urgent only</span>
+          </label>
+          {viewer !== null && view.tab !== "mine" ? (
+            <label className="rn-pop-item">
+              <input
+                type="checkbox"
+                checked={view.mine}
+                onChange={(event) => change({ mine: event.target.checked })}
+              />
+              <span>Mine</span>
+            </label>
+          ) : null}
+          <label className="rn-pop-item">
+            <input
+              type="checkbox"
+              checked={view.section}
+              onChange={(event) => change({ section: event.target.checked })}
+            />
+            <span>This section</span>
+          </label>
+          <label className="rn-pop-owner">
+            <span>Owner</span>
+            <select
+              className="rn-select"
+              value={view.owner ?? ""}
+              onChange={(event) =>
+                change({
+                  owner: event.target.value === "" ? null : event.target.value,
+                })
+              }
+            >
+              <option value="">Anyone</option>
+              {owners.map(([value, name]) => (
+                <option key={value} value={value}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {on ? (
+            <button
+              type="button"
+              className="rn-pop-clear"
+              onClick={() =>
+                change({
+                  urgent: false,
+                  mine: false,
+                  section: false,
+                  owner: null,
+                })
+              }
+            >
+              Clear filters
+            </button>
+          ) : null}
+        </fieldset>
+      ) : null}
+    </div>
+  );
+}
+
+/** The rail's header: its title, the search (an icon that opens a one-line box in its
+ * place) and the filter menu; under it, one switch, Open · Mine · Resolved, each with its
+ * count; and, where a filter is on, a quiet line that says which, with Clear. */
+function RailHead({ ui }: { ui: NotesUi }) {
+  const viewer = ui.set?.viewerId ?? null;
+  const [searching, setSearching] = useState(ui.railView.search !== "");
+  const [typed, setTyped] = useState(ui.railView.search);
+  const opener = useRef<HTMLButtonElement>(null);
+  const box = useRef<HTMLInputElement>(null);
+  const { setRailView } = ui;
+  useEffect(() => {
+    const wait = window.setTimeout(
+      () =>
+        setRailView((current) =>
+          current.search === typed ? current : { ...current, search: typed },
+        ),
+      SEARCH_WAIT_MS,
+    );
+    return () => window.clearTimeout(wait);
+  }, [typed, setRailView]);
+  useEffect(() => {
+    if (searching) {
+      box.current?.focus();
+    }
+  }, [searching]);
+  const closeSearch = () => {
+    setTyped("");
+    setRailView((current) => ({ ...current, search: "" }));
+    setSearching(false);
+    window.requestAnimationFrame(() => opener.current?.focus());
+  };
+  const view = ui.railView;
+  const said = [
+    view.urgent ? "Urgent" : "",
+    view.mine ? "Mine" : "",
+    view.section
+      ? (SECTIONS.find((item) => item.n === ui.section)?.name ?? "This section")
+      : "",
+    view.owner === null
+      ? ""
+      : `Owner ${ui.ordered.find((note) => note.owner.id === view.owner)?.owner.name ?? ""}`.trim(),
+  ].filter((part) => part !== "");
+  return (
+    <div className="rn-rail-head">
+      <div className="rn-head-row">
+        {searching ? (
+          <>
+            <label className="rn-rail-search">
+              <span className="sr-only">Search the notes and replies</span>
+              <UiIcon name="search" size={14} />
+              <input
+                ref={box}
+                type="search"
+                value={typed}
+                placeholder="Search notes"
+                onChange={(event) => setTyped(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    closeSearch();
+                  }
+                }}
+              />
+            </label>
+            <button
+              type="button"
+              className="rn-icon-btn"
+              aria-label="Close the search"
+              title="Close"
+              onClick={closeSearch}
+            >
+              <UiIcon name="x" size={14} />
+            </button>
+          </>
+        ) : (
+          <>
+            <h2 className="rn-rail-title">Review notes</h2>
+            <button
+              ref={opener}
+              type="button"
+              className="rn-icon-btn"
+              aria-label="Search the notes"
+              title="Search"
+              onClick={() => setSearching(true)}
+            >
+              <UiIcon name="search" size={15} />
+            </button>
+          </>
+        )}
+        <RailFilter ui={ui} />
+      </div>
+      <fieldset className="rn-tabs">
+        <legend className="sr-only">Show notes</legend>
+        {RAIL_TABS.filter((tab) => tab.key !== "mine" || viewer !== null).map(
+          (tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              className="rn-tab"
+              aria-pressed={ui.railView.tab === tab.key}
+              onClick={() => {
+                // A note open in the other tab is closed: the new tab lists its own.
+                if (
+                  ui.selected !== null &&
+                  !railNotes(
+                    ui.ordered,
+                    { ...view, tab: tab.key },
+                    viewer,
+                    ui.section,
+                  ).some((note) => note.id === ui.selected)
+                ) {
+                  ui.select(null, "rail");
+                }
+                setRailView((current) => ({ ...current, tab: tab.key }));
+              }}
+            >
+              {tab.label}
+              <span className="rn-tab-count">
+                {tabCount(ui.ordered, view, tab.key, viewer, ui.section)}
+              </span>
+            </button>
+          ),
+        )}
+      </fieldset>
+      {said.length > 0 ? (
+        <p className="rn-filter-line">
+          <span>{said.join(" · ")}</span>
+          <button
+            type="button"
+            className="rn-link"
+            onClick={() =>
+              setRailView((current) => ({
+                ...current,
+                urgent: false,
+                mine: false,
+                section: false,
+                owner: null,
+              }))
+            }
+          >
+            Clear
+          </button>
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/** Arrow keys between the notes' lines (Home and End to the first and the last). */
+function moveInList(event: ReactKeyboardEvent<HTMLElement>) {
+  const target = event.target;
+  if (
+    !(target instanceof HTMLElement) ||
+    !target.classList.contains("rn-card-pick") ||
+    !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)
+  ) {
+    return;
+  }
+  const lines = [
+    ...(target
+      .closest(".rn-groups")
+      ?.querySelectorAll<HTMLElement>(".rn-card-pick") ?? []),
+  ];
+  const at = lines.indexOf(target);
+  const next =
+    event.key === "Home"
+      ? 0
+      : event.key === "End"
+        ? lines.length - 1
+        : Math.min(
+            lines.length - 1,
+            Math.max(0, at + (event.key === "ArrowDown" ? 1 : -1)),
+          );
+  event.preventDefault();
+  lines[next]?.focus();
+}
+
+/** The rail's notes: grouped Urgent, Normal, Follow-up (only the groups that have notes
+ * under the switch and the filters), each note one line; under Resolved, one list of
+ * faint lines. */
+function RailList({ ui }: { ui: NotesUi }) {
+  const id = useId();
+  const view = ui.railView;
+  if (ui.listed.length === 0) {
+    return (
+      <p className="rn-empty">
+        {ui.ordered.length === 0
+          ? ui.set?.canRaise
+            ? "No review note yet. Point at a field and press the note icon in the margin, or select words in it."
+            : "No review note on this workpaper."
+          : railFiltered(view) || view.search.trim() !== ""
+            ? "No note matches these filters."
+            : view.tab === "resolved"
+              ? "No resolved note yet."
+              : view.tab === "mine"
+                ? "No open note is yours."
+                : "No open note. Every note is resolved."}
+      </p>
+    );
+  }
+  const card = (note: ReviewNote) => (
+    <NoteCard key={note.id} ui={ui} note={note} place="rail" />
+  );
+  return (
+    <div className="rn-groups">
+      {view.tab === "resolved" ? (
+        <ol className="rn-list" aria-label="Resolved notes">
+          {ui.listed.map(card)}
+        </ol>
+      ) : (
+        groupsOf(ui.listed).map((group) => (
+          <section
+            key={group.key}
+            className="rn-group"
+            aria-labelledby={`${id}-${group.key}`}
+          >
+            <h3 className="rn-group-label" id={`${id}-${group.key}`}>
+              {group.label}
+            </h3>
+            <ol className="rn-list">{group.notes.map(card)}</ol>
+          </section>
+        ))
+      )}
+    </div>
+  );
+}
+
+/** The rail beside the Document view (section 6; product owner, 16 November 2026: notes
+ * rail, inbox (option 3)): its header (search, filter, the switch), then a new note's
+ * form where one is being written, the notes as one-line rows grouped by criticality,
+ * the selected one open in place, and a note on the whole workpaper. */
 export function NotesRail({ id }: { id?: string }) {
   const ui = useNotesUi();
-  const sectionOn = ui?.chips.section === true;
+  const sectionOn = ui?.railView.section === true;
   const setSection = ui?.setSection;
   const root = ui?.rootRef;
-  // "This section" follows the section in view while it is pressed.
+  // "This section" follows the section in view while it is on.
   useEffect(() => {
     if (!sectionOn || setSection === undefined || root === undefined) {
       return;
@@ -2276,7 +2779,6 @@ export function NotesRail({ id }: { id?: string }) {
     return null;
   }
   const { notes, set } = ui;
-  const viewer = set?.viewerId ?? null;
   return (
     <aside
       className="rn-rail"
@@ -2285,7 +2787,7 @@ export function NotesRail({ id }: { id?: string }) {
       data-rn-rail=""
     >
       {notes.status === "loading" ? (
-        <p className="rn-quiet" aria-busy="true">
+        <p className="rn-quiet rn-rail-wait" aria-busy="true">
           Reading the review notes…
         </p>
       ) : notes.status === "failed" || set === null ? (
@@ -2299,83 +2801,31 @@ export function NotesRail({ id }: { id?: string }) {
         </div>
       ) : (
         <>
-          {ui.raising !== null ? (
-            <RaiseForm key={raiseKey(ui.raising)} target={ui.raising} />
-          ) : null}
-          <fieldset className="rn-chips">
-            <legend className="sr-only">Show notes</legend>
-            {CHIPS.filter((chip) => chip.key !== "mine" || viewer !== null).map(
-              (chip) => (
-                <button
-                  key={chip.key}
-                  type="button"
-                  className="rn-chip"
-                  aria-pressed={ui.chips[chip.key]}
-                  onClick={() => {
-                    const next = {
-                      ...ui.chips,
-                      [chip.key]: !ui.chips[chip.key],
-                    };
-                    if (chip.key === "section" && next.section) {
-                      ui.setSection(sectionInView(ui.rootRef.current));
-                    }
-                    ui.setChips(next);
-                  }}
-                >
-                  {chip.label}
-                  {chip.key !== "section" || ui.section !== null ? (
-                    <span className="rn-chip-count">
-                      {chipCount(
-                        ui.ordered,
-                        ui.chips,
-                        chip.key,
-                        viewer,
-                        ui.section,
-                      )}
-                    </span>
-                  ) : null}
-                </button>
-              ),
-            )}
-          </fieldset>
-          {ui.chips.section && ui.section !== null ? (
-            <p className="rn-quiet rn-chip-note">
-              {SECTIONS.find((item) => item.n === ui.section)?.name}
-            </p>
-          ) : null}
-          {ui.listed.length === 0 ? (
-            <p className="rn-empty">
-              {ui.ordered.length === 0
-                ? set.canRaise
-                  ? "No review note yet. Point at a field and press the note icon in the margin, or select words in it."
-                  : "No review note on this workpaper."
-                : "No note matches these filters."}
-            </p>
-          ) : (
-            <ol className="rn-list">
-              {ui.listed.map((note) => (
-                <NoteCard key={note.id} ui={ui} note={note} place="rail" />
-              ))}
-            </ol>
-          )}
-          {set.canRaise ? (
-            <button
-              type="button"
-              className="rn-btn is-quiet rn-whole"
-              onClick={(event) =>
-                ui.startRaise({
-                  anchorKind: "WORKPAPER",
-                  field: "",
-                  anchor: null,
-                  where: "The workpaper as a whole",
-                  opener: event.currentTarget,
-                })
-              }
-            >
-              <UiIcon name="plus" size={13} />
-              Note on the whole workpaper
-            </button>
-          ) : null}
+          <RailHead ui={ui} />
+          <div className="rn-rail-body">
+            {ui.raising !== null ? (
+              <RaiseForm key={raiseKey(ui.raising)} target={ui.raising} />
+            ) : null}
+            <RailList ui={ui} />
+            {set.canRaise ? (
+              <button
+                type="button"
+                className="rn-whole"
+                onClick={(event) =>
+                  ui.startRaise({
+                    anchorKind: "WORKPAPER",
+                    field: "",
+                    anchor: null,
+                    where: "The workpaper as a whole",
+                    opener: event.currentTarget,
+                  })
+                }
+              >
+                <UiIcon name="plus" size={13} />
+                Note on the whole workpaper
+              </button>
+            ) : null}
+          </div>
         </>
       )}
     </aside>
@@ -2595,9 +3045,12 @@ export function AllNotesView({
   ).map((item) => ({ value: String(item.n), label: item.name }));
   const change = (next: Partial<NoteFilters>) =>
     setFilters((current) => ({ ...current, ...next }));
-  // The rail shows the note: its chips let it through (a closed note with Open off).
+  // The rail shows the note: its switch lets it through (a closed note under Resolved).
   const openAt = (note: ReviewNote) => {
-    ui.setChips({ ...RAIL_START, open: !isClosed(note) });
+    ui.setRailView({
+      ...RAIL_START,
+      tab: isClosed(note) ? "resolved" : "open",
+    });
     ui.select(note.id, "open");
     onOpenAt(note.id);
   };
