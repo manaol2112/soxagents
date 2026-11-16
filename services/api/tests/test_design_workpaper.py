@@ -637,8 +637,16 @@ def test_a_conclusion_is_signed_only_from_its_sign_off_record(migrated: Database
         "NOT_EFFECTIVE", reason, "NOT_EFFECTIVE",
     )  # fmt: skip
 
-    prepared = bench.owner.post(
+    # Recording the choice changed the workpaper's record (independent review, 15 November
+    # 2026, docs/design-workpaper.md section 3.6). Old: prepared at the version read before
+    # the choice; new: that version is stale (409), so the page reads it again first.
+    stale = bench.owner.post(
         f"{bench.base}/workpapers/{paper['id']}/prepare", json={"version": paper["version"]}
+    )
+    assert stale.status_code == 409, stale.text
+    [(current,)] = bench.rows("SELECT version FROM workpapers WHERE id = %s", UUID(paper["id"]))
+    prepared = bench.owner.post(
+        f"{bench.base}/workpapers/{paper['id']}/prepare", json={"version": current}
     )
     assert prepared.status_code == 200, prepared.text
     version = prepared.json()["prepared_version"]
@@ -671,6 +679,7 @@ def test_a_conclusion_is_signed_only_from_its_sign_off_record(migrated: Database
         f"{bench.base}/design-conclusions/{bench.control}/sign-off",
         json={
             "conclusion": "NOT_EFFECTIVE",
+            "choice_id": choice["id"],
             "workpaper_version": version,
             "note": "Walked through.",
         },  # fmt: skip

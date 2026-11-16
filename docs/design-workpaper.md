@@ -492,7 +492,12 @@ a conclusion could be signed, or keep clearing OE, without resting on the record
   `EFFECTIVE`, Design no longer `DESIGNED` under `NO_INSTANCE`, no exception left or an
   attribute gone open under `EXCEPTIONS_NOTED`. The reason is the rule's own sentence. A
   sign-off made before choices were recorded (no `choice_id`) is held to `EFFECTIVE`'s or
-  `NOT_EFFECTIVE`'s existing rules only, as before.
+  `NOT_EFFECTIVE`'s existing rules only, as before; so is one the demo seeded (a sign-off on
+  a demo engagement, `projects.demo`, by a demo identity, `users.demo_organization_id`:
+  both set only by demo initialization, migrations 0128 and 0130), never other data.
+  "Noted after" compares the choice's `recorded_at` with a person's exception's own
+  `recorded_at`, and with the `finished_at` of the latest current check run that shows a
+  check's exception (a run with no finish time counts as after).
 - *The sign-off names the choice.* `SignOffBody` is `{conclusion, choice_id,
   workpaper_version, note}`; a `choice_id` that is not the standing choice is refused
   ("the preparer's conclusion changed; read it again"). The `verdict` field is no longer

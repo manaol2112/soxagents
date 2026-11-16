@@ -31,6 +31,7 @@ from test_phase_release import _launched, _prepare_design
 
 from ai_workforce_api.db import connect
 from ai_workforce_api.design_conclusions import (
+    CHOICE_NOT_STANDING,
     DRAFT_FIRST,
     GATE_DESIGN,
     GATE_NOT_EFFECTIVE,
@@ -57,6 +58,11 @@ EXCEPTION_UNANSWERED = (
     "an exception is recorded on an attribute and no design deficiency is logged for it"
 )
 DEFICIENCY_EFFECTIVE = "a design deficiency is logged, so the conclusion cannot be “Effective”"
+# The rule of an effective conclusion, as a sign-off made from the preparer's choice is
+# held to it (independent review, 15 November 2026).
+EXCEPTION_STANDS = (
+    "an exception stands on attribute {code}, so the conclusion cannot be “Effective”"
+)
 DEFICIENCY_NO_INSTANCE = (
     "a design deficiency is logged, so the conclusion cannot be "
     "“Design effective, no instance to walk through”"
@@ -157,6 +163,15 @@ def _concluded(
     return body
 
 
+def _signing(body: dict[str, Any], conclusion: str, version: int = 1) -> dict[str, Any]:
+    """A sign-off of the preparer's conclusion that stands in `body` (the D&I conclusion
+    as read), naming it by its id (independent review, 15 November 2026,
+    docs/design-workpaper.md section 3.6)."""
+    return {
+        "conclusion": conclusion, "choice_id": body["choice"]["id"], "workpaper_version": version,
+    }  # fmt: skip
+
+
 def _reopen_paper(migrated: Database, team: dict[str, Any], paper_id: str, reason: str) -> None:
     """A person reopens the prepared design workpaper, through its own route."""
     with connect(migrated.url) as connection:
@@ -220,6 +235,7 @@ def test_the_d_and_i_conclusion_is_signed_by_an_independent_reviewer(migrated: D
     assert body["viewer_prepared"] is True and body["can_sign"] is False
     sign = {
         "conclusion": "EFFECTIVE",
+        "choice_id": choice["id"],
         "workpaper_version": case.version,
         "note": "Design walked through.",
     }
@@ -234,14 +250,20 @@ def test_the_d_and_i_conclusion_is_signed_by_an_independent_reviewer(migrated: D
     reviewer = case.reviewer
     assert case.body()["can_sign"] is True
     # The reviewer signs the preparer's conclusion, on the version they reviewed.
-    others = (
-        {**sign, "conclusion": "NO_INSTANCE"},
-        {**sign, "conclusion": None, "verdict": "NOT_EFFECTIVE"},
-    )
-    for other in others:
-        mismatch = reviewer.post(f"{path}/sign-off", json=other)
-        assert mismatch.status_code == 409
-        assert mismatch.json()["detail"].startswith("the preparer's conclusion is “Effective”")
+    # Independent review, 15 November 2026 (docs/design-workpaper.md section 3.6). Old: the
+    # two-value `verdict` ({"conclusion": None, "verdict": "NOT_EFFECTIVE"}) was refused
+    # as another conclusion (409); new: `verdict` is not accepted at all (422), and the
+    # sign-off names the choice it signs: another than the standing one is a 409.
+    mismatch = reviewer.post(f"{path}/sign-off", json={**sign, "conclusion": "NO_INSTANCE"})
+    assert mismatch.status_code == 409
+    assert mismatch.json()["detail"].startswith("the preparer's conclusion is “Effective”")
+    by_verdict = {key: value for key, value in sign.items() if key != "conclusion"}
+    for retired in ({**by_verdict, "verdict": "EFFECTIVE"}, {**sign, "verdict": "EFFECTIVE"}):
+        assert reviewer.post(f"{path}/sign-off", json=retired).status_code == 422
+    assert reviewer.post(f"{path}/sign-off", json=by_verdict).status_code == 422
+    unread = reviewer.post(f"{path}/sign-off", json={**sign, "choice_id": str(uuid4())})
+    assert (unread.status_code, unread.json()["detail"]) == (409, CHOICE_NOT_STANDING)
+    assert case.verdict() is None
     stale = reviewer.post(f"{path}/sign-off", json={**sign, "workpaper_version": case.version + 1})
     assert stale.status_code == 409 and "changed" in stale.json()["detail"]
 
@@ -277,7 +299,16 @@ def test_the_d_and_i_conclusion_is_signed_by_an_independent_reviewer(migrated: D
     )
     assert recorded.status_code == 200, recorded.text
     case.prepare()
-    not_effective = {**sign, "conclusion": "NOT_EFFECTIVE", "workpaper_version": case.version}
+    # The sign-off still naming the effective choice it was about to sign: refused.
+    unread = reviewer.post(
+        f"{path}/sign-off",
+        json={**sign, "conclusion": "NOT_EFFECTIVE", "workpaper_version": case.version},
+    )
+    assert (unread.status_code, unread.json()["detail"]) == (409, CHOICE_NOT_STANDING)
+    not_effective = {
+        **sign, "conclusion": "NOT_EFFECTIVE", "workpaper_version": case.version,
+        "choice_id": recorded.json()["choice"]["id"],
+    }  # fmt: skip
     resigned = reviewer.post(f"{path}/sign-off", json=not_effective)
     assert resigned.status_code == 200, resigned.text
     body = resigned.json()
@@ -343,14 +374,12 @@ def test_a_recorded_d_and_i_conclusion_is_never_changed_or_deleted(migrated: Dat
     unchangeable as the rest. Every assertion is kept."""
     team = _launched(migrated, "dc-keep")
     control = _control(team)
-    _concluded(migrated, team, control)
+    concluded = _concluded(migrated, team, control)
     _design_deficiency(migrated, team, control)
     _reviewer_role(migrated, team, team["reviewer_id"])
     reviewer = _session(migrated, team["reviewer_id"])
     path = f"{_project(team)}/design-conclusions/{control}"
-    signed = reviewer.post(
-        f"{path}/sign-off", json={"conclusion": "NOT_EFFECTIVE", "workpaper_version": 1}
-    )
+    signed = reviewer.post(f"{path}/sign-off", json=_signing(concluded, "NOT_EFFECTIVE"))
     assert signed.status_code == 200, signed.text
     with connect(migrated.url) as connection:
         for change in (
@@ -389,17 +418,13 @@ def test_reopening_the_design_workpaper_opens_the_d_and_i_conclusion(migrated: D
     team = _launched(migrated, "dc-reopen")
     owner = team["owner"]
     control = _control(team)
-    _concluded(migrated, team, control)
+    concluded = _concluded(migrated, team, control)
     _design_deficiency(migrated, team, control)
     _reviewer_role(migrated, team, team["reviewer_id"])
     reviewer = _session(migrated, team["reviewer_id"])
     path = f"{_project(team)}/design-conclusions/{control}"
-    assert (
-        reviewer.post(
-            f"{path}/sign-off", json={"conclusion": "NOT_EFFECTIVE", "workpaper_version": 1}
-        ).status_code
-        == 200
-    )
+    signing = _signing(concluded, "NOT_EFFECTIVE")
+    assert reviewer.post(f"{path}/sign-off", json=signing).status_code == 200
     before = owner.get(path).json()
     _reopen_paper(migrated, team, before["workpaper"]["id"], "Walkthrough notes to correct.")
     body = owner.get(path).json()
@@ -499,19 +524,26 @@ class _Signing:
         body: dict[str, Any] = found.json()
         return body
 
-    def sign(self, verdict: str = "EFFECTIVE") -> Any:
-        """The reviewer signs, naming the two-value verdict as the screen sends it today
-        (accepted for one release: it must be that of the preparer's conclusion)."""
-        return self.reviewer.post(
-            f"{self.path}/sign-off",
-            json={"verdict": verdict, "workpaper_version": self.version},
-        )
+    def sign(self, conclusion: str = "EFFECTIVE") -> Any:
+        """The reviewer signs `conclusion`, naming the preparer's choice that stands.
+
+        Independent review, 15 November 2026 (docs/design-workpaper.md section 3.6). Old:
+        it named the two-value verdict as the screen sent it then ({"verdict": ...}); new:
+        the `verdict` field is no longer accepted, so it names the conclusion and the
+        choice. The conclusions it is called with (effective, not effective) are those
+        verdicts' own words, so each call keeps its meaning."""
+        return self.sign_as(conclusion)
 
     def sign_as(self, conclusion: str) -> Any:
-        """The reviewer signs, naming the preparer's conclusion."""
+        """The reviewer signs, naming the preparer's conclusion and the choice that stands
+        (where none stands, an id that names no choice)."""
         return self.reviewer.post(
             f"{self.path}/sign-off",
-            json={"conclusion": conclusion, "workpaper_version": self.version},
+            json={
+                "conclusion": conclusion,
+                "choice_id": self.standing() or str(uuid4()),
+                "workpaper_version": self.version,
+            },
         )
 
     def verdict(self) -> str | None:
@@ -657,11 +689,11 @@ def test_a_tickmark_changed_after_the_sign_off_puts_it_out_of_date(migrated: Dat
     case = _Signing(migrated, "dc-changed")
     bench, ids = case.bench, case.ids
 
-    def resign(verdict: str = "EFFECTIVE") -> None:
-        signed = case.sign(verdict)
+    def resign(conclusion: str = "EFFECTIVE") -> None:
+        signed = case.sign(conclusion)
         assert signed.status_code == 200, signed.text
         assert (signed.json()["status"], signed.json()["out_of_date"]) == ("SIGNED_OFF", [])
-        assert case.verdict() == verdict
+        assert case.verdict() == conclusion
 
     def out_of_date() -> dict[str, Any]:
         body = case.body()
@@ -699,9 +731,15 @@ def test_a_tickmark_changed_after_the_sign_off_puts_it_out_of_date(migrated: Dat
 
     # An exception recorded after the sign-off: out of date, and it cannot be signed again
     # as it is.
+    # Independent review, 15 November 2026 (docs/design-workpaper.md section 3.6): old,
+    # the one reason [TICKMARK_ON_B]; new, the sign-off was made from the preparer's
+    # effective choice, so the rule that allowed it is read again and its own sentence
+    # follows (an exception stands on B).
     assert _tickmark(bench, ids["B"], "EXCEPTION").status_code == 200
     body = out_of_date()
-    assert (body["out_of_date"], body["proposed"]) == ([TICKMARK_ON_B], "EFFECTIVE")
+    assert (body["out_of_date"], body["proposed"]) == (
+        [TICKMARK_ON_B, EXCEPTION_STANDS.format(code="B")], "EFFECTIVE",
+    )  # fmt: skip
     assert (body["blocking"], body["can_sign"]) == ([EXCEPTION_ON.format(code="B")], False)
     refused = case.sign()
     assert refused.status_code == 409
@@ -860,9 +898,14 @@ def test_an_exception_is_never_signed_over_whatever_the_state_of_its_requests_ch
                          "cannot be “Effective”")  # fmt: skip
     assert case.sign().status_code == 409 and case.verdict() is None
 
-    # A sign-off as effective made while the request was removed (one signed before every
-    # standing exception counted, as the rule this keeps says; the rules of section 3.6
-    # refuse it through the route now, so it is written here as it was then).
+    # A sign-off as effective made from the preparer's effective choice while the request
+    # was removed: the rules of section 3.6 refuse it through the route, so it is written
+    # here directly. Independent review, 15 November 2026 (docs/design-workpaper.md
+    # section 3.6): old, such a sign-off held (SIGNED_OFF, the OE gate open) until the
+    # exception counted again; new, a sign-off made from a choice is held to its
+    # conclusion's rule on the records as they are, so with nothing showing the
+    # attributes it is out of date at once, in the rule's own sentence, and the OE gate
+    # stays shut.
     with connect(migrated.url) as connection:
         connection.execute(
             """
@@ -874,6 +917,43 @@ def test_an_exception_is_never_signed_over_whatever_the_state_of_its_requests_ch
                    'EFFECTIVE', %s, 'EFFECTIVE', reason, id
             FROM design_conclusion_choices
             WHERE engagement_control_id = %s AND ended_at IS NULL AND kind = 'EFFECTIVE'
+            """,
+            (case.version, case.reviewer_id, UUID(bench.control)),
+        )
+    body = case.body()
+    assert body["status"] == "OUT_OF_DATE" and case.verdict() is None
+    assert case.gate() == GATE_DESIGN
+    [broken] = body["out_of_date"]
+    assert broken.endswith("not yet shown in the records of an instance, so the conclusion "
+                           "cannot be “Effective”")  # fmt: skip
+
+    # The rule this test keeps (an exception that comes to stand under a sign-off as
+    # effective, with nothing recorded since, puts it out of date) now applies to a
+    # sign-off made before preparers chose (no choice_id, and no choice standing), which
+    # the service can no longer make: the one above is reopened, the choice ended and the
+    # sign-off written as one of those, while the request is removed.
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE design_conclusions SET reopened_at = clock_timestamp(), reopened_by = %s, "
+            "reopen_reason = 'Written again as a sign-off made before section 3.6.', "
+            "reopened_from = 'PERSON' WHERE engagement_control_id = %s AND reopened_at IS NULL",
+            (case.reviewer_id, UUID(bench.control)),
+        )
+        connection.execute(
+            "UPDATE design_conclusion_choices SET ended_at = clock_timestamp(), "
+            "ended_by = recorded_by, ended_as = 'REPLACED' "
+            "WHERE engagement_control_id = %s AND ended_at IS NULL",
+            (UUID(bench.control),),
+        )
+        connection.execute(
+            """
+            INSERT INTO design_conclusions (
+                organization_id, project_id, engagement_control_id, workpaper_id,
+                workpaper_version, verdict, signed_by, conclusion
+            )
+            SELECT organization_id, project_id, engagement_control_id, id, %s, 'EFFECTIVE',
+                   %s, 'EFFECTIVE'
+            FROM workpapers WHERE engagement_control_id = %s AND stage = 'DESIGN'
             """,
             (case.version, case.reviewer_id, UUID(bench.control)),
         )
@@ -892,14 +972,18 @@ def test_an_exception_is_never_signed_over_whatever_the_state_of_its_requests_ch
     assert case.gate() == GATE_DESIGN
     assert body["out_of_date"] == [EXCEPTION_UNANSWERED]
     assert [e["code"] for e in body["exceptions"]] == ["B"] and body["can_sign"] is False
+    # Old: refused with EXCEPTION_ON (the effective choice stood); new: no choice stands
+    # in the state a sign-off made before section 3.6 is in, so NO_CHOICE comes first
+    # (the exception's refusal of effective is asserted above, in `blocked`).
     refused = case.sign_as("EFFECTIVE")
-    assert (refused.status_code, refused.json()["detail"]) == (409, EXCEPTION_ON.format(code="B"))
+    assert (refused.status_code, refused.json()["detail"]) == (409, NO_CHOICE)
     # With a design deficiency logged the records propose not effective; the preparer
     # concludes so on the reopened workpaper, and the reviewer signs it.
     case.deficiency()
     body = case.body()
     assert body["out_of_date"] == ["a design deficiency was logged after the sign-off"]
-    assert (body["proposed"], body["blocking"]) == ("NOT_EFFECTIVE", [DEFICIENCY_EFFECTIVE])
+    # Old: blocking [DEFICIENCY_EFFECTIVE] (the effective choice stood); new: [NO_CHOICE].
+    assert (body["proposed"], body["blocking"]) == ("NOT_EFFECTIVE", [NO_CHOICE])
     case.conclude_again("NOT_EFFECTIVE")
     assert case.sign("NOT_EFFECTIVE").status_code == 200
     assert case.verdict() == "NOT_EFFECTIVE" and case.gate() == GATE_NOT_EFFECTIVE

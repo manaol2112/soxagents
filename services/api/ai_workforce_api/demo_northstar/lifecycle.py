@@ -395,9 +395,13 @@ def _design_workpaper(ctx: Context, ref: str, control_id: UUID) -> None:
 # the D&I evidence, so the records leave the design and the instance open and the rules
 # would refuse "Effective". The demo's controls conclude effective all the same, as they did
 # before section 3.6: the preparer's choice, and the reviewer's sign-off of it, are written
-# here as synthetic seed data, the way tests/support.sign_off_design writes them. Where
-# the records propose not effective (a design deficiency stands), the preparer records it
-# and the reviewer signs it through the service, as for a person.
+# here as synthetic seed data. Where the records propose not effective (a design
+# deficiency stands), the preparer records it and the reviewer signs it through the
+# service, as for a person. A sign-off on a demo engagement by a demo identity (both
+# markers set only by demo initialization, migrations 0128 and 0130) is held to the rules
+# it was signed under only, as one made before section 3.6 is, so the seeded checks'
+# absence never puts it out of date (design_conclusions._STANDING; independent review,
+# 15 November 2026).
 DEMO_REASON = "Demo data: concluded from the control's description; no instance is seeded."
 DEMO_NOT_EFFECTIVE = "The design deficiency logged against the control stands."
 DEMO_SIGNOFF_NOTE = "Design and implementation reviewed (prepared with the demo)."
@@ -472,8 +476,8 @@ def _design_conclusion(ctx: Context, control_id: UUID) -> None:
     if not seeded:
         sign_off(
             ctx.connection, riley, ctx.organization_id, ctx.project_id, control_id,
-            SignOffBody(conclusion=choice.kind, workpaper_version=paper.prepared_version,
-                        note=DEMO_SIGNOFF_NOTE),
+            SignOffBody(conclusion=choice.kind, choice_id=choice.id,
+                        workpaper_version=paper.prepared_version, note=DEMO_SIGNOFF_NOTE),
         )  # fmt: skip
         return
     # Demo seeding: the reviewer's sign-off of the seeded effective choice, written

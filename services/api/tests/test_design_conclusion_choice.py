@@ -41,16 +41,17 @@ from test_design_conclusions import (
     _control,
 )
 from test_design_workpaper import _draft_design
-from test_evidence_assurance import _Bench
+from test_evidence_assurance import LOG, _Bench, _reading
 from test_evidence_flow import _project
 from test_execution import _add_user
+from test_file_reliability import _check as _finish_check
 from test_file_reliability import _first_check as _first_check_with_a_report
 from test_file_reliability import _record as _decide_reliability
 from test_file_reliability import _reopen as _reopen_decision
 from test_outbound import _session, migrated
 from test_phase_release import _launched
 
-from ai_workforce_api import design_conclusions
+from ai_workforce_api import design_conclusions, independence
 from ai_workforce_api.authorization import Principal, PrincipalKind
 from ai_workforce_api.db import connect
 from ai_workforce_api.design_conclusions import (
@@ -58,11 +59,15 @@ from ai_workforce_api.design_conclusions import (
     BASIS_NOT_TAKEN,
     BEING_DRAFTED,
     CHOICE_CHANGED,
+    CHOICE_NOT_STANDING,
     CHOICE_RECORDED_SINCE,
     CHOICE_STALE,
     DEFICIENCY_FIRST,
+    DEFICIENCY_LOGGED_SINCE,
     DESIGN_NOT_SHOWN,
     DRAFT_FIRST,
+    EXCEPTION_SINCE,
+    EXCEPTIONS_NEEDED,
     GATE_DESIGN,
     GATE_NOT_EFFECTIVE,
     IN_PLACE_SENTENCE,
@@ -73,6 +78,8 @@ from ai_workforce_api.design_conclusions import (
     REASON_NEEDED,
     REASON_TOO_LONG,
     RECORDED_AFTER,
+    RECORDER_CANNOT_SIGN,
+    design_verdict,
     effective_controls,
     oe_gate_reason,
 )
@@ -172,11 +179,27 @@ class _Draft:
         )
         assert opened.status_code == 200, opened.text
 
-    def sign_as(self, conclusion: str, client: TestClient | None = None) -> Any:
+    def sign_as(
+        self, conclusion: str, client: TestClient | None = None, choice_id: Any = _STANDING
+    ) -> Any:
+        """The reviewer signs `conclusion`, naming the choice they read (by default the one
+        standing now; where none stands, an id that names no choice)."""
+        if choice_id is _STANDING:
+            standing = self.body()["choice"]
+            choice_id = str(uuid4()) if standing is None else standing["id"]
         return (client or self.reviewer).post(
             f"{self.path}/sign-off",
-            json={"conclusion": conclusion, "workpaper_version": self.version},
-        )
+            json={"conclusion": conclusion, "choice_id": choice_id,
+                  "workpaper_version": self.version},
+        )  # fmt: skip
+
+    def view(self) -> dict[str, Any]:
+        """The design workpaper's assembled view."""
+        bench = self.bench
+        found = bench.owner.get(f"{bench.base}/controls/{bench.control}/design-workpaper")
+        assert found.status_code == 200, found.text
+        body: dict[str, Any] = found.json()
+        return body
 
     def rows(self, query: str, *params: Any) -> list[tuple[Any, ...]]:
         with connect(self.database.url) as connection:
@@ -201,6 +224,52 @@ class _Draft:
     def gate(self) -> str | None:
         with connect(self.database.url) as connection:
             return oe_gate_reason(connection, UUID(self.bench.control))
+
+    def verdict(self) -> str | None:
+        with connect(self.database.url) as connection:
+            return design_verdict(
+                connection, UUID(str(self.bench.team["project"])), UUID(self.bench.control)
+            )
+
+    def shut(self) -> None:
+        """OE is not cleared, as each of the gate's readers reads it: the verdict, the gate,
+        the engagement's effective controls, and the phase progress the page reads."""
+        assert self.verdict() is None
+        assert self.gate() == GATE_DESIGN
+        assert not self.effective()
+        assert self.design_complete() is False
+
+    def cleared(self) -> None:
+        assert self.verdict() == "EFFECTIVE"
+        assert self.gate() is None
+        assert self.effective()
+        assert self.design_complete() is True
+
+    def design_complete(self) -> bool:
+        """Whether the phase progress (the route the page reads) has D&I complete."""
+        bench = self.bench
+        found = bench.owner.get(f"{bench.base}/phase-progress")
+        assert found.status_code == 200, found.text
+        control = next(c for c in found.json()["controls"] if c["control_id"] == bench.control)
+        return bool(next(p for p in control["phases"] if p["phase"] == "DESIGN")["complete"])
+
+    def later_check(self, **how: str) -> None:
+        """Another file reaches the request and the request is checked again, by `how`
+        (every attribute shown unless it says otherwise): a check that finishes now."""
+        self.bench.add("sap change log.txt", LOG)
+        self.bench.read_next(_reading("change_history"))
+        _finish_check(self.bench, "ticket REQ-1041.txt", "sap change log.txt", **how)
+
+    def concluded_and_signed(self, kind: str) -> dict[str, Any]:
+        """The preparer records `kind` on the draft, prepares, and the reviewer signs it
+        through the service. The D&I conclusion's body after the sign-off."""
+        self.chosen(kind)
+        self.prepare()
+        signed = self.sign_as(kind)
+        assert signed.status_code == 200, signed.text
+        body: dict[str, Any] = signed.json()
+        assert (body["status"], body["out_of_date"]) == ("SIGNED_OFF", [])
+        return body
 
     def effective(self) -> bool:
         with connect(self.database.url) as connection:
@@ -258,7 +327,21 @@ def test_the_preparer_records_each_conclusion_on_the_draft_and_one_stands(
     assert (effective["kind"], effective["basis"], effective["reason"]) == ("EFFECTIVE", None, "")
     assert (effective["proposed_kind"], effective["workpaper_version"]) == ("EFFECTIVE", 1)
     assert effective["recorded_by"] == case.bench.name(owner_id)
+    # Exceptions noted needs an exception on record (independent review, 15 November 2026,
+    # docs/design-workpaper.md section 3.6). Old: recorded here with every attribute shown
+    # and no exception; new: refused so, and recorded once a person's exception stands on
+    # B, which is then reopened for the kinds that follow.
+    _refused(
+        case.choose("EXCEPTIONS_NOTED", reason=REASONS["EXCEPTIONS_NOTED"]), 409,
+        EXCEPTIONS_NEEDED,
+    )  # fmt: skip
+    assert _tickmark(case.bench, case.ids["B"], "EXCEPTION").status_code == 200
     case.chosen("EXCEPTIONS_NOTED")
+    [(disposition,)] = case.rows(
+        "SELECT id FROM attribute_dispositions WHERE attribute_id = %s AND ended_at IS NULL",
+        UUID(case.ids["B"]),
+    )
+    assert _reopen_tickmark(case.bench, case.ids["B"], str(disposition)).status_code == 200
     case.chosen("NOT_EFFECTIVE", basis="BOTH")
     hostile = "<b>No change</b> was made​ in the period, so there is nothing to walk."
     no_instance = case.chosen("NO_INSTANCE", reason=hostile)["choice"]
@@ -604,14 +687,20 @@ def test_exceptions_noted_is_signed_over_a_persons_exception_and_effective_is_no
     )  # fmt: skip
     case.chosen("EXCEPTIONS_NOTED")
     case.prepare()
-    # The exception is what it concludes on: nothing keeps the reviewer from signing, and
-    # the two-value verdict the screen sends today signs the preparer's conclusion.
+    # The exception is what it concludes on: nothing keeps the reviewer from signing.
+    # Independent review, 15 November 2026 (docs/design-workpaper.md section 3.6). Old: the
+    # two-value verdict the screen sent ({"verdict": "EFFECTIVE"}) signed the preparer's
+    # conclusion; new: `verdict` is not accepted (422, nothing signed), and the sign-off
+    # names the conclusion and the choice.
     body = case.body(case.reviewer)
     assert (body["blocking"], body["can_sign"]) == ([], True)
     assert [e["code"] for e in body["exceptions"]] == ["B"]
-    signed = case.reviewer.post(
+    retired = case.reviewer.post(
         f"{case.path}/sign-off", json={"verdict": "EFFECTIVE", "workpaper_version": case.version}
     )
+    assert retired.status_code == 422
+    assert case.rows("SELECT count(*) FROM design_conclusions") == [(0,)]
+    signed = case.sign_as("EXCEPTIONS_NOTED")
     assert signed.status_code == 200, signed.text
     assert signed.json()["signed"]["conclusion"] == "EXCEPTIONS_NOTED"
     assert (signed.json()["status"], signed.json()["out_of_date"]) == ("SIGNED_OFF", [])
@@ -696,12 +785,257 @@ def test_the_workpaper_view_carries_the_results_and_a_file_not_relied_on_shows_n
     # the attributes any more, so the instance is open and effective cannot be recorded.
     assert _decide_reliability(bench, case.ticket, "NOT_RELIED_ON").status_code == 200
     after = view()
-    assert {a["shown_by"] for a in after["attributes"]} == {None}
+    # Independent review, 15 November 2026 (docs/design-workpaper.md section 3.6): old,
+    # shown_by None; new, "NOT_RELIED", which counts for neither result (asserted below).
+    assert {a["shown_by"] for a in after["attributes"]} == {"NOT_RELIED"}
     assert {a["state"] for a in after["attributes"]} == {"SHOWN"}
     assert (after["design"]["result"], after["implementation"]["result"]) == ("OPEN", "OPEN")
     assert case.body()["proposed_conclusion"] == "NOT_CONCLUDED"
     answer = case.choose("EFFECTIVE")
     assert answer.status_code == 409 and "cannot be “Effective”" in answer.json()["detail"]
+
+
+# --- Tightened after the independent review (15 November 2026; section 3.6, last part) ---
+
+ALL_ABSENT = {code: "ABSENT" for code in "ABCDE"}
+
+
+def _exception_stands(code: str) -> str:
+    return f"an exception stands on attribute {code}, so the conclusion cannot be “Effective”"
+
+
+def test_the_person_who_recorded_the_conclusion_cannot_sign_it(
+    migrated: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finding 1. The reviewer records the preparer's conclusion (they may update the
+    work); the owner prepares the workpaper. Where independence is required the person who
+    recorded the standing choice cannot sign it: `can_sign` is false and `blocking` says
+    so to them alone, the route refuses with the sentence and nothing is signed; another
+    reviewer signs it."""
+    case = _Draft(migrated, "dcc-recorder")
+    recorded = case.chosen("EFFECTIVE", client=case.reviewer)["choice"]
+    assert recorded["recorded_by"] == case.bench.name(case.reviewer_id)
+    case.prepare()
+    mine = case.body(case.reviewer)
+    assert (mine["viewer_recorded"], mine["viewer_prepared"]) == (True, False)
+    assert (mine["blocking"], mine["can_sign"]) == ([RECORDER_CANNOT_SIGN], False)
+    _refused(case.sign_as("EFFECTIVE"), 409, RECORDER_CANNOT_SIGN)
+    assert case.rows("SELECT count(*) FROM design_conclusions") == [(0,)]
+    case.shut()
+    # The owner did not record it: nothing is said to them of it.
+    theirs = case.body()
+    assert theirs["viewer_recorded"] is False and RECORDER_CANNOT_SIGN not in theirs["blocking"]
+    assert RECORDER_CANNOT_SIGN == (
+        "you recorded this conclusion; another reviewer must sign it off"
+    )
+    # Development with independence off: the rule is not applied, as for the preparer.
+    with monkeypatch.context() as patched:
+        patched.setattr(independence, "_required", False)
+        off = case.body(case.reviewer)
+        assert (off["blocking"], off["can_sign"]) == ([], True)
+    # Another reviewer signs it.
+    second_id, second = case.bench.member("ADMIN")
+    case.engagement_role(second_id, "REVIEWER")
+    theirs = case.body(second)
+    assert (theirs["viewer_recorded"], theirs["blocking"], theirs["can_sign"]) == (
+        False, [], True,
+    )  # fmt: skip
+    signed = case.sign_as("EFFECTIVE", second)
+    assert signed.status_code == 200, signed.text
+    case.cleared()
+
+
+def test_exceptions_noted_needs_an_exception_and_every_other_attribute_shown(
+    migrated: Database,
+) -> None:
+    """Finding 2, at the choice. Refused with no exception at all (every attribute shown,
+    or none shown), and with an exception while another attribute is open; the proposal
+    is then not concluded, naming both; a closing tickmark on what is open makes it the
+    proposal, and it is recorded."""
+    # Nothing shown, no exception.
+    none = _Draft(migrated, "dcc-en-none", True, **ALL_ABSENT)
+    body = none.body()
+    assert body["design"]["result"] == "OPEN" and body["proposed_conclusion"] == "NOT_CONCLUDED"
+    reason = REASONS["EXCEPTIONS_NOTED"]
+    _refused(none.choose("EXCEPTIONS_NOTED", reason=reason), 409, EXCEPTIONS_NEEDED)
+    # Every attribute shown, no exception.
+    shown = _Draft(migrated, "dcc-en-shown")
+    _refused(shown.choose("EXCEPTIONS_NOTED", reason=reason), 409, EXCEPTIONS_NEEDED)
+    # The check's exception on B, and C not shown.
+    mixed = _Draft(migrated, "dcc-en-mixed", B="DEVIATION", C="ABSENT")
+    body = mixed.body()
+    assert [(a["code"], a["state"]) for a in mixed.view()["attributes"]][1:3] == [
+        ("B", "EXCEPTION"), ("C", "NOT_SHOWN"),
+    ]  # fmt: skip
+    assert (body["proposed_conclusion"], body["proposed_reasons"]) == (
+        "NOT_CONCLUDED",
+        ["An exception stands on attribute B.",
+         "Attribute C is not yet shown in the records of an instance."],
+    )  # fmt: skip
+    _refused(mixed.choose("EXCEPTIONS_NOTED", reason=reason), 409, EXCEPTIONS_NEEDED)
+    # A person's exception, with C still open: the same.
+    person = _Draft(migrated, "dcc-en-person", C="ABSENT")
+    assert _tickmark(person.bench, person.ids["B"], "EXCEPTION").status_code == 200
+    body = person.body()
+    assert body["proposed_conclusion"] == "NOT_CONCLUDED"
+    assert body["proposed_reasons"][0] == "An exception stands on attribute B."
+    _refused(person.choose("EXCEPTIONS_NOTED", reason=reason), 409, EXCEPTIONS_NEEDED)
+    assert [c for case in (none, shown, mixed, person) for c in case.choices()] == []
+    # C settled by a closing tickmark: exceptions noted is proposed and recorded.
+    assert _tickmark(mixed.bench, mixed.ids["C"], "NOT_APPLICABLE").status_code == 200
+    body = mixed.body()
+    assert (body["proposed_conclusion"], body["proposed_reasons"]) == (
+        "EXCEPTIONS_NOTED", ["An exception stands on attribute B."],
+    )  # fmt: skip
+    assert mixed.chosen("EXCEPTIONS_NOTED")["choice"]["proposed_kind"] == "EXCEPTIONS_NOTED"
+
+
+def test_exceptions_noted_is_refused_at_the_sign_off_for_an_exception_noted_since(
+    migrated: Database,
+) -> None:
+    """Finding 2, at the sign-off. What is compared with the choice's `recorded_at`: a
+    person's exception's own `recorded_at`, and for an exception a check shows, the
+    `finished_at` of the latest current check run that shows it."""
+    # A person's exception recorded after the choice.
+    case = _Draft(migrated, "dcc-en-since")
+    assert _tickmark(case.bench, case.ids["B"], "EXCEPTION").status_code == 200
+    case.chosen("EXCEPTIONS_NOTED")
+    assert _tickmark(case.bench, case.ids["A"], "EXCEPTION").status_code == 200
+    case.prepare()
+    body = case.body(case.reviewer)
+    assert (body["blocking"], body["can_sign"]) == ([EXCEPTION_SINCE], False)
+    _refused(case.sign_as("EXCEPTIONS_NOTED"), 409, EXCEPTION_SINCE)
+    case.shut()
+    # The preparer records it again on the reopened workpaper: then it is signed.
+    case.reopen()
+    case.chosen("EXCEPTIONS_NOTED")
+    case.prepare()
+    assert case.sign_as("EXCEPTIONS_NOTED").status_code == 200
+    case.cleared()
+
+    # A check that finds the exception again after the choice was recorded.
+    found = _Draft(migrated, "dcc-en-found", B="DEVIATION")
+    found.chosen("EXCEPTIONS_NOTED")
+    found.later_check(B="DEVIATION")
+    found.prepare()
+    body = found.body(found.reviewer)
+    assert (body["blocking"], body["can_sign"]) == ([EXCEPTION_SINCE], False)
+    _refused(found.sign_as("EXCEPTIONS_NOTED"), 409, EXCEPTION_SINCE)
+    found.shut()
+
+
+def test_a_sign_off_stops_clearing_oe_when_its_conclusions_rule_stops_holding(
+    migrated: Database,
+) -> None:
+    """Finding 3, through the service's choice and sign-off: each conclusion signed, then
+    a later check changes what the records show, with nothing recorded by a person since.
+    The sign-off is out of date, in the rule's own sentence, and none of the gate's
+    readers (the verdict, the gate, the effective controls, the phase progress route)
+    reads it."""
+    # Effective, then a later check finds an exception on B.
+    effective = _Draft(migrated, "dcc-held-effective")
+    effective.concluded_and_signed("EFFECTIVE")
+    effective.cleared()
+    effective.later_check(B="DEVIATION")
+    body = effective.body()
+    assert (body["status"], body["out_of_date"]) == ("OUT_OF_DATE", [_exception_stands("B")])
+    effective.shut()
+
+    # Design effective, no instance, then a later check no longer shows B.
+    no_instance = _Draft(migrated, "dcc-held-no-instance")
+    no_instance.concluded_and_signed("NO_INSTANCE")
+    no_instance.cleared()
+    no_instance.later_check(B="ABSENT")
+    body = no_instance.body()
+    assert (body["status"], body["out_of_date"]) == ("OUT_OF_DATE", [DESIGN_NOT_SHOWN])
+    no_instance.shut()
+
+    # Exceptions noted, then a later check shows B: no exception is left.
+    noted = _Draft(migrated, "dcc-held-noted", B="DEVIATION")
+    noted.concluded_and_signed("EXCEPTIONS_NOTED")
+    noted.cleared()
+    noted.later_check()
+    body = noted.body()
+    assert (body["status"], body["out_of_date"]) == ("OUT_OF_DATE", [EXCEPTIONS_NEEDED])
+    noted.shut()
+
+
+def test_what_a_person_decides_after_an_effective_sign_off_puts_it_out_of_date(
+    migrated: Database,
+) -> None:
+    """Finding 13. A person's exception on an attribute whose state is not "Shown" keeps
+    effective from being recorded; the only file decided not relied on after the sign-off
+    puts it out of date (the decision, and the rule: nothing shows the attributes); a
+    design deficiency logged after it puts it out of date in the assembled view."""
+    waiting = _Draft(migrated, "dcc-not-shown", B="ABSENT")
+    assert _tickmark(waiting.bench, waiting.ids["B"], "EXCEPTION").status_code == 200
+    assert next(a for a in waiting.view()["attributes"] if a["code"] == "B")["state"] != "SHOWN"
+    _refused(waiting.choose("EFFECTIVE"), 409, _exception_stands("B"))
+
+    relied = _Draft(migrated, "dcc-not-relied")
+    relied.concluded_and_signed("EFFECTIVE")
+    assert _decide_reliability(relied.bench, relied.ticket, "NOT_RELIED_ON").status_code == 200
+    body = relied.body()
+    assert body["status"] == "OUT_OF_DATE"
+    decided, rule = body["out_of_date"]
+    assert decided == "the reliability decision on ticket REQ-1041.txt changed after the sign-off"
+    assert rule.endswith("not yet shown in the records of an instance, so the conclusion "
+                         "cannot be “Effective”")  # fmt: skip
+    assert {a["shown_by"] for a in relied.view()["attributes"]} == {"NOT_RELIED"}
+    relied.shut()
+
+    logged = _Draft(migrated, "dcc-logged")
+    logged.concluded_and_signed("EFFECTIVE")
+    assert logged.view()["review"]["status"] == "SIGNED_OFF"
+    logged.deficiency()
+    view = logged.view()
+    assert (view["review"]["status"], view["review"]["out_of_date"]) == (
+        "OUT_OF_DATE", [DEFICIENCY_LOGGED_SINCE],
+    )  # fmt: skip
+    assert view["conclusion"]["signed"] is False
+    logged.shut()
+
+
+def test_the_sign_off_names_the_choice_it_signs(migrated: Database) -> None:
+    """Finding 4 and 7. A choice_id that is not the standing choice's is refused with
+    the sentence; a body with the two-value verdict and no conclusion, or no choice_id,
+    is a 422; nothing is signed."""
+    case = _Draft(migrated, "dcc-names")
+    first = case.chosen("EFFECTIVE")["choice"]
+    second = case.chosen("NO_INSTANCE")["choice"]
+    case.prepare()
+    _refused(case.sign_as("NO_INSTANCE", choice_id=first["id"]), 409, CHOICE_NOT_STANDING)
+    _refused(case.sign_as("NO_INSTANCE", choice_id=str(uuid4())), 409, CHOICE_NOT_STANDING)
+    assert CHOICE_NOT_STANDING == "the preparer's conclusion changed; read it again"
+    for sent in (
+        {"verdict": "EFFECTIVE", "choice_id": second["id"], "workpaper_version": case.version},
+        {"conclusion": "NO_INSTANCE", "workpaper_version": case.version},
+        {"conclusion": "NO_INSTANCE", "choice_id": second["id"], "verdict": "EFFECTIVE",
+         "workpaper_version": case.version},
+    ):  # fmt: skip
+        assert case.reviewer.post(f"{case.path}/sign-off", json=sent).status_code == 422
+    assert case.rows("SELECT count(*) FROM design_conclusions") == [(0,)]
+    signed = case.sign_as("NO_INSTANCE", choice_id=second["id"])
+    assert signed.status_code == 200, signed.text
+    assert case.signed_row()[4] == UUID(second["id"])
+
+
+def test_recording_a_choice_makes_a_prepare_from_an_older_page_stale(migrated: Database) -> None:
+    """Finding 9, with two people: the owner reads the draft workpaper; another person
+    records the conclusion on it; the owner's Prepare, sent from the page that has not
+    seen the choice, is refused as stale and prepares nothing. Read again, it prepares."""
+    case = _Draft(migrated, "dcc-version")
+    seen = case.paper()
+    case.chosen("EFFECTIVE", client=case.reviewer)
+    [(version,)] = case.rows("SELECT version FROM workpapers WHERE id = %s", UUID(seen["id"]))
+    assert version == seen["version"] + 1
+    stale = case.bench.owner.post(
+        f"{case.bench.base}/workpapers/{seen['id']}/prepare", json={"version": seen["version"]}
+    )
+    assert stale.status_code == 409, stale.text
+    assert case.paper()["status"] != "PREPARED"
+    case.prepare()
+    assert case.paper()["status"] == "PREPARED"
 
 
 # The 0143 guard as that migration created it: the first statement of its rollback.

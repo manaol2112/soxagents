@@ -319,7 +319,9 @@ class AttributeBody(BaseModel):
     checks: list[str] = Field(default_factory=list)
     notes: str = ""
     # How a current check shows the attribute, where it reads "Shown" (section 3.6): in
-    # the records of an instance, or only as a document requires it; null otherwise.
+    # the records of an instance, only as a document requires it, or NOT_RELIED where it is
+    # shown only on files a person decided are not relied on (which counts for neither the
+    # design nor the implementation); null for every other state.
     shown_by: design_conclusions.ShownBy | None = None
 
 
@@ -495,6 +497,8 @@ class CheckRecord:
     outcome: tuple[StoredOutcome, ...] = ()
     review: assurance.ReviewBody | None = None
     out_of_date: tuple[str, ...] = ()
+    # When the run finished (evidence_assessments.finished_at); None where it has not.
+    finished_at: datetime | None = None
 
     @property
     def current(self) -> bool:
@@ -566,6 +570,8 @@ class Reading:
     unreliable: bool = False
     # What is shown rests only on files a person decided are not relied on (section 10.14).
     not_relied: bool = False
+    # When the check that gives this reading finished (`CheckRecord.finished_at`).
+    found_at: datetime | None = None
 
 
 def _distinct[T](items: Iterable[T]) -> tuple[T, ...]:
@@ -694,6 +700,7 @@ def readings_of(check: CheckRecord, decisions: Sequence[FileDecision] = ()) -> d
             implementation=item.shows == "IMPLEMENTATION",
             unreliable=reliability_open(check, shows, decisions),
             not_relied=bool(shows) and all(file_id in not_relied for file_id in shows),
+            found_at=check.finished_at,
         )
     return found
 
@@ -717,19 +724,41 @@ def shown_by(
     checks' words that stand for it (`readings`): IMPLEMENTATION where a check shows it in
     the records of an instance (`Reading.implementation`), DESIGN where checks show it only
     as a document requires it, null for every other state. A check whose showing rests
-    only on files a person decided are not relied on (section 10.14) shows nothing here."""
+    only on files a person decided are not relied on (section 10.14) shows nothing here:
+    where every check that shows the attribute is such a one, NOT_RELIED, which the page
+    says under the result and neither the design nor the implementation counts.
+
+    That is the only way an attribute reads "Shown" with nothing to show it by: the state
+    is "Shown" only where a check's reading in `readings` is (`standing`), and a reading
+    that is not on files not relied on gives DESIGN or IMPLEMENTATION (one with no file to
+    its showing, as an engine 1 check's, is never "not relied on")."""
     if state != "SHOWN":
         return None
-    showing = [r for r in readings if r.state == "SHOWN" and not r.not_relied]
+    shown = [r for r in readings if r.state == "SHOWN"]
+    showing = [r for r in shown if not r.not_relied]
     if not showing:
-        return None
+        return "NOT_RELIED" if shown else None
     return "IMPLEMENTATION" if any(r.implementation for r in showing) else "DESIGN"
 
 
-def standing_of(attribute: AttributeBody) -> design_conclusions.AttributeStanding:
-    """An attribute as the D&I conclusion's design and implementation results read it."""
+def standing_of(
+    attribute: AttributeBody, readings: Sequence[Reading] = ()
+) -> design_conclusions.AttributeStanding:
+    """An attribute as the D&I conclusion's design and implementation results read it.
+    `readings` are the checks' words on it (as `attributes_of` gives them back): for an
+    attribute whose state is the check's exception, `found_at` is when the latest check
+    that shows the exception finished, and None where one of them has no finish time
+    (which the conclusion reads as not yet seen)."""
+    found_at: datetime | None = None
+    if attribute.state == "EXCEPTION":
+        times = [reading.found_at for reading in readings if reading.state == "EXCEPTION"]
+        known = [at for at in times if at is not None]
+        found_at = max(known) if known and len(known) == len(times) else None
     return design_conclusions.AttributeStanding(
-        code=attribute.code, state=attribute.state, shown_by=attribute.shown_by
+        code=attribute.code,
+        state=attribute.state,
+        shown_by=attribute.shown_by,
+        found_at=found_at,
     )
 
 
@@ -2271,6 +2300,7 @@ def load_checks(
             outcome=outcome,
             review=review,
             out_of_date=tuple(clean_line(reason, 300) for reason in reasons),
+            finished_at=run.finished_at,
         )
     return found
 
@@ -2404,8 +2434,15 @@ def _records(
     project_id: UUID,
     control_id: UUID,
     control: assurance._Control,
+    lean: bool = False,
 ) -> _Records:
-    order = _list_order(connection, project_id, control_id)
+    """Each kind of record the view assembles from, read once for the control. `lean`
+    (the D&I conclusion's read, where the view itself is not read): only what the
+    attributes' states and `shown_by` depend on. The requests keep the order they are read
+    in and their files carry no content type (both bear on the evidence index, the
+    sentences and the marks only), and the annotations are read only where a "Shown, on my
+    review" tickmark stands, which is all a state reads of them."""
+    order = [] if lean else _list_order(connection, project_id, control_id)
     place = {requirement_id: index for index, requirement_id in enumerate(order)}
     loaded = sorted(
         assurance._requests(connection, project_id, control_id),
@@ -2415,7 +2452,7 @@ def _records(
     links = assurance._linked(connection, control_id)
     checks = load_checks(connection, project_id, control_id, control, loaded, approved, links)
     file_ids = list(_distinct(file.file_id for request in loaded for file in request.files))
-    types = _content_types(connection, project_id, file_ids)
+    types = {} if lean else _content_types(connection, project_id, file_ids)
     known = {attribute[0] for attribute in approved}
     requests = [
         RequestRecord(
@@ -2429,19 +2466,23 @@ def _records(
         )
         for request in loaded
     ]
+    dispositions = list(standing_for(connection, control_id).values())
+    rests_on_annotations = any(d.kind == "SHOWN_ON_REVIEW" for d in dispositions)
     return _Records(
         order=order,
         file_ids=file_ids,
         requests=requests,
         checks=checks,
         attributes=[AttributeRecord(a[0], a[1], a[2]) for a in approved],
-        annotations=load_annotations(connection, project_id, control_id),
+        annotations=load_annotations(connection, project_id, control_id)
+        if rests_on_annotations or not lean
+        else [],
         decisions=decisions_applying(
             list(file_reliability.standing_for(connection, control_id).values()),
             checks,
             requests,
         ),
-        dispositions=list(standing_for(connection, control_id).values()),
+        dispositions=dispositions,
     )
 
 
@@ -2469,24 +2510,34 @@ def load_exceptions(
     )
 
 
-def attribute_standings(
-    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
-) -> list[design_conclusions.AttributeStanding]:
-    """The approved attributes as the view assembles them (`attributes_of`), from the same
-    records and by the same rules, read for the D&I conclusion's design and implementation
-    results where the view itself is not read. Empty for a control that is not found."""
+def conclusion_records(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID, excepted: bool = True
+) -> tuple[list[design_conclusions.AttributeStanding], list[design_conclusions.ExceptionRef]]:
+    """What the D&I conclusion reads of the control where the view itself is not read, in
+    one read of its requests and checks: the approved attributes as the view assembles
+    them (`attributes_of`, from the same records and by the same rules), and, with
+    `excepted`, the exceptions a person recorded that stand (`exceptions_standing`).
+
+    Only what the rule needs is read (`_records`, lean): no evidence index is built, so the
+    attributes' references and marks are not worked out; their states, `shown_by` and the
+    time a check found an exception are exactly the view's. Nothing for a control that is
+    not found."""
     control = assurance._control(connection, project_id, control_id)
     if control is None:
-        return []
-    records = _records(connection, project_id, control_id, control)
-    evidence, _more = evidence_index(
-        records.requests, records.checks, records.annotations, records.decisions
-    )
-    shown, _readings = attributes_of(
-        records.attributes, records.requests, records.checks, records.annotations, evidence,
+        return [], []
+    records = _records(connection, project_id, control_id, control, lean=True)
+    shown, readings = attributes_of(
+        records.attributes, records.requests, records.checks, records.annotations, [],
         None, records.dispositions, records.decisions,
     )  # fmt: skip
-    return [standing_of(attribute) for attribute in shown]
+    exceptions = (
+        exceptions_standing(
+            records.attributes, exceptions_on_record(connection, control_id), records.checks
+        )
+        if excepted
+        else []
+    )
+    return [standing_of(a, readings.get(a.id, ())) for a in shown], exceptions
 
 
 def drafter_record(
@@ -2569,7 +2620,7 @@ def read_design_workpaper(
     conclusion = design_conclusions._body(
         connection, project_id, control_id, principal.id,
         exceptions_standing(attributes, excepted, checks),
-        [standing_of(attribute) for attribute in shown], may_update,
+        [standing_of(a, readings.get(a.id, ())) for a in shown], may_update,
     )  # fmt: skip
     header = _section(content, "control")
     understanding = _text_section(content, _ACTIVITY_ROLES)
@@ -2694,11 +2745,11 @@ __all__ = [
     "StoredOutcome",
     "annotations_standing",
     "attribute_notes",
-    "attribute_standings",
     "attributes_of",
     "can_edit_sections",
     "closed_by_tickmark",
     "conclusion_of",
+    "conclusion_records",
     "decision_matters",
     "decisions_applying",
     "disposition_basis",

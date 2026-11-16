@@ -235,38 +235,32 @@ def sign_off_design(
                     (organization, project_id, control, template or "design", owner, owner),
                 ).fetchone()
             assert paper is not None
-            # The reviewer signs the preparer's conclusion (docs/design-workpaper.md, section
-            # 3.6), recorded on the draft: here, at the preparation. One that stood is
-            # replaced.
+            # A sign-off made before preparers recorded their conclusion (docs/design-
+            # workpaper.md, section 3.6): no choice stands and it names none, so it is held
+            # to the effective rules it was signed under only. Independent review, 15
+            # November 2026: old, the setup wrote a preparer's effective choice and a
+            # sign-off of it; new, a sign-off made from a choice is held to its conclusion's
+            # rule on the records as they are, and this setup checks no evidence, so that
+            # sign-off would be out of date at once and OE would stay shut for every test of
+            # what follows D&I. The service cannot make this state (it signs only a
+            # choice), so it is written directly. Tests of the OE gate on a preparer's
+            # choice sign through the service (test_design_conclusion_choice.py).
             connection.execute(
                 "UPDATE design_conclusion_choices SET ended_at = clock_timestamp(), "
                 "ended_by = %s, ended_as = 'REPLACED' "
                 "WHERE engagement_control_id = %s AND ended_at IS NULL",
                 (owner, control),
             )
-            choice = connection.execute(
-                """
-                INSERT INTO design_conclusion_choices (
-                    organization_id, project_id, engagement_control_id, workpaper_id,
-                    workpaper_version, kind, proposed_kind, recorded_by, recorded_at
-                )
-                VALUES (%s, %s, %s, %s, %s, 'EFFECTIVE', 'EFFECTIVE', %s, %s)
-                RETURNING id
-                """,
-                (organization, project_id, control, paper[0], paper[1], owner, paper[2]),
-            ).fetchone()
-            assert choice is not None
             connection.execute(
                 """
                 INSERT INTO design_conclusions (
                     organization_id, project_id, engagement_control_id, workpaper_id,
-                    workpaper_version, verdict, signed_by, signoff_note, conclusion,
-                    conclusion_reason, choice_id
+                    workpaper_version, verdict, signed_by, signoff_note, conclusion
                 )
                 VALUES (%s, %s, %s, %s, %s, 'EFFECTIVE', %s, 'Signed off in the test setup.',
-                        'EFFECTIVE', '', %s)
+                        'EFFECTIVE')
                 """,
-                (organization, project_id, control, paper[0], paper[1], owner, choice[0]),
+                (organization, project_id, control, paper[0], paper[1], owner),
             )
 
 

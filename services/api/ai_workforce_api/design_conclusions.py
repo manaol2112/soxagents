@@ -57,11 +57,46 @@ the verdict and the reviewer signs exactly it":
   Not concluded is never signed. A sign-off no longer holds once the standing choice
   changed after it.
 
+Tightened after the independent review (15 November 2026; docs/design-workpaper.md, section
+3.6, last part). Each closes a way a conclusion could be signed, or keep clearing OE,
+without resting on the records:
+
+- Independence covers the conclusion itself: where independence is required, the person
+  who recorded the standing choice cannot sign it, as the workpaper's preparer cannot.
+- Exceptions noted needs an exception on record (the check's or a person's) and every
+  other approved attribute shown in the records of an instance or settled by a closing
+  tickmark, at the choice and again at the sign-off; at the sign-off also no exception
+  noted after the choice was recorded. "Noted after" compares, with the choice's
+  `recorded_at`: a person's exception's own `recorded_at`; for an exception a check shows,
+  the `finished_at` of the latest current check run that shows it on the attribute (a run
+  with no finish time counts as after). The proposal follows: with an exception and other
+  attributes still open it is not concluded, and its reasons name both.
+- A sign-off made from a preparer's choice stops holding when the rule that allowed its
+  conclusion would refuse it on the records as they are now (`_Facts.rule_broken`): the
+  reason is the rule's own sentence. `design_verdict`, `oe_gate_reason` and
+  `effective_controls` all read it (`_held`). A sign-off made before choices were recorded
+  (no `choice_id`) is held to the rules it was signed under only, as before; so is one the
+  demo seeded (`_STANDING`: on a demo engagement and signed by a demo identity, two
+  markers the database sets only in demo initialization and never changes).
+- The sign-off names the choice it signs (`choice_id`); one that is not the standing
+  choice is refused. The two-value `verdict` is no longer accepted in the body.
+- Recording a choice bumps the design workpaper's `version`, so a Prepare sent from a page
+  that has not seen the choice is refused as stale.
+
+What the gate costs. The rule needs the attributes as the design workpaper assembles them:
+the control's D&I requests, their checks, tickmarks and decisions. They are read once per
+control per call, in one read with the person's exceptions
+(`design_workpaper.conclusion_records`), and only where the answer depends on them: never
+for a sign-off that something cheaper already puts out of date, one not held to the rule,
+or one of not effective (which the rule never refuses). `effective_controls` leaves out,
+in its one query, the sign-offs whose workpaper is not prepared at the signed version or
+whose choice is no longer the standing one.
+
 `design_verdict` is what the OE gate reads: the verdict signed off and still current, or None.
 """
 
 from collections.abc import Callable, Collection, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
@@ -69,7 +104,7 @@ from uuid import UUID
 import psycopg
 from fastapi import FastAPI, HTTPException, Request
 from psycopg.types.json import Json
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from ai_workforce_api import attribute_dispositions, file_reliability, independence
 from ai_workforce_api.authorization import (
@@ -97,9 +132,11 @@ DesignConclusionKind = Literal[
 SignedKind = Literal["EFFECTIVE", "EXCEPTIONS_NOTED", "NOT_EFFECTIVE", "NO_INSTANCE"]
 # What a not effective conclusion rests on.
 Basis = Literal["DESIGN", "IMPLEMENTATION", "BOTH"]
-# How a current check shows an attribute: in the records of an instance, or only as a
-# document requires it.
-ShownBy = Literal["IMPLEMENTATION", "DESIGN"]
+# How a current check shows an attribute that reads "Shown": in the records of an instance,
+# only as a document requires it, or only on files a person decided are not relied on
+# (which shows nothing: neither the design nor the implementation counts it).
+ShownBy = Literal["IMPLEMENTATION", "DESIGN", "NOT_RELIED"]
+_SHOWING: frozenset[str] = frozenset({"IMPLEMENTATION", "DESIGN"})
 ResultKind = Literal["IN_PLACE", "DESIGNED", "EXCEPTIONS", "OPEN"]
 
 KINDS: tuple[DesignConclusionKind, ...] = (
@@ -145,16 +182,26 @@ DESIGN_NOT_SHOWN = (
     "or settled by a tickmark"
 )
 CHOICE_CHANGED = "the preparer's conclusion changed"
+# Tightened after the independent review (15 November 2026; section 3.6, last part).
+RECORDER_CANNOT_SIGN = "you recorded this conclusion; another reviewer must sign it off"
+EXCEPTIONS_NEEDED = (
+    "Exceptions noted needs an exception on record and every other attribute shown or settled"
+)
+EXCEPTION_SINCE = (
+    "an exception was noted after this conclusion was recorded; the preparer records it again"
+)
+CHOICE_NOT_STANDING = "the preparer's conclusion changed; read it again"
 REASON_NEEDED = f"give the reason in a sentence of at least {REASON_MIN} characters"
 REASON_TOO_LONG = f"the reason can be at most {REASON_MAX} characters"
 BASIS_NEEDED = "say whether the design, the implementation or both are not effective"
 BASIS_NOT_TAKEN = "a basis is given only for a conclusion of “Not effective”"
-CONCLUSION_NEEDED = "name the conclusion you sign off"
 
 # A design deficiency counts against the design until it is remediated or closed.
 _STANDING_DEFICIENCY = ("OPEN", "REMEDIATION_IN_PROGRESS", "READY_FOR_RETEST")
 
-# Why a standing sign-off no longer holds, of a person's tickmarks (section 10.15, item 5).
+# Why a standing sign-off no longer holds: a design deficiency logged since; and, of a
+# person's tickmarks (section 10.15, item 5), an exception that stands unanswered.
+DEFICIENCY_LOGGED_SINCE = "a design deficiency was logged after the sign-off"
 EXCEPTION_UNANSWERED = (
     "an exception is recorded on an attribute and no design deficiency is logged for it"
 )
@@ -251,11 +298,15 @@ NO_DEFICIENCY_NOR_EXCEPTION = "No design deficiency is logged and no exception s
 @dataclass(frozen=True)
 class AttributeStanding:
     """One approved attribute as the design workpaper assembles it: its letter, its state
-    (design_workpaper.AttributeState) and how a current check shows it (`shown_by`)."""
+    (design_workpaper.AttributeState) and how a current check shows it (`shown_by`). For
+    an attribute whose state is the check's exception, `found_at` is when the latest
+    current check that shows the exception finished (None where the run has no finish
+    time)."""
 
     code: str
     state: str
     shown_by: ShownBy | None = None
+    found_at: datetime | None = None
 
 
 class ResultBody(BaseModel):
@@ -277,6 +328,17 @@ class Results:
     implementation: ResultBody
     # The attributes on which an exception stands, in the attributes' order.
     exceptions: tuple[str, ...] = ()
+    # The other attributes not yet shown in the records of an instance nor settled by a
+    # closing tickmark, in the attributes' order: what "Exceptions noted" cannot leave open.
+    others_open: tuple[str, ...] = ()
+    # For each attribute whose state is the check's exception, when the latest current
+    # check that shows it finished (None where unknown).
+    found: tuple[datetime | None, ...] = ()
+
+    def found_since(self, when: datetime) -> bool:
+        """Whether a current check that shows an exception finished after `when`. A run
+        with no finish time counts as after: it is never assumed to have been seen."""
+        return any(at is None or at > when for at in self.found)
 
 
 def _attributes(codes: Sequence[str], capital: bool = False) -> str:
@@ -321,7 +383,7 @@ def results_of(attributes: Sequence[AttributeStanding], excepted: Collection[str
     designed_open = [
         a.code
         for a in attributes
-        if not (a.state in _CLOSED_STATES or (a.state == "SHOWN" and a.shown_by is not None))
+        if not (a.state in _CLOSED_STATES or (a.state == "SHOWN" and a.shown_by in _SHOWING))
     ]
     implemented_open = [
         a.code
@@ -336,6 +398,8 @@ def results_of(attributes: Sequence[AttributeStanding], excepted: Collection[str
             ResultBody(result="EXCEPTIONS", sentence=sentence, open=designed_open),
             ResultBody(result="EXCEPTIONS", sentence=sentence, open=implemented_open),
             exceptions,
+            tuple(code for code in implemented_open if code not in exceptions),
+            tuple(a.found_at for a in attributes if a.state == "EXCEPTION"),
         )
     design = (
         ResultBody(result="DESIGNED", sentence=DESIGNED_SENTENCE)
@@ -366,13 +430,20 @@ def _deficiencies_sentence(count: int) -> str:
 
 def proposal_of(deficiencies: int, results: Results) -> tuple[DesignConclusionKind, list[str]]:
     """The conclusion the records propose, and why, one sentence each (section 3.6), in
-    this order: not effective where a design deficiency stands; else exceptions noted
-    where any attribute is an exception; else not concluded where the design or the
-    implementation is open (design alone, without the instance, is not effective); else
-    effective."""
+    this order: not effective where a design deficiency stands; else, where any attribute
+    is an exception, exceptions noted, but only where the rule would accept it
+    (`choice_refusal`): with another attribute still open it is not concluded, and the
+    reasons name both the exception and what is open; else not concluded where the design
+    or the implementation is open (design alone, without the instance, is not effective);
+    else effective."""
     if deficiencies:
         return "NOT_EFFECTIVE", [_deficiencies_sentence(deficiencies)]
     if results.exceptions:
+        if results.others_open:
+            return "NOT_CONCLUDED", [
+                results.design.sentence,
+                _not_yet(results.others_open, " in the records of an instance"),
+            ]
         return "EXCEPTIONS_NOTED", [results.design.sentence]
     opened = [r.sentence for r in (results.design, results.implementation) if r.result == "OPEN"]
     if opened:
@@ -382,16 +453,20 @@ def proposal_of(deficiencies: int, results: Results) -> tuple[DesignConclusionKi
 
 def choice_refusal(kind: str, deficiencies: int, results: Results) -> str | None:
     """Why the conclusion cannot be recorded, or signed, on the records as they are; None
-    where it can. Effective: while a design deficiency or an exception stands, or the
-    design or the implementation is open. Exceptions noted and no instance: while a
-    design deficiency stands. No instance also unless the design result is DESIGNED: its
-    words say the design is effective (DESIGN_NOT_SHOWN). Not effective and not
-    concluded: never refused here (a sign-off of not effective also needs a standing
-    design deficiency: DEFICIENCY_FIRST)."""
+    where it can. It is also what a sign-off of the conclusion is held to afterwards
+    (`_Facts.rule_broken`). Effective: while a design deficiency or an exception stands,
+    or the design or the implementation is open. Exceptions noted and no instance: while a
+    design deficiency stands. Exceptions noted also unless an exception stands (the
+    check's or a person's) and every other attribute is shown in the records of an
+    instance or settled by a closing tickmark (EXCEPTIONS_NEEDED): effective needs the
+    instance, and an exception never makes OE easier to clear than no exception would. No
+    instance also unless the design result is DESIGNED: its words say the design is
+    effective (DESIGN_NOT_SHOWN). Not effective and not concluded: never refused here (a
+    sign-off of not effective also needs a standing design deficiency: DEFICIENCY_FIRST)."""
     words = KIND_WORDS.get(kind, kind)
+    if kind in ("EFFECTIVE", "EXCEPTIONS_NOTED", "NO_INSTANCE") and deficiencies:
+        return _deficiency_refusal(kind)
     if kind == "EFFECTIVE":
-        if deficiencies:
-            return f"a design deficiency is logged, so the conclusion cannot be “{words}”"
         if results.exceptions:
             where = _attributes(results.exceptions)
             return f"an exception stands on {where}, so the conclusion cannot be “{words}”"
@@ -408,11 +483,17 @@ def choice_refusal(kind: str, deficiencies: int, results: Results) -> str | None
                 f"an instance, so the conclusion cannot be “{words}”"
             )
         return None
-    if kind in ("EXCEPTIONS_NOTED", "NO_INSTANCE") and deficiencies:
-        return f"a design deficiency is logged, so the conclusion cannot be “{words}”"
+    if kind == "EXCEPTIONS_NOTED" and (not results.exceptions or results.others_open):
+        return EXCEPTIONS_NEEDED
     if kind == "NO_INSTANCE" and results.design.result != "DESIGNED":
         return DESIGN_NOT_SHOWN
     return None
+
+
+def _deficiency_refusal(kind: str) -> str:
+    """The refusal of a conclusion that a standing design deficiency rules out."""
+    words = KIND_WORDS.get(kind, kind)
+    return f"a design deficiency is logged, so the conclusion cannot be “{words}”"
 
 
 def reason_needed(kind: str, proposed: str) -> bool:
@@ -536,6 +617,10 @@ class DesignConclusionBody(BaseModel):
     independence_required: bool
     can_sign: bool
     history: list[SignoffRecord]
+    # Whether the viewer recorded the preparer's conclusion that stands. Where independence
+    # is required they cannot sign it: `can_sign` is false, and for a reviewer `blocking`
+    # says so (RECORDER_CANNOT_SIGN).
+    viewer_recorded: bool = False
     # The conclusion the records propose now, whatever the workpaper's state, and why
     # (section 3.6). `proposed` above is the two-value verdict, kept for its readers.
     proposed_conclusion: DesignConclusionKind = "NOT_CONCLUDED"
@@ -549,21 +634,17 @@ class DesignConclusionBody(BaseModel):
 
 
 class SignOffBody(BaseModel):
-    """The reviewer signs the preparer's standing conclusion (`conclusion`). `verdict`, the
-    two-value verdict the screen sent before section 3.6, is accepted for one release:
-    where given it must be the two-value verdict of the preparer's standing conclusion,
-    and that conclusion is what is signed."""
+    """The reviewer signs the preparer's standing conclusion: `conclusion` is its kind and
+    `choice_id` the choice the reviewer read, so that one recorded since is never signed
+    unread (CHOICE_NOT_STANDING). Nothing else is taken: the two-value `verdict` the
+    screen sent before section 3.6 is no longer accepted."""
 
-    conclusion: DesignConclusionKind | None = None
-    verdict: Verdict | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    conclusion: DesignConclusionKind
+    choice_id: UUID
     workpaper_version: int = Field(ge=1)
     note: str = Field(default="", max_length=1000)
-
-    @model_validator(mode="after")
-    def _named(self) -> SignOffBody:
-        if self.conclusion is None and self.verdict is None:
-            raise ValueError(CONCLUSION_NEEDED)
-        return self
 
 
 class ChoiceBody(BaseModel):
@@ -591,16 +672,25 @@ class _Facts:
     # prepared_at, current_version) of the design workpaper.
     workpaper: tuple[Any, ...] | None
     deficiencies: list[DeficiencyRef]
-    # (id, workpaper_version, verdict, deficiencies, signed_at, choice_id, conclusion) of
-    # the sign-off that stands.
+    # (id, workpaper_version, verdict, deficiencies, signed_at, choice_id, conclusion,
+    # seeded with the demo) of the sign-off that stands (`_STANDING`).
     standing: tuple[Any, ...] | None
     # What a person recorded or ended after the standing sign-off, each as the reason it
     # gives: the tickmarks (by attribute), the decisions on files' reliability (by file).
     changed: tuple[str, ...] = ()
     # The exceptions a person recorded that stand, whatever their request's check.
     exceptions: tuple[ExceptionRef, ...] = ()
-    # The preparer's conclusion that stands.
+    # The preparer's conclusion that stands, and who recorded it.
     choice: ChoiceRecord | None = None
+    choice_by: UUID | None = None
+    # The approved attributes as the design workpaper assembles them; None until they are
+    # read (`_facts` with `assemble`, or `_assembled`).
+    attributes: tuple[AttributeStanding, ...] | None = None
+    # Whether a person's exception stands on the control at all, and whether `exceptions`
+    # holds them: a gate's read of a sign-off held to its rules leaves them, with the
+    # attributes, until the rule is read (`_held`).
+    excepted: bool = False
+    exceptions_read: bool = True
 
     @property
     def proposed(self) -> Verdict | None:
@@ -608,12 +698,28 @@ class _Facts:
             return None
         return "NOT_EFFECTIVE" if self.deficiencies else "EFFECTIVE"
 
+    def held_to_rules(self) -> bool:
+        """Whether the standing sign-off is held to the rules of its own conclusion on the
+        records as they are now (`rule_broken`): one a reviewer signed from a preparer's
+        choice. Not one made before choices were recorded (no `choice_id`), which is held
+        to the rules it was signed under only; nor one the demo seeded, on records with no
+        check of the evidence."""
+        standing = self.standing
+        return standing is not None and standing[5] is not None and not standing[7]
+
+    def results(self) -> Results:
+        """The design and implementation results, from the attributes as the design
+        workpaper assembles them and the person's exceptions that stand."""
+        assert self.attributes is not None and self.exceptions_read
+        return results_of(self.attributes, {exception.code for exception in self.exceptions})
+
     def unanswered(self) -> list[str]:
         """One sentence per attribute with an exception a person recorded, while no design
         deficiency stands: what keeps the conclusion from being signed. With a design
         deficiency standing the records propose not effective, and nothing is said here.
         An attribute's sentence says the request waits to be checked again only where none
         of its exceptions is on a current check."""
+        assert self.exceptions_read
         if self.deficiencies:
             return []
         current: dict[str, bool] = {}
@@ -621,8 +727,18 @@ class _Facts:
             current[exception.code] = current.get(exception.code, False) or exception.check_current
         return [exception_sentence(code, on_check) for code, on_check in current.items()]
 
-    def out_of_date(self) -> list[str]:
-        """Why the standing sign-off no longer holds (empty when it holds or none stands)."""
+    def noted_since(self, results: Results, when: datetime) -> bool:
+        """Whether an exception was recorded or found after `when` (the time a choice was
+        recorded): a person's exception that stands and was recorded after it, or an
+        exception a current check shows whose run finished after it."""
+        assert self.exceptions_read
+        return any(e.recorded_at > when for e in self.exceptions) or results.found_since(when)
+
+    def stale(self) -> list[str]:
+        """Why the standing sign-off no longer holds, as far as the records say without
+        the attributes being read (empty where they say nothing, or none stands): the
+        workpaper, the design deficiencies, what a person recorded since, the preparer's
+        choice. A sign-off held to its conclusion's rules is then read by `rule_broken`."""
         if self.standing is None:
             return []
         reasons: list[str] = []
@@ -633,17 +749,22 @@ class _Facts:
         signed = {str(item["id"]) for item in self.standing[3]}
         now = {str(item.id) for item in self.deficiencies}
         if now - signed:
-            reasons.append("a design deficiency was logged after the sign-off")
+            reasons.append(DEFICIENCY_LOGGED_SINCE)
         if signed - now:
             reasons.append("a design deficiency was remediated or closed after the sign-off")
         if self.changed:
             reasons.extend(self.changed)
-        elif self.standing[6] in _BLOCKED_BY_EXCEPTIONS and self.unanswered():
+        elif (
+            not self.held_to_rules()
+            and self.standing[6] in _BLOCKED_BY_EXCEPTIONS
+            and self.unanswered()
+        ):
             # Nothing changed since, and still an exception stands unanswered under a
-            # sign-off as effective (its request was restored, its attribute approved
-            # again, or it was signed before every standing exception counted): the OE
-            # gate never reads a verdict signed over a standing exception. A sign-off of
-            # exceptions noted or not effective concludes on the exceptions (section 3.6).
+            # sign-off as effective that is not held to its conclusion's rules (one made
+            # before choices were recorded: its request was restored, its attribute
+            # approved again, or it was signed before every standing exception counted):
+            # the OE gate never reads a verdict signed over a standing exception. One held
+            # to its rules says so by the rule's own sentence (`rule_broken`).
             reasons.append(EXCEPTION_UNANSWERED)
         # The preparer's conclusion the reviewer signed no longer stands: another was
         # recorded since (on the reopened workpaper). A sign-off made before preparers
@@ -653,11 +774,49 @@ class _Facts:
             reasons.append(CHOICE_CHANGED)
         return reasons
 
+    def rule_broken(self, results: Results) -> str | None:
+        """Why the rule that allowed the standing sign-off's conclusion would refuse it on
+        the records as they are now, in the rule's own sentence; None where it holds, and
+        for a sign-off not held to it (`held_to_rules`). The rule is the choice's
+        (`choice_refusal`, for the conclusion that was signed); for exceptions noted also
+        that no exception was noted after the signed choice was recorded (EXCEPTION_SINCE),
+        as its sign-off was held to. Not effective is never refused by it."""
+        if not self.held_to_rules():
+            return None
+        assert self.standing is not None
+        kind = str(self.standing[6])
+        refusal = choice_refusal(kind, len(self.deficiencies), results)
+        choice = self.choice
+        if (
+            refusal is None
+            and kind == "EXCEPTIONS_NOTED"
+            and choice is not None
+            and choice.id == UUID(str(self.standing[5]))
+            and self.noted_since(results, choice.recorded_at)
+        ):
+            return EXCEPTION_SINCE
+        return refusal
+
+    def out_of_date(self, results: Results) -> list[str]:
+        """Why the standing sign-off no longer holds (empty when it holds or none stands):
+        what `stale` says, then the sentence of the rule it no longer meets
+        (`rule_broken`). A design deficiency logged since is said once, by its own reason."""
+        reasons = self.stale()
+        broken = self.rule_broken(results)
+        if broken is None:
+            return reasons
+        assert self.standing is not None
+        said = DEFICIENCY_LOGGED_SINCE in reasons
+        if not (said and broken == _deficiency_refusal(str(self.standing[6]))):
+            reasons.append(broken)
+        return reasons
+
     def signing_refusals(self, results: Results) -> list[str]:
         """What keeps the preparer's standing conclusion from being signed on the records
         as they are (section 3.6), each one sentence; empty where it can be. A person's
         standing exceptions keep only effective (and no instance, which says the design is
-        effective) from being signed, one sentence per attribute as before."""
+        effective) from being signed, one sentence per attribute as before. Exceptions
+        noted is also refused where an exception was noted after it was recorded."""
         choice = self.choice
         if choice is None:
             return [NO_CHOICE]
@@ -678,6 +837,8 @@ class _Facts:
         refusal = choice_refusal(choice.kind, len(self.deficiencies), results)
         if refusal is not None:
             return [refusal]
+        if choice.kind == "EXCEPTIONS_NOTED" and self.noted_since(results, choice.recorded_at):
+            return [EXCEPTION_SINCE]
         if choice.kind == "NOT_EFFECTIVE" and not self.deficiencies:
             return [DEFICIENCY_FIRST]
         return []
@@ -698,6 +859,25 @@ def _exceptions(
     from ai_workforce_api.design_workpaper import load_exceptions
 
     return load_exceptions(connection, project_id, control_id)
+
+
+def _assembled(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID, facts: _Facts
+) -> _Facts:
+    """The facts with the approved attributes as the design workpaper assembles them, and
+    the person's exceptions that stand where they were not read yet: one read of the
+    control's requests and checks for both (`design_workpaper.conclusion_records`, by the
+    view's own rules; that module imports this one, so it is imported here)."""
+    from ai_workforce_api.design_workpaper import conclusion_records
+
+    wanted = facts.excepted and not facts.exceptions_read
+    attributes, exceptions = conclusion_records(connection, project_id, control_id, wanted)
+    return replace(
+        facts,
+        attributes=tuple(attributes),
+        exceptions=tuple(exceptions) if wanted else facts.exceptions,
+        exceptions_read=True,
+    )
 
 
 def _changed(
@@ -730,16 +910,38 @@ def _changed(
     return tuple(reasons)
 
 
+# The sign-off that stands on a control. Its last column: whether the demo seeded it,
+# which is a sign-off on a demo engagement signed by a demo identity. The database sets
+# both markers only inside demo initialization and never changes them (migrations 0128 and
+# 0130), and a demo identity can never sign in, so no sign-off a person makes, on a demo
+# engagement or any other, reads as seeded.
+_STANDING = """
+    SELECT d.id, d.workpaper_version, d.verdict, d.deficiencies, d.signed_at, d.choice_id,
+           d.conclusion, coalesce(p.demo AND s.demo_organization_id IS NOT NULL, false)
+    FROM design_conclusions d
+    JOIN projects p ON p.id = d.project_id
+    LEFT JOIN users s ON s.id = d.signed_by
+    WHERE d.project_id = %s AND d.engagement_control_id = %s AND d.reopened_at IS NULL
+"""
+
+
 def _facts(
     connection: psycopg.Connection[Any],
     project_id: UUID,
     control_id: UUID,
     lock: bool = False,
     exceptions: Sequence[ExceptionRef] | None = None,
+    attributes: Sequence[AttributeStanding] | None = None,
+    assemble: bool = False,
 ) -> _Facts:
-    """What the conclusion rests on. `exceptions` are the exceptions that stand where the
-    caller has read them already (the design workpaper's view); otherwise they are read
-    here, and only for a control on which a person's exception stands at all."""
+    """What the conclusion rests on. `exceptions` and `attributes` are the person's
+    exceptions that stand and the attributes as assembled, where the caller has read them
+    already (the design workpaper's view). Otherwise, with `assemble` (the conclusion as a
+    person reads it, the choice, the sign-off), both are read here, in one read of the
+    control's requests and checks. Without it (the gate's readers) the attributes are not
+    read, and the exceptions only for a control on which one stands at all, under a
+    sign-off that is not held to its conclusion's rules: one that is leaves both until
+    the rule is read (`_held`)."""
     control = connection.execute(
         "SELECT organization_id FROM engagement_controls WHERE project_id = %s AND id = %s",
         (project_id, control_id),
@@ -769,38 +971,45 @@ def _facts(
         ).fetchall()
     ]
     standing = connection.execute(
-        """
-        SELECT id, workpaper_version, verdict, deficiencies, signed_at, choice_id, conclusion
-        FROM design_conclusions
-        WHERE project_id = %s AND engagement_control_id = %s AND reopened_at IS NULL
-        """
-        + (" FOR UPDATE" if lock else ""),
-        (project_id, control_id),
+        _STANDING + (" FOR UPDATE OF d" if lock else ""), (project_id, control_id)
     ).fetchone()
     signed_at: datetime | None = None if standing is None else standing[4]
     marked, excepted = attribute_dispositions.signoff_facts(connection, control_id, signed_at)
     changed = _changed(connection, control_id, marked, signed_at)
-    if exceptions is None:
-        exceptions = _exceptions(connection, project_id, control_id) if excepted else ()
-    return _Facts(
+    choice, choice_by = _standing_choice(connection, project_id, control_id, lock)
+    facts = _Facts(
         UUID(str(control[0])),
         workpaper,
         deficiencies,
         standing,
         changed,
-        tuple(exceptions),
-        _standing_choice(connection, project_id, control_id, lock),
+        () if exceptions is None else tuple(exceptions),
+        choice,
+        choice_by,
+        None if attributes is None else tuple(attributes),
+        excepted,
+        exceptions is not None or not excepted,
     )
+    if facts.attributes is None and assemble:
+        return _assembled(connection, project_id, control_id, facts)
+    if not facts.exceptions_read and not (facts.attributes is None and facts.held_to_rules()):
+        return replace(
+            facts,
+            exceptions=tuple(_exceptions(connection, project_id, control_id)),
+            exceptions_read=True,
+        )
+    return facts
 
 
 def _standing_choice(
     connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID, lock: bool = False
-) -> ChoiceRecord | None:
-    """The preparer's conclusion that stands on the control, or None."""
+) -> tuple[ChoiceRecord | None, UUID | None]:
+    """The preparer's conclusion that stands on the control and who recorded it, or
+    neither."""
     row = connection.execute(
         """
         SELECT c.id, c.kind, c.basis, c.reason, c.proposed_kind, u.display_name,
-               c.recorded_at, c.workpaper_version
+               c.recorded_at, c.workpaper_version, c.recorded_by
         FROM design_conclusion_choices c LEFT JOIN users u ON u.id = c.recorded_by
         WHERE c.project_id = %s AND c.engagement_control_id = %s AND c.ended_at IS NULL
         """
@@ -808,8 +1017,8 @@ def _standing_choice(
         (project_id, control_id),
     ).fetchone()
     if row is None:
-        return None
-    return ChoiceRecord(
+        return None, None
+    record = ChoiceRecord(
         id=UUID(str(row[0])),
         kind=row[1],
         basis=row[2],
@@ -819,24 +1028,24 @@ def _standing_choice(
         recorded_at=row[6],
         workpaper_version=int(row[7]),
     )
+    return record, UUID(str(row[8]))
 
 
-def _results(
-    connection: psycopg.Connection[Any],
-    project_id: UUID,
-    control_id: UUID,
-    facts: _Facts,
-    attributes: Sequence[AttributeStanding] | None = None,
-) -> Results:
-    """The design and implementation results, from the attributes as the design
-    workpaper assembles them (`attributes`, where the caller has them already; otherwise
-    read here, by the same rules: design_workpaper imports this module, so it is imported
-    here) and the person's exceptions that stand."""
-    if attributes is None:
-        from ai_workforce_api.design_workpaper import attribute_standings
-
-        attributes = attribute_standings(connection, project_id, control_id)
-    return results_of(attributes, {exception.code for exception in facts.exceptions})
+def _held(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID, facts: _Facts
+) -> bool:
+    """Whether the standing sign-off holds, as the OE gate reads it: nothing in `stale`,
+    and its conclusion's rule not broken. The attributes are read (once, with the person's
+    exceptions) only where the answer depends on them: not for a sign-off already out of
+    date, one not held to the rule, or one of not effective, which the rule never
+    refuses."""
+    if facts.standing is None or facts.stale():
+        return False
+    if not facts.held_to_rules() or facts.standing[6] == "NOT_EFFECTIVE":
+        return True
+    if facts.attributes is None:
+        facts = _assembled(connection, project_id, control_id, facts)
+    return facts.rule_broken(facts.results()) is None
 
 
 def design_verdict(
@@ -845,7 +1054,7 @@ def design_verdict(
     """The D&I verdict a reviewer signed off that still holds, or None: what the OE gate
     reads."""
     facts = _facts(connection, project_id, control_id)
-    if facts.standing is None or facts.out_of_date():
+    if facts.standing is None or not _held(connection, project_id, control_id, facts):
         return None
     verdict: Verdict = "EFFECTIVE" if facts.standing[2] == "EFFECTIVE" else "NOT_EFFECTIVE"
     return verdict
@@ -878,11 +1087,25 @@ def effective_controls(
     connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID | None = None
 ) -> set[UUID]:
     """The controls (one, or the engagement's) whose D&I conclusion is signed off effective
-    and still holds, read for the phase progress."""
+    and still holds, read for the phase progress and the release of OE requests. Each is
+    read as the gate reads it (`design_verdict`). The one query first leaves out the
+    sign-offs that two of `_Facts.stale`'s rules already put out of date, so that nothing
+    more is read for them: the design workpaper not prepared at the signed version, and a
+    signed choice that is no longer the one standing (or one standing where none was
+    signed)."""
     rows = connection.execute(
-        "SELECT engagement_control_id FROM design_conclusions "
-        "WHERE project_id = %s AND reopened_at IS NULL AND verdict = 'EFFECTIVE'"
-        + (" AND engagement_control_id = %s" if control_id is not None else ""),
+        """
+        SELECT d.engagement_control_id
+        FROM design_conclusions d
+        JOIN workpapers w ON w.project_id = d.project_id
+             AND w.engagement_control_id = d.engagement_control_id AND w.stage = 'DESIGN'
+        LEFT JOIN design_conclusion_choices c ON c.project_id = d.project_id
+             AND c.engagement_control_id = d.engagement_control_id AND c.ended_at IS NULL
+        WHERE d.project_id = %s AND d.reopened_at IS NULL AND d.verdict = 'EFFECTIVE'
+          AND w.status = 'PREPARED' AND w.prepared_version = d.workpaper_version
+          AND c.id IS NOT DISTINCT FROM d.choice_id
+        """
+        + (" AND d.engagement_control_id = %s" if control_id is not None else ""),
         (project_id, control_id) if control_id is not None else (project_id,),
     ).fetchall()
     return {
@@ -941,12 +1164,15 @@ def _body(
     """The D&I conclusion as the viewer reads it. `exceptions` and `attributes` are what
     the design workpaper's view has read already; `may_update` is whether the viewer is a
     person who may update the engagement's work (the choice's rule)."""
-    facts = _facts(connection, project_id, control_id, exceptions=exceptions)
-    results = _results(connection, project_id, control_id, facts, attributes)
+    facts = _facts(
+        connection, project_id, control_id, exceptions=exceptions, attributes=attributes,
+        assemble=True,
+    )  # fmt: skip
+    results = facts.results()
     proposal, proposal_reasons = proposal_of(len(facts.deficiencies), results)
     history = _history(connection, project_id, control_id)
     paper = facts.workpaper
-    reasons = facts.out_of_date()
+    reasons = facts.out_of_date(results)
     signed = (
         None
         if facts.standing is None
@@ -972,7 +1198,12 @@ def _body(
         blocking.append("the D&I conclusion is signed off")
     reviewer = _is_reviewer(connection, project_id, viewer)
     prepared = paper is not None and paper[5] is not None and UUID(str(paper[5])) == viewer
+    recorded = facts.choice_by is not None and facts.choice_by == viewer
     required = independence.required()
+    if recorded and required and reviewer and status != "SIGNED_OFF":
+        # Independence covers the conclusion itself: said to the reviewer it keeps from
+        # signing, and to nobody else (the preparer who recorded it is not held by it).
+        blocking.append(RECORDER_CANNOT_SIGN)
     can_choose = (
         may_update
         and paper is not None
@@ -1002,8 +1233,9 @@ def _body(
         viewer_is_reviewer=reviewer,
         viewer_prepared=prepared,
         independence_required=required,
-        can_sign=not blocking and reviewer and not (prepared and required),
+        can_sign=not blocking and reviewer and not ((prepared or recorded) and required),
         history=history,
+        viewer_recorded=recorded,
         proposed_conclusion=proposal,
         proposed_reasons=proposal_reasons,
         choice=facts.choice,
@@ -1112,7 +1344,7 @@ def choose(
     with transaction(connection) as cursor:
         # The workpaper row is locked first, as preparing it locks it: a choice and a
         # preparation of the same workpaper never pass each other.
-        facts = _facts(cursor.connection, project_id, control_id, lock=True)
+        facts = _facts(cursor.connection, project_id, control_id, lock=True, assemble=True)
         paper = facts.workpaper
         if paper is None or int(paper[7]) < 1:
             raise DesignConclusionState(DRAFT_FIRST)
@@ -1124,7 +1356,7 @@ def choose(
         seen = body.replaces
         if (None if standing is None else standing.id) != seen:
             raise DesignConclusionState(CHOICE_STALE if standing is None else CHOICE_RECORDED_SINCE)
-        results = _results(cursor.connection, project_id, control_id, facts)
+        results = facts.results()
         proposal, _reasons = proposal_of(len(facts.deficiencies), results)
         refusal = choice_refusal(body.kind, len(facts.deficiencies), results)
         if refusal is not None:
@@ -1156,6 +1388,12 @@ def choose(
         ).fetchone()  # fmt: skip
         assert row is not None
         chosen = UUID(str(row[0]))
+        # Recording a choice changes the workpaper's record: its row, locked above, takes
+        # the next `version`, so a Prepare (or an edit) sent from a page that has not seen
+        # the choice is refused as stale.
+        cursor.execute(
+            "UPDATE workpapers SET version = version + 1 WHERE id = %s", (UUID(str(paper[0])),)
+        )
         _audit(cursor, facts.organization_id, project_id, principal.id, chosen, CHOSEN,
                {"control_id": str(control_id), "choice_id": str(chosen), "kind": body.kind,
                 "basis": body.basis, "proposed_kind": proposal,
@@ -1209,21 +1447,25 @@ def sign_off(
     body: SignOffBody,
 ) -> DesignConclusionBody:
     """The reviewer signs the preparer's standing conclusion (section 3.6), for the design
-    workpaper at its prepared version. Refused where no conclusion stands, where it is
-    not concluded, where it was recorded after the workpaper was prepared, where its rules
-    no longer hold on the records as they are now (read again here, in the transaction),
-    where a not effective conclusion has no standing design deficiency, and where the
-    reviewer names another conclusion; and, as before, for the preparer (independence),
-    another prepared version, and a sign-off that still holds."""
+    workpaper at its prepared version. Refused where no conclusion stands, where the one
+    standing is not the one the reviewer read (`choice_id`), where it is not concluded,
+    where it was recorded after the workpaper was prepared, where its rules no longer hold
+    on the records as they are now (read again here, in the transaction), where a not
+    effective conclusion has no standing design deficiency, and where the reviewer names
+    another conclusion; and, as before, for the preparer (independence, which also covers
+    the person who recorded the conclusion), another prepared version, and a sign-off that
+    still holds."""
     _reviewer(connection, principal, organization_id, project_id)
     with transaction(connection) as cursor:
-        facts = _facts(cursor.connection, project_id, control_id, lock=True)
+        facts = _facts(cursor.connection, project_id, control_id, lock=True, assemble=True)
         paper = facts.workpaper
         if paper is None or paper[1] != "PREPARED":
             raise DesignConclusionState("prepare the design workpaper first")
         if int(paper[4]) != body.workpaper_version:
             raise DesignConclusionState("the design workpaper changed; review it again")
-        results = _results(cursor.connection, project_id, control_id, facts)
+        if facts.choice is not None and facts.choice.id != body.choice_id:
+            raise DesignConclusionState(CHOICE_NOT_STANDING)
+        results = facts.results()
         refusals = facts.signing_refusals(results)
         if refusals:
             # An exception a person recorded is never signed over as effective: whatever
@@ -1234,26 +1476,26 @@ def sign_off(
         assert choice is not None and choice.kind != "NOT_CONCLUDED"
         kind = choice.kind
         verdict = verdict_of(kind)
-        if (body.conclusion is not None and body.conclusion != kind) or (
-            body.verdict is not None and body.verdict != verdict
-        ):
+        if body.conclusion != kind:
             raise DesignConclusionState(
                 f"the preparer's conclusion is “{KIND_WORDS[kind]}”; sign off that conclusion, "
                 "or reopen the design workpaper for the preparer to change it"
             )
-        if facts.standing is not None and not facts.out_of_date():
+        if facts.standing is not None and not facts.out_of_date(results):
             raise DesignConclusionState("the D&I conclusion is signed off")
         if independence.required() and paper[5] is not None and UUID(str(paper[5])) == principal.id:
             raise DesignConclusionState(
                 "you prepared the design workpaper; another reviewer must sign off the "
                 "D&I conclusion"
             )
+        if independence.required() and facts.choice_by == principal.id:
+            raise DesignConclusionState(RECORDER_CANNOT_SIGN)
         if facts.standing is not None:
             _reopen_standing(
                 cursor,
                 UUID(str(facts.standing[0])),
                 principal.id,
-                "; ".join(facts.out_of_date()),
+                "; ".join(facts.out_of_date(results)),
                 "SUPERSEDED",
             )
         basis = [

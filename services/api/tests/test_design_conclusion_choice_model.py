@@ -10,15 +10,24 @@ Audit integrity:
   tickmark is what it reads by; an exception (the check's, or one a person recorded) is
   never counted as shown; nothing approved, nothing concluded;
 - the proposal follows the section's order exactly: not effective on a design deficiency,
-  then exceptions noted, then not concluded while the design or the implementation is
-  open (design alone, without the instance, is not effective), then effective;
+  then exceptions noted (only where its rule accepts it: with another attribute open it is
+  not concluded, naming both), then not concluded while the design or the implementation
+  is open (design alone, without the instance, is not effective), then effective;
 - effective is refused while a deficiency or an exception stands or anything is open;
-  exceptions noted and no instance while a deficiency stands, and no instance unless the
-  design result is DESIGNED (its words say the design is effective); a reason is needed where
-  the table says so, and is the person's own text, cleaned and bounded;
+  exceptions noted and no instance while a deficiency stands; exceptions noted also unless
+  an exception stands and every other attribute is shown in an instance or settled; no
+  instance unless the design result is DESIGNED (its words say the design is effective); a
+  reason is needed where the table says so, and is the person's own text, cleaned and
+  bounded;
+- a sign-off made from a preparer's choice stops holding when its conclusion's rule would
+  refuse it now, in the rule's own sentence; one made before choices, or seeded by the
+  demo, is held to the rules it was signed under only (independent review, 15 November
+  2026, docs/design-workpaper.md section 3.6);
+- the sign-off names the choice it signs; the two-value verdict is no longer taken;
 - the OE-facing verdict keeps its two values; not concluded has none.
 """
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -37,8 +46,13 @@ from test_design_workpaper_model import (
 )
 
 from ai_workforce_api.design_conclusions import (
+    CHOICE_CHANGED,
+    DEFICIENCY_LOGGED_SINCE,
     DESIGN_NOT_SHOWN,
     DESIGNED_SENTENCE,
+    EXCEPTION_SINCE,
+    EXCEPTION_UNANSWERED,
+    EXCEPTIONS_NEEDED,
     IN_PLACE_SENTENCE,
     NO_ATTRIBUTES,
     NO_DEFICIENCY_NOR_EXCEPTION,
@@ -47,7 +61,11 @@ from ai_workforce_api.design_conclusions import (
     AttributeStanding,
     ChoiceBody,
     ChoiceInvalid,
+    ChoiceRecord,
+    DeficiencyRef,
+    ExceptionRef,
     SignOffBody,
+    _Facts,
     choice_refusal,
     clean_reason,
     proposal_of,
@@ -175,8 +193,14 @@ def _reading(implementation: bool = True, not_relied: bool = False) -> Reading:
 def test_shown_by_says_how_a_current_check_shows_an_attribute() -> None:
     assert shown_by("SHOWN", [_reading(implementation=False), _reading()]) == "IMPLEMENTATION"
     assert shown_by("SHOWN", [_reading(implementation=False)]) == "DESIGN"
-    # Resting only on files not relied on: nothing.
-    assert shown_by("SHOWN", [_reading(not_relied=True)]) is None
+    # Resting only on files not relied on: NOT_RELIED, which shows nothing for the design
+    # nor the implementation. Old: None; new: "NOT_RELIED", so the page can say why the
+    # attribute reads "Shown" and still counts as open (independent review, 15 November
+    # 2026, docs/design-workpaper.md section 3.6).
+    assert shown_by("SHOWN", [_reading(not_relied=True)]) == "NOT_RELIED"
+    assert shown_by("SHOWN", [_reading(not_relied=True), _reading(not_relied=True)]) == (
+        "NOT_RELIED"
+    )
     assert shown_by("SHOWN", [_reading(not_relied=True), _reading(implementation=False)]) == (
         "DESIGN"
     )
@@ -249,10 +273,26 @@ def test_the_proposal_follows_the_sections_order_with_its_reasons() -> None:
     assert proposal_of(2, settled) == (
         "NOT_EFFECTIVE", ["2 design deficiencies are logged against the control."],
     )  # fmt: skip
-    # 2. An exception, even with something open: exceptions noted.
-    assert proposal_of(0, excepted) == (
+    # 2. An exception with every other attribute shown in an instance or settled:
+    # exceptions noted.
+    settled_but_one = results_of([_stand("A", "EXCEPTION", None), _stand("B")])
+    assert proposal_of(0, settled_but_one) == (
         "EXCEPTIONS_NOTED", ["An exception stands on attribute A."],
     )  # fmt: skip
+    # An exception with another attribute still open: not concluded, and the reasons name
+    # both. Old: "EXCEPTIONS_NOTED" with the exception's sentence alone ("an exception,
+    # even with something open"); new: the proposal is only what the rule would accept
+    # (independent review, 15 November 2026, docs/design-workpaper.md section 3.6).
+    assert proposal_of(0, excepted) == (
+        "NOT_CONCLUDED",
+        [
+            "An exception stands on attribute A.",
+            "Attribute B is not yet shown in the records of an instance.",
+        ],
+    )
+    # Shown only as designed is open for the implementation, so it is open here too.
+    by_design = results_of([_stand("A", "EXCEPTION", None), _stand("B", by="DESIGN")])
+    assert proposal_of(0, by_design)[0] == "NOT_CONCLUDED"
     # 3. Something open: not concluded, each open result's sentence.
     assert proposal_of(0, opened) == (
         "NOT_CONCLUDED",
@@ -291,13 +331,33 @@ def test_the_rules_of_each_conclusion() -> None:
     assert choice_refusal("EFFECTIVE", 0, results_of([])) == (
         f"no attribute of the control is approved yet, {cannot} “Effective”"
     )
-    # Exceptions noted: refused only while a design deficiency stands; an exception, or
-    # what is open, is what it concludes on.
+    # Exceptions noted: refused while a design deficiency stands, and unless an exception
+    # stands and every other attribute is shown in an instance or settled by a tickmark.
+    # Old: refused only while a design deficiency stands (no exception, or something open,
+    # was accepted: `designed_only` and no attribute at all returned None); new:
+    # EXCEPTIONS_NEEDED (independent review, 15 November 2026, docs/design-workpaper.md
+    # section 3.6).
     assert choice_refusal("EXCEPTIONS_NOTED", 0, excepted) is None
-    assert choice_refusal("EXCEPTIONS_NOTED", 0, designed_only) is None
-    assert choice_refusal("EXCEPTIONS_NOTED", 0, results_of([])) is None
+    assert choice_refusal("EXCEPTIONS_NOTED", 0, designed_only) == EXCEPTIONS_NEEDED
+    assert choice_refusal("EXCEPTIONS_NOTED", 0, results_of([])) == EXCEPTIONS_NEEDED
+    assert choice_refusal("EXCEPTIONS_NOTED", 0, settled) == EXCEPTIONS_NEEDED
+    with_open = results_of([_stand("A", "EXCEPTION", None), _stand("B", "NOT_TESTED", None)])
+    assert choice_refusal("EXCEPTIONS_NOTED", 0, with_open) == EXCEPTIONS_NEEDED
+    by_design = results_of([_stand("A", "EXCEPTION", None), _stand("B", by="DESIGN")])
+    assert choice_refusal("EXCEPTIONS_NOTED", 0, by_design) == EXCEPTIONS_NEEDED
+    # A person's exception where the attribute's state does not read as one counts.
+    waiting = results_of([_stand("A"), _stand("B", "NOT_TESTED", None)], excepted={"B"})
+    assert choice_refusal("EXCEPTIONS_NOTED", 0, waiting) is None
+    closed = results_of([_stand("A", "EXCEPTION", None), _stand("B", "NOT_APPLICABLE", None)])
+    assert choice_refusal("EXCEPTIONS_NOTED", 0, closed) is None
     assert choice_refusal("EXCEPTIONS_NOTED", 1, settled) == (
         f"a design deficiency is logged, {cannot} “Exceptions noted”"
+    )
+    assert choice_refusal("EXCEPTIONS_NOTED", 1, excepted) == (
+        f"a design deficiency is logged, {cannot} “Exceptions noted”"
+    )
+    assert EXCEPTIONS_NEEDED == (
+        "Exceptions noted needs an exception on record and every other attribute shown or settled"
     )
     # No instance says the design is effective: refused while a design deficiency stands,
     # and unless every attribute is shown as designed (or in the instance) or settled by a
@@ -375,11 +435,32 @@ def test_the_bodies_name_what_they_must() -> None:
     with pytest.raises(ValidationError):
         ChoiceBody.model_validate({"kind": "NOT_EFFECTIVE", "basis": "PEOPLE", "replaces": None})
     assert ChoiceBody.model_validate({"kind": "EFFECTIVE", "replaces": None}).basis is None
-    # A sign-off names the conclusion, or (for one release) the two-value verdict.
+    # A sign-off names the conclusion and the choice it signs. Old: the conclusion, or (for
+    # one release) the two-value `verdict`, and no choice; new: `conclusion` and `choice_id`
+    # both required, `verdict` refused (independent review, 15 November 2026,
+    # docs/design-workpaper.md section 3.6).
+    choice = str(UUID(int=7))
     with pytest.raises(ValidationError):
         SignOffBody.model_validate({"workpaper_version": 1})
-    assert SignOffBody.model_validate({"conclusion": "NO_INSTANCE", "workpaper_version": 1})
-    assert SignOffBody.model_validate({"verdict": "EFFECTIVE", "workpaper_version": 1})
+    with pytest.raises(ValidationError):
+        SignOffBody.model_validate({"conclusion": "NO_INSTANCE", "workpaper_version": 1})
+    with pytest.raises(ValidationError):
+        SignOffBody.model_validate(
+            {"verdict": "EFFECTIVE", "choice_id": choice, "workpaper_version": 1}
+        )
+    with pytest.raises(ValidationError):
+        SignOffBody.model_validate(
+            {"conclusion": "EFFECTIVE", "verdict": "EFFECTIVE", "choice_id": choice,
+             "workpaper_version": 1}
+        )  # fmt: skip
+    with pytest.raises(ValidationError):
+        SignOffBody.model_validate(
+            {"conclusion": "EFFECTIVE", "choice_id": "not-a-choice", "workpaper_version": 1}
+        )
+    signed = SignOffBody.model_validate(
+        {"conclusion": "NO_INSTANCE", "choice_id": choice, "workpaper_version": 1}
+    )
+    assert (signed.conclusion, signed.choice_id) == ("NO_INSTANCE", UUID(int=7))
 
 
 def test_a_sign_off_record_carries_the_conclusion() -> None:
@@ -426,3 +507,181 @@ def test_the_workpapers_conclusion_part_carries_the_proposal_and_the_choice() ->
 
 
 REASON_EXCEPTIONS = "The exception on B is a timing slip, not a design deficiency."
+
+
+# --- A sign-off held to its conclusion's rules (independent review, 15 November 2026) ---
+
+T_CHOICE = datetime(2027, 1, 1, 9, tzinfo=UTC)
+T_PREPARED = datetime(2027, 1, 1, 10, tzinfo=UTC)
+T_SIGNED = datetime(2027, 1, 1, 11, tzinfo=UTC)
+CHOICE = UUID(int=40)
+
+
+def _signed(
+    kind: str,
+    choice_id: UUID | None = CHOICE,
+    seeded: bool = False,
+    deficiencies: tuple[str, ...] = (),
+    signed_deficiencies: tuple[str, ...] = (),
+    exceptions: tuple[ExceptionRef, ...] = (),
+) -> _Facts:
+    """The facts of a sign-off of `kind` that stands on a prepared design workpaper, as
+    `_facts` reads them: signed from the preparer's choice `choice_id` (None: made before
+    choices were recorded, and no choice stands), or seeded with the demo."""
+    choice = (
+        None
+        if choice_id is None
+        else ChoiceRecord(
+            id=choice_id, kind=kind, basis="DESIGN" if kind == "NOT_EFFECTIVE" else None,  # type: ignore[arg-type]
+            reason="The preparer's reason for the conclusion.", proposed_kind=kind,  # type: ignore[arg-type]
+            recorded_by="Pat Preparer", recorded_at=T_CHOICE, workpaper_version=1,
+        )
+    )  # fmt: skip
+    verdict = "NOT_EFFECTIVE" if kind == "NOT_EFFECTIVE" else "EFFECTIVE"
+    return _Facts(
+        UUID(int=50),
+        (UUID(int=51), "PREPARED", "IDLE", "Pat Preparer", 1, UUID(int=52), T_PREPARED, 1),
+        [
+            DeficiencyRef(id=UUID(int=60 + i), reference=ref, title=ref, status="OPEN")
+            for i, ref in enumerate(deficiencies)
+        ],
+        (
+            UUID(int=53), 1, verdict,
+            [{"id": str(UUID(int=60 + i)), "reference": ref}
+             for i, ref in enumerate(signed_deficiencies)],
+            T_SIGNED, choice_id, kind, seeded,
+        ),
+        exceptions=exceptions,
+        choice=choice,
+        choice_by=None if choice_id is None else UUID(int=52),
+    )  # fmt: skip
+
+
+def _person_exception(code: str, at: datetime, current: bool = True) -> ExceptionRef:
+    return ExceptionRef(
+        disposition_id=UUID(int=70), attribute_id=UUID(int=71), code=code,
+        requirement_id=R1, recorded_by_name="Pat Preparer", recorded_at=at,
+        reason="The ticket was approved after the change.", check_current=current,
+    )  # fmt: skip
+
+
+def _found(code: str, at: datetime | None) -> AttributeStanding:
+    return AttributeStanding(code=code, state="EXCEPTION", shown_by=None, found_at=at)
+
+
+def test_a_signed_effective_conclusion_stops_holding_when_its_rule_would_refuse_it() -> None:
+    facts = _signed("EFFECTIVE")
+    assert facts.held_to_rules()
+    settled = results_of(_all_in_instance("A", "B"))
+    assert facts.out_of_date(settled) == []
+    # A later check's exception: the rule's own sentence.
+    later = results_of([_stand("A"), _found("B", T_SIGNED)])
+    assert facts.out_of_date(later) == [
+        "an exception stands on attribute B, so the conclusion cannot be “Effective”"
+    ]
+    # The implementation gone open (B shown only as designed now).
+    designed = results_of([_stand("A"), _stand("B", by="DESIGN")])
+    assert facts.out_of_date(designed) == [
+        "attribute B is not yet shown in the records of an instance, so the conclusion "
+        "cannot be “Effective”"
+    ]
+    # Shown only on files a person decided are not relied on: open as well.
+    not_relied = results_of([_stand("A"), _stand("B", by="NOT_RELIED")])
+    assert (not_relied.design.open, not_relied.implementation.open) == (["B"], ["B"])
+    assert facts.out_of_date(not_relied) != []
+    # A person's exception on an attribute whose state is not "Shown" still breaks it.
+    person = results_of([_stand("A"), _stand("B", "NOT_TESTED", None)], excepted={"B"})
+    assert facts.out_of_date(person)[-1] == (
+        "an exception stands on attribute B, so the conclusion cannot be “Effective”"
+    )
+
+
+def test_a_design_deficiency_logged_since_is_said_once() -> None:
+    facts = _signed("EFFECTIVE", deficiencies=("DEF-1",))
+    settled = results_of(_all_in_instance("A", "B"))
+    assert facts.out_of_date(settled) == [DEFICIENCY_LOGGED_SINCE]
+
+
+def test_no_instance_stops_holding_once_the_design_is_open_or_an_exception_is_found() -> None:
+    facts = _signed("NO_INSTANCE")
+    assert facts.out_of_date(results_of([_stand("A", by="DESIGN")])) == []
+    opened = results_of([_stand("A", by="DESIGN"), _stand("B", "NOT_TESTED", None)])
+    assert facts.out_of_date(opened) == [DESIGN_NOT_SHOWN]
+    found = results_of([_stand("A", by="DESIGN"), _found("B", T_SIGNED)])
+    assert facts.out_of_date(found) == [DESIGN_NOT_SHOWN]
+
+
+def test_exceptions_noted_stops_holding_without_an_exception_or_with_one_noted_since() -> None:
+    facts = _signed("EXCEPTIONS_NOTED")
+    seen = results_of([_stand("A"), _found("B", T_CHOICE)])
+    assert facts.out_of_date(seen) == []
+    # No exception left.
+    gone = results_of(_all_in_instance("A", "B"))
+    assert facts.out_of_date(gone) == [EXCEPTIONS_NEEDED]
+    # Another attribute gone open.
+    opened = results_of([_stand("A", "NOT_TESTED", None), _found("B", T_CHOICE)])
+    assert facts.out_of_date(opened) == [EXCEPTIONS_NEEDED]
+    # An exception a check found after the choice was recorded, or one whose run has no
+    # finish time (never assumed seen).
+    later = results_of([_stand("A"), _found("B", T_SIGNED)])
+    assert later.found_since(T_CHOICE) and not seen.found_since(T_CHOICE)
+    assert facts.out_of_date(later) == [EXCEPTION_SINCE]
+    unknown = results_of([_stand("A"), _found("B", None)])
+    assert facts.out_of_date(unknown) == [EXCEPTION_SINCE]
+    # A person's exception recorded after the choice was recorded.
+    person = _signed("EXCEPTIONS_NOTED", exceptions=(_person_exception("B", T_SIGNED),))
+    recorded = results_of([_stand("A"), _stand("B", "EXCEPTION_RECORDED", None)], {"B"})
+    assert person.out_of_date(recorded) == [EXCEPTION_SINCE]
+    before = _signed("EXCEPTIONS_NOTED", exceptions=(_person_exception("B", T_CHOICE),))
+    assert before.out_of_date(recorded) == []
+    assert EXCEPTION_SINCE == (
+        "an exception was noted after this conclusion was recorded; the preparer records it again"
+    )
+
+
+def test_not_effective_is_never_put_out_of_date_by_the_rule() -> None:
+    facts = _signed("NOT_EFFECTIVE", deficiencies=("DEF-1",), signed_deficiencies=("DEF-1",))
+    for results in (results_of([]), results_of(_all_in_instance("A"))):
+        assert facts.out_of_date(results) == []
+
+
+def test_a_sign_off_before_choices_or_seeded_by_the_demo_keeps_its_old_rules_only() -> None:
+    opened = results_of([_stand("A", "NOT_TESTED", None)])
+    # Made before choices were recorded (no choice_id, and none stands): not held to the
+    # rule, and open attributes never put it out of date, as before section 3.6.
+    before = _signed("EFFECTIVE", choice_id=None)
+    assert not before.held_to_rules()
+    assert before.out_of_date(opened) == []
+    # Its old rule stays: a person's exception standing unanswered puts it out of date.
+    unanswered = _signed(
+        "EFFECTIVE", choice_id=None, exceptions=(_person_exception("A", T_SIGNED),)
+    )
+    assert unanswered.out_of_date(opened) == [EXCEPTION_UNANSWERED]
+    # Seeded with the demo (a demo engagement, a demo identity): the same.
+    seeded = _signed("EFFECTIVE", seeded=True)
+    assert not seeded.held_to_rules()
+    assert seeded.out_of_date(opened) == []
+    # The choice still counts: another recorded since puts a held sign-off out of date.
+    held = _signed("EFFECTIVE")
+    settled = results_of(_all_in_instance("A"))
+    assert held.out_of_date(settled) == []
+    assert held.choice is not None
+    replaced = replace(held, choice=held.choice.model_copy(update={"id": UUID(int=41)}))
+    assert replaced.out_of_date(settled) == [CHOICE_CHANGED]
+
+
+def test_standing_of_carries_when_a_check_found_the_exception() -> None:
+    from ai_workforce_api.design_workpaper import AttributeBody
+
+    excepted = AttributeBody.model_construct(code="B", state="EXCEPTION", shown_by=None)
+    first, second = (
+        Reading(requirement_id=R1, state="EXCEPTION", basis="", found_at=T_CHOICE),
+        Reading(requirement_id=R2, state="EXCEPTION", basis="", found_at=T_SIGNED),
+    )
+    assert standing_of(excepted, [first, second]).found_at == T_SIGNED
+    # One without a finish time: unknown, which the conclusion reads as not yet seen.
+    third = Reading(requirement_id=R2, state="EXCEPTION", basis="", found_at=None)
+    assert standing_of(excepted, [first, third]).found_at is None
+    # Only an exception of the check carries a time.
+    shown = AttributeBody.model_construct(code="A", state="SHOWN", shown_by="IMPLEMENTATION")
+    assert standing_of(shown, [first]).found_at is None
