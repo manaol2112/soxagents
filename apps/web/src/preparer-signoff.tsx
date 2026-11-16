@@ -100,9 +100,20 @@ export function PreparerSignOff({
     return (
       <section className="ps ps-signed" aria-labelledby={`${uid}-h`}>
         <h6 id={`${uid}-h`}>Preparer's sign-off</h6>
-        <p className="ps-line">
-          {preparedLine(prepared.by, prepared.on, prepared.version)}
-        </p>
+        <div className="ps-row">
+          <p className="ps-line">
+            {preparedLine(prepared.by, prepared.on, prepared.version)}
+          </p>
+          {mayAct && !reopening ? (
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => setReopening(true)}
+            >
+              {REOPEN_TO_CHANGE}
+            </button>
+          ) : null}
+        </div>
         {mayAct ? (
           reopening ? (
             <form
@@ -137,22 +148,14 @@ export function PreparerSignOff({
                 </button>
                 <button
                   type="submit"
-                  className="btn btn-secondary btn-sm"
+                  className="btn btn-sm"
                   disabled={sending || text.trim().length < 3}
                 >
                   {sending ? "Reopening…" : "Reopen"}
                 </button>
               </div>
             </form>
-          ) : (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={() => setReopening(true)}
-            >
-              {REOPEN_TO_CHANGE}
-            </button>
-          )
+          ) : null
         ) : null}
         {refusal !== "" ? (
           <p className="ps-refusal" role="alert" tabIndex={-1} ref={alert}>
