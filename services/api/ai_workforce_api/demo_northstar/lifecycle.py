@@ -383,6 +383,7 @@ def _design_workpaper(ctx: Context, ref: str, control_id: UUID) -> None:
         "UPDATE workpapers SET draft_status = 'IDLE', lease_until = NULL WHERE id = %s",
         (workpaper_id,),
     )
+    _design_choice(ctx, control_id)
     version = _version(ctx, "workpapers", workpaper_id)
     _prepare(
         ctx.connection, ctx.principal("morgan"), ctx.organization_id, ctx.project_id,
@@ -390,19 +391,62 @@ def _design_workpaper(ctx: Context, ref: str, control_id: UUID) -> None:
     )  # fmt: skip
 
 
+# Why the preparer concludes as they do, where the records leave something to say. The demo
+# seeds no check of the D&I evidence, so the records leave the instance open: the design is
+# evaluated from the control's description and the organization's configuration, and no
+# instance is walked through in the demo's records.
+DEMO_NO_INSTANCE = (
+    "Design evaluated from the control's description and the organization's configuration; "
+    "the demo walks through no instance."
+)
+DEMO_NOT_EFFECTIVE = "The design deficiency logged against the control stands."
+DEMO_EXCEPTIONS = "The exceptions recorded are evaluated and are not a design deficiency."
+
+
+def _design_choice(ctx: Context, control_id: UUID) -> None:
+    """Morgan, the preparer, records the D&I conclusion on the draft design workpaper
+    (docs/design-workpaper.md, section 3.6): the records' proposal where it is effective,
+    not effective or exceptions noted, each with the reason it needs; where the records
+    leave the instance open, the design as effective with no instance to walk through."""
+    from ai_workforce_api.design_conclusions import ChoiceBody, choose, read
+
+    morgan = ctx.principal("morgan")
+    found = read(ctx.connection, morgan, ctx.organization_id, ctx.project_id, control_id)
+    replaces = None if found.choice is None else found.choice.id
+    proposed = found.proposed_conclusion
+    if proposed == "EFFECTIVE":
+        body = ChoiceBody(kind="EFFECTIVE", replaces=replaces)
+    elif proposed == "NOT_EFFECTIVE":
+        body = ChoiceBody(
+            kind="NOT_EFFECTIVE", basis="DESIGN", reason=DEMO_NOT_EFFECTIVE, replaces=replaces
+        )
+    elif proposed == "EXCEPTIONS_NOTED":
+        body = ChoiceBody(kind="EXCEPTIONS_NOTED", reason=DEMO_EXCEPTIONS, replaces=replaces)
+    else:
+        body = ChoiceBody(kind="NO_INSTANCE", reason=DEMO_NO_INSTANCE, replaces=replaces)
+    choose(ctx.connection, morgan, ctx.organization_id, ctx.project_id, control_id, body)
+
+
 def _design_conclusion(ctx: Context, control_id: UUID) -> None:
-    """The reviewer signs off the D&I conclusion the records propose, as OE follows it (B0,
-    8 November 2026). Riley reviews; Morgan prepared the design workpaper."""
+    """The reviewer signs off the preparer's D&I conclusion, as OE follows it (B0, 8
+    November 2026; section 3.6). Riley reviews; Morgan prepared the design workpaper."""
     from ai_workforce_api.design_conclusions import SignOffBody, read, sign_off
 
     riley = ctx.principal("riley")
     found = read(ctx.connection, riley, ctx.organization_id, ctx.project_id, control_id)
     paper = found.workpaper
-    if found.proposed is None or paper is None or paper.prepared_version is None:
+    choice = found.choice
+    if (
+        found.proposed is None
+        or paper is None
+        or paper.prepared_version is None
+        or choice is None
+        or choice.kind == "NOT_CONCLUDED"
+    ):
         return
     sign_off(
         ctx.connection, riley, ctx.organization_id, ctx.project_id, control_id,
-        SignOffBody(verdict=found.proposed, workpaper_version=paper.prepared_version,
+        SignOffBody(conclusion=choice.kind, workpaper_version=paper.prepared_version,
                     note="Design and implementation reviewed (prepared with the demo)."),
     )  # fmt: skip
 

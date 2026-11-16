@@ -66,11 +66,24 @@ from ai_workforce_api.workpaper_service import run_draft
 
 __all__ = ["migrated"]
 
+# Section 3.6 (product owner, 15 November 2026, docs/design-workpaper.md section 3.6) adds
+# the design and implementation results. Old expectation: the keys without "design" and
+# "implementation"; new: with them. Nothing else changes.
 KEYS = {
     "control", "workpaper", "review", "risk", "activity", "facts", "understanding",
     "procedures", "evidence", "walkthrough", "attributes", "reports", "matters", "conclusion",
-    "tickmarks", "can_edit",
+    "design", "implementation", "tickmarks", "can_edit",
 }  # fmt: skip
+# What section 3.6 adds to the conclusion part: the records' proposed conclusion, its
+# reasons and the preparer's conclusion that stands (old expectation: none of them).
+ADDED_TO_CONCLUSION = ("proposed_conclusion", "proposed_reasons", "choice")
+
+
+def _before_3_6(conclusion: dict[str, Any]) -> dict[str, Any]:
+    """The conclusion part without what section 3.6 adds."""
+    return {k: v for k, v in conclusion.items() if k not in ADDED_TO_CONCLUSION}
+
+
 STATE_OF = {
     "CONTRADICTED": "EXCEPTION",
     "SATISFIED": "SHOWN",
@@ -194,19 +207,26 @@ def test_a_control_with_no_workpaper_reads_and_only_the_engagements_readers_see_
         "status": "NOT_READY", "proposed": None, "signed_verdict": None, "signed_by": None,
         "signed_at": None, "out_of_date": [],
     }  # fmt: skip
-    assert body["conclusion"] == {
+    assert _before_3_6(body["conclusion"]) == {
         "text": "", "source": "RECORDS", "proposed": None, "words": "Not concluded yet",
         "signed": False,
     }  # fmt: skip
+    # Nothing tested: the records propose no conclusion yet, and nothing is chosen.
+    assert (body["conclusion"]["proposed_conclusion"], body["conclusion"]["choice"]) == (
+        "NOT_CONCLUDED", None,
+    )  # fmt: skip
+    assert (body["design"]["result"], body["implementation"]["result"]) == ("OPEN", "OPEN")
     # Every approved attribute, in the list's order, and none tested yet.
     approved = _approved(bench)
     assert [a["id"] for a in body["attributes"]] == approved and len(approved) >= 3
     assert [a["code"] for a in body["attributes"]][:3] == ["A", "B", "C"]
     for attribute in body["attributes"]:
+        # Section 3.6 adds "shown_by" (old expectation: the keys without it).
         assert set(attribute) == {
             "id", "code", "text", "state", "state_words", "basis", "tickmark", "refs", "marks",
-            "checks", "notes",
+            "checks", "notes", "shown_by",
         }  # fmt: skip
+        assert attribute["shown_by"] is None
         assert (attribute["state"], attribute["state_words"]) == ("NOT_TESTED", "Not tested yet")
         assert attribute["basis"] == "No current check covers this attribute."
         assert (attribute["tickmark"], attribute["refs"], attribute["marks"]) == ("NONE", [], {})
@@ -290,7 +310,7 @@ def test_a_drafted_workpaper_and_an_engine_2_check_are_assembled_and_nothing_is_
     # The sections' own words, as stored.
     assert body["understanding"] == sections["understanding-of-the-control"]["text"]
     assert body["understanding"] == UNDERSTANDING
-    assert body["conclusion"] == {
+    assert _before_3_6(body["conclusion"]) == {
         "text": CONCLUSION, "source": "AGENT", "proposed": None, "words": "Not concluded yet",
         "signed": False,
     }  # fmt: skip
@@ -584,12 +604,29 @@ def test_an_engine_1_check_gives_states_and_shows_marks_only(migrated: Database)
 
 
 def test_a_conclusion_is_signed_only_from_its_sign_off_record(migrated: Database) -> None:
+    """Section 3.6 (product owner, 15 November 2026, docs/design-workpaper.md section 3.6).
+    Old expectation: the workpaper was prepared with no conclusion recorded and the
+    reviewer signed the records' verdict ("verdict": "EFFECTIVE"). New: the preparer
+    records the conclusion on the draft first (nothing checked the evidence, so the design
+    as effective with no instance to walk through), the view carries it, and the reviewer
+    signs it. Every other assertion is kept: a proposal is never presented as signed, a
+    read signs nothing, and a sign-off that no longer holds is not presented as signed."""
     bench = _Bench(migrated, "dw-sign")
     paper = _draft_design(bench, None)
     drafted = _view(bench)
     assert (drafted["workpaper"]["status"], drafted["can_edit"]) == ("DRAFT", True)
     assert drafted["review"]["status"] == "NOT_READY" and drafted["conclusion"]["signed"] is False
     assert drafted["conclusion"]["words"] == "Not concluded yet"
+    reason = "No change was made in the period, so there is no instance to walk."
+    chosen = bench.owner.post(
+        f"{bench.base}/design-conclusions/{bench.control}/choice",
+        json={"kind": "NO_INSTANCE", "reason": reason, "replaces": None},
+    )
+    assert chosen.status_code == 200, chosen.text
+    choice = _view(bench)["conclusion"]["choice"]
+    assert (choice["kind"], choice["reason"], choice["proposed_kind"]) == (
+        "NO_INSTANCE", reason, "NOT_CONCLUDED",
+    )  # fmt: skip
 
     prepared = bench.owner.post(
         f"{bench.base}/workpapers/{paper['id']}/prepare", json={"version": paper["version"]}
@@ -623,7 +660,11 @@ def test_a_conclusion_is_signed_only_from_its_sign_off_record(migrated: Database
         )
     signed = reviewer.post(
         f"{bench.base}/design-conclusions/{bench.control}/sign-off",
-        json={"verdict": "EFFECTIVE", "workpaper_version": version, "note": "Walked through."},
+        json={
+            "conclusion": "NO_INSTANCE",
+            "workpaper_version": version,
+            "note": "Walked through.",
+        },  # fmt: skip
     )
     assert signed.status_code == 200, signed.text
     body = _view(bench)

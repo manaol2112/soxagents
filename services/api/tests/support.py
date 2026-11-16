@@ -216,7 +216,7 @@ def sign_off_design(
                     prepared_version = coalesce(prepared_version, greatest(current_version, 1)),
                     draft_status = 'IDLE', started_at = coalesce(started_at, clock_timestamp())
                 WHERE project_id = %s AND engagement_control_id = %s AND stage = 'DESIGN'
-                RETURNING id, prepared_version
+                RETURNING id, prepared_version, prepared_at
                 """,
                 (project_id, control),
             ).fetchone()
@@ -230,20 +230,43 @@ def sign_off_design(
                     )
                     VALUES (%s, %s, %s, 'DESIGN', %s, 'PREPARED', 'IDLE', %s, %s,
                             clock_timestamp(), 1, clock_timestamp())
-                    RETURNING id, prepared_version
+                    RETURNING id, prepared_version, prepared_at
                     """,
                     (organization, project_id, control, template or "design", owner, owner),
                 ).fetchone()
             assert paper is not None
+            # The reviewer signs the preparer's conclusion (docs/design-workpaper.md, section
+            # 3.6), recorded on the draft: here, at the preparation. One that stood is
+            # replaced.
+            connection.execute(
+                "UPDATE design_conclusion_choices SET ended_at = clock_timestamp(), "
+                "ended_by = %s, ended_as = 'REPLACED' "
+                "WHERE engagement_control_id = %s AND ended_at IS NULL",
+                (owner, control),
+            )
+            choice = connection.execute(
+                """
+                INSERT INTO design_conclusion_choices (
+                    organization_id, project_id, engagement_control_id, workpaper_id,
+                    workpaper_version, kind, proposed_kind, recorded_by, recorded_at
+                )
+                VALUES (%s, %s, %s, %s, %s, 'EFFECTIVE', 'EFFECTIVE', %s, %s)
+                RETURNING id
+                """,
+                (organization, project_id, control, paper[0], paper[1], owner, paper[2]),
+            ).fetchone()
+            assert choice is not None
             connection.execute(
                 """
                 INSERT INTO design_conclusions (
                     organization_id, project_id, engagement_control_id, workpaper_id,
-                    workpaper_version, verdict, signed_by, signoff_note
+                    workpaper_version, verdict, signed_by, signoff_note, conclusion,
+                    conclusion_reason, choice_id
                 )
-                VALUES (%s, %s, %s, %s, %s, 'EFFECTIVE', %s, 'Signed off in the test setup.')
+                VALUES (%s, %s, %s, %s, %s, 'EFFECTIVE', %s, 'Signed off in the test setup.',
+                        'EFFECTIVE', '', %s)
                 """,
-                (organization, project_id, control, paper[0], paper[1], owner),
+                (organization, project_id, control, paper[0], paper[1], owner, choice[0]),
             )
 
 

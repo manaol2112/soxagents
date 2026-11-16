@@ -1217,7 +1217,8 @@ def _conclusion(status: str, proposed: str | None, signed: str | None) -> Design
         None
         if signed is None
         else SignoffRecord(
-            id=UUID(int=90), verdict=signed, workpaper_version=1, deficiencies=[],  # type: ignore[arg-type]
+            id=UUID(int=90), verdict=signed, conclusion=signed, workpaper_version=1,  # type: ignore[arg-type]
+            deficiencies=[],
             signed_by="Rhea Reviewer", signed_at=datetime(2027, 2, 1, tzinfo=UTC),
             signoff_note="", reopened_at=None, reopened_by=None, reopen_reason="",
             reopened_from=None,
@@ -1237,9 +1238,14 @@ def test_a_conclusion_is_signed_only_from_its_sign_off_record() -> None:
     )  # fmt: skip
     # A proposed verdict is never presented as signed.
     proposed = conclusion_of(section, _conclusion("TO_SIGN", "EFFECTIVE", None))
+    # Section 3.6 (product owner, 15 November 2026, docs/design-workpaper.md section 3.6)
+    # adds the records' proposed conclusion, its reasons and the preparer's choice to the
+    # conclusion part. Old expectation: exactly the five keys below. New: the same five,
+    # unchanged, and the three added ones as the D&I conclusion gives them.
     assert proposed.model_dump() == {
         "text": "The evidence supports an effective design. [^1]", "source": "AGENT",
         "proposed": "EFFECTIVE", "words": "Effective", "signed": False,
+        "proposed_conclusion": "NOT_CONCLUDED", "proposed_reasons": [], "choice": None,
     }  # fmt: skip
     signed = conclusion_of(section, _conclusion("SIGNED_OFF", "EFFECTIVE", "EFFECTIVE"))
     assert (signed.signed, signed.words) == (True, "Effective")
@@ -1253,7 +1259,8 @@ def test_a_conclusion_is_signed_only_from_its_sign_off_record() -> None:
     none = conclusion_of(None, _conclusion("NOT_READY", None, None))
     assert none.model_dump() == {
         "text": "", "source": "RECORDS", "proposed": None, "words": "Not concluded yet",
-        "signed": False,
+        "signed": False, "proposed_conclusion": "NOT_CONCLUDED", "proposed_reasons": [],
+        "choice": None,
     }  # fmt: skip
 
 

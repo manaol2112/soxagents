@@ -318,6 +318,9 @@ class AttributeBody(BaseModel):
     marks: dict[str, Mark] = Field(default_factory=dict)
     checks: list[str] = Field(default_factory=list)
     notes: str = ""
+    # How a current check shows the attribute, where it reads "Shown" (section 3.6): in
+    # the records of an instance, or only as a document requires it; null otherwise.
+    shown_by: design_conclusions.ShownBy | None = None
 
 
 class ReportBody(BaseModel):
@@ -347,6 +350,11 @@ class ConclusionBody(BaseModel):
     words: str
     # True only from the D&I conclusion's own sign-off record, while it holds.
     signed: bool
+    # The conclusion the records propose now and why (section 3.6), and the preparer's
+    # conclusion that stands, or null: as the D&I conclusion reads them.
+    proposed_conclusion: design_conclusions.DesignConclusionKind = "NOT_CONCLUDED"
+    proposed_reasons: list[str] = Field(default_factory=list)
+    choice: design_conclusions.ChoiceRecord | None = None
 
 
 class TickmarkBody(BaseModel):
@@ -370,6 +378,10 @@ class DesignWorkpaperBody(BaseModel):
     reports: list[ReportBody] = Field(default_factory=list)
     matters: list[MatterBody] = Field(default_factory=list)
     conclusion: ConclusionBody
+    # The design and the implementation result (section 3.6), as the D&I conclusion
+    # works them out from the attributes above.
+    design: design_conclusions.ResultBody
+    implementation: design_conclusions.ResultBody
     tickmarks: list[TickmarkBody] = Field(default_factory=list)
     can_edit: bool
 
@@ -696,6 +708,29 @@ def standing(readings: Sequence[Reading]) -> tuple[AttributeState, str]:
             if reading.state == state:
                 return state, reading.basis
     return "NOT_TESTED", STATE_BASIS["NOT_TESTED"]
+
+
+def shown_by(
+    state: AttributeState, readings: Sequence[Reading]
+) -> design_conclusions.ShownBy | None:
+    """How the current checks show an attribute that reads "Shown" (section 3.6), from the
+    checks' words that stand for it (`readings`): IMPLEMENTATION where a check shows it in
+    the records of an instance (`Reading.implementation`), DESIGN where checks show it only
+    as a document requires it, null for every other state. A check whose showing rests
+    only on files a person decided are not relied on (section 10.14) shows nothing here."""
+    if state != "SHOWN":
+        return None
+    showing = [r for r in readings if r.state == "SHOWN" and not r.not_relied]
+    if not showing:
+        return None
+    return "IMPLEMENTATION" if any(r.implementation for r in showing) else "DESIGN"
+
+
+def standing_of(attribute: AttributeBody) -> design_conclusions.AttributeStanding:
+    """An attribute as the D&I conclusion's design and implementation results read it."""
+    return design_conclusions.AttributeStanding(
+        code=attribute.code, state=attribute.state, shown_by=attribute.shown_by
+    )
 
 
 def tickmark_of(state: AttributeState, readings: Sequence[Reading]) -> Tickmark:
@@ -1367,6 +1402,7 @@ def attributes_of(
         reviewed = reviewed_annotations(mine, stand)
         found.append(
             AttributeBody(
+                shown_by=shown_by(state, left),
                 id=attribute.id,
                 code=attribute.code,
                 text=attribute.text,
@@ -2038,6 +2074,9 @@ def conclusion_of(
         proposed=conclusion.proposed,
         words=VERDICT_WORDS.get(verdict or "", NOT_CONCLUDED_WORDS),
         signed=signed,
+        proposed_conclusion=conclusion.proposed_conclusion,
+        proposed_reasons=list(conclusion.proposed_reasons),
+        choice=conclusion.choice,
     )
 
 
@@ -2430,6 +2469,26 @@ def load_exceptions(
     )
 
 
+def attribute_standings(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
+) -> list[design_conclusions.AttributeStanding]:
+    """The approved attributes as the view assembles them (`attributes_of`), from the same
+    records and by the same rules, read for the D&I conclusion's design and implementation
+    results where the view itself is not read. Empty for a control that is not found."""
+    control = assurance._control(connection, project_id, control_id)
+    if control is None:
+        return []
+    records = _records(connection, project_id, control_id, control)
+    evidence, _more = evidence_index(
+        records.requests, records.checks, records.annotations, records.decisions
+    )
+    shown, _readings = attributes_of(
+        records.attributes, records.requests, records.checks, records.annotations, evidence,
+        None, records.dispositions, records.decisions,
+    )  # fmt: skip
+    return [standing_of(attribute) for attribute in shown]
+
+
 def drafter_record(
     connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
 ) -> dict[str, Any] | None:
@@ -2510,6 +2569,7 @@ def read_design_workpaper(
     conclusion = design_conclusions._body(
         connection, project_id, control_id, principal.id,
         exceptions_standing(attributes, excepted, checks),
+        [standing_of(attribute) for attribute in shown], may_update,
     )  # fmt: skip
     header = _section(content, "control")
     understanding = _text_section(content, _ACTIVITY_ROLES)
@@ -2581,6 +2641,8 @@ def read_design_workpaper(
         conclusion=conclusion_of(
             _text_section(content, ("design-conclusion",), "conclusion"), conclusion
         ),
+        design=conclusion.design,
+        implementation=conclusion.implementation,
         tickmarks=legend(
             bool(reports_inspected(requests, checks))
             or any(d.kind == "ESTABLISHED_ON_REVIEW" for d in decisions),
@@ -2632,6 +2694,7 @@ __all__ = [
     "StoredOutcome",
     "annotations_standing",
     "attribute_notes",
+    "attribute_standings",
     "attributes_of",
     "can_edit_sections",
     "closed_by_tickmark",
@@ -2662,7 +2725,9 @@ __all__ = [
     "reports_of",
     "row_refs",
     "row_when",
+    "shown_by",
     "standing",
+    "standing_of",
     "tickmark_of",
     "walkthrough_of",
 ]

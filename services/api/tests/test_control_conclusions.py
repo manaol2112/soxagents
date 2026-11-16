@@ -8,10 +8,10 @@ from uuid import UUID
 import psycopg
 import pytest
 from support import Database, sign_off_design
-from test_design_conclusions import _control, _design_deficiency, _reviewer_role
+from test_design_conclusions import _concluded, _control, _design_deficiency, _reviewer_role
 from test_evidence_flow import _project
 from test_outbound import _session, migrated
-from test_phase_release import _launched, _prepare_design
+from test_phase_release import _launched
 
 from ai_workforce_api.control_conclusions import Facts, propose, suggestion
 from ai_workforce_api.db import connect
@@ -244,13 +244,18 @@ def test_oe_waits_for_an_effective_d_and_i_sign_off_and_not_effective_goes_to_re
         for row in owner.get(f"{_project(team)}/workspace/controls").json()
         if row["included"] and row["id"] != control
     )
-    _prepare_design(migrated, team, other)
+    # Section 3.6 (product owner, 15 November 2026, docs/design-workpaper.md section 3.6).
+    # Old expectation: the workpaper prepared with no conclusion recorded, and the reviewer
+    # signed the records' verdict, not effective. New: the preparer records not effective
+    # on the draft before preparing it, and the reviewer signs that conclusion. Every
+    # assertion that follows is kept.
+    _concluded(migrated, team, other, "NOT_EFFECTIVE")
     _design_deficiency(migrated, team, other)
     _reviewer_role(migrated, team, team["reviewer_id"])
     reviewer = _session(migrated, team["reviewer_id"])
     signed = reviewer.post(
         f"{_project(team)}/design-conclusions/{other}/sign-off",
-        json={"verdict": "NOT_EFFECTIVE", "workpaper_version": 1},
+        json={"conclusion": "NOT_EFFECTIVE", "workpaper_version": 1},
     )
     assert signed.status_code == 200, signed.text
     with connect(migrated.url) as connection:
