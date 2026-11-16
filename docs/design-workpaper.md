@@ -454,7 +454,7 @@ only), `reason`, `proposed_kind` (the proposal when it was recorded), `workpaper
   at the sign-off; a missing
   basis or reason where the table says one is needed (422).
 **Sign-off.** The reviewer signs the preparer's standing choice: `SignOffBody`
-`{conclusion, workpaper_version, note}`; refused where no choice stands, where it is
+`{conclusion, choice_id, workpaper_version, note}`; refused where no choice stands, where it is
 `NOT_CONCLUDED`, where `conclusion` is not the standing choice's kind, where the choice
 was recorded after the workpaper was prepared (a choice is recorded on the draft, then
 the workpaper is prepared: `recorded_at` ≤ the preparation), and where the choice's rules
@@ -470,6 +470,37 @@ standing exceptions no longer block a sign-off of `EXCEPTIONS_NOTED` or `NOT_EFF
   `EFFECTIVE`, `EXCEPTIONS_NOTED` and `NO_INSTANCE`. `NOT_CONCLUDED` is never signed.
 - Out of date also when the standing choice changed after the sign-off ("the preparer's
   conclusion changed").
+
+**Tightened after the independent review (15 November 2026).** Each of these closes a way
+a conclusion could be signed, or keep clearing OE, without resting on the records:
+- *Independence covers the conclusion itself.* Where independence is required, the person
+  who recorded the standing choice cannot sign it (as the workpaper's preparer cannot):
+  "you recorded this conclusion; another reviewer must sign it off". `can_sign` is false
+  for them.
+- *"Exceptions noted" needs exceptions, and nothing else open.* It is refused unless an
+  exception stands (the check's or a person's) and every other approved attribute is
+  shown or settled by a closing tickmark ("Exceptions noted needs an exception on record
+  and every other attribute shown or settled"), at the choice and again at the sign-off.
+  It is also refused at the sign-off where an exception was recorded or found after the
+  choice was recorded ("an exception was noted after this conclusion was recorded; the
+  preparer records it again"). The proposal follows: with an exception and other
+  attributes still open it proposes `NOT_CONCLUDED`, and its reasons name both.
+- *A sign-off stops holding when its own rules stop holding.* It is out of date (and no
+  longer clears OE: `design_verdict`, `oe_gate_reason`, `effective_controls`) when the
+  rule that allowed its conclusion would now refuse it: an exception found by a later
+  check under `EFFECTIVE` or `NO_INSTANCE`, Design or Implementation gone open under
+  `EFFECTIVE`, Design no longer `DESIGNED` under `NO_INSTANCE`, no exception left or an
+  attribute gone open under `EXCEPTIONS_NOTED`. The reason is the rule's own sentence. A
+  sign-off made before choices were recorded (no `choice_id`) is held to `EFFECTIVE`'s or
+  `NOT_EFFECTIVE`'s existing rules only, as before.
+- *The sign-off names the choice.* `SignOffBody` is `{conclusion, choice_id,
+  workpaper_version, note}`; a `choice_id` that is not the standing choice is refused
+  ("the preparer's conclusion changed; read it again"). The `verdict` field is no longer
+  accepted.
+- *Recording a choice changes the workpaper's record.* It bumps `workpapers.version`, so
+  a Prepare sent from a page that has not seen the choice is refused as stale.
+- *An attribute shown only on files a person decided are not relied on* is sent with
+  `shown_by: "NOT_RELIED"`, and the page says so under its result.
 
 **The body** of `GET …/design-conclusions/{control_id}` gains `proposed_conclusion`,
 `proposed_reasons`, `choice` (`{id, kind, basis, reason, proposed_kind, recorded_by,
