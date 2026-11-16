@@ -92,6 +92,26 @@ import {
   whenAsked,
 } from "./leave-guard";
 import { PreparerSignOff } from "./preparer-signoff";
+import {
+  AllNotesView,
+  NoteField,
+  NotesRail,
+  openedAtNotes,
+  ReviewNotesProvider,
+  useReviewNotes,
+} from "./review-notes";
+import {
+  attributeKey,
+  CONCLUSION,
+  controlKey,
+  isOpen,
+  matterKey,
+  procedureKey,
+  reportKey,
+  UNDERSTANDING,
+  walkthroughColumnsOf,
+  walkthroughKey,
+} from "./review-notes-model";
 import { RichText } from "./rich-text";
 import { destinationHref } from "./routes";
 import {
@@ -159,6 +179,7 @@ const VIEW_ICONS: Record<ViewKey, IconName> = {
   document: "file",
   matrix: "grid",
   evidence: "panel",
+  notes: "message",
 };
 
 const calm = (): boolean =>
@@ -601,6 +622,9 @@ export function DesignWorkpaper({
     if (openedAtConclusion()) {
       setView("document");
       setSeekingConclusion(true);
+    } else if (openedAtNotes()) {
+      // From D&I Conclusion and Review: every review note of the workpaper.
+      setView("notes");
     }
   }, [arrived]);
   useEffect(() => {
@@ -688,6 +712,27 @@ export function DesignWorkpaper({
   };
 
   const { paper } = state;
+  // The workpaper's review notes (docs/workpaper-review.md, section 6): one read, shared
+  // by the Document view's markers and rail and by the Notes view.
+  const paperId = paper?.workpaper?.id ?? null;
+  const notesScope = useMemo(
+    () =>
+      paperId === null
+        ? null
+        : {
+            organizationId: scope.organizationId,
+            projectId: scope.projectId,
+            workpaperId: paperId,
+          },
+    [scope.organizationId, scope.projectId, paperId],
+  );
+  const reviewNotes = useReviewNotes(notesScope);
+  const openNotes = (reviewNotes.set?.notes ?? []).filter(isOpen).length;
+  // The rail beside the document: as the person set it, or, until they do, on where a
+  // note is open.
+  const [railChoice, setRailChoice] = useState<boolean | null>(null);
+  const railOn = railChoice ?? openNotes > 0;
+  const sheetRef = useRef<HTMLDivElement>(null);
   const editable = useMemo(
     () =>
       paper === null ? new Set<EditableSection>() : editableSections(paper),
@@ -1222,10 +1267,23 @@ export function DesignWorkpaper({
         </div>
       </div>
     ) : view === "document" ? (
-      <DocumentSheet
-        paper={paper}
-        actions={actions}
-        mattersId={`${uid}-matters`}
+      <div className={railOn ? "rn-with-rail" : undefined}>
+        <div ref={sheetRef}>
+          <DocumentSheet
+            paper={paper}
+            actions={actions}
+            mattersId={`${uid}-matters`}
+          />
+        </div>
+        {railOn ? <NotesRail id={`${uid}-rail`} /> : null}
+      </div>
+    ) : view === "notes" ? (
+      <AllNotesView
+        workpaperId={paper.workpaper.id}
+        onOpenAt={() => {
+          setRailChoice(true);
+          choose("document");
+        }}
       />
     ) : view === "matrix" ? (
       <MatrixBoard paper={paper} scope={scope} actions={actions} />
@@ -1245,195 +1303,232 @@ export function DesignWorkpaper({
     );
 
   return (
-    <section
-      ref={root}
-      className="dw"
-      aria-label="Design and implementation workpaper"
+    <ReviewNotesProvider
+      notes={reviewNotes}
+      paper={paper}
+      // Off while the sheet prints: the printed copy carries no marker or highlight.
+      on={
+        view === "document" &&
+        railOn &&
+        !printing &&
+        reviewNotes.status === "ready"
+      }
+      workpaperVersion={
+        paper?.workpaper?.shownVersion || paper?.workpaper?.currentVersion || 1
+      }
+      rootRef={sheetRef}
     >
-      {tabbed ? (
-        <div className="dw-bar">
-          <div
-            className="dw-switch"
-            role="tablist"
-            aria-label="Workpaper view"
-            onKeyDown={onKey}
-          >
-            {VIEWS.map((item) => {
-              const on = item.key === view;
-              return (
-                <button
-                  key={item.key}
-                  type="button"
-                  role="tab"
-                  id={`${uid}-tab-${item.key}`}
-                  ref={(node) => {
-                    if (node === null) {
-                      tabs.current.delete(item.key);
-                    } else {
-                      tabs.current.set(item.key, node);
-                    }
-                  }}
-                  className={`dw-tab${on ? " is-on" : ""}`}
-                  aria-selected={on}
-                  aria-controls={panelId}
-                  tabIndex={on ? 0 : -1}
-                  title={item.hint}
-                  onClick={() => choose(item.key)}
-                >
-                  <UiIcon name={VIEW_ICONS[item.key]} size={14} />
-                  {item.label}
-                </button>
-              );
-            })}
-          </div>
-          <p className="dw-bar-note" aria-live="polite">
-            {state.loading && paper !== null
-              ? "Reading the workpaper again"
-              : ""}
-          </p>
-          {view === "document" && paper !== null && editing !== null ? (
-            // A section open in its editor is not the workpaper as saved: it is not
-            // printed until the editor is closed.
-            <button
-              type="button"
-              className="btn-secondary btn-sm"
-              disabled
-              title="Save or cancel the section you are editing before printing."
+      <section
+        ref={root}
+        className="dw"
+        aria-label="Design and implementation workpaper"
+      >
+        {tabbed ? (
+          <div className="dw-bar">
+            <div
+              className="dw-switch"
+              role="tablist"
+              aria-label="Workpaper view"
+              onKeyDown={onKey}
             >
-              <UiIcon name="file" size={13} /> Print or save as PDF
-            </button>
-          ) : view === "document" && paper !== null ? (
+              {VIEWS.map((item) => {
+                const on = item.key === view;
+                return (
+                  <button
+                    key={item.key}
+                    type="button"
+                    role="tab"
+                    id={`${uid}-tab-${item.key}`}
+                    ref={(node) => {
+                      if (node === null) {
+                        tabs.current.delete(item.key);
+                      } else {
+                        tabs.current.set(item.key, node);
+                      }
+                    }}
+                    className={`dw-tab${on ? " is-on" : ""}`}
+                    aria-selected={on}
+                    aria-controls={panelId}
+                    tabIndex={on ? 0 : -1}
+                    title={item.hint}
+                    onClick={() => choose(item.key)}
+                  >
+                    <UiIcon name={VIEW_ICONS[item.key]} size={14} />
+                    {item.label}
+                    {item.key === "notes" && openNotes > 0
+                      ? ` · ${openNotes}`
+                      : ""}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="dw-bar-note" aria-live="polite">
+              {state.loading && paper !== null
+                ? "Reading the workpaper again"
+                : ""}
+            </p>
+            {view === "document" &&
+            paper !== null &&
+            paper.workpaper !== null &&
+            reviewNotes.status !== "off" ? (
+              // The review notes beside the sheet (docs/workpaper-review.md, section 6).
+              <button
+                type="button"
+                className={`dw-notes-switch${railOn ? " is-on" : ""}`}
+                aria-pressed={railOn}
+                aria-controls={railOn ? `${uid}-rail` : undefined}
+                onClick={() => setRailChoice(!railOn)}
+              >
+                <UiIcon name="message" size={13} />
+                Notes{openNotes > 0 ? ` · ${openNotes}` : ""}
+              </button>
+            ) : null}
+            {view === "document" && paper !== null && editing !== null ? (
+              // A section open in its editor is not the workpaper as saved: it is not
+              // printed until the editor is closed.
+              <button
+                type="button"
+                className="btn-secondary btn-sm"
+                disabled
+                title="Save or cancel the section you are editing before printing."
+              >
+                <UiIcon name="file" size={13} /> Print or save as PDF
+              </button>
+            ) : view === "document" && paper !== null ? (
+              <button
+                type="button"
+                className="btn-secondary btn-sm"
+                disabled={stale}
+                title={
+                  stale
+                    ? "Read the workpaper again before printing it."
+                    : undefined
+                }
+                onClick={() => {
+                  if (!stale) {
+                    setPrinting(true);
+                  }
+                }}
+              >
+                <UiIcon name="file" size={13} /> Print or save as PDF
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+        {state.problem !== null ? (
+          // It stays while the retry is out, so the button a person pressed keeps the focus.
+          <p className="banner banner-warning dw-problem" role="alert">
+            <UiIcon name="info" size={15} />
+            <span>{stale ? staleProblem(state.problem) : state.problem}</span>
             <button
               type="button"
               className="btn-secondary btn-sm"
-              disabled={stale}
-              title={
-                stale
-                  ? "Read the workpaper again before printing it."
-                  : undefined
-              }
+              aria-busy={state.loading}
               onClick={() => {
-                if (!stale) {
-                  setPrinting(true);
+                if (!state.loading) {
+                  retried.current = true;
+                  setAttempt((count) => count + 1);
                 }
               }}
             >
-              <UiIcon name="file" size={13} /> Print or save as PDF
+              Try again
             </button>
-          ) : null}
-        </div>
-      ) : null}
-      {state.problem !== null ? (
-        // It stays while the retry is out, so the button a person pressed keeps the focus.
-        <p className="banner banner-warning dw-problem" role="alert">
-          <UiIcon name="info" size={15} />
-          <span>{stale ? staleProblem(state.problem) : state.problem}</span>
-          <button
-            type="button"
-            className="btn-secondary btn-sm"
+          </p>
+        ) : null}
+        {tabbed ? (
+          <div
+            className="dw-panel"
+            role="tabpanel"
+            id={panelId}
+            aria-labelledby={`${uid}-tab-${view}`}
             aria-busy={state.loading}
-            onClick={() => {
-              if (!state.loading) {
-                retried.current = true;
-                setAttempt((count) => count + 1);
+          >
+            {body}
+          </div>
+        ) : (
+          // No workpaper, so no tabs: the panel is not labelled by one that is not there.
+          <div className="dw-panel" aria-busy={state.loading}>
+            {body}
+          </div>
+        )}
+        {opened !== null ? (
+          <AnnotatedDialog
+            organizationId={scope.organizationId}
+            projectId={scope.projectId}
+            files={[
+              { id: opened.entry.fileId, fileName: opened.entry.fileName },
+            ]}
+            title={opened.entry.requirementTitle || evidenceTitle(opened.entry)}
+            annotations={
+              opened.entry.requirementId === null
+                ? undefined
+                : {
+                    controlId: scope.controlId,
+                    requirementId: opened.entry.requirementId,
+                  }
+            }
+            startAnnotationId={opened.annotationId ?? undefined}
+            onClose={() => {
+              setOpened(null);
+              // The pane reads the file again without opening an annotation, so the focus
+              // the preview hands back stays where it is put.
+              setSelection((before) =>
+                before === null || before.annotationId === null
+                  ? before
+                  : { ...before, annotationId: null },
+              );
+              // An annotation reviewed in the preview changes the counts: read them again.
+              setAttempt((count) => count + 1);
+            }}
+          />
+        ) : null}
+        {askingNow && editing !== null ? (
+          <LeaveDialog
+            section={editing.editor.title}
+            problem={draftProblem(editing.editor, editing.draft)}
+            refusal={editing.refusal}
+            words={leaveWords({
+              keeping: keeper.keeping,
+              problem: draftProblem(editing.editor, editing.draft),
+              unkept: keeper.unkept(),
+              waited,
+            })}
+            onSave={async () => {
+              const section = editing.section;
+              await save();
+              // Only once the server confirmed the save; the page is leaving, so it does
+              // not wait for the views to read again. A refusal stays, said in the bar.
+              if (confirmed.current === section) {
+                goOn();
+              } else {
+                stay();
               }
             }}
-          >
-            Try again
-          </button>
-        </p>
-      ) : null}
-      {tabbed ? (
-        <div
-          className="dw-panel"
-          role="tabpanel"
-          id={panelId}
-          aria-labelledby={`${uid}-tab-${view}`}
-          aria-busy={state.loading}
-        >
-          {body}
-        </div>
-      ) : (
-        // No workpaper, so no tabs: the panel is not labelled by one that is not there.
-        <div className="dw-panel" aria-busy={state.loading}>
-          {body}
-        </div>
-      )}
-      {opened !== null ? (
-        <AnnotatedDialog
-          organizationId={scope.organizationId}
-          projectId={scope.projectId}
-          files={[{ id: opened.entry.fileId, fileName: opened.entry.fileName }]}
-          title={opened.entry.requirementTitle || evidenceTitle(opened.entry)}
-          annotations={
-            opened.entry.requirementId === null
-              ? undefined
-              : {
-                  controlId: scope.controlId,
-                  requirementId: opened.entry.requirementId,
-                }
-          }
-          startAnnotationId={opened.annotationId ?? undefined}
-          onClose={() => {
-            setOpened(null);
-            // The pane reads the file again without opening an annotation, so the focus
-            // the preview hands back stays where it is put.
-            setSelection((before) =>
-              before === null || before.annotationId === null
-                ? before
-                : { ...before, annotationId: null },
-            );
-            // An annotation reviewed in the preview changes the counts: read them again.
-            setAttempt((count) => count + 1);
-          }}
-        />
-      ) : null}
-      {askingNow && editing !== null ? (
-        <LeaveDialog
-          section={editing.editor.title}
-          problem={draftProblem(editing.editor, editing.draft)}
-          refusal={editing.refusal}
-          words={leaveWords({
-            keeping: keeper.keeping,
-            problem: draftProblem(editing.editor, editing.draft),
-            unkept: keeper.unkept(),
-            waited,
-          })}
-          onSave={async () => {
-            const section = editing.section;
-            await save();
-            // Only once the server confirmed the save; the page is leaving, so it does
-            // not wait for the views to read again. A refusal stays, said in the bar.
-            if (confirmed.current === section) {
-              goOn();
-            } else {
-              stay();
-            }
-          }}
-          onLeave={async (lose) => {
-            // The latest is kept at once (no pause), and the page does not wait long. It
-            // goes on only once the keep was confirmed, or where the person was told the
-            // changes are not kept and chose to leave anyway (independent review, 15
-            // November 2026); otherwise the dialog stays and says so.
-            await keeper.flush(LEAVE_WAIT_MS);
-            if (lose || !keeper.unkept()) {
-              goOn();
-            } else {
-              setWaited(true);
-            }
-          }}
-          onStay={stay}
-        />
-      ) : null}
-      {printing && !stale && paper !== null && paper.workpaper !== null
-        ? createPortal(
-            <div className="dw-print-root">
-              <DocumentSheet paper={paper} actions={null} />
-            </div>,
-            document.body,
-          )
-        : null}
-    </section>
+            onLeave={async (lose) => {
+              // The latest is kept at once (no pause), and the page does not wait long. It
+              // goes on only once the keep was confirmed, or where the person was told the
+              // changes are not kept and chose to leave anyway (independent review, 15
+              // November 2026); otherwise the dialog stays and says so.
+              await keeper.flush(LEAVE_WAIT_MS);
+              if (lose || !keeper.unkept()) {
+                goOn();
+              } else {
+                setWaited(true);
+              }
+            }}
+            onStay={stay}
+          />
+        ) : null}
+        {printing && !stale && paper !== null && paper.workpaper !== null
+          ? createPortal(
+              <div className="dw-print-root">
+                <DocumentSheet paper={paper} actions={null} />
+              </div>,
+              document.body,
+            )
+          : null}
+      </section>
+    </ReviewNotesProvider>
   );
 }
 
@@ -1947,6 +2042,9 @@ function DocumentSheet({
   const conclusion = conclusionOf(paper);
   const dated = walkthroughIsDated(paper.walkthrough);
   const columns = walkthroughHeaders(paper.walkthrough.columns);
+  // The stored walkthrough's column numbers: the review notes' field keys (section 3 of
+  // docs/workpaper-review.md).
+  const stored = walkthroughColumnsOf(paper.walkthrough.columns);
   const legend = tickmarkLegend(paper);
   const { understanding } = paper;
   const { workpaper } = paper;
@@ -2026,11 +2124,31 @@ function DocumentSheet({
         <div className="dw-two">
           <div>
             <h6>Risk addressed</h6>
-            <p>{paper.risk || "Not stated on the control."}</p>
+            <p>
+              {paper.risk !== "" ? (
+                <NoteField
+                  field={controlKey("risk")}
+                  text={paper.risk}
+                  inline
+                />
+              ) : (
+                "Not stated on the control."
+              )}
+            </p>
           </div>
           <div>
             <h6>Control activity</h6>
-            <p>{paper.activity || "Not stated on the control."}</p>
+            <p>
+              {paper.activity !== "" ? (
+                <NoteField
+                  field={controlKey("activity")}
+                  text={paper.activity}
+                  inline
+                />
+              ) : (
+                "Not stated on the control."
+              )}
+            </p>
           </div>
         </div>
         {paper.facts.length > 0 ? (
@@ -2053,7 +2171,9 @@ function DocumentSheet({
         ) : understanding.length > 0 ? (
           <div className="dw-prose">
             <h6>Understanding of the control</h6>
-            <RichText text={understanding} />
+            <NoteField field={UNDERSTANDING} text={understanding} rich>
+              <RichText text={understanding} />
+            </NoteField>
           </div>
         ) : null}
       </Section>
@@ -2066,9 +2186,17 @@ function DocumentSheet({
           </p>
         ) : (
           <ol className="dw-proc">
-            {keyed(paper.procedures, (item) => item).map(({ key, item }) => (
-              <li key={key}>{item}</li>
-            ))}
+            {keyed(paper.procedures, (item) => item).map(
+              ({ key, item }, index) => (
+                <li key={key}>
+                  <NoteField
+                    field={procedureKey(index + 1)}
+                    text={item}
+                    inline
+                  />
+                </li>
+              ),
+            )}
           </ol>
         )}
       </Section>
@@ -2123,11 +2251,42 @@ function DocumentSheet({
                 ).map(({ key, item: step }) => (
                   <tr key={key}>
                     <td className="is-num">{step.number}</td>
-                    {dated ? <td className="is-when">{step.when}</td> : null}
-                    <td>{step.step}</td>
-                    <td>{step.who}</td>
-                    <td>{step.evidence}</td>
-                    <td>{step.result}</td>
+                    {dated ? (
+                      <td className="is-when">
+                        {stored.when !== null ? (
+                          <NoteField
+                            field={walkthroughKey(step.number, stored.when)}
+                            text={step.when}
+                          />
+                        ) : (
+                          step.when
+                        )}
+                      </td>
+                    ) : null}
+                    <td>
+                      <NoteField
+                        field={walkthroughKey(step.number, stored.step)}
+                        text={step.step}
+                      />
+                    </td>
+                    <td>
+                      <NoteField
+                        field={walkthroughKey(step.number, stored.who)}
+                        text={step.who}
+                      />
+                    </td>
+                    <td>
+                      <NoteField
+                        field={walkthroughKey(step.number, stored.evidence)}
+                        text={step.evidence}
+                      />
+                    </td>
+                    <td>
+                      <NoteField
+                        field={walkthroughKey(step.number, stored.result)}
+                        text={step.result}
+                      />
+                    </td>
                     <td className="is-refs">
                       <Refs refs={step.refs} paper={paper} actions={actions} />
                     </td>
@@ -2196,7 +2355,12 @@ function DocumentSheet({
                           {attribute.text}
                         </th>
                         <td>
-                          {attribute.basis || (
+                          {attribute.basis !== "" ? (
+                            <NoteField
+                              field={attributeKey(attribute.id, "basis")}
+                              text={attribute.basis}
+                            />
+                          ) : (
                             <span className="dw-quiet">
                               Nothing on record for it yet.
                             </span>
@@ -2222,7 +2386,12 @@ function DocumentSheet({
                             />
                           ) : attribute.notes !== "" ? (
                             <p className="dw-note">
-                              <b>Preparer's note.</b> {attribute.notes}
+                              <b>Preparer's note.</b>{" "}
+                              <NoteField
+                                field={attributeKey(attribute.id, "note")}
+                                text={attribute.notes}
+                                inline
+                              />
                             </p>
                           ) : null}
                         </td>
@@ -2234,12 +2403,16 @@ function DocumentSheet({
                           />
                         </td>
                         <td className="is-state">
-                          <StatePill {...stateOf(attribute)} />
-                          {attribute.shownBy !== null ? (
-                            <small className="dw-shown-by">
-                              {SHOWN_BY_WORDS[attribute.shownBy]}
-                            </small>
-                          ) : null}
+                          <NoteField
+                            field={attributeKey(attribute.id, "result")}
+                          >
+                            <StatePill {...stateOf(attribute)} />
+                            {attribute.shownBy !== null ? (
+                              <small className="dw-shown-by">
+                                {SHOWN_BY_WORDS[attribute.shownBy]}
+                              </small>
+                            ) : null}
+                          </NoteField>
                         </td>
                         <td className="is-tm">
                           {mark.symbol !== "" ? (
@@ -2294,7 +2467,7 @@ function DocumentSheet({
                 {keyed(
                   paper.reports,
                   (item) => `${item.ref} ${item.report}`,
-                ).map(({ key, item: report }) => (
+                ).map(({ key, item: report }, index) => (
                   <tr key={key}>
                     <th scope="row" className="is-attr">
                       {report.ref !== "" ? (
@@ -2304,16 +2477,33 @@ function DocumentSheet({
                           actions={actions}
                         />
                       ) : null}{" "}
-                      {report.report}
+                      <NoteField
+                        field={reportKey(index + 1, 1)}
+                        text={report.report}
+                        inline
+                      />
                     </th>
-                    <td>{report.source || "Not stated"}</td>
                     <td>
-                      {report.procedure ||
-                        (reportInspected(paper, report) === null ? (
-                          <span className="dw-quiet">
-                            No procedure on record yet.
-                          </span>
-                        ) : null)}
+                      {report.source !== "" ? (
+                        <NoteField
+                          field={reportKey(index + 1, 2)}
+                          text={report.source}
+                        />
+                      ) : (
+                        "Not stated"
+                      )}
+                    </td>
+                    <td>
+                      {report.procedure !== "" ? (
+                        <NoteField
+                          field={reportKey(index + 1, 3)}
+                          text={report.procedure}
+                        />
+                      ) : reportInspected(paper, report) === null ? (
+                        <span className="dw-quiet">
+                          No procedure on record yet.
+                        </span>
+                      ) : null}
                       <Inspected paper={paper} report={report} />
                     </td>
                   </tr>
@@ -2341,7 +2531,7 @@ function DocumentSheet({
                 {keyed(
                   paper.matters,
                   (item) => `${item.kind} ${item.text}`,
-                ).map(({ key, item: matter }) => {
+                ).map(({ key, item: matter }, index) => {
                   const words = matterWords(matter);
                   return (
                     <tr key={key}>
@@ -2350,7 +2540,11 @@ function DocumentSheet({
                       </td>
                       <td>
                         {words.kind !== "" ? <b>{words.kind}. </b> : null}
-                        {matter.text}
+                        <NoteField
+                          field={matterKey(index + 1)}
+                          text={matter.text}
+                          inline
+                        />
                       </td>
                       <td className="is-refs">
                         <Refs
@@ -2401,7 +2595,9 @@ function DocumentSheet({
                 workpaper, and the preparer finalizes it here.
               </p>
             ) : (
-              <RichText text={conclusion.text} />
+              <NoteField field={CONCLUSION} text={conclusion.text} rich>
+                <RichText text={conclusion.text} />
+              </NoteField>
             )}
             {concluding === null ? (
               <EditConclusion

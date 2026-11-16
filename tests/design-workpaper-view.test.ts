@@ -56,9 +56,14 @@ describe("one switcher, three views", () => {
     assert.match(body, /role="tabpanel"/);
     assert.match(body, /aria-labelledby=\{`\$\{uid\}-tab-\$\{view\}`\}/);
     // Each view is drawn only while it is the one shown.
+    // Rewritten 15 November 2026 (docs/workpaper-review.md, section 6). Old: the
+    // Document view was the sheet alone, and the views were Document, Matrix, Evidence.
+    // New: the Document view is the sheet with the review notes' rail beside it while
+    // the rail is on, and a fourth view, Notes (All notes), comes before the Matrix in
+    // the chain of views drawn; each is still drawn only while it is the one shown.
     assert.match(
       body,
-      /view === "document" \? \(\s*<DocumentSheet[\s\S]{0,120}\) : view === "matrix" \? \(\s*<MatrixBoard[\s\S]{0,160}\) : \(\s*<EvidenceSplit/,
+      /view === "document" \? \(\s*<div className=\{railOn \? "rn-with-rail" : undefined\}>\s*<div ref=\{sheetRef\}>\s*<DocumentSheet[\s\S]{0,120}<\/div>\s*\{railOn \? <NotesRail id=\{`\$\{uid\}-rail`\} \/> : null\}\s*<\/div>\s*\) : view === "notes" \? \(\s*<AllNotesView[\s\S]{0,240}\) : view === "matrix" \? \(\s*<MatrixBoard[\s\S]{0,160}\) : \(\s*<EvidenceSplit/,
     );
   });
 

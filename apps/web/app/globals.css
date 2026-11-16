@@ -95,6 +95,13 @@
   --ai-soft: #f4f1ff;
   --ai-border: #ddd4fb;
 
+  /* Review notes (docs/workpaper-review.md, section 6): one colour per criticality, for
+     its dot, its card's rule and its highlighted words, and nowhere else. Follow-up is
+     the neutral grey; the dark theme takes its own danger and accent text tones. */
+  --note-urgent: #a61e1e;
+  --note-normal: #1e40af;
+  --note-follow-up: var(--neutral);
+
   /* Marks drawn over evidence (docs/evidence-annotations.md): the file is shown as it is,
      a light page in both themes, so each keeps one value. Each is 4.5:1 or more on white
      and under --mark-paper, and sits inside a ring of --mark-paper so it reads on a dark
@@ -231,6 +238,9 @@
   --ai: #c2afff;
   --ai-soft: rgb(167 139 250 / 14%);
   --ai-border: rgb(167 139 250 / 34%);
+
+  --note-urgent: var(--danger);
+  --note-normal: var(--accent-strong);
 
   /* Over evidence, which stays a light page: the same values as the light theme. */
   --mark-paper: #ffffff;

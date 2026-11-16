@@ -616,15 +616,22 @@ describe("the request", () => {
 });
 
 describe("the remembered view", () => {
-  it("offers Document, Matrix and Evidence, in that order", () => {
+  // Rewritten 15 November 2026 (docs/workpaper-review.md, section 6). Old: three views,
+  // Document, Matrix and Evidence. New: a fourth, Notes (All notes: every review note of
+  // the workpaper, with search and filters), after the three, as the product owner
+  // approved it ("A fourth view beside Document, Matrix and Evidence"). The three keep
+  // their order and their keys, so a remembered choice still opens the same view.
+  it("offers Document, Matrix, Evidence and Notes, in that order", () => {
     assert.deepEqual(
       VIEWS.map((view) => [view.key, view.label]),
       [
         ["document", "Document"],
         ["matrix", "Matrix"],
         ["evidence", "Evidence"],
+        ["notes", "Notes"],
       ],
     );
+    assert.equal(viewFrom("notes"), "notes");
   });
 
   it("is the document unless the browser kept another", () => {
@@ -693,14 +700,19 @@ describe("the remembered view", () => {
     );
   });
 
+  // Rewritten 15 November 2026 (docs/workpaper-review.md, section 6). Old: Evidence was
+  // the last tab (ArrowRight from it and ArrowLeft from Document went round to it; End
+  // landed on it). New: Notes is the last of four, so the ends are Document and Notes;
+  // the keys and the wrapping are unchanged.
   it("moves between the tabs by the arrow keys, Home and End, round the ends", () => {
     assert.equal(viewForKey("document", "ArrowRight"), "matrix");
     assert.equal(viewForKey("matrix", "ArrowRight"), "evidence");
-    assert.equal(viewForKey("evidence", "ArrowRight"), "document");
-    assert.equal(viewForKey("document", "ArrowLeft"), "evidence");
+    assert.equal(viewForKey("evidence", "ArrowRight"), "notes");
+    assert.equal(viewForKey("notes", "ArrowRight"), "document");
+    assert.equal(viewForKey("document", "ArrowLeft"), "notes");
     assert.equal(viewForKey("evidence", "ArrowLeft"), "matrix");
-    assert.equal(viewForKey("evidence", "Home"), "document");
-    assert.equal(viewForKey("document", "End"), "evidence");
+    assert.equal(viewForKey("notes", "Home"), "document");
+    assert.equal(viewForKey("document", "End"), "notes");
     // A horizontal tab list: Up and Down are the page's own, like every other key.
     for (const key of [
       "ArrowUp",

@@ -420,9 +420,14 @@ describe("where a text section is read", () => {
   it("is how the Document, the printed sheet and the Evidence view show the understanding and the conclusion", () => {
     assert.match(view, /import \{ RichText \} from "\.\/rich-text";/);
     const sheet = component(view, "DocumentSheet");
+    // Rewritten 15 November 2026 (docs/workpaper-review.md, sections 3 and 6). Old: the
+    // understanding's RichText directly in its block. New: the same RichText, inside the
+    // review notes' field (`understanding`), which draws it as it is while the notes are
+    // off (and on the printed sheet), and with its highlighted words while they are on;
+    // the text is still shown formatted, by the same reader.
     assert.match(
       sheet,
-      /<div className="dw-prose">\s*<h6>Understanding of the control<\/h6>\s*<RichText text=\{understanding\} \/>\s*<\/div>/,
+      /<div className="dw-prose">\s*<h6>Understanding of the control<\/h6>\s*<NoteField field=\{UNDERSTANDING\} text=\{understanding\} rich>\s*<RichText text=\{understanding\} \/>\s*<\/NoteField>\s*<\/div>/,
     );
     assert.match(sheet, /const \{ understanding \} = paper;/);
     // Rewritten 15 November 2026. Old: the conclusion's RichText directly before
@@ -432,9 +437,14 @@ describe("where a text section is read", () => {
     // date, and the Evidence view links to section 7 instead of repeating the text (two
     // RichText) (product owner, 15 November 2026, docs/design-workpaper.md section
     // 3.5/3.6). The text is still shown formatted, by the same reader.
+    // Rewritten again 15 November 2026 (docs/workpaper-review.md, sections 3 and 6).
+    // Old: the conclusion's RichText directly in that place. New: the same RichText
+    // inside the review notes' field (`conclusion`), drawn as it is while the notes are
+    // off and with its highlighted words while they are on; the order around it (the
+    // text, "Edit conclusion", what is out of date) is unchanged.
     assert.match(
       sheet,
-      /\) : conclusion\.text === "" \? \([\s\S]{0,400}\) : \(\s*<RichText text=\{conclusion\.text\} \/>\s*\)\}\s*\{concluding === null \? \(\s*<EditConclusion[\s\S]{0,160}\) : null\}\s*<OutOfDate reasons=\{conclusion\.outOfDate\} \/>/,
+      /\) : conclusion\.text === "" \? \([\s\S]{0,400}\) : \(\s*<NoteField field=\{CONCLUSION\} text=\{conclusion\.text\} rich>\s*<RichText text=\{conclusion\.text\} \/>\s*<\/NoteField>\s*\)\}\s*\{concluding === null \? \(\s*<EditConclusion[\s\S]{0,160}\) : null\}\s*<OutOfDate reasons=\{conclusion\.outOfDate\} \/>/,
     );
     assert.equal(
       /Read the conclusion|RichText text=\{conclusion/.test(

@@ -24,9 +24,11 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** An evidence reference: E1, E2, … in the order of the evidence index. */
 const REF = /^E[1-9]\d{0,2}$/;
 
-/* The three views, and the one a browser remembers ------------------------------------ */
+/* The views, and the one a browser remembers ------------------------------------------ */
 
-export type ViewKey = "document" | "matrix" | "evidence";
+/** The document, the matrix, the evidence, and every review note of the workpaper
+ * (docs/workpaper-review.md, section 6). */
+export type ViewKey = "document" | "matrix" | "evidence" | "notes";
 
 export const VIEWS: ReadonlyArray<{
   key: ViewKey;
@@ -47,6 +49,11 @@ export const VIEWS: ReadonlyArray<{
     key: "evidence",
     label: "Evidence",
     hint: "The workpaper with its evidence beside it",
+  },
+  {
+    key: "notes",
+    label: "Notes",
+    hint: "Every review note, with search and filters",
   },
 ];
 

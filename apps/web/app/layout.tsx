@@ -36,6 +36,7 @@ import "./design-evidence.css";
 import "./check-digest.css";
 import "./evidence-wizard.css";
 import "./design-workpaper.css";
+import "./review-notes.css";
 import "./evidence-annotations.css";
 // Last: the glass layer sits over the modules' own surfaces.
 import "./glass.css";

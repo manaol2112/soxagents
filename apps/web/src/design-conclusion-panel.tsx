@@ -32,6 +32,8 @@ import {
   recordedLine,
 } from "./design-workpaper-model";
 import { formatDate } from "./format";
+import { ReviewNotesLine } from "./review-notes";
+import { notesHref } from "./review-notes-model";
 import { RichText } from "./rich-text";
 import { UiIcon } from "./ui-icon";
 
@@ -391,6 +393,26 @@ export function DesignConclusionPanel({
                 "Not signed yet: the preparer signs at the end of section 7"
               )}{" "}
               <a href={conclusionHref(assessmentHref)}>Open section 7</a>
+            </dd>
+          </div>
+          {/* The workpaper's review notes (docs/workpaper-review.md, section 6): how
+              many are open and urgent, and the way to them. What holds the sign-off is
+              the server's `blocking`, said below with the rest. */}
+          <div>
+            <dt>Review notes</dt>
+            <dd>
+              <ReviewNotesLine
+                scope={
+                  paper === null
+                    ? null
+                    : {
+                        organizationId: ids.organizationId,
+                        projectId: ids.projectId,
+                        workpaperId: paper.id,
+                      }
+                }
+                href={notesHref(assessmentHref)}
+              />
             </dd>
           </div>
           <div>
