@@ -618,6 +618,137 @@ conclusion and its review are both in D&I Assessment, section 7.
   review-requests/mine` lists the viewer's standing requests for Home. Each write is one
   audit event; the message and reason at most 200 characters in it.
 
+## 3.9 No "Matters for the reviewer": each point is settled where it belongs (product owner, 16 November 2026)
+
+"Is there any way we can present this not part of the actual workpaper? This is a feedback
+to the reviewer and not part of the workpaper right?", then, to a list beside the notes
+and to a bar above the paper: "I don't like either. Could cause confusion if you say there
+is still something open?", then "Okay proceed" to the prototype (scratchpad
+brief-proto/place.png) and, asked how a point with no action of its own is cleared,
+"Considered, with reason". Supersedes section 6 of the Document view and the matters of
+section 2 of this contract for the views.
+
+**What goes, and where each item now is.**
+- Section 6 "Matters for the reviewer" is removed from the Document view, its print and
+  the Matrix and Evidence views. The Conclusion becomes section 6 (every "section 7" in the
+  product's words becomes "section 6"). The line "Operating effectiveness is tested
+  separately" goes.
+- **Noted items** are not repeated; each is already, or now is, at its place:
+  - a tickmark is in section 4 on its attribute. Where the tickmark does not change the
+    attribute's state (the check shows it, an exception, or not concluded), the row now
+    also says the tickmark with who, when and the reason;
+  - a reliability decision is in section 5 on the report row naming the file. Where no
+    row names the file, it is on the file's line in "Tickmarks and evidence";
+  - a file left out by purpose is on its line in "Tickmarks and evidence";
+  - "N more files are not listed" is said under that list.
+- **An exception a person recorded** (`DISPOSITION`, "still to be evaluated") is no longer
+  a separate item. Section 4 shows it, and the conclusion evaluates it: Effective is
+  refused while it stands (3.6), and Exceptions noted and Not effective carry the reason.
+- **The agent's considerations** (`CONSIDERATION`) become the draft of the message sent
+  with the review request (3.8). The box starts with them, one per line, marked "Drafted
+  from the agent's observations · edit before sending", within the message's 1,000
+  characters. The preparer edits or clears it, and it is sent as their message only when
+  they press "Sign and send for review". The reviewer reads it on the request, never in the
+  workpaper. Nothing new is recorded for it; the agent's text is shown as text.
+- **The points** (everything that waited on a person) are shown at their place, to the
+  preparer only, and settled there.
+
+**A point** (server, `design_points.py`, assembled on each read like the matters were).
+These are the open items of `matters_of`:
+- a check out of date (`STALE`);
+- an open finding (`FINDING`);
+- an attribute not concluded (`NOT_CONCLUDED`);
+- an attribute shown only on files not relied on (`NOT_RELIED`);
+- an attribute shown by one request and not by another that asks for it (`CONFLICT`);
+- a file held out of the check, not by purpose (`HELD`);
+- each sentence of a check's completeness review (`COMPLETENESS`);
+- each follow-up of a check (`FOLLOW_UP`).
+
+A point has:
+- `key`: 32 hex characters, the SHA-256 of its kind and the identity of what it is about
+  (the request, the attribute, the file, the finding, the sentence). It is the same on
+  every read while the point is the same, and new when the point changes, for example a
+  new check with other words;
+- `kind`, `text` (the matter's sentence), `refs`;
+- `place` (`{at: "ATTRIBUTE", attribute_id}`, `{at: "FILE", file_id}`, or
+  `{at: "REQUEST", requirement_id}`): where the view shows it;
+- `settle`: the existing actions that settle it, one or more of `RELIABILITY` (a file
+  decision), `TICKMARK` (a closing tickmark on that request), `RERUN` (check the request
+  again), `FINDING` (decide the finding). `CONSIDER` is always offered;
+- `considered`: null, or `{id, by {id, name}, at, reason}`.
+
+A point is settled when its own action makes it go (it is no longer assembled) or when a
+consideration stands for its key.
+
+**Considered** (migration 0169, `design_point_considerations`, written once and ended once,
+no delete, archived guard). Columns:
+- `id`, `organization_id`, `project_id`, `control_id`, `workpaper_id`;
+- `point_key`, `point_kind`, `point_text` (the point's sentence when considered, up to
+  2,000 characters);
+- `reason` (10 to 1,000 characters, a person's own, cleaned as text is);
+- `considered_by`, `considered_at`;
+- `ended_at`, `ended_by`, `ended_as` (`WITHDRAWN`).
+
+One stands per workpaper and point key.
+- `POST /organizations/{o}/projects/{p}/design-conclusions/{control_id}/points/{key}/
+  consider` `{reason, workpaper_version}`: TASK_UPDATE, a person (never an agent), an open
+  engagement, the design workpaper a draft that is not being drafted, shown at its
+  current version, and the key a point of the current read that is not settled. Each
+  refusal is one sentence (409 where the workpaper or the point changed: "this point
+  changed; read the workpaper again").
+- `POST …/points/{key}/withdraw` `{consideration_id, workpaper_version}`: the same rules,
+  for a standing consideration.
+- Each write bumps the workpaper's version, as recording a conclusion does (3.6), and is
+  one audit event (the reason at most 200 characters in it). A consideration whose point is
+  no longer assembled is kept, and is not shown or counted.
+
+**The rules** (the server decides; the page says so before the press):
+- **The preparer's sign-off** (prepare, and so "Sign and send for review") of a design
+  workpaper is refused while a point is not settled: "Settle the points first (N): <the
+  first one's words>." The 3.7 refusals come first. Demo seeding stays held to the rules it
+  had (as for 3.6).
+- **The reviewer's sign-off** is refused while a point is not settled. A point can appear
+  after the preparer signed, when the evidence or a check changes: "N points were raised
+  since the preparer signed: return it to the preparer." A standing sign-off whose rule
+  breaks goes out of date as today; a point raised after the sign-off does not, by
+  itself, end it.
+
+**In the page.**
+- **At its place.** For the preparer (who may update the workpaper, while it is a draft),
+  each point that is not settled is shown under the row it is about. An `ATTRIBUTE`
+  point is under the attribute's row in section 4. A `FILE` point is under the section 5
+  row naming the file, else under the file's line in "Tickmarks and evidence". A
+  `REQUEST` point is at the head of section 4, naming the request.
+  - It reads "Your decision." with the sentence and its references, one button per
+    existing action (inline where the action's component is on the page, otherwise a
+    link to where it is), and "Considered…". That opens a reason box in place (10 to 1,000
+    characters; "Record" shown as done only once the server confirmed).
+  - The words never say "open".
+  - Others, and the print, do not see an unsettled point, except the reviewer in the
+    case below.
+- **A considered point** is part of the workpaper. Everyone, and the print, sees it at its
+  place as one quiet line: "Considered by Dana Lee, 16 Nov: <reason>", with the point's
+  sentence on request. The preparer may withdraw it while the workpaper is a draft. A
+  review note may be raised on it (field `points.<key>`).
+- **Before signing.** Section 6's preparer sign-off lists the points not yet settled, one
+  line each with a link to its place, and "N decisions before you sign"; the button waits.
+  The verdict line of the Evidence view says "N decisions before you sign" to the
+  preparer, and nothing to others.
+- **The reviewer**, where a point appeared after the preparer signed, sees it at its place
+  as "Raised since the preparer signed", and the sign-off says to return it.
+- **Review notes on the old section** (`matters.<n>`) stay. They are listed in the rail
+  with their kept words as "On an item no longer listed", with no marker on the page.
+
+**Tests.**
+- Server: each point kind and its key's stability; settling by each action and by a
+  consideration; the consider and withdraw rules, the version bump and the audit event;
+  the prepare and send-for-review refusal, and the reviewer's; demo seeding unchanged.
+- Web: the model (parsing points, places, the counts, the draft message from the
+  considerations within 1,000 characters) and the view (no section 6; each place; the
+  print with considered lines and no unsettled ones; the sign-off list).
+- Superseded matters tests are rewritten for the points, each with the old and new
+  expectation recorded.
+
 ## 4. Tests
 
 Server: the assembly from synthetic records (each attribute state, the evidence numbering
@@ -639,3 +770,4 @@ source-level checks that the existing actions are kept and appear once.
 | Formatting (3.3); autosave and leaving (3.4) | built 15 November 2026 (web: rich-editor, working copies, leave dialog; server: workpaper_marks, workpaper_drafts, migration 0164 applied to dev); checked in headless browsers on synthetic data (149 and 210 checks); independent review pending |
 | One conclusion (3.5); the preparer concludes (3.6) | agreed 15 November 2026; being built |
 | The preparer's sign-off (3.7): the server's refusal | built 16 November 2026 (`workpaper_service._prepare`: a design workpaper is refused with "record a conclusion first" where no conclusion stands, and "Not concluded is not signed: record the conclusion the records support" where the standing one is Not concluded; tests in `test_design_conclusion_choice.py`, critical tier). The testing workpaper's prepare is unchanged |
+| No section 6; points settled where they belong (3.9) | agreed 16 November 2026; being built |
