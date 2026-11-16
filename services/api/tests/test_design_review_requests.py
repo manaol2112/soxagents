@@ -35,7 +35,7 @@ from test_evidence_assurance import _Bench
 from test_execution import _add_user
 from test_outbound import _session, migrated
 
-from ai_workforce_api import design_conclusions, independence
+from ai_workforce_api import design_conclusions, design_review_requests, independence
 from ai_workforce_api.authorization import Principal, PrincipalKind
 from ai_workforce_api.db import connect
 from ai_workforce_api.design_review_requests import (
@@ -597,7 +597,7 @@ def test_the_reviewers_list_on_home(migrated: Database) -> None:
         "SELECT control_ref, title FROM engagement_controls WHERE id = %s", UUID(bench.control)
     )
     assert line == {
-        "id": request["id"], "control_id": bench.control, "control_ref": ref,
+        "id": request["id"], "control_id": bench.control, "control_reference": ref,
         "control_title": title, "stage": "DESIGN",
         "sent_by": {"id": str(owner_id), "name": bench.name(owner_id)},
         "sent_at": line["sent_at"], "message": MESSAGE, "reminded_at": None,
@@ -628,6 +628,52 @@ def test_the_reviewers_list_on_home(migrated: Database) -> None:
     assert _session(migrated, stranger_id).get(
         f"{bench.base}/review-requests/mine"
     ).status_code in (403, 404)
+
+
+def test_the_home_list_is_one_query_whatever_its_length(
+    migrated: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Home reads the reviewer's list and its urgent notes in one query: a waiting line
+    adds no statement (no per-line count of urgent notes), and the count is still only
+    the urgent notes that are open or responded to."""
+    case = _Review(migrated, "drr-home-queries")
+    bench = case.bench
+    owner_id = bench.team["owner_id"]
+    reviewer = Principal(kind=PrincipalKind.USER, id=case.reviewer_id)
+    org, project = UUID(str(bench.team["org"])), UUID(str(bench.team["project"]))
+
+    def counted() -> tuple[int, Any]:
+        statements: list[Any] = []
+        execute = psycopg.Cursor.execute
+
+        def counting(self: Any, query: Any, *args: Any, **kwargs: Any) -> Any:
+            statements.append(query)
+            return execute(self, query, *args, **kwargs)
+
+        with monkeypatch.context() as patched, connect(migrated.url) as connection:
+            patched.setattr(psycopg.Cursor, "execute", counting)
+            found = design_review_requests.mine(connection, reviewer, org, project)
+        return len(statements), found
+
+    none, empty = counted()
+    assert (empty.count, empty.requests) == (0, [])
+    assert none > 0
+    case.sent(case.reviewer_id, MESSAGE)
+    for criticality in ("URGENT", "NORMAL"):
+        raised = case.reviewer.post(
+            f"{bench.base}/workpapers/{case.paper_id}/review-notes",
+            json={"anchor_kind": "WORKPAPER", "workpaper_version": 1,
+                  "text": f"A {criticality.lower()} note on the walkthrough.",
+                  "criticality": criticality, "owner_id": str(owner_id)},
+        )  # fmt: skip
+        assert raised.status_code == 200, raised.text
+    one, found = counted()
+    assert one == none
+    [line] = found.requests
+    [(ref,)] = case.rows(
+        "SELECT control_ref FROM engagement_controls WHERE id = %s", UUID(bench.control)
+    )
+    assert (line.control_reference, line.urgent_notes) == (ref, 1)
 
 
 # --- Who may write, and the archive ------------------------------------------------------

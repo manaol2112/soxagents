@@ -836,11 +836,12 @@ def return_to_preparer(
 class WaitingRequest(BaseModel):
     """One D&I workpaper waiting for the viewer's review. `conclusion` is the preparer's
     standing conclusion (null where none stands); `urgent_notes` the workpaper's urgent
-    review notes that are open or responded to, which hold the sign-off."""
+    review notes that are open or responded to, which hold the sign-off. The control's
+    reference is `control_reference`, the name the web's Home list reads."""
 
     id: UUID
     control_id: UUID
-    control_ref: str
+    control_reference: str
     control_title: str
     stage: Literal["DESIGN"] = "DESIGN"
     sent_by: PersonRef
@@ -864,9 +865,12 @@ def mine(
     organization_id: UUID,
     project_id: UUID,
 ) -> MineBody:
-    """The viewer's standing requests on the engagement, the longest waiting first."""
+    """The viewer's standing requests on the engagement, the longest waiting first. One
+    query lists them with their urgent notes (counted for the engagement's workpapers in
+    one grouped subquery, as `workpaper_review_notes.urgent_open` counts them for one), so
+    a long list costs no more round trips than a short one. Migration 0166, which holds
+    the notes, comes before 0168: where the requests are on record, so are the notes."""
     from ai_workforce_api import design_conclusions
-    from ai_workforce_api.workpaper_review_notes import urgent_open
 
     design_conclusions._person(connection, principal, organization_id, project_id,
                                Action.TASK_READ)  # fmt: skip
@@ -885,17 +889,24 @@ def mine(
                     WHERE ch.project_id = r.project_id
                       AND ch.engagement_control_id = r.engagement_control_id
                       AND ch.ended_at IS NULL),
-                   r.workpaper_id
+                   coalesce(u.urgent, 0)
             FROM design_review_requests r
             JOIN engagement_controls c
               ON c.project_id = r.project_id AND c.id = r.engagement_control_id
             LEFT JOIN users s ON s.id = r.sent_by
+            LEFT JOIN (
+                SELECT n.workpaper_id, count(*) AS urgent
+                FROM workpaper_review_notes n
+                WHERE n.project_id = %s AND n.criticality = 'URGENT'
+                  AND n.status IN ('OPEN', 'RESPONDED')
+                GROUP BY n.workpaper_id
+            ) u ON u.workpaper_id = r.workpaper_id
             WHERE r.project_id = %s AND r.organization_id = %s AND r.reviewer_id = %s
               AND r.ended_at IS NULL
             ORDER BY r.sent_at, r.id
             LIMIT %s
             """,
-            (project_id, organization_id, principal.id, MINE_LIMIT),
+            (project_id, project_id, organization_id, principal.id, MINE_LIMIT),
         ).fetchall()
         return MineBody(
             count=0 if total is None else int(total[0]),
@@ -903,7 +914,7 @@ def mine(
                 WaitingRequest(
                     id=UUID(str(row[0])),
                     control_id=UUID(str(row[1])),
-                    control_ref=str(row[2]),
+                    control_reference=str(row[2]),
                     control_title=str(row[3]),
                     sent_by=PersonRef(id=UUID(str(row[4])), name=str(row[5] or "")),
                     sent_at=row[6],
@@ -914,7 +925,7 @@ def mine(
                     conclusion_words=None
                     if row[10] is None
                     else design_conclusions.KIND_WORDS.get(str(row[10])),
-                    urgent_notes=urgent_open(connection, UUID(str(row[11]))),
+                    urgent_notes=int(row[11]),
                 )
                 for row in rows
             ],
