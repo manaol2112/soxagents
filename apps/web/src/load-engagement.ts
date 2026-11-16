@@ -320,7 +320,9 @@ export async function loadEngagement(
     designConclusion:
       ok(designConclusion) === undefined
         ? null
-        : parseDesignConclusion(ok(designConclusion)),
+        : // Who is reading is the session's own user: section 7 knows the reviewer a
+          // request names without the review notes' route (section 3.8).
+          parseDesignConclusion(ok(designConclusion), model.userId),
     designConclusionNotice: open
       ? parseDesignConclusionNotice(query.notice)
       : null,

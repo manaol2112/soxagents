@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 
 import {
   ATTESTATION,
   NOTE_LABEL,
-  preparedLine,
+  preparedDetail,
   REOPEN_TO_CHANGE,
   REOPENED_READING,
   SIGN_AS_PREPARER,
@@ -16,14 +16,36 @@ import {
   signOffRequest,
   signOffRereads,
 } from "./preparer-signoff-model";
+import { ReviewerPicker } from "./review-picker";
+import {
+  type LastReturn,
+  MESSAGE_LABEL,
+  MESSAGE_MAX,
+  NEEDS_REVIEWER,
+  NO_REVIEWER,
+  REVIEW_ROUTES,
+  type ReviewerOption,
+  returnedLine,
+  returnedNext,
+  SEND_TO,
+  SENT_READING,
+  SIGN_AND_SEND,
+  SIGN_AND_SEND_AGAIN,
+  sendHint,
+  sendRequest,
+} from "./review-request-model";
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
 
+/** The one request a press sends: the existing prepare or reopen, or (section 3.8) the
+ * prepare that also sends the workpaper for review. An answer that cannot be read, or
+ * none, is status 0: nothing is taken as done. */
 async function send(
-  body: Record<string, string>,
+  url: string,
+  body: Record<string, unknown>,
 ): Promise<{ status: number; detail: string }> {
   try {
-    const response = await fetch("/workspace/workpapers/prepare", {
+    const response = await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -41,18 +63,26 @@ async function send(
   }
 }
 
+/** Section 3.8: "Sign and send for review", where the body names the review. */
+export type SendFor = {
+  /** Who may be chosen, and who is shown but not offered, with why. */
+  reviewers: readonly ReviewerOption[];
+  /** The reviewer the picker starts on; null where a choice is needed. */
+  startOn: string | null;
+  /** The reviewer's last return, where the workpaper came back: its reason is shown, and
+   * the button reads "Sign and send again". */
+  returned: LastReturn | null;
+  viewerId: string | null;
+};
+
 /**
- * The preparer's sign-off, at the end of section 7 (docs/design-workpaper.md, section
- * 3.7): what it attests, what it still needs, an optional note, and "Sign as preparer";
- * once signed, who and when, and "Reopen to change" with its reason. Each press is the
- * existing prepare or reopen; it reads as done only after the server confirms, and the
- * page then reads the workpaper and its records again.
- *
- * One row (product owner, 16 November 2026: section 7 lighter, option A): the heading and
- * what is attested on the left, "Sign as preparer" on the right; what it still needs only
- * while it needs something, and the note for the reviewer only once asked for ("Add a
- * note for the reviewer"). Once signed: who and which version on the left, "Reopen to
- * change" as a quiet link on the right.
+ * The preparer's row of section 7's Sign-off (docs/design-workpaper.md, sections 3.7 and
+ * 3.8): what it attests, what it still needs, and "Sign and send for review" with the
+ * reviewer chosen in "Send for review to" and an optional message; once signed, who,
+ * when and which version, and "Reopen to change" with its reason. Where the body is from
+ * before 3.8 (`sendFor` null) the press is the existing "Sign as preparer", with its note.
+ * Each press reads as done only after the server confirms; the page then reads the
+ * workpaper and its records again.
  *
  * After the independent review (16 November 2026):
  * - A press the server confirmed is said at once ("Signed. Reading the workpaper
@@ -62,8 +92,8 @@ async function send(
  *   (409), no answer or a server error read the workpaper again; an answer that did not
  *   come back is said as "may not have been taken", never "Not signed".
  * - The focus is never dropped: into the reason when "Reopen to change" opens it, back
- *   to "Reopen to change" on Cancel, and to the sign-off's heading once a confirmed
- *   press is shown.
+ *   to "Reopen to change" on Cancel, and to the row's heading once a confirmed press is
+ *   shown.
  */
 export function PreparerSignOff({
   ids,
@@ -73,6 +103,9 @@ export function PreparerSignOff({
   prepared,
   mayAct,
   onDone,
+  sendFor = null,
+  unread = false,
+  below = null,
 }: {
   ids: Ids;
   workpaperId: string;
@@ -85,17 +118,50 @@ export function PreparerSignOff({
   /** The views and the page's records are read again: after a press the server
    * confirmed, and after an answer that leaves them in doubt (`signOffRereads`). */
   onDone: () => void;
+  sendFor?: SendFor | null;
+  /** The D&I conclusion could not be read: a draft is not prepared from here, since the
+   * existing prepare would name no reviewer (section 3.8: a reviewer must be chosen). */
+  unread?: boolean;
+  /** Under the prepared line: the preparer's message, where the reviewer reads it. */
+  below?: ReactNode;
 }) {
   const uid = useId();
   const [text, setText] = useState("");
   const [reopening, setReopening] = useState(false);
-  // The optional note's box, drawn once asked for.
+  // The optional note's box, drawn once asked for (before 3.8).
   const [noting, setNoting] = useState(false);
   const [sending, setSending] = useState(false);
   const [refusal, setRefusal] = useState("");
+  // Section 3.8: the reviewer chosen, starting on the server's default; and, once the
+  // workpaper came back, the picker folded to one line until "Change" opens it.
+  const [reviewerId, setReviewerId] = useState<string | null>(
+    sendFor?.startOn ?? null,
+  );
+  const [picking, setPicking] = useState(false);
+  const startOn = sendFor?.startOn ?? null;
+  // Returned (again): the picker starts on the reviewer who returned it, whatever was
+  // chosen on this page before (a reviewer changed since in "Change reviewer" is the one
+  // who returned it). Otherwise a choice already made is kept.
+  const returnedAt = sendFor?.returned?.at ?? null;
+  const seenReturn = useRef(returnedAt);
+  useEffect(() => {
+    if (seenReturn.current !== returnedAt) {
+      seenReturn.current = returnedAt;
+      if (returnedAt !== null) {
+        setReviewerId(startOn);
+        setPicking(false);
+        return;
+      }
+    }
+    if (startOn !== null) {
+      setReviewerId((before) => before ?? startOn);
+    }
+  }, [returnedAt, startOn]);
   // A press the server confirmed, until the workpaper read again shows it (its status
   // changes): nothing is pressed meanwhile.
-  const [confirmed, setConfirmed] = useState<"prepare" | "reopen" | null>(null);
+  const [confirmed, setConfirmed] = useState<
+    "prepare" | "reopen" | "send" | null
+  >(null);
   const busy = useRef(false);
   const alert = useRef<HTMLParagraphElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -103,7 +169,14 @@ export function PreparerSignOff({
   // A press was answered and the workpaper is read again: when it shows another status,
   // the control that had the focus is gone, and the focus goes to the heading.
   const landing = useRef(false);
-  const problems = signOffProblems(facts);
+  const offered = (sendFor?.reviewers ?? []).filter((item) => item.offered);
+  const chosen = offered.find((item) => item.id === reviewerId) ?? null;
+  const problems = [
+    ...signOffProblems(facts),
+    ...(sendFor !== null && facts.status === "DRAFT" && chosen === null
+      ? [offered.length === 0 ? NO_REVIEWER : NEEDS_REVIEWER]
+      : []),
+  ];
 
   // The workpaper read again shows another status: what was said before it (a refusal,
   // a confirmed press) no longer holds.
@@ -121,17 +194,33 @@ export function PreparerSignOff({
     }
   }, [facts.status]);
 
-  const press = async (intent: "prepare" | "reopen") => {
+  const press = async (kind: "prepare" | "reopen") => {
     if (busy.current || confirmed !== null) {
+      return;
+    }
+    // The D&I conclusion could not be read: nothing is prepared without a reviewer.
+    if (unread && kind === "prepare") {
+      return;
+    }
+    // Section 3.8: the sign-off sends the workpaper for review, in one transaction.
+    const intent = kind === "prepare" && sendFor !== null ? "send" : kind;
+    if (intent === "send" && chosen === null) {
       return;
     }
     busy.current = true;
     landing.current = false;
     setSending(true);
     setRefusal("");
-    const answer = await send(
-      signOffRequest(ids, workpaperId, version, intent, text.trim()),
-    );
+    const answer =
+      intent === "send"
+        ? await send(
+            REVIEW_ROUTES.send,
+            sendRequest(ids, version, chosen?.id ?? "", text.trim()),
+          )
+        : await send(
+            "/workspace/workpapers/prepare",
+            signOffRequest(ids, workpaperId, version, intent, text.trim()),
+          );
     busy.current = false;
     setSending(false);
     const said = signOffRefusal(intent, answer.status, answer.detail);
@@ -163,11 +252,19 @@ export function PreparerSignOff({
     <p className="ps-status" role="status">
       {confirmed === "prepare"
         ? SIGNED_READING
-        : confirmed === "reopen"
-          ? REOPENED_READING
-          : ""}
+        : confirmed === "send"
+          ? SENT_READING
+          : confirmed === "reopen"
+            ? REOPENED_READING
+            : ""}
     </p>
   );
+  const refused =
+    refusal !== "" ? (
+      <p className="ps-refusal" role="alert" tabIndex={-1} ref={alert}>
+        {refusal}
+      </p>
+    ) : null;
 
   if (facts.status === "PREPARED") {
     return (
@@ -175,11 +272,11 @@ export function PreparerSignOff({
         <div className="ps-row">
           <div className="ps-copy">
             <h6 id={`${uid}-h`} ref={heading} tabIndex={-1}>
-              Preparer's sign-off
+              <b>Prepared</b>{" "}
+              <span className="ps-who">
+                {preparedDetail(prepared.by, prepared.on, prepared.version)}
+              </span>
             </h6>
-            <p className="ps-line">
-              {preparedLine(prepared.by, prepared.on, prepared.version)}
-            </p>
           </div>
           {mayAct && !reopening && confirmed === null ? (
             <button
@@ -199,6 +296,7 @@ export function PreparerSignOff({
             </button>
           ) : null}
         </div>
+        {below}
         {reading}
         {mayAct && confirmed === null ? (
           reopening ? (
@@ -246,25 +344,34 @@ export function PreparerSignOff({
             </form>
           ) : null
         ) : null}
-        {refusal !== "" ? (
-          <p className="ps-refusal" role="alert" tabIndex={-1} ref={alert}>
-            {refusal}
-          </p>
-        ) : null}
+        {refused}
       </section>
     );
   }
-  if (facts.status !== "DRAFT" || !mayAct) {
+  const returned = sendFor?.returned ?? null;
+  if (facts.status !== "DRAFT" || !mayAct || unread) {
     return (
       <section className="ps" aria-labelledby={`${uid}-h`}>
         <div className="ps-copy">
-          <h6 id={`${uid}-h`}>Preparer's sign-off</h6>
-          <p className="ps-line">Not signed by the preparer yet.</p>
+          <h6 id={`${uid}-h`}>
+            <b>Prepared</b>{" "}
+            <span className="ps-who">
+              {unread && facts.status === "DRAFT" && mayAct
+                ? "the sign-off could not be read. Refresh the page."
+                : returned !== null
+                  ? `not yet · returned by ${returned.by.name}`
+                  : "not signed by the preparer yet"}
+            </span>
+          </h6>
+          {returned !== null && returned.reason !== "" ? (
+            <blockquote className="ps-quote">{returned.reason}</blockquote>
+          ) : null}
         </div>
       </section>
     );
   }
   const ready = problems.length === 0;
+  const again = returned !== null;
   return (
     <section className="ps" aria-labelledby={`${uid}-h`}>
       <form
@@ -281,18 +388,48 @@ export function PreparerSignOff({
         <div className="ps-row">
           <div className="ps-copy">
             <h6 id={`${uid}-h`} ref={heading} tabIndex={-1}>
-              Preparer's sign-off
+              <b>Prepared</b>{" "}
+              <span className="ps-who">
+                {returned !== null
+                  ? returnedLine(returned, shortDay)
+                  : "by you"}
+              </span>
             </h6>
+            {returned !== null ? (
+              <>
+                {returned.reason !== "" ? (
+                  <blockquote className="ps-quote">
+                    {returned.reason}
+                  </blockquote>
+                ) : null}
+                <p className="ps-line">{returnedNext(chosen?.name ?? null)}</p>
+              </>
+            ) : null}
             <p className="ps-attest">{ATTESTATION}</p>
           </div>
-          <button
-            type="submit"
-            className="dw-ink btn-sm"
-            aria-disabled={!ready || sending || confirmed !== null}
-            aria-describedby={problems.length > 0 ? `${uid}-needs` : undefined}
-          >
-            {sending ? "Signing…" : SIGN_AS_PREPARER}
-          </button>
+          <div className="ps-go">
+            <button
+              type="submit"
+              className="dw-ink btn-sm"
+              aria-disabled={!ready || sending || confirmed !== null}
+              aria-describedby={
+                problems.length > 0 ? `${uid}-needs` : undefined
+              }
+            >
+              {sending
+                ? sendFor !== null
+                  ? "Sending…"
+                  : "Signing…"
+                : sendFor === null
+                  ? SIGN_AS_PREPARER
+                  : again
+                    ? SIGN_AND_SEND_AGAIN
+                    : SIGN_AND_SEND}
+            </button>
+            {sendFor !== null && chosen !== null && !again ? (
+              <small className="ps-hint">{sendHint(chosen.name)}</small>
+            ) : null}
+          </div>
         </div>
         {reading}
         {problems.length > 0 ? (
@@ -302,7 +439,48 @@ export function PreparerSignOff({
             ))}
           </ul>
         ) : null}
-        {noting || text !== "" ? (
+        {sendFor !== null ? (
+          again && chosen !== null && !picking ? (
+            // Sent again to the same reviewer unless the preparer changes it.
+            <p className="ps-line ps-to">
+              Goes to {chosen.name}{" "}
+              <button
+                type="button"
+                className="dw-link"
+                disabled={sending || confirmed !== null}
+                onClick={() => setPicking(true)}
+              >
+                Change
+                <span className="sr-only"> the reviewer</span>
+              </button>
+            </p>
+          ) : (
+            <div className="ps-send">
+              <ReviewerPicker
+                label={SEND_TO}
+                reviewers={sendFor.reviewers}
+                value={reviewerId}
+                viewerId={sendFor.viewerId}
+                disabled={sending || confirmed !== null}
+                openAtStart={again && picking}
+                onChange={setReviewerId}
+              />
+              {again ? null : (
+                <div className="ps-note">
+                  <label htmlFor={`${uid}-n`}>{MESSAGE_LABEL}</label>
+                  <textarea
+                    id={`${uid}-n`}
+                    rows={2}
+                    maxLength={MESSAGE_MAX}
+                    value={text}
+                    disabled={sending || confirmed !== null}
+                    onChange={(event) => setText(event.currentTarget.value)}
+                  />
+                </div>
+              )}
+            </div>
+          )
+        ) : noting || text !== "" ? (
           <div className="ps-note">
             <label htmlFor={`${uid}-n`}>{NOTE_LABEL}</label>
             <textarea
@@ -331,11 +509,19 @@ export function PreparerSignOff({
           </p>
         ) : null}
       </form>
-      {refusal !== "" ? (
-        <p className="ps-refusal" role="alert" tabIndex={-1} ref={alert}>
-          {refusal}
-        </p>
-      ) : null}
+      {refused}
     </section>
   );
+}
+
+const DAY = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+});
+
+/** "Nov 17": a day the records give, in the viewer's own time; as sent where it is not a
+ * date. */
+export function shortDay(value: string): string {
+  const time = Date.parse(value);
+  return Number.isNaN(time) ? value : DAY.format(time);
 }

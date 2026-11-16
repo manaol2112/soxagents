@@ -19,6 +19,7 @@ import {
   BASIS_WORDS,
   CONCLUSION_WORDS,
   type ConclusionChoice,
+  type DesignConclusion,
 } from "./design-conclusion-model";
 import {
   CONCLUSION_ANCHOR,
@@ -90,7 +91,6 @@ import {
   setLeaveAsker,
   whenAsked,
 } from "./leave-guard";
-import { PreparerSignOff } from "./preparer-signoff";
 import {
   AllNotesView,
   NoteField,
@@ -113,6 +113,7 @@ import {
   walkthroughColumnsOf,
   walkthroughKey,
 } from "./review-notes-model";
+import { SignOffBlock } from "./review-signoff";
 import { RichText } from "./rich-text";
 import { destinationHref } from "./routes";
 import {
@@ -228,12 +229,18 @@ type Actions = {
   /** Where a design deficiency is logged (the deficiency log's form for this control);
    * null where the page has no link to it. */
   deficiencyHref: string | null;
-  /** The preparer's sign-off at the end of section 7 (section 3.7): the control's ids,
-   * what the page knows that the sign-off needs, and what it does once confirmed. */
+  /** Section 7's Sign-off (sections 3.7 and 3.8): the control's ids, what the page knows
+   * that the preparer's sign-off needs, the D&I conclusion's body (the review request,
+   * the reviewers, the reviewer's sign-off), who is reading, the review notes' counts,
+   * and what it does once confirmed. */
   signOff: {
     ids: { organizationId: string; projectId: string; controlId: string };
     unsaved: boolean;
     behind: boolean;
+    conclusion: DesignConclusion | null;
+    viewerId: string | null;
+    notes: { open: number; urgent: number } | null;
+    onNotes: (() => void) | null;
     /** The viewer may act on the engagement's work (the card's `canAct`: the role, and
      * the engagement open): "Reopen to change" is offered only then. */
     canAct: boolean;
@@ -246,7 +253,12 @@ type Actions = {
 type CardProps = Omit<
   ComponentProps<typeof WorkpapersTab>,
   "stage" | "compact"
->;
+> & {
+  /** The control's D&I conclusion, as the page read it: section 7's sign-off reads the
+   * review request and the reviewer's sign-off from it (docs/design-workpaper.md,
+   * section 3.8). Null where it could not be read. */
+  conclusion?: DesignConclusion | null;
+};
 
 /**
  * Where the D&I workpaper is shown (docs/design-workpaper.md, section 3.1): the three
@@ -255,7 +267,10 @@ type CardProps = Omit<
  * signs at the end of section 7, section 3.7: the fold shows no Prepare for it). It
  * takes the card's own props.
  */
-export function DesignWorkpaperStep(props: CardProps) {
+export function DesignWorkpaperStep({
+  conclusion = null,
+  ...props
+}: CardProps) {
   const { ids, papers, notice, viewing } = props;
   // Section 7 links to where a design deficiency is logged: the deficiency log's form for
   // this control (Reports, Deficiencies; docs/design-workpaper.md, section 3.5).
@@ -353,6 +368,7 @@ export function DesignWorkpaperStep(props: CardProps) {
         deficiencyHref={deficiencyHref}
         onBehind={setBehind}
         canAct={props.canAct}
+        conclusion={conclusion}
       />
       <details
         ref={fold}
@@ -430,6 +446,7 @@ export function DesignWorkpaper({
   deficiencyHref = null,
   onBehind,
   canAct = false,
+  conclusion = null,
 }: {
   scope: WorkpaperScope;
   /** Changes when the workpaper record does: the views then read again. */
@@ -449,6 +466,8 @@ export function DesignWorkpaper({
   /** The viewer may act on the engagement's work (the card's `canAct`): section 7's
    * "Reopen to change" is offered only then, as the fold's Reopen is. */
   canAct?: boolean;
+  /** The control's D&I conclusion, for section 7's Sign-off (section 3.8). */
+  conclusion?: DesignConclusion | null;
 }) {
   const uid = useId();
   const query = designWorkpaperQuery(scope);
@@ -631,7 +650,8 @@ export function DesignWorkpaper({
   }, [seeking, view, uid]);
 
   // Section 7, once the document is the view shown; and once on arrival where the page
-  // was opened at it (`#di-conclusion`, from D&I Conclusion and Review).
+  // was opened at it (`#di-conclusion`: from Home's "Waiting for your review", or a link
+  // to the removed "D&I Conclusion and Review" step, section 3.8).
   const arrived = state.paper !== null && state.paper.workpaper !== null;
   useEffect(() => {
     if (!arrived || linkedOnce.current) {
@@ -642,7 +662,7 @@ export function DesignWorkpaper({
       setView("document");
       setSeekingConclusion(true);
     } else if (openedAtNotes()) {
-      // From D&I Conclusion and Review: every review note of the workpaper.
+      // A link to every review note of the workpaper.
       setView("notes");
     }
   }, [arrived]);
@@ -1249,6 +1269,19 @@ export function DesignWorkpaper({
       // a version the server refuses as stale.
       behind: held || rereading,
       canAct,
+      conclusion,
+      // Who is reading (the review notes' route asks the API who the session is): the
+      // reviewer a request names signs it; their own row in the picker says "(you)".
+      viewerId: reviewNotes.set?.viewerId ?? null,
+      notes:
+        reviewNotes.set === null
+          ? null
+          : {
+              open:
+                reviewNotes.set.counts.open + reviewNotes.set.counts.responded,
+              urgent: reviewNotes.set.counts.urgentOpen,
+            },
+      onNotes: () => choose("notes"),
       // Signed or reopened: the views and the page's records are read again, as after
       // any confirmed write; nothing is shown as done before the server confirmed.
       onDone: () => {
@@ -1914,8 +1947,8 @@ function Results({ paper, why }: { paper: Paper; why: boolean }) {
   );
 }
 
-/** The preparer's sign-off at the end of section 7 (section 3.7); on paper, the
- * signature lines under the sheet say it. */
+/** Section 7's Sign-off (sections 3.7 and 3.8): the preparer's row, then the
+ * reviewer's; on paper, the signature lines under the sheet say it. */
 function SignOffOf({
   paper,
   actions,
@@ -1931,14 +1964,16 @@ function SignOffOf({
     return null;
   }
   return (
-    <PreparerSignOff
+    <SignOffBlock
       ids={sign.ids}
       workpaperId={workpaper.id}
       version={workpaper.version}
       // A draft: the server's `can_edit` (the role and the engagement open). Prepared:
       // "Reopen to change" only for a viewer who may act, as the fold's Reopen
       // (independent review, 16 November 2026: before, anyone who could read it).
-      mayAct={paper.canEdit || (workpaper.status === "PREPARED" && sign.canAct)}
+      preparerMayAct={
+        paper.canEdit || (workpaper.status === "PREPARED" && sign.canAct)
+      }
       facts={{
         status: workpaper.status,
         drafting: workpaper.drafting,
@@ -1955,6 +1990,11 @@ function SignOffOf({
         version:
           workpaper.status === "PREPARED" ? workpaper.currentVersion : null,
       }}
+      conclusion={sign.conclusion}
+      viewerId={sign.viewerId}
+      canAct={sign.canAct}
+      notes={sign.notes}
+      onNotes={sign.onNotes}
       onDone={sign.onDone}
     />
   );
@@ -2685,8 +2725,8 @@ function DocumentSheet({
         number={7}
         title="Conclusion"
         said={saidOf("conclusion")}
-        // Where D&I Conclusion and Review links to; not on the printed copy, which is a
-        // second sheet.
+        // Where Home's "Waiting for your review" links to (section 3.8); not on the
+        // printed copy, which is a second sheet.
         anchor={actions === null ? undefined : CONCLUSION_ANCHOR}
         edit={
           <EditLink

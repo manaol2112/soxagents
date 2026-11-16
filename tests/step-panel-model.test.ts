@@ -69,14 +69,16 @@ function midway(overrides: Partial<WorkflowInput> = {}): WorkflowInput {
 describe("a step's panel frame", () => {
   it("asks a person for the step's decision, with one action into its work", () => {
     const steps = workflowOf(midway());
-    const frame = panelFrame("designconclusion", steps, null);
+    // Old: on "designconclusion", based on D&I Assessment. New: D&I Assessment carries the
+    // sign-off once its workpaper is prepared, based on D&I Evidence (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
+    const frame = panelFrame("designassessment", steps, null);
     assert.equal(frame.need.kind, "act");
     assert.equal(frame.need.title, "Sign off the D&I conclusion");
     assert.equal(frame.need.action?.anchor, "stp-work");
     // What it rests on: the step that leads into it.
     assert.deepEqual(
       frame.basedOn.map((item) => item.key),
-      ["designassessment"],
+      ["designevidence"],
     );
   });
 
@@ -96,20 +98,26 @@ describe("a step's panel frame", () => {
     // The review waits on the conclusion, which waits on the D&I sign-off.
     const frame = panelFrame("review", steps, null);
     assert.equal(frame.need.kind, "wait");
-    assert.equal(frame.need.action?.step, "designconclusion");
-    assert.match(frame.need.detail, /D&I Conclusion/);
+    // Old: "designconclusion", /D&I Conclusion/. New: D&I Assessment, where the sign-off
+    // is (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
+    assert.equal(frame.need.action?.step, "designassessment");
+    assert.match(frame.need.detail, /D&I Assessment/);
   });
 
   it("flags OE work recorded before the D&I sign-off, and links to the sign-off", () => {
     const steps = workflowOf(midway());
     const frame = panelFrame("oeevidence", steps, null);
     assert.equal(frame.need.kind, "flag");
-    assert.equal(frame.need.action?.step, "designconclusion");
+    // Old: "designconclusion". New: D&I Assessment, where the sign-off is
+    // (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
+    assert.equal(frame.need.action?.step, "designassessment");
   });
 
   it("follows the D&I verdict: both ways until it is signed, then only the one taken", () => {
     const steps = workflowOf(midway());
-    const open = panelFrame("designconclusion", steps, null);
+    // Old: "designconclusion". New: D&I Assessment, whose verdict decides the way on
+    // (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
+    const open = panelFrame("designassessment", steps, null);
     assert.deepEqual(
       open.next.map((item) => [item.key, item.when]),
       [
@@ -117,12 +125,12 @@ describe("a step's panel frame", () => {
         ["conclusion", "If not effective"],
       ],
     );
-    const effective = panelFrame("designconclusion", steps, "EFFECTIVE");
+    const effective = panelFrame("designassessment", steps, "EFFECTIVE");
     assert.deepEqual(
       effective.next.map((item) => item.key),
       ["oeevidence"],
     );
-    const not = panelFrame("designconclusion", steps, "NOT_EFFECTIVE");
+    const not = panelFrame("designassessment", steps, "NOT_EFFECTIVE");
     assert.deepEqual(
       not.next.map((item) => item.key),
       ["conclusion"],
@@ -366,7 +374,10 @@ describe("the agent's strip", () => {
       "2 evidence items planned, 1 accepted.",
       "1 item received and read, to decide.",
     ]);
-    assert.deepEqual(agentNote(at("designconclusion"), input).found, [
+    // Old: on "designconclusion", ["Proposed: effective."]. New: on D&I Assessment,
+    // after the line on the workpaper (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
+    assert.deepEqual(agentNote(at("designassessment"), input).found, [
+      "The design workpaper is prepared.",
       "Proposed: effective.",
     ]);
     assert.deepEqual(agentNote(at("oetesting"), input).found, [
@@ -499,11 +510,13 @@ describe("D&I Evidence once its requests are drafted (12 November 2026)", () => 
 describe("the D&I conclusion's strip says the conclusion that stands", () => {
   const found = (designConclusion: WorkflowInput["designConclusion"]) => {
     const input = midway({ designConclusion });
+    // Old: the "designconclusion" step's strip. New: D&I Assessment's, after its line on
+    // the workpaper itself (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
     const step = workflowOf(input).find(
-      (item) => item.key === "designconclusion",
+      (item) => item.key === "designassessment",
     );
     assert.ok(step !== undefined);
-    return agentNote(step, input).found;
+    return agentNote(step, input).found.slice(1);
   };
 
   it("with none recorded: says so, never “Proposed: effective”", () => {

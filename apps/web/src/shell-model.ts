@@ -223,6 +223,8 @@ export type ShellModel =
   | {
       status: "ready";
       email: string;
+      /** The session's own user (`/auth/me`): who is reading, where a page needs it. */
+      userId: string;
       organizations: Organization[];
       organization: Organization;
       projects: Project[];
@@ -384,6 +386,7 @@ export function deriveShell(snapshot: WorkspaceSnapshot): ShellModel {
   return {
     status: "ready",
     email: user.email,
+    userId: user.id,
     organizations,
     organization,
     projects,

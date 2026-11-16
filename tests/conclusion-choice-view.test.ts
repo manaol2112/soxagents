@@ -15,7 +15,10 @@ import { describe, it } from "node:test";
 const read = (path: string) => readFileSync(path, "utf8");
 const view = read("apps/web/src/design-workpaper-view.tsx");
 const choice = read("apps/web/src/conclusion-choice.tsx");
-const panel = read("apps/web/src/design-conclusion-panel.tsx");
+// Rewritten. Old: the reviewer's panel of the "D&I Conclusion and Review" step
+// (design-conclusion-panel.tsx). New: its reviewer's parts (the sign-off, what it rests on,
+// the refusals) are section 7's Sign-off, in review-signoff.tsx (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
+const panel = read("apps/web/src/review-signoff.tsx");
 const conclusionModel = read("apps/web/src/design-conclusion-model.ts");
 const route = read("apps/web/app/workspace/design-conclusions/route.ts");
 const choiceRoute = read(
@@ -269,67 +272,55 @@ describe("the choice is recorded by the server, and shown as recorded only then"
   });
 });
 
-describe("D&I Conclusion and Review is the reviewer's, and read-only", () => {
-  it("is named for what it is", () => {
+// Rewritten. Old: "D&I Conclusion and Review is the reviewer's, and read-only": a step of
+// its own, which read the conclusion's text again and showed it read-only before the
+// sign-off. New: there is no such step; the reviewer signs in section 7 of D&I Assessment,
+// under the conclusion and its text as the section shows them, and nothing there edits
+// the conclusion (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
+describe("the reviewer signs in section 7, and the sign-off edits nothing", () => {
+  it("has no step of its own: an old link opens D&I Assessment", () => {
+    assert.equal(/title: "D&I Conclusion and Review"/.test(workflow), false);
+    assert.equal(/key: "designconclusion"/.test(workflow), false);
+    assert.match(workflow, /designconclusion: "designassessment",/);
     assert.match(
-      workflow,
-      /title: "D&I Conclusion and Review",\s*covers: "Review · Sign-off",/,
+      choice,
+      /new URLSearchParams\(window\.location\.search\)\.get\("step"\) ===\s*"designconclusion"/,
     );
   });
 
-  it("shows the conclusion first, with its text exactly as section 7 reads it", () => {
-    assert.match(
-      panel,
-      /fetch\(`\/workspace\/design-workpaper\?\$\{query\}`, \{\s*cache: "no-store",\s*signal: control\.signal,/,
+  it("signs under the conclusion and its text, as section 7 shows them", () => {
+    const sheet = component(view, "DocumentSheet");
+    const text = sheet.indexOf('<div className="dw-concl-text">');
+    const sign = sheet.indexOf(
+      "<SignOffOf paper={paper} actions={actions} head={head} />",
     );
-    assert.match(
-      panel,
-      /return \(\) => \{\s*current = false;\s*control\.abort\(\);\s*\};/,
+    assert.ok(text > 0 && sign > text);
+    // Nothing is edited there: the only boxes are the sign-off's note, the reason to
+    // return it, and the reason to reopen it.
+    assert.equal(
+      /contentEditable|RichTextBox|SectionEditorPanel/.test(panel),
+      false,
     );
-    assert.match(
-      panel,
-      /read = paper === null \? false : paper\.conclusion\.text;/,
-    );
-    assert.match(panel, /<RichText text=\{text\} \/>/);
-    assert.match(
-      panel,
-      /The preparer has not recorded a conclusion yet\.\{" "\}\s*<a href=\{section7\}>Open section 7 in D&amp;I Assessment<\/a>/,
-    );
-    assert.match(
-      panel,
-      /<a href=\{section7\}>Edit the conclusion in D&amp;I Assessment<\/a>/,
-    );
-    assert.match(panel, /const section7 = conclusionHref\(assessmentHref\);/);
-    // Nothing is edited here.
-    // Nothing is edited here: the only boxes are the sign-off's note and the reason to
-    // reopen, as before.
-    assert.equal(/contentEditable|type="radio"|RichTextBox/.test(panel), false);
     assert.deepEqual(
-      [...panel.matchAll(/<textarea\s+name="([a-z_]+)"/g)].map((m) => m[1]),
-      ["note", "reason"],
+      [...panel.matchAll(/<textarea\s+id=\{`\$\{uid\}-([a-z]+)`\}/g)].map(
+        (m) => m[1],
+      ),
+      ["reopen", "note", "return"],
     );
   });
 
   it("signs the preparer's conclusion by its kind, and its button says which", () => {
-    assert.match(
-      panel,
-      /<input type="hidden" name="conclusion" value=\{signable \?\? ""\} \/>/,
-    );
-    assert.equal(/name="verdict"/.test(panel), false);
-    assert.match(
-      panel,
-      /`Sign off: \$\{signable === null \? "" : CONCLUSION_WORDS\[signable\]\}`/,
-    );
+    assert.match(panel, /conclusion: signable,\s*choice_id: choice\.id,/);
+    assert.equal(/verdict:/.test(panel), false);
+    assert.match(panel, /`Sign off: \$\{CONCLUSION_WORDS\[signable\]\}`/);
     // Rewritten (independent review, 15 November 2026, docs/design-workpaper.md section 3.6, finding 4). Old: `body: {
     // conclusion, workpaper_version: version, note }`. New: the standing choice's id is
     // posted, and there is no sign-off without one.
+    // Rewritten again. Old: the body ended at `note`. New: with the review request it
+    // ends, where one stands (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
     assert.match(
       conclusionModel,
-      /body: \{\s*conclusion,\s*choice_id: choice,\s*workpaper_version: version,\s*note,\s*\},/,
-    );
-    assert.match(
-      panel,
-      /<input type="hidden" name="choice_id" value=\{choice\?\.id \?\? ""\} \/>/,
+      /body: \{\s*conclusion,\s*choice_id: choice,\s*workpaper_version: version,\s*note,\s*\.\.\.\(request === "" \? \{\} : \{ request_id: request \}\),\s*\},/,
     );
     assert.match(
       panel,
@@ -340,48 +331,42 @@ describe("D&I Conclusion and Review is the reviewer's, and read-only", () => {
     assert.match(route, /const write = designConclusionWrite\(fields\);/);
   });
 
-  it("says the conclusion once in the step", () => {
-    // The sign-off line names it only where it signed another one.
-    // Rewritten (independent review, 15 November 2026, docs/design-workpaper.md section 3.6, finding 6). Old: compared
-    // with `choice.kind`, which a pre-3.6 sign-off with no choice could not be. New:
-    // with the conclusion the card says (`standing`).
-    assert.match(
-      panel,
-      /signed\.conclusion !== null && signed\.conclusion !== standing\s*\?\s*` · signed as “\$\{CONCLUSION_WORDS\[signed\.conclusion\]\}”`/,
-    );
-    assert.equal(count(panel, /\{head\.word\}/g), 1);
+  it("says the conclusion once in section 7", () => {
+    // Old: the step's card said the conclusion's word once (`{head.word}`). New: section
+    // 7's head says it; the sign-off reads only the holds from the model's head, and
+    // names the conclusion again only once it is signed (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
+    assert.equal(count(panel, /\{head\.word\}/g), 0);
+    assert.match(panel, /const head = conclusionHead\(conclusion\);/);
   });
 });
 
 // The independent review of section 3.6 (15 November 2026), read from the screen's own
 // files: what must hold however it looks. The browser harness checks the behavior.
 describe("the independent review of the conclusion's screens", () => {
-  it("5: the step reads the text again for the version it signs, and holds Sign off meanwhile", () => {
-    for (const part of [
-      "conclusion?.choice?.id",
-      "conclusion?.status",
-      "conclusion?.workpaper?.status",
-      "conclusion?.workpaper?.preparedVersion",
-    ]) {
-      assert.ok(panel.includes(part), part);
-    }
-    assert.match(panel, /text: wanted && read !== null && read\.key === key/);
-    assert.match(panel, /"Reading the conclusion…"/);
-    assert.match(panel, /"The conclusion could not be read: try again"/);
+  it("5: the sign-off is of the version prepared, and is held while it may not be made", () => {
+    // Rewritten. Old: the step read the conclusion's text again for the version it
+    // signs, and held Sign off while it read. New: the text is section 7's own, read with
+    // the views; the sign-off posts the prepared version the server gives, and is held
+    // (aria-disabled, described by what holds it) wherever the server's `can_sign` is
+    // false (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
+    assert.match(panel, /workpaper_version: String\(preparedVersion\),/);
     assert.match(
       panel,
-      /if \(intent === "sign" && typeof text !== "string"\) \{\s*return;\s*\}/,
+      /aria-disabled=\{!signs \|\| sending !== null \|\| confirmed !== null\}/,
     );
     assert.match(
       panel,
-      /aria-disabled=\{textHold !== "" \? "true" : undefined\}/,
+      /if \(\s*!signs \|\|\s*signable === null \|\|\s*choice === null \|\|\s*preparedVersion === null\s*\) \{\s*return;\s*\}/,
     );
   });
 
   it("10: the sign-off's refusal is the server's own sentence, shown at once", () => {
+    // Rewritten. Old: `setRefusal(designConclusionRefusal(intent, result, detail));`.
+    // New: the same sentence, the notice's own where the server gives none
+    // (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
     assert.match(
       panel,
-      /setRefusal\(designConclusionRefusal\(intent, result, detail\)\);/,
+      /designConclusionRefusal\(intent, answer\.notice, answer\.detail\) \|\|\s*DESIGN_CONCLUSION_NOTICES\[answer\.notice\]/,
     );
     assert.match(route, /return NextResponse\.json\(\{ notice, detail \}\);/);
   });

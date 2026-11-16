@@ -55,7 +55,6 @@ import {
   notesProblem,
   notesQuery,
   noteTextProblem,
-  openLine,
   type Painted,
   type PaintRange,
   type PaperFields,
@@ -3237,46 +3236,5 @@ export function AllNotesView({
         ) : null}
       </div>
     </section>
-  );
-}
-
-/* The reviewer's step ------------------------------------------------------------------ */
-
-/** D&I Conclusion and Review (section 6): how many notes are open and how many are
- * urgent, with the way to All notes. What holds the sign-off is the server's `blocking`,
- * which the step already says. */
-export function ReviewNotesLine({
-  scope,
-  href,
-}: {
-  scope: WorkpaperNotesScope | null;
-  href: string;
-}) {
-  const notes = useReviewNotes(scope);
-  if (scope === null) {
-    return (
-      <span className="rn-step-line">
-        No review note: no design workpaper yet
-      </span>
-    );
-  }
-  if (notes.status === "loading") {
-    return <span className="rn-step-line">Reading the review notes…</span>;
-  }
-  if (notes.status !== "ready" || notes.set === null) {
-    return (
-      <span className="rn-step-line">
-        The review notes could not be read. <a href={href}>Open them</a>
-      </span>
-    );
-  }
-  const { counts } = notes.set;
-  return (
-    <span className={`rn-step-line${counts.urgentOpen > 0 ? " is-held" : ""}`}>
-      <span>{openLine(counts)}</span>
-      {notes.set.notes.length > 0 ? (
-        <a href={href}>Open the review notes</a>
-      ) : null}
-    </span>
   );
 }

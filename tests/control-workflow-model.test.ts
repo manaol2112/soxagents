@@ -177,7 +177,10 @@ describe("the control's workflow", () => {
         // preparer concludes in section 7 of D&I Assessment and this step is the
         // reviewer's (product owner, 15 November 2026, docs/design-workpaper.md section
         // 3.5/3.6).
-        "D&I Conclusion and Review",
+        // Rewritten again. Old: "D&I Conclusion and Review" after D&I Assessment. New:
+        // no such step: the preparer sends the workpaper for review and the reviewer
+        // signs in section 7 of D&I Assessment, one D&I step.
+        // product owner, 16 November 2026, docs/design-workpaper.md section 3.8.
         "Scope & Sampling",
         "OE Evidence",
         "OE Testing",
@@ -188,7 +191,9 @@ describe("the control's workflow", () => {
     );
     assert.deepEqual(
       STEPS.filter((step) => step.group === "design").map((step) => step.key),
-      ["designevidence", "designassessment", "designconclusion"],
+      // Old: [..., "designassessment", "designconclusion"]. New: the sign-off is in D&I
+      // Assessment (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
+      ["designevidence", "designassessment"],
     );
     assert.deepEqual(
       STEPS.filter((step) => step.group === "operating").map(
@@ -200,10 +205,12 @@ describe("the control's workflow", () => {
       STEPS.filter((step) => step.group === "prepare").map((step) => step.key),
       ["setup", "understanding", "attributes"],
     );
-    // People decide at the gates.
+    // People decide at the gates. Old: ["attributes", "designconclusion", "testdesign",
+    // "review"]. New: the D&I reviewer's gate is section 7 of D&I Assessment, not a step
+    // of its own (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
     assert.deepEqual(
       STEPS.filter((step) => step.kind === "gate").map((step) => step.key),
-      ["attributes", "designconclusion", "testdesign", "review"],
+      ["attributes", "testdesign", "review"],
     );
   });
 
@@ -322,8 +329,10 @@ describe("the control's workflow", () => {
       "attention",
       "1 item to review",
     ]);
-    assert.deepEqual(state(steps, "designassessment"), ["done", "Assessed"]);
-    assert.deepEqual(state(steps, "designconclusion"), [
+    // Old: designassessment ["done", "Assessed"], then designconclusion ["attention",
+    // "Effective · to sign off"]. New: one D&I step, which carries the sign-off (product
+    // owner, 16 November 2026, docs/design-workpaper.md section 3.8).
+    assert.deepEqual(state(steps, "designassessment"), [
       "attention",
       "Effective · to sign off",
     ]);
@@ -360,9 +369,12 @@ describe("the control's workflow", () => {
       ...midway(),
       designConclusion: signedEffective,
     });
-    assert.deepEqual(state(cleared, "designconclusion"), [
+    // Old: designconclusion ["done", "Effective · signed off"]. New: D&I Assessment
+    // reads "Signed off: <conclusion>" (product owner, 16 November 2026,
+    // docs/design-workpaper.md section 3.8).
+    assert.deepEqual(state(cleared, "designassessment"), [
       "done",
-      "Effective · signed off",
+      "Signed off: Effective",
     ]);
     assert.deepEqual(state(cleared, "oeevidence"), [
       "active",
@@ -382,9 +394,11 @@ describe("the control's workflow", () => {
         { phase: "INTERIM", state: "NOT_GENERATED" },
       ],
     });
+    // Old: ["designconclusion"]. New: the sign-off is D&I Assessment's (product owner,
+    // 16 November 2026, docs/design-workpaper.md section 3.8).
     assert.deepEqual(
       steps.filter((step) => step.next).map((step) => step.key),
-      ["designconclusion"],
+      ["designassessment"],
     );
     assert.equal(by(steps, "oeevidence")?.status, "Waiting on D&I conclusion");
   });
@@ -396,9 +410,12 @@ describe("the control's workflow", () => {
       reviewStatus: "",
       designConclusion: { ...signedEffective, status: "OUT_OF_DATE" },
     });
-    assert.deepEqual(state(steps, "designconclusion"), [
+    // Old: designconclusion ["attention", "Out of date · to sign again"]. New: D&I
+    // Assessment reads "Sign-off out of date" (product owner, 16 November 2026,
+    // docs/design-workpaper.md section 3.8).
+    assert.deepEqual(state(steps, "designassessment"), [
       "attention",
-      "Out of date · to sign again",
+      "Sign-off out of date",
     ]);
     assert.deepEqual(state(steps, "oeevidence"), [
       "attention",
@@ -417,7 +434,9 @@ describe("the control's workflow", () => {
   it("never treats a prepared design workpaper alone as a D&I conclusion", () => {
     // The conclusion could not be read: the step asks for the sign-off, and OE stays held.
     const steps = workflowOf({ ...midway(), designConclusion: null });
-    assert.deepEqual(state(steps, "designconclusion"), [
+    // Old: on designconclusion. New: on D&I Assessment, which carries the sign-off
+    // (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
+    assert.deepEqual(state(steps, "designassessment"), [
       "attention",
       "To sign off",
     ]);
@@ -433,9 +452,11 @@ describe("the control's workflow", () => {
       "done",
       "2 of 2 accepted",
     ]);
-    assert.deepEqual(state(steps, "designconclusion"), [
+    // Old: designconclusion ["done", "Effective · signed off"]. New: D&I Assessment
+    // (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
+    assert.deepEqual(state(steps, "designassessment"), [
       "done",
-      "Effective · signed off",
+      "Signed off: Effective",
     ]);
     assert.deepEqual(state(steps, "oeevidence"), [
       "done",
@@ -444,8 +465,10 @@ describe("the control's workflow", () => {
     assert.deepEqual(state(steps, "oetesting"), ["done", "Retest effective"]);
     assert.deepEqual(state(steps, "conclusion"), ["done", "Effective"]);
     assert.deepEqual(state(steps, "workpaper"), ["done", "Prepared"]);
-    // Twelve steps since the Attributes step (11 November 2026; before: eleven).
-    assert.deepEqual(progressOf(steps), { done: 12, of: 12 });
+    // Twelve steps since the Attributes step (11 November 2026; before: eleven). Old: 12
+    // of 12. New: eleven, "D&I Conclusion and Review" being part of D&I Assessment
+    // (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
+    assert.deepEqual(progressOf(steps), { done: 11, of: 11 });
     assert.equal(
       steps.some((step) => step.next),
       false,
@@ -466,9 +489,11 @@ describe("the control's workflow", () => {
       findings: [{ reference: "D-007", status: "OPEN", type: "DESIGN" }],
       designConclusion: signedNotEffective,
     });
-    assert.deepEqual(state(steps, "designconclusion"), [
+    // Old: designconclusion ["done", "Not effective · signed off"]. New: D&I Assessment
+    // (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
+    assert.deepEqual(state(steps, "designassessment"), [
       "done",
-      "Not effective · signed off",
+      "Signed off: Not effective",
     ]);
     assert.deepEqual(state(steps, "oeevidence"), [
       "skipped",
@@ -483,8 +508,10 @@ describe("the control's workflow", () => {
       "Proposed: not effective",
     ]);
     // The two steps not performed are neither done nor left to do (twelve steps since 11
-    // November 2026, so ten counted; before: nine of eleven).
-    assert.equal(progressOf(steps).of, 10);
+    // November 2026, so ten counted; before: nine of eleven). Old: 10. New: eleven steps,
+    // so nine counted (product owner, 16 November 2026, docs/design-workpaper.md section
+    // 3.8).
+    assert.equal(progressOf(steps).of, 9);
     assert.deepEqual(
       steps.filter((step) => step.next).map((step) => step.key),
       ["conclusion"],
@@ -618,9 +645,11 @@ describe("the control's workflow", () => {
       "idle",
       "Waiting on the conclusion",
     ]);
+    // Old: designconclusion "Effective · signed off". New: D&I Assessment (product owner,
+    // 16 November 2026, docs/design-workpaper.md section 3.8).
     assert.equal(
-      by(steps, "designconclusion")?.status,
-      "Effective · signed off",
+      by(steps, "designassessment")?.status,
+      "Signed off: Effective",
     );
   });
 
@@ -649,9 +678,11 @@ describe("the control's workflow", () => {
         { phase: "INTERIM", state: "SENT" },
       ],
     });
+    // Old: ["designconclusion"]. New: the sign-off is D&I Assessment's (product owner,
+    // 16 November 2026, docs/design-workpaper.md section 3.8).
     assert.deepEqual(
       designDone.filter((step) => step.next).map((step) => step.key),
-      ["designconclusion"],
+      ["designassessment"],
     );
   });
 
@@ -1068,7 +1099,11 @@ describe("the workflow's addresses", () => {
     assert.equal(SECTION_OF.understanding, "setup-answers");
     assert.equal(SECTION_OF.designevidence, "evidence");
     assert.equal(SECTION_OF.designassessment, "design");
-    assert.equal(SECTION_OF.designconclusion, "design-conclusion");
+    // Old: SECTION_OF.designconclusion was "design-conclusion". New: no such step or
+    // section; an old link opens D&I Assessment (product owner, 16 November 2026,
+    // docs/design-workpaper.md section 3.8).
+    assert.equal(openedFrom("designconclusion", null), "designassessment");
+    assert.equal(Object.hasOwn(SECTION_OF, "designconclusion"), false);
     assert.equal(SECTION_OF.testdesign, "setup-plan");
     assert.equal(SECTION_OF.oetesting, "testing");
     assert.equal(SECTION_OF.review, "approvals");
@@ -1117,7 +1152,9 @@ describe("the workflow's layout", () => {
     point.y <= box.y + box.height;
 
   it("places every step once, with no step overlapping another", () => {
-    assert.equal(placed.length, 12);
+    // Old: 12. New: 11 (product owner, 16 November 2026, docs/design-workpaper.md section
+    // 3.8).
+    assert.equal(placed.length, 11);
     for (const a of placed) {
       for (const b of placed) {
         if (a !== b) {
@@ -1140,17 +1177,21 @@ describe("the workflow's layout", () => {
         `${edge.id} runs back`,
       );
     }
-    assert.equal(edges.length, 13);
+    // Old: 13. New: 12, the edge into "D&I Conclusion and Review" gone (product owner, 16
+    // November 2026, docs/design-workpaper.md section 3.8).
+    assert.equal(edges.length, 12);
   });
 
   it("drops an effective D&I conclusion straight into OE evidence", () => {
+    // Old: from "designconclusion". New: from D&I Assessment, which carries the sign-off
+    // (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
     const gate = edges.find(
-      (edge) => edge.id === "e:designconclusion>oeevidence",
+      (edge) => edge.id === "e:designassessment>oeevidence",
     );
     assert.equal(gate?.label, "Effective");
     assert.equal(gate?.sourceHandle, "bottom");
-    assert.equal(at("oeevidence").x, at("designconclusion").x);
-    assert.ok(at("oeevidence").y > at("designconclusion").y);
+    assert.equal(at("oeevidence").x, at("designassessment").x);
+    assert.ok(at("oeevidence").y > at("designassessment").y);
     // Scope & Sampling may start once the attributes are settled, beside D&I evidence.
     assert.equal(at("testdesign").x, at("designevidence").x);
     assert.ok(at("designevidence").y < at("testdesign").y);
@@ -1175,14 +1216,16 @@ describe("the workflow's layout", () => {
   });
 
   it("joins a not-effective verdict and OE testing at the conclusion", () => {
+    // Old: from "designconclusion". New: from D&I Assessment (product owner, 16 November
+    // 2026, docs/design-workpaper.md section 3.8).
     const skip = edges.find(
-      (edge) => edge.id === "e:designconclusion>conclusion",
+      (edge) => edge.id === "e:designassessment>conclusion",
     );
     assert.equal(skip?.label, "Not effective");
     assert.ok(edges.some((edge) => edge.id === "e:oetesting>conclusion"));
     // Regression (8 November 2026): the "Not effective" label sat under OE Testing and read
     // "lot effective". The label sits halfway along its edge, clear of every step.
-    const from = at("designconclusion");
+    const from = at("designassessment");
     const to = at("conclusion");
     const label = {
       x: (from.x + NODE_SIZE.width + to.x) / 2,
@@ -1501,8 +1544,11 @@ describe("D&I Evidence once its requests are drafted (12 November 2026)", () => 
 // Review tile says the one that stands, in its words, never the records' two-value
 // proposal as anyone's conclusion. A body from before 3.6 reads as it did.
 describe("the D&I conclusion tile says the conclusion that stands", () => {
+  // Old: the "designconclusion" tile. New: D&I Assessment's, which carries the sign-off;
+  // signed, it reads "Signed off: <conclusion>", and out of date "Sign-off out of date"
+  // (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
   const tile = (designConclusion: WorkflowInput["designConclusion"]) =>
-    state(workflowOf({ ...midway(), designConclusion }), "designconclusion");
+    state(workflowOf({ ...midway(), designConclusion }), "designassessment");
 
   it("words a sign-off by the conclusion it signed", () => {
     assert.deepEqual(
@@ -1510,17 +1556,17 @@ describe("the D&I conclusion tile says the conclusion that stands", () => {
         ...signedEffective,
         named: { standing: "EXCEPTIONS_NOTED", proposed: "EXCEPTIONS_NOTED" },
       }),
-      ["done", "Exceptions noted · signed off"],
+      ["done", "Signed off: Exceptions noted"],
     );
     assert.deepEqual(
       tile({
         ...signedEffective,
         named: { standing: "EFFECTIVE", proposed: "EFFECTIVE" },
       }),
-      ["done", "Effective · signed off"],
+      ["done", "Signed off: Effective"],
     );
     // Before 3.6: the verdict, as before.
-    assert.deepEqual(tile(signedEffective), ["done", "Effective · signed off"]);
+    assert.deepEqual(tile(signedEffective), ["done", "Signed off: Effective"]);
   });
 
   it("never says the proposal where no conclusion is recorded", () => {
@@ -1555,7 +1601,7 @@ describe("the D&I conclusion tile says the conclusion that stands", () => {
         status: "OUT_OF_DATE",
         named: { standing: null, proposed: "NOT_CONCLUDED" },
       }),
-      ["attention", "Out of date · no conclusion recorded"],
+      ["attention", "Sign-off out of date"],
     );
     // Before 3.6: the proposed verdict, as before.
     assert.deepEqual(tile(toSign), ["attention", "Effective · to sign off"]);

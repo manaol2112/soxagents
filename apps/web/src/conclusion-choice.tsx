@@ -70,7 +70,11 @@ import { useRecordsRefresh } from "./section-editor";
 export function openedAtConclusion(): boolean {
   return (
     typeof window !== "undefined" &&
-    window.location.hash === `#${CONCLUSION_ANCHOR}`
+    (window.location.hash === `#${CONCLUSION_ANCHOR}` ||
+      // A link to the removed "D&I Conclusion and Review" step (docs/design-workpaper.md,
+      // section 3.8) opens D&I Assessment, at section 7.
+      new URLSearchParams(window.location.search).get("step") ===
+        "designconclusion")
   );
 }
 

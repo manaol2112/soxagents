@@ -23,6 +23,13 @@ import {
 } from "./design-evidence-model.ts";
 import { requestsFallback } from "./design-requests-model.ts";
 import type { RequirementState } from "./evidence-plan-model.ts";
+import {
+  inReviewStatus,
+  STEP_DRAFT,
+  STEP_OUT_OF_DATE,
+  STEP_RETURNED,
+  signedOffStatus,
+} from "./review-request-model.ts";
 
 export type StepKey =
   | "setup"
@@ -30,7 +37,6 @@ export type StepKey =
   | "attributes"
   | "designevidence"
   | "designassessment"
-  | "designconclusion"
   | "testdesign"
   | "oeevidence"
   | "oetesting"
@@ -119,23 +125,15 @@ export const STEPS: ReadonlyArray<{
     short: "D&I evidence",
   },
   {
+    // One D&I step (product owner, 16 November 2026; docs/design-workpaper.md, section
+    // 3.8): the preparer concludes and signs in section 7, sends it for review, and the
+    // reviewer signs off there. "D&I Conclusion and Review" (`designconclusion`) is gone;
+    // a step that waits on the reviewer's sign-off still waits on the D&I conclusion.
     key: "designassessment",
     group: "design",
     kind: "agent",
     title: "D&I Assessment",
-    covers: "Design · Implementation",
-    short: "D&I assessment",
-  },
-  {
-    // "D&I Conclusion and Review" (product owner, 15 November 2026;
-    // docs/design-workpaper.md, section 3.5): the preparer concludes in section 7 of D&I
-    // Assessment, and this step is the reviewer's. A step that waits on it still waits
-    // on the D&I conclusion.
-    key: "designconclusion",
-    group: "design",
-    kind: "gate",
-    title: "D&I Conclusion and Review",
-    covers: "Review · Sign-off",
+    covers: "Design · Implementation · Sign-off",
     short: "D&I conclusion",
   },
   {
@@ -290,6 +288,11 @@ export type WorkflowInput = {
     /** What holds the sign-off, as the server sends it (`blocking`): an exception a
      * person recorded is read from it. Absent where it was not read. */
     blocking?: readonly string[];
+    /** Section 3.8: the reviewer the standing request is with (a name), and whether the
+     * workpaper was returned to the preparer and not sent again. Absent on a body from
+     * before 3.8. */
+    inReviewWith?: string | null;
+    returned?: boolean;
     /** On a body that follows docs/design-workpaper.md section 3.6
      * (design-conclusion-model.namedConclusion): the conclusion that stands (the signed
      * one while the sign-off holds, else the preparer's; null where none is recorded,
@@ -471,6 +474,13 @@ function evidenceState(
   };
 }
 
+/**
+ * D&I Assessment, the one D&I step (docs/design-workpaper.md, section 3.8): the workpaper
+ * drafted and prepared, then its review in section 7. Draft · Prepared, in review with
+ * <name> · Returned to the preparer · Signed off: <conclusion> · Sign-off out of date. A
+ * workpaper prepared with no request standing (a body from before 3.8, or prepared by the
+ * existing prepare) reads as the reviewer's sign-off did before.
+ */
 function assessmentState(input: WorkflowInput, evidence: State): State {
   const paper = input.designPaper;
   if (paper === null) {
@@ -481,14 +491,38 @@ function assessmentState(input: WorkflowInput, evidence: State): State {
   if (paper.drafting) {
     return { tone: "active", status: "Being drafted" };
   }
+  const conclusion = input.designConclusion;
+  if (conclusion?.status === "SIGNED_OFF" && conclusion.signed !== null) {
+    return {
+      tone: "done",
+      status: signedOffStatus(
+        conclusion.named === undefined
+          ? VERDICT_WORDS[conclusion.signed]
+          : standingWords(conclusion.named.standing),
+      ),
+    };
+  }
   if (paper.status !== "PREPARED") {
-    return { tone: "attention", status: "Draft to review" };
+    if (conclusion?.status === "OUT_OF_DATE") {
+      return { tone: "attention", status: STEP_OUT_OF_DATE };
+    }
+    return conclusion?.returned === true
+      ? { tone: "attention", status: STEP_RETURNED }
+      : { tone: "attention", status: STEP_DRAFT };
   }
   // An exception a person recorded holds the sign-off until a design deficiency is
   // logged for it, or its tickmark is changed: the assessment is not finished.
-  return excepted(input)
-    ? { tone: "attention", status: EXCEPTION_TO_RESOLVE }
-    : { tone: "done", status: "Assessed" };
+  if (excepted(input)) {
+    return { tone: "attention", status: EXCEPTION_TO_RESOLVE };
+  }
+  if (conclusion?.status === "OUT_OF_DATE") {
+    return { tone: "attention", status: STEP_OUT_OF_DATE };
+  }
+  const reviewer = conclusion?.inReviewWith ?? null;
+  if (reviewer !== null) {
+    return { tone: "attention", status: inReviewStatus(reviewer) };
+  }
+  return designConclusionState(input);
 }
 
 /** Whether an exception a person recorded holds the D&I sign-off, as the server's
@@ -532,15 +566,15 @@ const VERDICT_WORDS: Record<DesignVerdict, string> = {
   NOT_EFFECTIVE: "Not effective",
 };
 
+/** A prepared design workpaper with no review request standing: the reviewer's sign-off,
+ * as the removed "D&I Conclusion and Review" step said it (section 3.6). */
 function designConclusionState(input: WorkflowInput): State {
   const conclusion = input.designConclusion;
   if (conclusion === null) {
-    return input.designPaper?.status === "PREPARED"
-      ? { tone: "attention", status: "To sign off" }
-      : waiting("designassessment");
+    return { tone: "attention", status: "To sign off" };
   }
   if (conclusion.status === "NOT_READY") {
-    return waiting("designassessment");
+    return { tone: "attention", status: "Prepared" };
   }
   // Section 3.6: on a body that names the conclusion, the step says the one that stands,
   // in its own words ("Exceptions noted · signed off"); the records' two-value proposal
@@ -730,7 +764,7 @@ function conclusionState(
     return { tone: "done", status: "Not effective" };
   }
   if (verdict === null) {
-    return waiting("designconclusion");
+    return waiting("designassessment");
   }
   // A design not effective decides the conclusion without OE.
   if (verdict === "NOT_EFFECTIVE") {
@@ -835,7 +869,7 @@ export function workflowOf(input: WorkflowInput): WorkflowStep[] {
       : verdict === null
         ? oeStarted
           ? EARLY
-          : waiting("designconclusion")
+          : waiting("designassessment")
         : evidenceState(oeItems, "testdesign", input.plan.approved);
   const oeTesting: State =
     verdict === "NOT_EFFECTIVE"
@@ -845,7 +879,7 @@ export function workflowOf(input: WorkflowInput): WorkflowStep[] {
       : verdict === null
         ? tested
           ? EARLY
-          : waiting("designconclusion")
+          : waiting("designassessment")
         : oeTestingState(input, oeEvidence);
   const states: Record<StepKey, State> = {
     setup: setupState(input),
@@ -853,7 +887,6 @@ export function workflowOf(input: WorkflowInput): WorkflowStep[] {
     attributes,
     designevidence: designEvidence,
     designassessment: assessmentState(input, designEvidence),
-    designconclusion: designConclusionState(input),
     testdesign: testDesignState(input, attributes),
     oeevidence: oeEvidence,
     oetesting: oeTesting,
@@ -954,6 +987,9 @@ const LEGACY: Record<string, Opened> = {
   overview: "setup",
   risk: "setup",
   design: "designassessment",
+  // "D&I Conclusion and Review" is part of D&I Assessment (section 3.8): an old link
+  // opens it, at section 7 (design-workpaper-view, openedAtConclusion).
+  designconclusion: "designassessment",
   plan: "testdesign",
   approval: "testdesign",
   scope: "testdesign",
@@ -1005,7 +1041,6 @@ export type Section =
   | "setup-plan"
   | "evidence"
   | "design"
-  | "design-conclusion"
   | "testing"
   | "approvals"
   | "conclusion"
@@ -1018,7 +1053,6 @@ export const SECTION_OF: Record<Opened, Section> = {
   attributes: "setup-attributes",
   designevidence: "evidence",
   designassessment: "design",
-  designconclusion: "design-conclusion",
   testdesign: "setup-plan",
   oeevidence: "evidence",
   oetesting: "testing",
@@ -1087,7 +1121,8 @@ export type Band = {
  * it, and the understanding down into the Attributes, which open the two branches from the row
  * between them. D&I runs along the top row and OE along the third; OE starts one column later
  * than D&I: Scope & Sampling may begin once the attributes are settled, but OE Evidence sits
- * directly under the D&I Conclusion and Review, whose effective verdict drops straight into it. A
+ * directly under D&I Assessment, whose signed-off effective verdict drops straight into it
+ * (section 3.8: the D&I sign-off is in that step). A
  * not-effective verdict and OE Testing join at the Control Conclusion on the middle row, and
  * the review and the final workpaper follow below it.
  */
@@ -1100,10 +1135,10 @@ export function workflowLayout(): {
   const { width, height } = NODE_SIZE;
   const across = width + GAP_X;
   const row = (at: number) => at * (height + GAP_Y);
-  // Columns: the preparation's two, four for the branches, and the conclusion.
+  // Columns: the preparation's two, three for the branches, and the conclusion.
   const prepareX = (at: number) => at * across;
   const branchX = (at: number) => prepareX(1) + width + GAP_BAND + at * across;
-  const concludeX = branchX(3) + width + GAP_BAND;
+  const concludeX = branchX(2) + width + GAP_BAND;
   // Rows: D&I on the first, OE on the third; the fork and the join between them.
   const designY = row(0);
   const middle = row(1);
@@ -1114,10 +1149,9 @@ export function workflowLayout(): {
     attributes: { x: prepareX(1), y: middle },
     designevidence: { x: branchX(0), y: designY },
     designassessment: { x: branchX(1), y: designY },
-    designconclusion: { x: branchX(2), y: designY },
     testdesign: { x: branchX(0), y: operatingY },
-    oeevidence: { x: branchX(2), y: operatingY },
-    oetesting: { x: branchX(3), y: operatingY },
+    oeevidence: { x: branchX(1), y: operatingY },
+    oetesting: { x: branchX(2), y: operatingY },
     conclusion: { x: concludeX, y: middle },
     review: { x: concludeX, y: operatingY },
     workpaper: { x: concludeX, y: row(3) },
@@ -1172,13 +1206,13 @@ export function workflowLayout(): {
     edge("attributes", "designevidence"),
     edge("attributes", "testdesign"),
     edge("designevidence", "designassessment"),
-    edge("designassessment", "designconclusion"),
+    // The D&I sign-off is in D&I Assessment (section 3.8): its verdict decides the way on.
     {
-      ...edge("designconclusion", "oeevidence", "bottom", "top"),
+      ...edge("designassessment", "oeevidence", "bottom", "top"),
       label: "Effective",
     },
     {
-      ...edge("designconclusion", "conclusion"),
+      ...edge("designassessment", "conclusion"),
       label: "Not effective",
     },
     edge("testdesign", "oeevidence"),

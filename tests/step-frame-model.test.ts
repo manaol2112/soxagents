@@ -71,7 +71,9 @@ describe("the step drawer's header (11 November 2026)", () => {
   it("keeps Control Understanding's own layout, and gives every other step the new one", () => {
     assert.equal(takesMinimalLayout("understanding"), false);
     const others = STEPS.filter((step) => step.key !== "understanding");
-    assert.equal(others.length, 11);
+    // Old: 11. New: 10, "D&I Conclusion and Review" being part of D&I Assessment
+    // (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
+    assert.equal(others.length, 10);
     for (const step of others) {
       assert.equal(takesMinimalLayout(step.key), true, step.key);
     }
@@ -101,8 +103,10 @@ describe("the step drawer's header (11 November 2026)", () => {
       headLabel("designevidence"),
       "Step 04 · AI agent · D&I branch",
     );
-    assert.equal(headLabel("testdesign"), "Step 07 · Human gate · OE branch");
-    assert.equal(headLabel("workpaper"), "Step 12 · Output");
+    // Old: "Step 07" and "Step 12". New: one step fewer before them
+    // (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
+    assert.equal(headLabel("testdesign"), "Step 06 · Human gate · OE branch");
+    assert.equal(headLabel("workpaper"), "Step 11 · Output");
   });
 
   it("shows one status: the step's own words, or its tone's where it has none", () => {
@@ -121,8 +125,10 @@ describe("the step drawer's header (11 November 2026)", () => {
 describe("what the panel says where nothing is needed from the person", () => {
   it("leaves a decision or a flag to the decision row", () => {
     const steps = workflowOf(midway());
+    // Old: the "designconclusion" step's decision. New: D&I Assessment's, which carries
+    // the sign-off (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
     assert.equal(
-      quietLineOf(panelFrame("designconclusion", steps, null).need),
+      quietLineOf(panelFrame("designassessment", steps, null).need),
       null,
     );
     assert.equal(quietLineOf(panelFrame("oeevidence", steps, null).need), null);
@@ -144,14 +150,18 @@ describe("what the panel says where nothing is needed from the person", () => {
     );
     const line = quietLineOf(panelFrame("review", steps, null).need);
     assert.ok(line !== null);
-    assert.match(line.text, /D&I Conclusion/);
+    // Rewritten. Old: /D&I Conclusion/. New: the step that holds it is D&I Assessment,
+    // where the sign-off is (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
+    assert.match(line.text, /D&I Assessment/);
     assert.equal(line.working, false);
     // Rewritten 15 November 2026. Old: "Open D&I Conclusion". New: "Open D&I Conclusion
     // and Review", the step's new title (product owner, 15 November 2026,
     // docs/design-workpaper.md section 3.5/3.6).
+    // Rewritten again. Old: "Open D&I Conclusion and Review", step "designconclusion".
+    // New: "Open D&I Assessment" (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
     assert.deepEqual(line.link, {
-      label: "Open D&I Conclusion and Review",
-      step: "designconclusion",
+      label: "Open D&I Assessment",
+      step: "designassessment",
     });
   });
 
@@ -275,7 +285,9 @@ describe("the panel's footer", () => {
   it("names each step that follows, with the outcome it follows on", () => {
     const steps = workflowOf(midway());
     assert.deepEqual(
-      nextLinks(panelFrame("designconclusion", steps, null).next),
+      // Old: from "designconclusion". New: from D&I Assessment, whose verdict decides the
+      // way on (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
+      nextLinks(panelFrame("designassessment", steps, null).next),
       [
         { key: "oeevidence", label: "If effective", title: "OE Evidence" },
         {

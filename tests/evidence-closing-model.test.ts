@@ -2226,7 +2226,9 @@ describe("an exception that holds the sign-off, as the conclusion reads (indepen
       Object.fromEntries(
         steps(conclusion)
           .filter((step) =>
-            ["designassessment", "designconclusion"].includes(step.key),
+            // Old: both "designassessment" and "designconclusion". New: one D&I step
+            // (section 3.8).
+            ["designassessment"].includes(step.key),
           )
           .map((step) => [step.key, `${step.tone}|${step.status}`]),
       );
@@ -2238,16 +2240,18 @@ describe("an exception that holds the sign-off, as the conclusion reads (indepen
     } as const;
     // Before: "attention|Effective · to sign off" and "done|Assessed", with the server
     // refusing every sign-off (the model never read `blocking`).
+    // Rewritten. Old: D&I Assessment "attention|Exception to resolve" and D&I Conclusion
+    // and Review "blocked|Exception to resolve". New: one D&I step carries the sign-off,
+    // and says it once (product owner, 16 November 2026, docs/design-workpaper.md section
+    // 3.8).
     assert.deepEqual(said(held), {
       designassessment: "attention|Exception to resolve",
-      designconclusion: "blocked|Exception to resolve",
     });
     // Out of date over an exception: never "to sign again".
     assert.deepEqual(
       said({ ...held, status: "OUT_OF_DATE", signed: "EFFECTIVE" }),
       {
         designassessment: "attention|Exception to resolve",
-        designconclusion: "blocked|Exception to resolve",
       },
     );
     for (const status of Object.values(
@@ -2255,7 +2259,9 @@ describe("an exception that holds the sign-off, as the conclusion reads (indepen
     )) {
       assert.equal(/to sign|Effective/.test(status), false);
     }
-    // No exception sentence, or `blocking` not read: as before.
+    // No exception sentence, or `blocking` not read: as before. Old: "done|Assessed" then
+    // "attention|Effective · to sign off". New: the one step says the sign-off's state
+    // (section 3.8).
     for (const blocking of [[], undefined]) {
       assert.deepEqual(
         said({
@@ -2265,12 +2271,12 @@ describe("an exception that holds the sign-off, as the conclusion reads (indepen
           ...(blocking === undefined ? {} : { blocking }),
         }),
         {
-          designassessment: "done|Assessed",
-          designconclusion: "attention|Effective · to sign off",
+          designassessment: "attention|Effective · to sign off",
         },
       );
     }
-    // Signed off: the sign-off's own words.
+    // Signed off: the sign-off's own words. Old: "done|Assessed" then "done|Effective ·
+    // signed off". New: "done|Signed off: Effective" (section 3.8).
     assert.deepEqual(
       said({
         status: "SIGNED_OFF",
@@ -2279,25 +2285,18 @@ describe("an exception that holds the sign-off, as the conclusion reads (indepen
         blocking: ["the D&I conclusion is signed off"],
       }),
       {
-        designassessment: "done|Assessed",
-        designconclusion: "done|Effective · signed off",
+        designassessment: "done|Signed off: Effective",
       },
     );
-    // The panels' decision lines agree: the conclusion waits on the exception and never
-    // calls for a sign-off; the assessment says what resolves it.
+    // The panel's decision line: the assessment says what resolves it, and never calls
+    // for a sign-off. Old: D&I Conclusion and Review's frame also waited ("Exception to
+    // resolve", with "Open D&I Assessment"). New: that step is gone (section 3.8), and no
+    // frame of the workflow asks for the sign-off over the exception.
     const workflow = steps(held);
-    const conclusion = panelModel.panelFrame(
-      "designconclusion",
-      workflow,
-      null,
-    ).need;
-    assert.equal(conclusion.kind, "wait");
-    assert.equal(conclusion.title, "Exception to resolve");
-    assert.equal(/Sign off the D&I conclusion/.test(conclusion.title), false);
-    assert.deepEqual(conclusion.action, {
-      label: "Open D&I Assessment",
-      step: "designassessment",
-    });
+    assert.equal(
+      workflow.some((step) => step.key === ("designconclusion" as never)),
+      false,
+    );
     const assessment = panelModel.panelFrame(
       "designassessment",
       workflow,
@@ -2306,15 +2305,18 @@ describe("an exception that holds the sign-off, as the conclusion reads (indepen
     assert.equal(assessment.kind, "act");
     assert.equal(assessment.title, "Resolve the recorded exception");
     assert.match(assessment.detail, /Log a design deficiency/);
-    // The agent's line does not say a verdict is proposed for signing.
+    assert.equal(/Sign off the D&I conclusion/.test(assessment.title), false);
+    // The agent's line does not say a verdict is proposed for signing. Old: on the
+    // D&I Conclusion and Review step, the hold its first line. New: on D&I Assessment,
+    // after the line on the workpaper itself (section 3.8).
     const note = panelModel.agentNote(
-      workflow.find((step) => step.key === "designconclusion") as never,
+      workflow.find((step) => step.key === "designassessment") as never,
       { ...base, designConclusion: held },
     );
     assert.equal(
       note.found.some((line) => /^Proposed: effective/.test(line)),
       false,
     );
-    assert.match(note.found[0] ?? "", /^Not ready to sign: an exception is/);
+    assert.match(note.found[1] ?? "", /^Not ready to sign: an exception is/);
   });
 });

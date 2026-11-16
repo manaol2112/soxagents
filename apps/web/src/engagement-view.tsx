@@ -32,6 +32,7 @@ import { PlanMissingButton } from "./plan-missing";
 import { parseQueueFilter, type Queue } from "./queue-model";
 import { QueuePanel } from "./queue-panel";
 import { RemediationHistoryCard } from "./remediation-history";
+import { ReviewWaiting } from "./review-waiting";
 import { canonicalQuery, placeSetup } from "./routes";
 import { canManageProjects, type ShellModel } from "./shell-model";
 import { UiIcon } from "./ui-icon";
@@ -507,6 +508,14 @@ export function EngagementDashboard({
       ) : (
         <div className="home-layout">
           <div className="home-main">
+            {/* Section 3.8 of docs/design-workpaper.md: the D&I workpapers sent to the
+                viewer for review, each opening its section 7. Not drawn when none wait. */}
+            {closed ? null : (
+              <ReviewWaiting
+                organizationId={ids.organizationId}
+                projectId={ids.projectId}
+              />
+            )}
             {closed ? null : queue !== null && workHref !== undefined ? (
               <HomeWorkPanel
                 queue={queue}

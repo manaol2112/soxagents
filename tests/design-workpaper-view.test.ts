@@ -133,10 +133,17 @@ describe("the existing workpaper card, kept once per mount", () => {
     // The views come first, the fold under them.
     assert.ok(step.indexOf("<DesignWorkpaper\n") < step.indexOf("<details"));
     assert.equal(count(step, /<DesignWorkpaper\n/g), 1);
-    // It takes the card's own props, and opens by the model's rule.
+    // It takes the card's own props, and opens by the model's rule. Rewritten. Old:
+    // `type CardProps = Omit<…, "stage" | "compact">;`. New: the same, and the D&I
+    // conclusion's body, which section 7's Sign-off reads and the card never gets
+    // (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
     assert.match(
       view,
-      /type CardProps = Omit<\s*ComponentProps<typeof WorkpapersTab>,\s*"stage" \| "compact"\s*>;/,
+      /type CardProps = Omit<\s*ComponentProps<typeof WorkpapersTab>,\s*"stage" \| "compact"\s*> & \{\s*(\/\*\*[\s\S]*?\*\/\s*)?conclusion\?: DesignConclusion \| null;\s*\};/,
+    );
+    assert.match(
+      step,
+      /export function DesignWorkpaperStep\(\{\s*conclusion = null,\s*\.\.\.props\s*\}: CardProps\)/,
     );
     assert.match(
       step,
@@ -161,9 +168,19 @@ describe("the existing workpaper card, kept once per mount", () => {
   });
 
   it("is mounted at the two D&I places, and nowhere is the card mounted twice", () => {
+    // Rewritten. Old: `<DesignWorkpaperStep {...workpaperProps} />` twice. New: the same
+    // props and the control's D&I conclusion, for section 7's Sign-off
+    // (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
     assert.equal(
-      count(controls, /<DesignWorkpaperStep \{\.\.\.workpaperProps\} \/>/g),
+      count(
+        controls,
+        /<DesignWorkpaperStep\s+\{\.\.\.workpaperProps\}\s+conclusion=\{openConclusion\}\s*\/>/g,
+      ),
       2,
+    );
+    assert.match(
+      controls,
+      /const openConclusion =\s*engagement\.designConclusion\?\.controlId === control\.id\s*\? engagement\.designConclusion\s*: null;/,
     );
     assert.equal(count(controls, /<DesignWorkpaperStep\b/g), 2);
     // The D&I card is no longer mounted directly: only through the step, once each.
@@ -171,13 +188,16 @@ describe("the existing workpaper card, kept once per mount", () => {
     // The testing workpaper is not changed: its three mounts are as they were.
     assert.equal(count(controls, /<WorkpapersTab\b/g), 3);
     assert.equal(count(controls, /stage="EFFECTIVENESS"/g), 3);
+    // Old (in both): `<DesignWorkpaperStep {...workpaperProps} />`. New: with
+    // `conclusion={openConclusion}` (product owner, 16 November 2026,
+    // docs/design-workpaper.md section 3.8).
     assert.match(
       controls,
-      /<h4 className="stp-subhead">Design and implementation<\/h4>\s*<DesignWorkpaperStep \{\.\.\.workpaperProps\} \/>\s*<h4 className="stp-subhead">Operating effectiveness<\/h4>\s*<WorkpapersTab compact \{\.\.\.workpaperProps\} stage="EFFECTIVENESS" \/>/,
+      /<h4 className="stp-subhead">Design and implementation<\/h4>\s*<DesignWorkpaperStep\s+\{\.\.\.workpaperProps\}\s+conclusion=\{openConclusion\}\s*\/>\s*<h4 className="stp-subhead">Operating effectiveness<\/h4>\s*<WorkpapersTab compact \{\.\.\.workpaperProps\} stage="EFFECTIVENESS" \/>/,
     );
     assert.match(
       controls,
-      /title="Walkthrough and design workpaper"[\s\S]{0,260}<DesignWorkpaperStep \{\.\.\.workpaperProps\} \/>\s*<\/PhaseStep>/,
+      /title="Walkthrough and design workpaper"[\s\S]{0,260}<DesignWorkpaperStep\s+\{\.\.\.workpaperProps\}\s+conclusion=\{openConclusion\}\s*\/>\s*<\/PhaseStep>/,
     );
   });
 
@@ -815,9 +835,12 @@ describe("the independent review of 16 November 2026, in the screen's own files"
   });
 
   it("4: offers Reopen to change only to a viewer who may act, as the fold's Reopen", () => {
+    // Rewritten. Old: `mayAct={…}` on PreparerSignOff. New: `preparerMayAct={…}` on the
+    // Sign-off block, which passes it to the preparer's row as `mayAct`
+    // (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
     assert.match(
       component(view, "SignOffOf"),
-      /mayAct=\{\s*paper\.canEdit \|\| \(workpaper\.status === "PREPARED" && sign\.canAct\)\s*\}/,
+      /preparerMayAct=\{\s*paper\.canEdit \|\| \(workpaper\.status === "PREPARED" && sign\.canAct\)\s*\}/,
     );
     assert.doesNotMatch(
       view,

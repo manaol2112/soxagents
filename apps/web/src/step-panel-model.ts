@@ -20,6 +20,7 @@ import {
   standingWords,
 } from "./design-conclusion-model.ts";
 import { requestsNeed } from "./design-requests-model.ts";
+import { STEP_DRAFT, STEP_RETURNED } from "./review-request-model.ts";
 
 export type PanelNeed = {
   /** act: a person decides; agent: an agent is working; wait: an earlier step holds it;
@@ -70,15 +71,12 @@ const ACTION: Record<StepKey, { title: string; label: string; why: string }> = {
     label: "Review evidence",
     why: "Each file is read on arrival; accept it, or ask for what is missing.",
   },
+  // One D&I step (docs/design-workpaper.md, section 3.8): prepared, sent for review and
+  // signed off in section 7.
   designassessment: {
     title: "Prepare the design workpaper",
     label: "Review the assessment",
-    why: "The walkthrough and each design attribute are drafted; review and prepare them.",
-  },
-  designconclusion: {
-    title: "Sign off the D&I conclusion",
-    label: "Review and sign off",
-    why: "A reviewer who did not prepare the design workpaper signs it. An effective sign-off clears OE.",
+    why: "The walkthrough and each design attribute are drafted; review them, record the conclusion, then sign and send it for review in section 7. A reviewer who did not prepare it signs it off there, and an effective sign-off clears OE.",
   },
   testdesign: {
     title: "Approve scope and sampling",
@@ -112,6 +110,14 @@ const ACTION: Record<StepKey, { title: string; label: string; why: string }> = {
   },
 };
 
+/** D&I Assessment once its workpaper is prepared: the reviewer's sign-off in section 7
+ * (section 3.8; before, the "D&I Conclusion and Review" step's). */
+const DESIGN_SIGN_OFF = {
+  title: "Sign off the D&I conclusion",
+  label: "Review and sign off",
+  why: "A reviewer who did not prepare the design workpaper signs it off in section 7, or returns it to the preparer. An effective sign-off clears OE.",
+};
+
 const link = (step: WorkflowStep): PanelLink => ({
   key: step.key,
   number: step.number,
@@ -142,7 +148,7 @@ function needOf(step: WorkflowStep, steps: readonly WorkflowStep[]): PanelNeed {
       title: "Recorded before the D&I sign-off",
       detail:
         "This work is kept as recorded, and it is relied on only once a reviewer signs off the design as effective.",
-      action: { label: "Open the D&I conclusion", step: "designconclusion" },
+      action: { label: "Open the D&I sign-off", step: "designassessment" },
     };
   }
   if (step.status === OUT_OF_ORDER[1]) {
@@ -215,21 +221,15 @@ function needOf(step: WorkflowStep, steps: readonly WorkflowStep[]): PanelNeed {
   // section 10.15, item 5): the conclusion waits on it, and never calls for a sign-off
   // the server refuses; the assessment says what resolves it.
   if (step.status === EXCEPTION_TO_RESOLVE) {
-    return step.key === "designconclusion"
-      ? {
-          kind: "wait",
-          title: EXCEPTION_TO_RESOLVE,
-          detail:
-            "An exception recorded on an attribute holds the sign-off, whichever verdict. It can be signed off once a design deficiency is logged for the attribute, or its tickmark is changed in D&I Evidence.",
-          action: { label: "Open D&I Assessment", step: "designassessment" },
-        }
-      : {
-          kind: "act",
-          title: "Resolve the recorded exception",
-          detail:
-            "An exception is recorded on an attribute, and the D&I conclusion cannot be signed off over it. Log a design deficiency for the attribute, or change its tickmark in D&I Evidence with a reason.",
-          action: { label: "Open D&I Evidence", step: "designevidence" },
-        };
+    // The D&I sign-off is in D&I Assessment (section 3.8): the one step says what resolves
+    // it.
+    return {
+      kind: "act",
+      title: "Resolve the recorded exception",
+      detail:
+        "An exception is recorded on an attribute, and the D&I conclusion cannot be signed off over it. Log a design deficiency for the attribute, or change its tickmark in D&I Evidence with a reason.",
+      action: { label: "Open D&I Evidence", step: "designevidence" },
+    };
   }
   if (step.tone === "done") {
     return { kind: "done", title: step.status, detail: "" };
@@ -245,15 +245,23 @@ function needOf(step: WorkflowStep, steps: readonly WorkflowStep[]): PanelNeed {
         "The agents are updating this step from the latest answers. It is ready to decide once they finish.",
     };
   }
+  // D&I Assessment carries the reviewer's sign-off (docs/design-workpaper.md, section
+  // 3.8): once the workpaper is prepared, what it needs is that sign-off, in section 7.
+  const action =
+    step.key === "designassessment" &&
+    step.status !== STEP_DRAFT &&
+    step.status !== STEP_RETURNED
+      ? DESIGN_SIGN_OFF
+      : ACTION[step.key];
   return {
     kind: "act",
-    title: ACTION[step.key].title,
-    detail: ACTION[step.key].why,
+    title: action.title,
+    detail: action.why,
     // Scope & Sampling's own plan review holds its one primary action (Approve plan): the
     // decision row only says what is needed, so the step never shows two (11 November 2026).
     ...(step.key === "testdesign"
       ? {}
-      : { action: { label: ACTION[step.key].label, anchor: "stp-work" } }),
+      : { action: { label: action.label, anchor: "stp-work" } }),
   };
 }
 
@@ -308,7 +316,6 @@ export const PREPARED_TITLE: Record<StepKey, string> = {
   attributes: "The control's attributes",
   designevidence: "D&I evidence",
   designassessment: "The design assessment",
-  designconclusion: "The D&I conclusion",
   testdesign: "Scope and sampling",
   oeevidence: "OE evidence",
   oetesting: "OE testing",
@@ -405,70 +412,13 @@ export function agentNote(
             did: "Drafted the D&I evidence requests and read each file that came back.",
             found: evidence(["DESIGN"]),
           };
-    case "designassessment":
+    case "designassessment": {
+      // One D&I step (section 3.8): the workpaper, then the conclusion and its sign-off.
+      const drafted = paper(input.designPaper, "design workpaper");
+      const said = conclusionNote(input);
       return {
-        did: "Drafted the design workpaper: the walkthrough of one instance and each design attribute.",
-        found: [paper(input.designPaper, "design workpaper")],
-      };
-    case "designconclusion": {
-      const design = input.findings.filter(
-        (item) =>
-          item.type === "DESIGN" &&
-          item.status !== "REMEDIATED" &&
-          item.status !== "CLOSED",
-      );
-      const proposed = input.designConclusion?.proposed ?? null;
-      // An exception a person recorded holds the sign-off: said in place of a verdict
-      // "proposed" that the server would refuse to sign.
-      const held =
-        input.designConclusion == null
-          ? 0
-          : exceptionHolds({
-              status: input.designConclusion.status,
-              blocking: input.designConclusion.blocking ?? [],
-            }).length;
-      const holdLine = `Not ready to sign: ${held === 1 ? "an exception is" : `${held} exceptions are`} recorded with no design deficiency logged.`;
-      const deficiencyLines =
-        design.length > 0
-          ? [
-              `Design deficiencies: ${design.map((item) => item.reference).join(", ")}.`,
-            ]
-          : [];
-      // Section 3.6: on a body that names the conclusion, the strip says the one that
-      // stands (signed, or the preparer's) and the agent's proposal as a proposal: never
-      // the records' two-value verdict as the conclusion (independent review, 15
-      // November 2026).
-      const named = input.designConclusion?.named;
-      if (named !== undefined) {
-        const signedOff = input.designConclusion?.status === "SIGNED_OFF";
-        return {
-          did: "Proposed the D&I conclusion from the records; the preparer records it in D&I Assessment, and a reviewer signs it off.",
-          found: [
-            ...(held > 0 ? [holdLine] : []),
-            named.standing === null
-              ? "No conclusion recorded yet: the preparer records it in section 7 of D&I Assessment."
-              : `${signedOff ? "Signed off" : "Recorded by the preparer"}: ${standingWords(named.standing)}.`,
-            ...(named.proposed !== null && !signedOff
-              ? [`Proposed by the agent: ${CONCLUSION_WORDS[named.proposed]}.`]
-              : []),
-            ...deficiencyLines,
-          ],
-        };
-      }
-      return {
-        did: "Proposed the D&I verdict from the prepared design workpaper and the design deficiencies.",
-        found: [
-          held > 0
-            ? holdLine
-            : proposed === null
-              ? "No verdict yet: the design workpaper is not prepared."
-              : `Proposed: ${proposed === "EFFECTIVE" ? "effective" : "not effective"}.`,
-          ...(design.length > 0
-            ? [
-                `Design deficiencies: ${design.map((item) => item.reference).join(", ")}.`,
-              ]
-            : []),
-        ],
+        did: `Drafted the design workpaper: the walkthrough of one instance and each design attribute. ${said.did}`,
+        found: [drafted, ...said.found],
       };
     }
     case "attributes":
@@ -546,4 +496,71 @@ export function agentNote(
         ],
       };
   }
+}
+
+/** What the agent says of the D&I conclusion, under D&I Assessment (section 3.8: the
+ * conclusion and its sign-off are in that step, section 7). */
+function conclusionNote(input: WorkflowInput): {
+  did: string;
+  found: string[];
+} {
+  const design = input.findings.filter(
+    (item) =>
+      item.type === "DESIGN" &&
+      item.status !== "REMEDIATED" &&
+      item.status !== "CLOSED",
+  );
+  const proposed = input.designConclusion?.proposed ?? null;
+  // An exception a person recorded holds the sign-off: said in place of a verdict
+  // "proposed" that the server would refuse to sign.
+  const held =
+    input.designConclusion == null
+      ? 0
+      : exceptionHolds({
+          status: input.designConclusion.status,
+          blocking: input.designConclusion.blocking ?? [],
+        }).length;
+  const holdLine = `Not ready to sign: ${held === 1 ? "an exception is" : `${held} exceptions are`} recorded with no design deficiency logged.`;
+  const deficiencyLines =
+    design.length > 0
+      ? [
+          `Design deficiencies: ${design.map((item) => item.reference).join(", ")}.`,
+        ]
+      : [];
+  // Section 3.6: on a body that names the conclusion, the strip says the one that
+  // stands (signed, or the preparer's) and the agent's proposal as a proposal: never
+  // the records' two-value verdict as the conclusion (independent review, 15
+  // November 2026).
+  const named = input.designConclusion?.named;
+  if (named !== undefined) {
+    const signedOff = input.designConclusion?.status === "SIGNED_OFF";
+    return {
+      did: "Proposed the D&I conclusion from the records; the preparer records it and sends the workpaper for review in section 7, and a reviewer signs it off there.",
+      found: [
+        ...(held > 0 ? [holdLine] : []),
+        named.standing === null
+          ? "No conclusion recorded yet: the preparer records it in section 7 of D&I Assessment."
+          : `${signedOff ? "Signed off" : "Recorded by the preparer"}: ${standingWords(named.standing)}.`,
+        ...(named.proposed !== null && !signedOff
+          ? [`Proposed by the agent: ${CONCLUSION_WORDS[named.proposed]}.`]
+          : []),
+        ...deficiencyLines,
+      ],
+    };
+  }
+  return {
+    did: "Proposed the D&I verdict from the prepared design workpaper and the design deficiencies.",
+    found: [
+      held > 0
+        ? holdLine
+        : proposed === null
+          ? "No verdict yet: the design workpaper is not prepared."
+          : `Proposed: ${proposed === "EFFECTIVE" ? "effective" : "not effective"}.`,
+      ...(design.length > 0
+        ? [
+            `Design deficiencies: ${design.map((item) => item.reference).join(", ")}.`,
+          ]
+        : []),
+    ],
+  };
 }

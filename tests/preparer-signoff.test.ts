@@ -211,7 +211,9 @@ describe("the screen", () => {
   const read = (path: string) => readFileSync(path, "utf8");
   const view = read("apps/web/src/design-workpaper-view.tsx");
   const card = read("apps/web/src/workpaper-view.tsx");
-  const panel = read("apps/web/src/design-conclusion-panel.tsx");
+  // Rewritten. Old: the "D&I Conclusion and Review" step's panel. New: section 7's
+  // Sign-off, which holds the preparer's row and the reviewer's (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
+  const panel = read("apps/web/src/review-signoff.tsx");
   const widget = read("apps/web/src/preparer-signoff.tsx");
   const route = read("apps/web/app/workspace/workpapers/prepare/route.ts");
 
@@ -224,9 +226,13 @@ describe("the screen", () => {
       card,
       /paper\.stage !== "DESIGN" &&\s*paper\.status === "DRAFT"/,
     );
-    // The review step names the preparer's signature and links to where it is made.
-    assert.match(panel, /<dt>Preparer's sign-off<\/dt>/);
-    assert.match(panel, /the preparer signs at the end of section 7/);
+    // Rewritten. Old: the review step named the preparer's signature and linked to where
+    // it is made. New: the two signatures are the two rows of one Sign-off, in order, the
+    // preparer's first (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
+    const first = panel.indexOf("<PreparerSignOff");
+    const second = panel.indexOf("<ReviewRow");
+    assert.ok(first > 0 && second > first);
+    assert.match(panel, /<Mark n=\{1\} done=\{preparedDone\} \/>/);
   });
 
   it("shows done only after the server confirmed, and never sets HTML", () => {

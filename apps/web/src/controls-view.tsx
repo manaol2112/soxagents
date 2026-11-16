@@ -106,7 +106,6 @@ import {
 import { ControlsToolbar } from "./controls-toolbar";
 import { CoverageForm } from "./coverage-form";
 import { namedConclusion } from "./design-conclusion-model";
-import { DesignConclusionPanel } from "./design-conclusion-panel";
 import { DesignEvidence } from "./design-evidence";
 import {
   carriersOf,
@@ -1722,6 +1721,12 @@ function ControlRecord({
         ? "active"
         : "todo";
   };
+  // The control's D&I conclusion, for section 7's Sign-off (docs/design-workpaper.md,
+  // section 3.8): the review request, the reviewers and the reviewer's sign-off.
+  const openConclusion =
+    engagement.designConclusion?.controlId === control.id
+      ? engagement.designConclusion
+      : null;
   const workpaperProps = {
     papers: engagement.workpapers,
     notice: engagement.workpaperNotice,
@@ -2105,6 +2110,13 @@ function ControlRecord({
             // Section 3.6: the conclusion that stands and the agent's proposal, where
             // the body names them (never the two-value `proposed` as a conclusion).
             named: namedConclusion(engagement.designConclusion),
+            // Section 3.8: who the standing review request is with, and whether the
+            // workpaper went back to its preparer (the D&I Assessment step's status).
+            inReviewWith:
+              engagement.designConclusion.reviewRequest?.reviewer.name ?? null,
+            returned:
+              engagement.designConclusion.reviewRequest === null &&
+              engagement.designConclusion.lastReturn !== null,
           },
     effectivenessPaper: paperOf("EFFECTIVENESS"),
     busy,
@@ -2574,7 +2586,10 @@ function ControlRecord({
       {section === "workpaper" ? (
         <div className="stp-papers">
           <h4 className="stp-subhead">Design and implementation</h4>
-          <DesignWorkpaperStep {...workpaperProps} />
+          <DesignWorkpaperStep
+            {...workpaperProps}
+            conclusion={openConclusion}
+          />
           <h4 className="stp-subhead">Operating effectiveness</h4>
           <WorkpapersTab compact {...workpaperProps} stage="EFFECTIVENESS" />
         </div>
@@ -2595,19 +2610,6 @@ function ControlRecord({
         ? setupFor(["attributes"], false, true)
         : null}
       {section === "setup-plan" ? setupFor(["plan"], false, true) : null}
-      {section === "design-conclusion" ? (
-        <DesignConclusionPanel
-          ids={{
-            organizationId: ids.organizationId,
-            projectId: ids.projectId,
-            controlId: control.id,
-          }}
-          conclusion={engagement.designConclusion}
-          notice={engagement.designConclusionNotice}
-          assessmentHref={stepHrefsWf.designassessment}
-          evidenceHref={stepHrefsWf.designevidence ?? null}
-        />
-      ) : null}
       {openStep !== null && NOT_YET_BUILT[openStep.key] !== undefined ? (
         <p className="wf-not-yet" role="note">
           {NOT_YET_BUILT[openStep.key]}
@@ -2722,7 +2724,10 @@ function ControlRecord({
                         keepOpen={keepWorkpaper}
                         plain
                       >
-                        <DesignWorkpaperStep {...workpaperProps} />
+                        <DesignWorkpaperStep
+                          {...workpaperProps}
+                          conclusion={openConclusion}
+                        />
                       </PhaseStep>
                     </PhasePanel>
                   ) : null

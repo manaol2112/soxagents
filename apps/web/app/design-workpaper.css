@@ -2825,7 +2825,8 @@ button.se-tool:focus-visible:not(:disabled) {
    A): one row under a thin rule, the heading and what is attested on the left, the dark
    button or a quiet link on the right. */
 
-.dw-concl > .ps {
+.dw-concl > .ps,
+.dw-concl > .so {
   padding-top: 0.875rem;
   border-top: 1px solid var(--border);
 }
@@ -2940,4 +2941,376 @@ button.se-tool:focus-visible:not(:disabled) {
 
 .ps h6[tabindex="-1"]:focus {
   outline: none;
+}
+
+/* Section 7's Sign-off (docs/design-workpaper.md, section 3.8; the approved prototype):
+   the label, then two numbered rows under a thin rule each, the preparer's and the
+   reviewer's. A row's mark is a quiet numbered ring, a dashed one while it waits on the
+   reviewer, and the one dark disc with a check once signed; its title reads "Prepared"
+   or "Reviewed" in the text colour and the rest in the secondary one. One dark button
+   per row, at its right. */
+
+.so-label {
+  margin: 0 0 0.5rem;
+  color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.so-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.so-step {
+  display: grid;
+  grid-template-columns: 1.5rem minmax(0, 1fr);
+  gap: 0 0.875rem;
+  align-items: start;
+  padding: 0.75rem 0;
+}
+
+.so-step + .so-step {
+  border-top: 1px solid var(--border);
+}
+
+.so-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+}
+
+.so-mark.is-waiting {
+  border-style: dashed;
+}
+
+.so-mark.is-done {
+  color: var(--surface);
+  background: var(--text-strong);
+  border-color: var(--text-strong);
+}
+
+.so .ps,
+.so-row {
+  display: grid;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+.so .ps h6,
+.so-row h6 {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1.5rem;
+  text-transform: none;
+}
+
+.so .ps h6 b,
+.so-row h6 b {
+  color: var(--text-strong);
+  font-weight: 650;
+}
+
+.so-row h6[tabindex="-1"]:focus {
+  outline: none;
+}
+
+.so-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.5rem;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.so-links {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  font-size: var(--fs-sm);
+}
+
+.so-line {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.so-held {
+  color: var(--danger);
+}
+
+.so-stale {
+  color: var(--warning-strong, var(--text-secondary));
+}
+
+.ps-quote {
+  margin: 0.125rem 0 0;
+  padding: 0.375rem 0.75rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--surface-muted);
+  border-left: 2px solid var(--border-strong);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.ps-go {
+  display: grid;
+  flex: none;
+  gap: 0.25rem;
+  justify-items: end;
+}
+
+.ps-hint {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.ps-send {
+  display: grid;
+  grid-template-columns: minmax(0, 20rem) minmax(0, 1fr);
+  gap: 0.75rem 1rem;
+  align-items: start;
+  margin-top: 0.25rem;
+}
+
+.ps-send .ps-note {
+  margin-top: 0;
+}
+
+.ps-to {
+  margin-top: 0.125rem;
+}
+
+.so-review {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem 1.5rem;
+  align-items: start;
+}
+
+.so-review-copy {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.so-review-go {
+  display: grid;
+  gap: 0.5rem;
+  justify-items: stretch;
+}
+
+.so-basis {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.5rem;
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.so-basis > div {
+  display: flex;
+  gap: 0.375rem;
+}
+
+.so-basis dt {
+  color: var(--text-tertiary);
+}
+
+.so-basis dd {
+  margin: 0;
+  color: var(--text-strong);
+}
+
+.so-form {
+  margin-top: 0.25rem;
+}
+
+.so-history {
+  margin-top: 0.25rem;
+  font-size: var(--fs-sm);
+}
+
+/* The reviewer picker ("Send for review to"): one line that opens the list under it. */
+
+.rp {
+  position: relative;
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.rp-label {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+button.rp-trigger {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 2.25rem;
+  padding: 0.25rem 0.625rem;
+  color: var(--text-strong);
+  font-weight: 400;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: none;
+}
+
+button.rp-trigger:hover {
+  color: var(--text-strong);
+  background: var(--surface);
+  border-color: var(--border-control);
+}
+
+.rp-value {
+  display: inline-flex;
+  gap: 0.5rem;
+  align-items: center;
+  min-width: 0;
+}
+
+.rp-none {
+  color: var(--text-tertiary);
+}
+
+.rp-role {
+  color: var(--text-tertiary);
+}
+
+.rp-avatar {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 1.625rem;
+  height: 1.625rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-2xs);
+  font-weight: 650;
+  background: var(--surface-sunken);
+  border-radius: 999px;
+}
+
+.rp-caret {
+  display: inline-flex;
+  color: var(--text-tertiary);
+  transform: rotate(90deg);
+}
+
+.rp-list {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  z-index: 5;
+  display: grid;
+  gap: 0.125rem;
+  width: max(100%, 18rem);
+  max-height: 18rem;
+  margin: 0;
+  padding: 0.25rem;
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+}
+
+.rp-option {
+  display: flex;
+  gap: 0.625rem;
+  align-items: center;
+  padding: 0.5rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.rp-option:hover,
+.rp-option.is-on,
+.rp-option:focus-within {
+  background: var(--surface-hover);
+}
+
+.rp-option:focus-within {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.rp-option.is-off {
+  color: var(--text-disabled);
+  cursor: default;
+}
+
+.rp-option.is-off:hover {
+  background: transparent;
+}
+
+.rp-copy {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rp-name {
+  color: inherit;
+}
+
+.rp-option:not(.is-off) .rp-name {
+  color: var(--text-strong);
+}
+
+.rp-copy small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.rp-option.is-off small,
+.rp-option.is-off .rp-avatar {
+  color: var(--text-disabled);
+}
+
+.rp-check {
+  display: inline-flex;
+  color: var(--text-strong);
+}
+
+.rp-empty {
+  margin: 0;
+  padding: 0.5rem;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+@media (max-width: 640px) {
+  .ps-send,
+  .so-review {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ps-go {
+    justify-items: start;
+  }
+
+  .so-review-go {
+    justify-items: start;
+  }
 }

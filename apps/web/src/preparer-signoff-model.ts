@@ -4,6 +4,7 @@
 // its prepare refuses what this page has not seen, and its sentence is shown.
 
 import type { ConclusionChoice } from "./design-conclusion-model.ts";
+import { reviewRefusal } from "./review-request-model.ts";
 import { workpaperWrite } from "./workpaper-model.ts";
 
 export const ATTESTATION =
@@ -68,6 +69,23 @@ export function signOffProblems(facts: SignOffFacts): string[] {
   return problems;
 }
 
+/** "by Dana Lee · Nov 15, 2026 · version 4": the Sign-off block's line after its bold
+ * "Prepared" (docs/design-workpaper.md, section 3.8; the prototype). */
+export function preparedDetail(
+  by: string | null,
+  on: string | null,
+  version: number | null,
+): string {
+  const who = by === null || by.trim() === "" ? "a team member" : by.trim();
+  return [
+    `by ${who}`,
+    on === null || on === "" ? "" : on,
+    version === null || version < 1 ? "" : `version ${version}`,
+  ]
+    .filter((part) => part !== "")
+    .join(" · ");
+}
+
 /** "Prepared by Dana Lee on Nov 15, 2026 · version 4"; the parts the records have. */
 export function preparedLine(
   by: string | null,
@@ -130,12 +148,17 @@ export function signOffRereads(status: number): boolean {
  * answer did not come back (0, 5xx) it may have been taken: it is said so, never "Not
  * signed", and the workpaper is read again (`signOffRereads`). */
 export function signOffRefusal(
-  intent: "prepare" | "reopen",
+  intent: "prepare" | "reopen" | "send",
   status: number,
   detail: string,
 ): string {
   if (status === 200) {
     return "";
+  }
+  // Section 3.8: "Sign and send for review" prepares and opens the request in one
+  // transaction: neither, or both. Its refusals are the review's (review-request-model).
+  if (intent === "send") {
+    return reviewRefusal("send", status, detail);
   }
   const said = detail.trim().replace(/[.\s]+$/, "");
   const lead = intent === "prepare" ? "Not signed" : "Not reopened";

@@ -113,6 +113,7 @@ import { EMPTY_SETUP, type SetupState, uniqueKeys } from "./onboarding-model";
 import { PlanMissingButton } from "./plan-missing";
 import type { RecipientLink } from "./portal-model";
 import { RecordDialog } from "./record-dialog";
+import { ReviewNavCount } from "./review-waiting";
 import { TRIAL_TAB } from "./routes";
 import { SetupForm } from "./setup-form";
 import { RegisterPage, ScopePage, SetupMain } from "./setup-view";
@@ -454,6 +455,14 @@ export function WorkspaceView({
                               >
                                 {waiting}
                               </span>
+                            ) : null}
+                            {/* Section 3.8: what waits for the viewer's review. */}
+                            {item.id === "overview" &&
+                            model.selectedProject !== null ? (
+                              <ReviewNavCount
+                                organizationId={model.organization.id}
+                                projectId={model.selectedProject.id}
+                              />
                             ) : null}
                           </a>
                         </li>

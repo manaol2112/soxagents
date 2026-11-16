@@ -6,6 +6,17 @@
  * writes.
  */
 
+import {
+  defaultReviewerOf,
+  type LastReturn,
+  lastReturnOf,
+  type ReviewerOption,
+  type ReviewRequest,
+  reviewersOf,
+  reviewFlowOf,
+  reviewRequestOf,
+} from "./review-request-model.ts";
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CREDENTIAL =
   /(?:api[_-]?key|client[_-]?secret|refresh[_-]?token|access[_-]?token|password\s*[:=]|private[_-]?key)/i;
@@ -152,6 +163,26 @@ export type DesignConclusion = {
   canChoose: boolean;
   design: ConclusionResult | null;
   implementation: ConclusionResult | null;
+  /** The body follows docs/design-workpaper.md section 3.8 (one D&I step: the preparer
+   * sends the workpaper for review): it names the request, or that none stands. A body
+   * from before it is read as before: the preparer prepares, a reviewer signs. */
+  reviewFlow: boolean;
+  /** The review request that stands; null where none does. */
+  reviewRequest: ReviewRequest | null;
+  /** The reviewer's last return to the preparer, with the reason; null where none. */
+  lastReturn: LastReturn | null;
+  /** Who the preparer may send it to, and who is shown but not offered, with why. */
+  reviewers: ReviewerOption[];
+  /** The reviewer the picker starts on, where the server names one. */
+  defaultReviewerId: string | null;
+  /** Who is reading: the body's `viewer_id` where the server sends it, else the session's
+   * own user (load-engagement), so that the reviewer a request names is known without the
+   * review notes' route, and never inferred from `can_sign` (which a hold makes false).
+   * Null where neither is known. */
+  viewerId: string | null;
+  /** The server's word on whether the viewer may change the reviewer or remind them
+   * (`can_manage_request`); null where the body does not carry it. */
+  canManageRequest: boolean | null;
 };
 
 export const VERDICT_LABELS: Record<DesignVerdict, string> = {
@@ -288,7 +319,12 @@ const strings = (value: unknown) =>
     ? value.filter((item): item is string => typeof item === "string")
     : [];
 
-export function parseDesignConclusion(value: unknown): DesignConclusion | null {
+export function parseDesignConclusion(
+  value: unknown,
+  /** The session's own user, where the page knows it: who is reading, unless the body
+   * names them (`viewer_id`). */
+  sessionUserId: string | null = null,
+): DesignConclusion | null {
   if (!isRaw(value) || typeof value.control_id !== "string") {
     return null;
   }
@@ -356,6 +392,21 @@ export function parseDesignConclusion(value: unknown): DesignConclusion | null {
     canChoose: value.can_choose === true,
     design: conclusionResultOf(value.design),
     implementation: conclusionResultOf(value.implementation),
+    reviewFlow: reviewFlowOf(value),
+    reviewRequest: reviewRequestOf(value.review_request),
+    lastReturn: lastReturnOf(value.last_return),
+    reviewers: reviewersOf(value.reviewers),
+    defaultReviewerId: defaultReviewerOf(value.default_reviewer_id),
+    viewerId:
+      typeof value.viewer_id === "string" && UUID.test(value.viewer_id)
+        ? value.viewer_id
+        : sessionUserId !== null && UUID.test(sessionUserId)
+          ? sessionUserId
+          : null,
+    canManageRequest:
+      typeof value.can_manage_request === "boolean"
+        ? value.can_manage_request
+        : null,
   };
 }
 
@@ -831,8 +882,12 @@ export function designConclusionWrite(
     const choice = fields.choice_id ?? "";
     const version = Number(fields.workpaper_version ?? "");
     const note = (fields.note ?? "").trim();
+    // Section 3.8: the request the sign-off ends, where one stands (the server refuses a
+    // stale one). Absent where none stands, as before.
+    const request = fields.request_id ?? "";
     if (
       conclusion === null ||
+      (request !== "" && !UUID.test(request)) ||
       !UUID.test(choice) ||
       !Number.isInteger(version) ||
       version < 1 ||
@@ -849,6 +904,7 @@ export function designConclusionWrite(
         choice_id: choice,
         workpaper_version: version,
         note,
+        ...(request === "" ? {} : { request_id: request }),
       },
       controlId: control,
     };

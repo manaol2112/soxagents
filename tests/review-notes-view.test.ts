@@ -20,7 +20,9 @@ const css = read("apps/web/app/review-notes.css");
 const sheet = read("apps/web/src/design-workpaper-view.tsx");
 const sheetModel = read("apps/web/src/design-workpaper-model.ts");
 const sheetCss = read("apps/web/app/design-workpaper.css");
-const panel = read("apps/web/src/design-conclusion-panel.tsx");
+// Rewritten. Old: the "D&I Conclusion and Review" step's panel. New: section 7's Sign-off,
+// where the reviewer signs (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
+const panel = read("apps/web/src/review-signoff.tsx");
 const globals = read("apps/web/app/globals.css");
 const layout = read("apps/web/app/layout.tsx");
 const makefile = read("Makefile");
@@ -467,11 +469,19 @@ describe("wired in the four places", () => {
     has(body, "} else if (openedAtNotes()) {");
   });
 
-  it("the reviewer's step: how many are open and urgent, with the way to them", () => {
-    has(panel, "<dt>Review notes</dt>");
-    has(panel, "<ReviewNotesLine");
-    has(panel, "href={notesHref(assessmentHref)}");
-    has(component(view, "ReviewNotesLine"), "{openLine(counts)}");
+  // Rewritten. Old: "the reviewer's step": its own read of the notes (ReviewNotesLine,
+  // "3 review notes open · 1 urgent") with a link to All notes. New: section 7's Sign-off
+  // says how many are open and urgent from the workpaper's one read of its notes, opens
+  // the Notes view, and says the urgent ones hold the sign-off (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
+  it("the reviewer's sign-off: how many are open and urgent, with the way to them", () => {
+    has(panel, "<dt>Notes</dt>");
+    has(panel, "notesWords(notes.open, notes.urgent)");
+    has(panel, "onClick={onNotes}");
+    has(panel, "{URGENT_HOLD}");
+    const body = component(sheet, "DesignWorkpaper");
+    has(body, "urgent: reviewNotes.set.counts.urgentOpen");
+    has(body, 'onNotes: () => choose("notes")');
+    assert.equal(/ReviewNotesLine/.test(view), false);
   });
 
   it("runs with the fast tier", () => {

@@ -52,7 +52,7 @@ const STAGES: ReadonlyArray<{ label: string; keys: readonly StepKey[] }> = [
   { label: "Understand", keys: ["understanding", "attributes"] },
   {
     label: "D&I evidence",
-    keys: ["designevidence", "designassessment", "designconclusion"],
+    keys: ["designevidence", "designassessment"],
   },
   { label: "Test", keys: ["testdesign", "oeevidence", "oetesting"] },
   { label: "Conclude", keys: ["conclusion", "review", "workpaper"] },

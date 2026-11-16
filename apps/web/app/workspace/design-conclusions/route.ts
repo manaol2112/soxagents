@@ -12,8 +12,10 @@ const REFUSED: ReadonlySet<number> = new Set([403, 409]);
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** A reviewer's sign-off or reopening of a control's D&I conclusion, back to its step. The
- * page shows success only once the API confirms it. */
+/** A reviewer's sign-off or reopening of a control's D&I conclusion, back to section 7 of
+ * D&I Assessment. The page shows success only once the API confirms it. Section 7 posts
+ * in the background (`x-dc-fetch: 1`) and is answered as JSON, never a redirect; the
+ * sign-off names the review request it ends where one stands (`request_id`, section 3.8). */
 export async function POST(request: Request) {
   const form = await request.formData();
   const fields: Record<string, string> = {};
@@ -77,7 +79,10 @@ export async function POST(request: Request) {
       destination.searchParams.set(param, value);
     }
   }
-  destination.searchParams.set("step", "designconclusion");
+  // The D&I sign-off is in D&I Assessment, section 7 (docs/design-workpaper.md, section
+  // 3.8): a form posted without scripts comes back there.
+  destination.searchParams.set("step", "designassessment");
   destination.searchParams.set("notice", notice);
+  destination.hash = "di-conclusion";
   return NextResponse.redirect(destination, 303);
 }

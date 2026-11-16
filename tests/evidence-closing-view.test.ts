@@ -23,7 +23,10 @@ const list = read("apps/web/src/design-evidence.tsx");
 const findings = read("apps/web/src/evidence-findings-view.tsx");
 const planView = read("apps/web/src/evidence-plan-view.tsx");
 const controls = read("apps/web/src/controls-view.tsx");
-const panel = read("apps/web/src/design-conclusion-panel.tsx");
+// Rewritten. Old: the "D&I Conclusion and Review" step's panel. New: section 7's Sign-off,
+// where the reviewer signs and what holds the sign-off is said (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
+const panel = read("apps/web/src/review-signoff.tsx");
+const sheet = read("apps/web/src/design-workpaper-view.tsx");
 const digestCss = read("apps/web/app/check-digest.css");
 const listCss = read("apps/web/app/design-evidence.css");
 const workflowCss = read("apps/web/app/control-workflow.css");
@@ -465,17 +468,16 @@ describe("the D&I conclusion", () => {
   });
 
   it("draws the card from the model's head: no status, verdict or effect worded here", () => {
-    has(panel, "<div className={`dc-verdict is-@{head.tone}`}>");
-    has(panel, '<h3 id="dc-heading">{head.heading}</h3>');
-    has(panel, "<span className={`dc-status is-@{head.statusTone}`}>");
-    // Rewritten (independent review, 15 November 2026, docs/design-workpaper.md section 3.6, finding 6). Old: `<p
-    // className="dc-verdict-word">{head.word}</p>`. New: the same word, said quietly
-    // where no conclusion is recorded (`is-none`).
-    has(
-      panel,
-      '<p className={`dc-verdict-word@{none ? " is-none" : ""}`}> {head.word} </p>',
+    // Rewritten. Old: the step's own card, drawn from the model's head (`dc-verdict`, its
+    // heading, status, word and effect). New: section 7's head says the conclusion, and
+    // the Sign-off draws from the model's head only what holds the sign-off: the
+    // exception's reasons and what the preparer does next; no card, status or verdict is
+    // worded in it (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
+    assert.equal(
+      /dc-verdict|\{head\.word\}|\{head\.status\}/.test(panel),
+      false,
     );
-    has(panel, '<p className="dc-effect">{head.effect}</p>');
+    has(panel, '<p className="dc-excepted-next">{head.next}</p>');
     has(panel, "{head.next}");
     // What misled is no longer written in the panel at all: the model says it, and only
     // where no exception holds the sign-off.
@@ -511,15 +513,20 @@ describe("the D&I conclusion", () => {
     // Rewritten 15 November 2026 (item 6). Old: the reasons joined into one sentence
     // (`conclusion.outOfDate.join("; ")`), which a reason that names what changed (and
     // holds its own punctuation) no longer reads in. New: one line per reason, as sent.
+    // Rewritten again (independent review, 15 November 2026, docs/design-workpaper.md section 3.6, finding 6). Old:
+    // the last line was always "OE waits until a reviewer signs off again.". New: the
+    // model's (outOfDateNext), which says what to do first where no conclusion that
+    // can be signed stands (a sign-off from before 3.6).
+    // Rewritten again. Old: both in the step's panel (`dc-outdated`). New: each reason on
+    // its own line under section 7's head (OutOfDate), and what to do in the Sign-off
+    // (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
     has(
-      panel,
-      // Rewritten again (independent review, 15 November 2026, docs/design-workpaper.md section 3.6, finding 6). Old:
-      // the last line was always "OE waits until a reviewer signs off again.". New: the
-      // model's (outOfDateNext), which says what to do first where no conclusion that
-      // can be signed stands (a sign-off from before 3.6).
-      '<div className="dc-outdated"> <p>The sign-off no longer holds:</p> <ul> {conclusion.outOfDate.map((reason) => ( <li key={reason}>{reason}</li> ))} </ul> <p>{outOfDateNext(conclusion)}</p> </div>',
+      sheet,
+      '<ul className="dw-stale"> {keyed(reasons, (reason) => reason).map(({ key, item }) => ( <li key={key}>{item}</li> ))} </ul>',
     );
-    assert.equal(/outOfDate\.join|outOfDate\[0\]/.test(panel), false);
+    has(sheet, "<OutOfDate reasons={conclusion.outOfDate} />");
+    has(panel, "The sign-off no longer holds. {outOfDateNext(conclusion)}");
+    assert.equal(/outOfDate\.join|outOfDate\[0\]/.test(panel + sheet), false);
     assert.match(
       rule(workflowCss, ".dc-outdated li"),
       /overflow-wrap: anywhere;/,
