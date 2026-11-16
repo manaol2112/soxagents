@@ -1,6 +1,13 @@
 "use client";
 
-import { type FormEvent, useEffect, useId, useRef, useState } from "react";
+import {
+  type FormEvent,
+  type ReactNode,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
 
 import {
   anotherStands,
@@ -48,6 +55,12 @@ import { useRecordsRefresh } from "./section-editor";
  * - Nothing in the form takes the `disabled` attribute while it has, or may be given,
  *   the focus: a conclusion not offered stays focusable and says why, and after an
  *   answer the focus goes to the refusal or to "Change".
+ *
+ * Lighter (product owner, 16 November 2026: section 7, option A): the form is drawn only
+ * after "Change" (or "Record conclusion" where none is recorded), in place, with Cancel.
+ * "Change" is a text link in the head's quiet line (the caller's `head`, given it), what
+ * the page says after an answer is a status beside it, and a refusal stays shown under
+ * where the form was, so closing the form never takes it away.
  */
 
 /** Whether the page was opened at section 7 (`#di-conclusion`, the link from D&I
@@ -106,6 +119,8 @@ export function ConclusionChoicePanel({
   onRecorded,
   onRefused,
   deficiencyHref = null,
+  head,
+  children,
 }: {
   scope: ChoiceScope;
   /** The preparer's conclusion that stands, as the views last read it. */
@@ -120,12 +135,18 @@ export function ConclusionChoicePanel({
   onRefused: () => void;
   /** Where a design deficiency is logged; null where the page has no link to it. */
   deficiencyHref?: string | null;
+  /** Section 7's head, given "Change" (or "Record conclusion") and the status beside it
+   * to draw in its quiet line. */
+  head: (change: ReactNode) => ReactNode;
+  /** What stands between the head and the form (the results). */
+  children?: ReactNode;
 }) {
   const uid = useId();
   // The conclusion that stands as far as this panel knows: the views' reading, or the
   // one the server just confirmed, until the views read it too.
   const [standing, setStanding] = useState<ConclusionChoice | null>(choice);
-  const [editing, setEditing] = useState(choice === null);
+  // Closed until "Change" or "Record conclusion" is pressed (option A).
+  const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<ChoiceDraft>(() => draftOf(choice));
   const [sending, setSending] = useState(false);
   const [refusal, setRefusal] = useState("");
@@ -316,194 +337,218 @@ export function ConclusionChoicePanel({
   const whyId = `${uid}-why`;
   const shownKind = draft.kind;
 
+  // "Change" in the head's quiet line while the form is closed, and what the page says
+  // after an answer beside it: a status that is always there, so it is heard.
+  const changeLink = (
+    <>
+      {editing ? null : (
+        <>
+          {" · "}
+          <button
+            ref={changeButton}
+            type="button"
+            className="dw-link"
+            onClick={change}
+          >
+            {standing === null ? (
+              "Record conclusion"
+            ) : (
+              <>
+                Change
+                <span className="sr-only"> the conclusion</span>
+              </>
+            )}
+          </button>
+        </>
+      )}
+      <span className="cc-notice" role="status">
+        {editing ? "" : notice}
+      </span>
+    </>
+  );
+
   return (
-    <form
-      ref={form}
-      autoComplete="off"
-      className="cc"
-      noValidate
-      onSubmit={record}
-      aria-busy={sending}
-      aria-label="The preparer's conclusion"
-    >
-      <fieldset className="cc-kinds">
-        <legend>Your conclusion</legend>
-        {CONCLUSION_KINDS.map((kind) => {
-          const off = problems.unavailable[kind];
-          const isStanding = standing?.kind === kind;
-          const wordsId = `${uid}-${kind}-words`;
-          const hintId = `${uid}-${kind}`;
-          // Not offered now, or not being changed: it cannot be chosen (the one that
-          // stands stays shown as chosen), and it says so without the `disabled`
-          // attribute, so it can still be reached and its reason heard.
-          const unavailable =
-            sending || (!editing ? !isStanding : off !== "" && !isStanding);
-          return (
-            <label
-              key={kind}
-              className={`cc-kind${shownKind === kind ? " is-on" : ""}${off !== "" ? " is-off" : ""}${unavailable ? " is-unavailable" : ""}`}
-              data-kind={kind}
+    <>
+      {head(changeLink)}
+      {children}
+      {editing ? (
+        <form
+          ref={form}
+          autoComplete="off"
+          className="cc"
+          noValidate
+          onSubmit={record}
+          aria-busy={sending}
+          aria-label="The preparer's conclusion"
+        >
+          <fieldset className="cc-kinds">
+            <legend>Your conclusion</legend>
+            {CONCLUSION_KINDS.map((kind) => {
+              const off = problems.unavailable[kind];
+              const isStanding = standing?.kind === kind;
+              const wordsId = `${uid}-${kind}-words`;
+              const hintId = `${uid}-${kind}`;
+              // Not offered now, or not being changed: it cannot be chosen (the one that
+              // stands stays shown as chosen), and it says so without the `disabled`
+              // attribute, so it can still be reached and its reason heard.
+              const unavailable =
+                sending || (!editing ? !isStanding : off !== "" && !isStanding);
+              return (
+                <label
+                  key={kind}
+                  className={`cc-kind${shownKind === kind ? " is-on" : ""}${off !== "" ? " is-off" : ""}${unavailable ? " is-unavailable" : ""}`}
+                  data-kind={kind}
+                >
+                  {/* Named by its words alone and described by its hint (or by why it
+                      is not offered): the hint is inside the label for the eye, so the
+                      name is taken from the words only and the hint is not heard
+                      twice. */}
+                  <input
+                    type="radio"
+                    name={`${uid}-kind`}
+                    value={kind}
+                    checked={shownKind === kind}
+                    aria-disabled={unavailable ? "true" : undefined}
+                    aria-labelledby={wordsId}
+                    aria-describedby={hintId}
+                    onClick={(event) => {
+                      if (unavailable) {
+                        event.preventDefault();
+                      }
+                    }}
+                    onChange={() => {
+                      if (!unavailable) {
+                        choose(kind);
+                      }
+                    }}
+                  />
+                  <span className="cc-kind-copy">
+                    <span id={wordsId} className="cc-kind-words">
+                      {CONCLUSION_WORDS[kind]}
+                      {kind === proposal ? (
+                        <span className="cc-proposed">
+                          Proposed by the agent
+                        </span>
+                      ) : null}
+                    </span>
+                    <small id={hintId} className={off !== "" ? "cc-off" : ""}>
+                      {off !== "" ? off : CONCLUSION_HINTS[kind]}
+                    </small>
+                  </span>
+                </label>
+              );
+            })}
+          </fieldset>
+
+          {shownKind === "NOT_EFFECTIVE" ? (
+            <fieldset
+              className="cc-basis"
+              aria-describedby={problems.basis !== "" ? basisHint : undefined}
             >
-              {/* Named by its words alone and described by its hint (or by why it is
-                  not offered): the hint is inside the label for the eye, so the name
-                  is taken from the words only and the hint is not heard twice. */}
-              <input
-                type="radio"
-                name={`${uid}-kind`}
-                value={kind}
-                checked={shownKind === kind}
-                aria-disabled={unavailable ? "true" : undefined}
-                aria-labelledby={wordsId}
-                aria-describedby={hintId}
-                onClick={(event) => {
-                  if (unavailable) {
-                    event.preventDefault();
+              <legend>What is not effective (needed)</legend>
+              <div className="cc-basis-options">
+                {CONCLUSION_BASES.map((basis) => (
+                  <label key={basis} className="cc-basis-option">
+                    <input
+                      type="radio"
+                      name={`${uid}-basis`}
+                      value={basis}
+                      checked={draft.basis === basis}
+                      aria-disabled={sending ? "true" : undefined}
+                      onChange={() => {
+                        if (sending) {
+                          return;
+                        }
+                        basisChosen.current = basis;
+                        setDraft((before) => ({ ...before, basis }));
+                        setUnread(false);
+                      }}
+                    />
+                    <span>{BASIS_WORDS[basis]}</span>
+                  </label>
+                ))}
+              </div>
+              {problems.basis !== "" ? (
+                <small id={basisHint} className="cc-hint">
+                  {problems.basis}
+                </small>
+              ) : null}
+              {!facts.deficiency ? (
+                <small className="cc-hint">
+                  Its sign-off needs the design deficiency logged.
+                  {deficiencyHref !== null ? (
+                    <>
+                      {" "}
+                      <a href={deficiencyHref}>Log a design deficiency</a>
+                    </>
+                  ) : null}
+                </small>
+              ) : null}
+            </fieldset>
+          ) : null}
+
+          {problems.reasonNeeded ? (
+            <div className="cc-reason">
+              <label htmlFor={reasonId}>
+                Reason (needed: {problems.reasonWhy})
+              </label>
+              <textarea
+                id={reasonId}
+                rows={3}
+                value={draft.reason}
+                readOnly={sending}
+                maxLength={REASON_MAX + 200}
+                aria-invalid={
+                  problems.reason !== "" && draft.reason.trim() !== ""
+                }
+                aria-describedby={reasonHint}
+                onChange={(event) => {
+                  const reason = event.currentTarget.value;
+                  // Kept under the conclusion it is typed for, for this session.
+                  if (draft.kind !== null) {
+                    typed.current = { ...typed.current, [draft.kind]: reason };
                   }
-                }}
-                onChange={() => {
-                  if (!unavailable) {
-                    choose(kind);
-                  }
+                  setDraft((before) => ({ ...before, reason }));
+                  setUnread(false);
                 }}
               />
-              <span className="cc-kind-copy">
-                <span id={wordsId} className="cc-kind-words">
-                  {CONCLUSION_WORDS[kind]}
-                  {kind === proposal ? (
-                    <span className="pill tone-ai cc-proposed">
-                      Proposed by the agent
-                    </span>
-                  ) : null}
-                </span>
-                <small id={hintId} className={off !== "" ? "cc-off" : ""}>
-                  {off !== "" ? off : CONCLUSION_HINTS[kind]}
-                </small>
-              </span>
-            </label>
-          );
-        })}
-      </fieldset>
-
-      {editing && shownKind === "NOT_EFFECTIVE" ? (
-        <fieldset
-          className="cc-basis"
-          aria-describedby={problems.basis !== "" ? basisHint : undefined}
-        >
-          <legend>What is not effective (needed)</legend>
-          <div className="cc-basis-options">
-            {CONCLUSION_BASES.map((basis) => (
-              <label key={basis} className="cc-basis-option">
-                <input
-                  type="radio"
-                  name={`${uid}-basis`}
-                  value={basis}
-                  checked={draft.basis === basis}
-                  aria-disabled={sending ? "true" : undefined}
-                  onChange={() => {
-                    if (sending) {
-                      return;
-                    }
-                    basisChosen.current = basis;
-                    setDraft((before) => ({ ...before, basis }));
-                    setUnread(false);
-                  }}
-                />
-                <span>{BASIS_WORDS[basis]}</span>
-              </label>
-            ))}
-          </div>
-          {problems.basis !== "" ? (
-            <small id={basisHint} className="cc-hint">
-              {problems.basis}
-            </small>
+              <small id={reasonHint} className="cc-hint">
+                {problems.reason !== ""
+                  ? problems.reason
+                  : `${draft.reason.trim().length.toLocaleString("en-US")} of ${REASON_MAX.toLocaleString("en-US")} characters.`}
+              </small>
+            </div>
           ) : null}
-          {!facts.deficiency ? (
-            <small className="cc-hint">
-              Its sign-off needs the design deficiency logged.
-              {deficiencyHref !== null ? (
-                <>
-                  {" "}
-                  <a href={deficiencyHref}>Log a design deficiency</a>
-                </>
-              ) : null}
-            </small>
-          ) : null}
-        </fieldset>
-      ) : null}
 
-      {editing && problems.reasonNeeded ? (
-        <div className="cc-reason">
-          <label htmlFor={reasonId}>
-            Reason (needed: {problems.reasonWhy})
-          </label>
-          <textarea
-            id={reasonId}
-            rows={3}
-            value={draft.reason}
-            readOnly={sending}
-            maxLength={REASON_MAX + 200}
-            aria-invalid={problems.reason !== "" && draft.reason.trim() !== ""}
-            aria-describedby={reasonHint}
-            onChange={(event) => {
-              const reason = event.currentTarget.value;
-              // Kept under the conclusion it is typed for, for this session.
-              if (draft.kind !== null) {
-                typed.current = { ...typed.current, [draft.kind]: reason };
-              }
-              setDraft((before) => ({ ...before, reason }));
-              setUnread(false);
-            }}
-          />
-          <small id={reasonHint} className="cc-hint">
-            {problems.reason !== ""
-              ? problems.reason
-              : `${draft.reason.trim().length.toLocaleString("en-US")} of ${REASON_MAX.toLocaleString("en-US")} characters.`}
-          </small>
-        </div>
-      ) : null}
-
-      <div className="cc-actions">
-        {editing ? (
-          <>
+          <div className="cc-actions">
             {/* While the request is out the button keeps the focus it has (it is not
                 given `disabled`): a second press sends nothing (`busy`). */}
             <button
               type="submit"
+              className="dw-ink btn-sm"
               disabled={!recordable}
               aria-disabled={sending ? "true" : undefined}
               aria-describedby={why !== "" ? whyId : undefined}
             >
               {sending ? "Recording…" : "Record conclusion"}
             </button>
-            {standing !== null ? (
-              <button
-                type="button"
-                className="btn-secondary"
-                aria-disabled={sending ? "true" : undefined}
-                onClick={cancel}
-              >
-                Cancel
-              </button>
-            ) : null}
-          </>
-        ) : (
-          <button
-            ref={changeButton}
-            type="button"
-            className="btn-secondary"
-            onClick={change}
-          >
-            Change
-            <span className="sr-only"> the conclusion</span>
-          </button>
-        )}
-        <span id={whyId} className="form-hint cc-why" role="status">
-          {editing ? why : notice}
-        </span>
-      </div>
+            <button
+              type="button"
+              className="dw-link"
+              aria-disabled={sending ? "true" : undefined}
+              onClick={cancel}
+            >
+              Cancel
+            </button>
+            <span id={whyId} className="form-hint cc-why" role="status">
+              {why}
+            </span>
+          </div>
+        </form>
+      ) : null}
       {refusal !== "" ? (
         // The focus is brought here after a refusal, so it is never left on a control
-        // that changed under it.
+        // that changed under it. Outside the form: closing it never takes this away.
         <p
           ref={alertBox}
           className={`cc-refusal${unread ? " is-recorded" : ""}`}
@@ -513,6 +558,6 @@ export function ConclusionChoicePanel({
           {refusal}
         </p>
       ) : null}
-    </form>
+    </>
   );
 }

@@ -442,9 +442,14 @@ describe("where a text section is read", () => {
     // inside the review notes' field (`conclusion`), drawn as it is while the notes are
     // off and with its highlighted words while they are on; the order around it (the
     // text, "Edit conclusion", what is out of date) is unchanged.
+    // Rewritten again (product owner, 16 November 2026: section 7 lighter, option A).
+    // Old: "Edit conclusion" followed by `<OutOfDate>` in the text's block. New: the
+    // text's block ends with "Edit conclusion"; why a sign-off is out of date is quietly
+    // under the conclusion's head (ConclusionHead). The text, in its note field, and
+    // "Edit conclusion" after it are unchanged.
     assert.match(
       sheet,
-      /\) : conclusion\.text === "" \? \([\s\S]{0,400}\) : \(\s*<NoteField field=\{CONCLUSION\} text=\{conclusion\.text\} rich>\s*<RichText text=\{conclusion\.text\} \/>\s*<\/NoteField>\s*\)\}\s*\{concluding === null \? \(\s*<EditConclusion[\s\S]{0,160}\) : null\}\s*<OutOfDate reasons=\{conclusion\.outOfDate\} \/>/,
+      /\) : conclusion\.text === "" \? \([\s\S]{0,400}\) : \(\s*<NoteField field=\{CONCLUSION\} text=\{conclusion\.text\} rich>\s*<RichText text=\{conclusion\.text\} \/>\s*<\/NoteField>\s*\)\}\s*\{concluding === null \? \(\s*<EditConclusion[\s\S]{0,160}\) : null\}\s*<\/div>/,
     );
     assert.equal(
       /Read the conclusion|RichText text=\{conclusion/.test(

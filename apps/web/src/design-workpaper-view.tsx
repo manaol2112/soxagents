@@ -43,7 +43,6 @@ import {
   openMatters,
   type DesignWorkpaper as Paper,
   PROPOSED_BY_AGENT,
-  PROPOSED_REVIEW,
   parseDesignWorkpaper,
   previewUrl,
   type RefChip,
@@ -1722,94 +1721,151 @@ function Verdict({
   );
 }
 
-/** Section 7's head: the agent's proposal and its reasons until the preparer records a
- * conclusion; then the preparer's conclusion, who recorded it, and what the agent
- * proposed; signed or out of date where the server says so (sections 3.5 and 3.6). */
+/** Section 7's head (product owner, 16 November 2026: section 7 lighter, option A): the
+ * conclusion in the display serif, or "No conclusion recorded yet" in quiet text, and
+ * under it one quiet line: who recorded it and whether the agent proposed the same (or,
+ * before any choice, what the agent proposes), signed or out of date where the server
+ * says so (sections 3.5 and 3.6), and "Change" (`change`, the choice's own link, where
+ * the preparer may record it). Why a sign-off is out of date, quietly under it. */
 function ConclusionHead({
   paper,
   conclusion,
+  change,
 }: {
   paper: Paper;
   conclusion: ConclusionView;
+  change: ReactNode;
 }) {
-  const { proposedConclusion: proposal, proposedReasons: reasons } =
-    paper.conclusion;
+  const proposal = paper.conclusion.proposedConclusion;
   const choice = paper.conclusion.choice;
-  const pill = conclusion.signed
-    ? conclusion.standing
-    : conclusion.stale
-      ? conclusion.standing
-      : choice !== null
-        ? recordedLine(choice)
-        : proposal !== null
-          ? PROPOSED_REVIEW
-          : conclusion.standing;
+  const named =
+    choice !== null || conclusion.signed
+      ? conclusion.verdict !== ""
+        ? conclusion.verdict
+        : conclusion.headline
+      : "";
+  const said: string[] = [];
+  if (choice !== null) {
+    said.push(recordedLine(choice));
+    if (proposal !== null) {
+      said.push(
+        choice.kind === proposal
+          ? "the agent proposed the same"
+          : `the agent proposed “${CONCLUSION_WORDS[proposal]}”`,
+      );
+    }
+  } else if (proposal !== null) {
+    said.push(
+      `Proposed by the agent: ${CONCLUSION_WORDS[proposal]}`,
+      "not recorded yet",
+    );
+  } else if (!conclusion.signed) {
+    said.push(
+      conclusion.verdict !== ""
+        ? `Proposed: ${conclusion.verdict}`
+        : "Not recorded yet",
+    );
+  }
+  // Signed, or out of date: in the model's words, in the same line.
+  if (conclusion.signed || conclusion.stale) {
+    said.push(conclusion.standing);
+  }
   return (
-    <div className={`dw-verdict dw-concl-head is-${conclusion.tone}`}>
-      <small>
-        {conclusion.signed
-          ? "Signed conclusion"
-          : choice !== null
-            ? "The preparer's conclusion"
-            : proposal !== null
-              ? "The agent's proposal"
-              : "Design and implementation"}
-      </small>
-      <strong>
-        {conclusion.verdict !== "" ? conclusion.verdict : conclusion.headline}
-      </strong>
-      <span className={`pill tone-${conclusion.tone}`}>
-        {pill === PROPOSED_REVIEW || pill === PROPOSED_BY_AGENT ? (
-          <UiIcon name="sparkles" size={11} />
-        ) : null}
-        {pill}
-      </span>
+    <div className="dw-concl-head">
+      <small>Design and implementation</small>
+      {named !== "" ? (
+        <strong>{named}</strong>
+      ) : (
+        <strong className="is-none">No conclusion recorded yet</strong>
+      )}
+      <p className="dw-concl-meta">
+        {said.join(" · ")}
+        {change}
+      </p>
       {choice !== null && choice.basis !== null ? (
-        <p className="dw-concl-line">
-          <b>Not effective in:</b> {BASIS_WORDS[choice.basis]}
+        <p className="dw-concl-meta">
+          Not effective in: {BASIS_WORDS[choice.basis]}
         </p>
       ) : null}
       {choice !== null && choice.reason !== "" ? (
-        <p className="dw-concl-line">
-          <b>Reason.</b> {choice.reason}
-        </p>
+        <p className="dw-concl-meta">Reason: {choice.reason}</p>
       ) : null}
-      {proposal !== null && reasons.length > 0 ? (
-        <div className="dw-concl-why">
-          {choice !== null ? (
-            <p>
-              {choice.kind === proposal
-                ? "The agent proposed the same, because:"
-                : `The agent proposed “${CONCLUSION_WORDS[proposal]}”, because:`}
-            </p>
-          ) : null}
-          <ul aria-label="Why the agent proposes it">
-            {keyed(reasons, (reason) => reason).map(({ key, item }) => (
-              <li key={key}>{item}</li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
+      <OutOfDate reasons={conclusion.outOfDate} />
     </div>
   );
 }
 
-/** The design and the implementation result side by side (section 3.6). Nothing where
- * the server sends neither. */
-function Results({ paper }: { paper: Paper }) {
+/** The two results' marks: settled, exceptions, open. Words carry the meaning; the mark
+ * is for the eye. */
+const RESULT_MARKS: Readonly<Record<string, string>> = {
+  info: "✓",
+  warning: "!",
+  neutral: "–",
+};
+
+/** The design and the implementation result on one line (section 3.6; option A), each a
+ * mark, its name and its words, and "Why" at the right, which shows the agent's reasons
+ * and the results' sentences and open letters as a short quiet list. Nothing where the
+ * server sends neither; no "Why" on paper (`why`). */
+function Results({ paper, why }: { paper: Paper; why: boolean }) {
+  const uid = useId();
+  const [open, setOpen] = useState(false);
   if (paper.design === null && paper.implementation === null) {
     return null;
   }
+  const boxes = resultBoxes(paper);
+  const reasons = paper.conclusion.proposedReasons;
+  const more = boxes
+    .map((box) => ({
+      label: box.label,
+      said: [
+        reasons.includes(box.sentence) ? "" : box.sentence,
+        box.open === "" ? "" : `${box.open}.`,
+      ]
+        .filter((part) => part !== "")
+        .join(" "),
+    }))
+    .filter((item) => item.said !== "");
+  const any = why && (reasons.length > 0 || more.length > 0);
   return (
     <div className="dw-results">
-      {resultBoxes(paper).map((box) => (
-        <div key={box.label} className={`dw-result is-${box.tone}`}>
-          <small>{box.label}</small>
-          <strong>{box.words}</strong>
-          {box.sentence !== "" ? <p>{box.sentence}</p> : null}
-          {box.open !== "" ? <p className="dw-quiet">{box.open}</p> : null}
-        </div>
-      ))}
+      <ul className="dw-results-line" aria-label="Results">
+        {boxes.map((box) => (
+          <li key={box.label} className={`dw-result is-${box.tone}`}>
+            <span className="dw-result-mark" aria-hidden="true">
+              {RESULT_MARKS[box.tone] ?? "–"}
+            </span>
+            <b>{box.label}</b>{" "}
+            <span className="dw-result-words">
+              {box.words.charAt(0).toLowerCase() + box.words.slice(1)}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {any ? (
+        <button
+          type="button"
+          className="dw-link dw-why-toggle"
+          aria-expanded={open}
+          aria-controls={`${uid}-why`}
+          onClick={() => setOpen((was) => !was)}
+        >
+          Why
+          <span className="sr-only"> the agent proposes it</span>
+        </button>
+      ) : null}
+      {any ? (
+        <ul id={`${uid}-why`} className="dw-why" hidden={!open}>
+          {keyed(reasons, (reason) => reason).map(({ key, item }) => (
+            <li key={key}>{item}</li>
+          ))}
+          {more.map((item) => (
+            <li key={item.label}>
+              <b>{item.label}.</b> {item.said}
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </div>
   );
 }
@@ -1857,19 +1913,33 @@ function SignOffOf({
   );
 }
 
-/** The choice of the conclusion where the preparer may record it (the editable draft:
- * the server's `can_edit`, the same rule as its `can_choose`); on paper, and for anyone
- * else, nothing more than the head says. The way to a design deficiency, where the
- * conclusion depends on one. */
+/** Section 7's top: the head, the results (`children`), and the choice where the
+ * preparer may record it (the editable draft: the server's `can_edit`, the same rule as
+ * its `can_choose`): "Change" in the head's line, the form in place under the results.
+ * On paper, and for anyone else, the head and the results only. The way to a design
+ * deficiency, where the conclusion depends on one, quietly under the results. */
 function ConclusionChoiceOf({
   paper,
+  conclusion,
   actions,
+  children,
 }: {
   paper: Paper;
+  conclusion: ConclusionView;
   actions: Actions | null;
+  children: ReactNode;
 }) {
+  const head = (change: ReactNode) => (
+    <ConclusionHead paper={paper} conclusion={conclusion} change={change} />
+  );
   if (actions === null) {
-    return null;
+    // On paper: nothing to choose.
+    return (
+      <>
+        {head(null)}
+        {children}
+      </>
+    );
   }
   const facts = choiceFactsOf(paper);
   const choice = paper.conclusion.choice;
@@ -1878,45 +1948,47 @@ function ConclusionChoiceOf({
     choice?.kind ?? paper.conclusion.proposedConclusion,
   );
   const scope = actions.choice?.scope ?? null;
-  return (
+  const deficiency = wanted ? (
+    <p className="dw-concl-deficiency">
+      {actions.deficiencyHref !== null ? (
+        <>
+          The conclusion follows the deficiency log.{" "}
+          <a href={actions.deficiencyHref}>Log a design deficiency</a>
+        </>
+      ) : (
+        "The conclusion follows the deficiency log: log a design deficiency in Reports, under Deficiencies."
+      )}
+    </p>
+  ) : null;
+  return paper.canEdit && scope !== null && actions.choice !== null ? (
+    <ConclusionChoicePanel
+      // Another workpaper is another panel.
+      key={paper.workpaper?.id ?? ""}
+      scope={scope}
+      choice={choice}
+      proposal={paper.conclusion.proposedConclusion}
+      facts={facts}
+      onRecorded={actions.choice.onRecorded}
+      onRefused={actions.choice.onRefused}
+      deficiencyHref={actions.deficiencyHref}
+      head={head}
+    >
+      {children}
+      {deficiency}
+    </ConclusionChoicePanel>
+  ) : (
     <>
-      {paper.canEdit && scope !== null && actions.choice !== null ? (
-        <ConclusionChoicePanel
-          // Another workpaper is another panel.
-          key={paper.workpaper?.id ?? ""}
-          scope={scope}
-          choice={choice}
-          proposal={paper.conclusion.proposedConclusion}
-          facts={facts}
-          onRecorded={actions.choice.onRecorded}
-          onRefused={actions.choice.onRefused}
-          deficiencyHref={actions.deficiencyHref}
-        />
-      ) : choice === null ? (
-        <p className="dw-quiet dw-concl-none">
-          No conclusion is recorded yet. The preparer records it here while the
-          workpaper is a draft.
-        </p>
-      ) : null}
-      {wanted ? (
-        <p className="dw-concl-deficiency">
-          {actions.deficiencyHref !== null ? (
-            <>
-              The conclusion follows the deficiency log.{" "}
-              <a href={actions.deficiencyHref}>Log a design deficiency</a>
-            </>
-          ) : (
-            "The conclusion follows the deficiency log: log a design deficiency in Reports, under Deficiencies."
-          )}
-        </p>
-      ) : null}
+      {head(null)}
+      {children}
+      {deficiency}
     </>
   );
 }
 
 /** "Edit conclusion": the same in-place editor as the link on section 7's heading, as a
- * button in the card (section 3.5). Off while another editor is open, while the page's
- * records are behind a save, and while the working copies are read. */
+ * quiet text link under the text (section 3.5; option A). Off while another editor is
+ * open, while the page's records are behind a save, and while the working copies are
+ * read. */
 function EditConclusion({
   actions,
   editable,
@@ -1930,10 +2002,10 @@ function EditConclusion({
   }
   const copied = actions?.copied.has("conclusion") === true;
   return (
-    <div className="dw-concl-edit">
+    <p className="dw-concl-edit">
       <button
         type="button"
-        className="btn-secondary btn-sm"
+        className="dw-link"
         disabled={
           actions?.editing != null ||
           actions?.behind === true ||
@@ -1944,7 +2016,7 @@ function EditConclusion({
         {copied ? CONTINUE_EDITING : "Edit conclusion"}
         {copied ? <span className="sr-only"> the conclusion</span> : null}
       </button>
-    </div>
+    </p>
   );
 }
 
@@ -2578,14 +2650,19 @@ function DocumentSheet({
           />
         }
       >
-        {/* One card (docs/design-workpaper.md, sections 3.5 and 3.6): the agent's
-            proposal or the preparer's conclusion, the design and the implementation
-            results, the choice, the way to a design deficiency, then the text with its
-            one editor, and the sign-off. */}
+        {/* On the plain sheet, top to bottom (docs/design-workpaper.md, sections 3.5 to
+            3.7; product owner, 16 November 2026: section 7 lighter, option A): the
+            conclusion and its one quiet line, the two results, the choice in place
+            after "Change", the way to a design deficiency, then the text with its one
+            editor, and the sign-off. */}
         <div className="dw-concl">
-          <ConclusionHead paper={paper} conclusion={conclusion} />
-          <Results paper={paper} />
-          <ConclusionChoiceOf paper={paper} actions={actions} />
+          <ConclusionChoiceOf
+            paper={paper}
+            conclusion={conclusion}
+            actions={actions}
+          >
+            <Results paper={paper} why={actions !== null} />
+          </ConclusionChoiceOf>
           <div className="dw-concl-text">
             {concluding !== null ? (
               <SectionEditorPanel {...concluding} />
@@ -2605,7 +2682,6 @@ function DocumentSheet({
                 editable={editable.has("conclusion")}
               />
             ) : null}
-            <OutOfDate reasons={conclusion.outOfDate} />
           </div>
           <SignOffOf paper={paper} actions={actions} head={head} />
         </div>

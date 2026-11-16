@@ -734,85 +734,24 @@ button.dw-edit:focus-visible:not(:disabled) {
   color: var(--text-secondary);
 }
 
-/* Section 7 is one card, top to bottom (docs/design-workpaper.md, sections 3.5 and 3.6):
-   the proposal or the preparer's conclusion, the design and implementation results, the
-   choice, then the text with its editor. Calm: one border, quiet dividers. */
+/* Section 7 on the plain sheet, top to bottom (docs/design-workpaper.md, sections 3.5 to
+   3.7; product owner, 16 November 2026: section 7 lighter, option A): the conclusion and
+   one quiet line, the two results on one line, the choice in place after "Change", then
+   a thin rule, the text, a thin rule and the sign-off. No card, no tinted block, no
+   coloured bar, no pill: ink, greys and one thin rule between the parts. */
 .dw-concl {
   display: grid;
+  gap: 0.75rem;
   margin-top: 0.75rem;
-  border: 1px solid var(--text-strong);
 }
 
-.dw-concl > * + * {
-  border-top: 1px solid var(--border);
-}
-
-.dw-concl .dw-verdict {
-  background: var(--surface-muted);
-  border: 0;
-  border-left: 4px solid var(--dw-c, var(--border-strong));
-  border-radius: 0;
-}
-
-.dw-concl .dw-verdict strong {
-  font-family: var(--font-display);
-  font-size: var(--fs-xl);
-  font-weight: 600;
-}
-
-.dw-concl-line,
-.dw-concl-why {
-  color: var(--text-secondary);
-  font-size: var(--fs-sm);
-  overflow-wrap: anywhere;
-}
-
-.dw-concl-line b {
-  color: var(--text-strong);
-  font-weight: 600;
-}
-
-.dw-concl-why ul {
-  margin: 0.125rem 0 0;
-  padding-left: 1.125rem;
-}
-
-.dw-concl-why li + li {
-  margin-top: 0.125rem;
-}
-
-/* The design and the implementation result, side by side. */
-.dw-results {
+.dw-concl-head {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.625rem;
-  padding: 0.75rem 1rem;
-}
-
-.dw-result {
-  display: grid;
-  gap: 0.25rem;
-  align-content: start;
+  gap: 0.125rem;
   min-width: 0;
-  padding: 0.5rem 0.75rem;
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--dw-c, var(--border-strong));
-  border-radius: var(--radius);
 }
 
-.dw-result.is-info {
-  --dw-c: var(--info);
-}
-
-.dw-result.is-warning {
-  --dw-c: var(--warning);
-}
-
-.dw-result.is-neutral {
-  --dw-c: var(--neutral);
-}
-
-.dw-result small {
+.dw-concl-head small {
   color: var(--text-tertiary);
   font-size: var(--fs-2xs);
   font-weight: 650;
@@ -820,34 +759,206 @@ button.dw-edit:focus-visible:not(:disabled) {
   text-transform: uppercase;
 }
 
-.dw-result strong {
+.dw-concl-head strong {
   color: var(--text-strong);
-  font-size: var(--fs-sm);
-  font-weight: 650;
+  font-family: var(--font-display);
+  font-size: var(--fs-title);
+  font-weight: 600;
+  line-height: 1.25;
 }
 
-.dw-result p {
+.dw-concl-head strong.is-none {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xl);
+  font-weight: 500;
+}
+
+.dw-concl-meta {
+  margin-top: 0.125rem;
   color: var(--text-secondary);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
   overflow-wrap: anywhere;
 }
 
-.dw-concl-none,
-.dw-concl-deficiency {
-  padding: 0.625rem 1rem;
+.dw-concl-head .dw-stale {
+  margin-top: 0.25rem;
+  color: var(--text-secondary);
+}
+
+button.dw-link {
+  /* A quiet text link: ink, underlined in grey; "Change", "Why", "Edit conclusion",
+     "Cancel", "Reopen to change". */
+  display: inline;
+  width: auto;
+  height: auto;
+  padding: 0;
+  color: var(--text-strong);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  font: inherit;
+  font-weight: 600;
+  line-height: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+  white-space: normal;
+  transition: text-decoration-color 120ms ease;
+}
+
+button.dw-link:hover {
+  color: var(--text-strong);
+  background: transparent;
+  border: 0;
+  text-decoration-color: currentcolor;
+}
+
+button.dw-link:disabled,
+button.dw-link[aria-disabled="true"] {
+  color: var(--text-tertiary);
+  text-decoration: none;
+  cursor: default;
+}
+
+/* The one dark button of an area: "Sign as preparer", "Record conclusion", "Reopen". */
+button.dw-ink {
+  color: var(--surface);
+  background: var(--text-strong);
+  border-color: var(--text-strong);
+  box-shadow: none;
+}
+
+button.dw-ink:hover {
+  color: var(--surface);
+  background: color-mix(in srgb, var(--text-strong) 86%, var(--surface));
+  border-color: var(--text-strong);
+}
+
+button.dw-ink:disabled,
+button.dw-ink[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* The design and the implementation result on one line; "Why" at its right. */
+.dw-results {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem 1rem;
+  align-items: baseline;
+}
+
+.dw-results-line {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  gap: 0.375rem 1.75rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dw-result {
+  min-width: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-base);
+}
+
+.dw-result b {
+  font-weight: 650;
+}
+
+.dw-result-words {
+  color: var(--text-secondary);
+}
+
+.dw-result-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  margin-right: 0.375rem;
+  color: var(--text-tertiary);
+  border: 1.5px solid currentcolor;
+  border-radius: 50%;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+  vertical-align: -2px;
+}
+
+.dw-result.is-info .dw-result-mark {
+  color: var(--text-strong);
+}
+
+button.dw-why-toggle {
+  margin-left: auto;
+  color: var(--text-secondary);
   font-size: var(--fs-sm);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+button.dw-why-toggle::before {
+  display: inline-block;
+  margin-right: 0.25rem;
+  content: "›";
+}
+
+button.dw-why-toggle[aria-expanded="true"]::before {
+  transform: rotate(90deg);
+}
+
+button.dw-why-toggle:hover {
+  color: var(--text-strong);
+  text-decoration: underline;
+}
+
+.dw-why {
+  flex: 1 0 100%;
+  margin: 0;
+  padding-left: 1.125rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.dw-why[hidden] {
+  display: none;
+}
+
+.dw-why li + li {
+  margin-top: 0.125rem;
+}
+
+.dw-why b {
+  color: var(--text-strong);
+  font-weight: 600;
 }
 
 .dw-concl-deficiency {
   color: var(--text-secondary);
+  font-size: var(--fs-sm);
 }
 
+.dw-concl-deficiency a {
+  color: var(--text-strong);
+  font-weight: 600;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+}
+
+/* The text, between two thin rules. */
 .dw-concl-text {
-  padding: 0.875rem 1rem;
+  padding-top: 0.875rem;
+  border-top: 1px solid var(--border);
 }
 
 .dw-concl-edit {
-  margin-top: 0.625rem;
+  margin-top: 0.5rem;
+  font-size: var(--fs-sm);
 }
 
 /* Under an attribute's result: how it is shown (section 3.6). */
@@ -858,11 +969,12 @@ button.dw-edit:focus-visible:not(:disabled) {
   font-size: var(--fs-2xs);
 }
 
-/* The preparer's choice of the conclusion (section 3.6). */
+/* The preparer's choice of the conclusion (section 3.6), in place after "Change": a plain
+   radio list with quiet hints, no tinted selected row. */
 .cc {
   display: grid;
-  gap: 0.75rem;
-  padding: 0.875rem 1rem;
+  gap: 0.875rem;
+  padding: 0.25rem 0 0.125rem;
 }
 
 .cc fieldset {
@@ -875,37 +987,29 @@ button.dw-edit:focus-visible:not(:disabled) {
 .cc legend {
   margin-bottom: 0.375rem;
   padding: 0;
-  color: var(--text-strong);
-  font-size: var(--fs-sm);
+  color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
   font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .cc-kinds {
   display: grid;
-  gap: 0.25rem;
+  gap: 0.125rem;
 }
 
 .cc-kind {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  gap: 0.5rem;
+  gap: 0.625rem;
   align-items: start;
-  padding: 0.375rem 0.5rem;
+  padding: 0.3125rem 0;
   border: 1px solid transparent;
-  border-radius: var(--radius);
   cursor: pointer;
   transition:
     background-color 120ms ease,
     border-color 120ms ease;
-}
-
-.cc-kind:hover:not(.is-off, .is-unavailable) {
-  background: var(--surface-muted);
-}
-
-.cc-kind.is-on {
-  background: var(--accent-soft);
-  border-color: var(--accent);
 }
 
 /* Not offered now, or not being changed: it stays in reach (never `disabled`), and reads
@@ -921,11 +1025,12 @@ button.dw-edit:focus-visible:not(:disabled) {
 
 .cc-kind input {
   margin-top: 0.2rem;
+  accent-color: var(--text-strong);
 }
 
 .cc-kind-copy {
   display: grid;
-  gap: 0.125rem;
+  gap: 0.0625rem;
   min-width: 0;
 }
 
@@ -933,10 +1038,14 @@ button.dw-edit:focus-visible:not(:disabled) {
   display: flex;
   flex-wrap: wrap;
   gap: 0.25rem 0.5rem;
-  align-items: center;
+  align-items: baseline;
   color: var(--text-strong);
-  font-size: var(--fs-sm);
-  font-weight: 600;
+  font-size: var(--fs-base);
+  font-weight: 500;
+}
+
+.cc-kind.is-on .cc-kind-words {
+  font-weight: 650;
 }
 
 .cc-kind.is-off .cc-kind-words {
@@ -945,19 +1054,19 @@ button.dw-edit:focus-visible:not(:disabled) {
 
 .cc-kind small,
 .cc-hint {
-  color: var(--text-secondary);
+  color: var(--text-tertiary);
   font-size: var(--fs-xs);
   overflow-wrap: anywhere;
 }
 
-.cc-kind small.cc-off {
+.cc-proposed {
   color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 500;
 }
 
-.cc-proposed {
-  height: auto;
-  min-height: 18px;
-  font-size: var(--fs-2xs);
+.cc-proposed::before {
+  content: "· ";
 }
 
 .cc-basis {
@@ -977,6 +1086,10 @@ button.dw-edit:focus-visible:not(:disabled) {
   align-items: center;
   font-size: var(--fs-sm);
   cursor: pointer;
+}
+
+.cc-basis-option input {
+  accent-color: var(--text-strong);
 }
 
 .cc-reason {
@@ -1003,22 +1116,26 @@ button.dw-edit:focus-visible:not(:disabled) {
 .cc-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem 0.75rem;
+  gap: 0.5rem 1rem;
   align-items: center;
+  font-size: var(--fs-sm);
 }
 
 .cc-why {
   min-width: 0;
+  color: var(--text-tertiary);
   overflow-wrap: anywhere;
 }
 
+/* What the page says after an answer, beside "Change". */
+.cc-notice:not(:empty) {
+  margin-left: 0.5rem;
+  color: var(--text-tertiary);
+}
+
 .cc-refusal {
-  padding: 0.5rem 0.75rem;
-  color: var(--text);
+  color: var(--danger);
   font-size: var(--fs-sm);
-  background: var(--danger-soft);
-  border: 1px solid var(--danger-border);
-  border-radius: var(--radius);
   overflow-wrap: anywhere;
 }
 
@@ -1029,8 +1146,7 @@ button.dw-edit:focus-visible:not(:disabled) {
 
 /* Recorded, though the page could not read the answer: said plainly, not as a refusal. */
 .cc-refusal.is-recorded {
-  background: var(--surface-muted);
-  border-color: var(--border);
+  color: var(--text-secondary);
 }
 
 /* The way to the document's section 7, from the Matrix and the Evidence view. */
@@ -1114,10 +1230,6 @@ button.dw-to-concl {
   .dw-concl,
   .dw-legend,
   .dw-sign {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .dw-results {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -2567,6 +2679,7 @@ button.se-tool:focus-visible:not(:disabled) {
   }
 
   .cc-kind,
+  button.dw-link,
   button.dw-tab,
   button.dw-ref,
   button.dw-cell,
@@ -2708,40 +2821,65 @@ button.se-tool:focus-visible:not(:disabled) {
   }
 }
 
-/* The preparer's sign-off at the end of section 7 (docs/design-workpaper.md, 3.7): a
-   row of the conclusion card, padded as its other rows are. */
+/* The preparer's sign-off at the end of section 7 (docs/design-workpaper.md, 3.7; option
+   A): one row under a thin rule, the heading and what is attested on the left, the dark
+   button or a quiet link on the right. */
 
 .dw-concl > .ps {
-  padding: 0.875rem 1rem 1rem;
+  padding-top: 0.875rem;
+  border-top: 1px solid var(--border);
 }
 
 .ps h6 {
-  margin: 0 0 0.5rem;
-  color: var(--text-secondary);
+  margin: 0 0 0.125rem;
+  color: var(--text-tertiary);
   font-size: var(--fs-2xs);
-  font-weight: 700;
-  letter-spacing: 0.07em;
+  font-weight: 650;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
-.ps-signed .ps-row {
+.ps-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem 1rem;
+  gap: 0.5rem 1.5rem;
   align-items: center;
   justify-content: space-between;
+}
+
+.ps-copy {
+  flex: 1 1 18rem;
+  min-width: 0;
+}
+
+.ps-row > button {
+  flex: none;
+}
+
+.ps-row > button.dw-link {
+  font-size: var(--fs-sm);
 }
 
 .ps-attest,
 .ps-line {
   margin: 0;
-  color: var(--text-strong);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
 }
 
 .ps-form {
   display: grid;
   gap: 0.375rem;
+}
+
+.ps-signed .ps-form {
   margin-top: 0.625rem;
+}
+
+.ps-note {
+  display: grid;
+  gap: 0.25rem;
+  margin-top: 0.25rem;
 }
 
 .ps-form label {
@@ -2757,23 +2895,29 @@ button.se-tool:focus-visible:not(:disabled) {
 }
 
 .ps-needs {
-  margin: 0.25rem 0 0;
+  margin: 0.125rem 0 0;
   padding-left: 1.1rem;
-  color: var(--text-secondary);
+  color: var(--text-tertiary);
   font-size: var(--fs-sm);
+}
+
+.ps-add-note {
+  font-size: var(--fs-sm);
+}
+
+.ps-add-note button.dw-link {
+  color: var(--text-secondary);
+  font-weight: 500;
 }
 
 .ps-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem;
+  gap: 0.5rem 1rem;
+  align-items: center;
   justify-content: flex-end;
   margin-top: 0.25rem;
-}
-
-.ps-actions [aria-disabled="true"] {
-  cursor: not-allowed;
-  opacity: 0.55;
+  font-size: var(--fs-sm);
 }
 
 .ps-refusal {
@@ -2781,4 +2925,3 @@ button.se-tool:focus-visible:not(:disabled) {
   color: var(--danger);
   font-size: var(--fs-sm);
 }
-

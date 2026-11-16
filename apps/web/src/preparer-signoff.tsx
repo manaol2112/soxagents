@@ -44,6 +44,12 @@ async function send(
  * once signed, who and when, and "Reopen to change" with its reason. Each press is the
  * existing prepare or reopen; it reads as done only after the server confirms, and the
  * page then reads the workpaper and its records again.
+ *
+ * One row (product owner, 16 November 2026: section 7 lighter, option A): the heading and
+ * what is attested on the left, "Sign as preparer" on the right; what it still needs only
+ * while it needs something, and the note for the reviewer only once asked for ("Add a
+ * note for the reviewer"). Once signed: who and which version on the left, "Reopen to
+ * change" as a quiet link on the right.
  */
 export function PreparerSignOff({
   ids,
@@ -67,6 +73,8 @@ export function PreparerSignOff({
   const uid = useId();
   const [text, setText] = useState("");
   const [reopening, setReopening] = useState(false);
+  // The optional note's box, drawn once asked for.
+  const [noting, setNoting] = useState(false);
   const [sending, setSending] = useState(false);
   const [refusal, setRefusal] = useState("");
   const busy = useRef(false);
@@ -99,16 +107,22 @@ export function PreparerSignOff({
   if (facts.status === "PREPARED") {
     return (
       <section className="ps ps-signed" aria-labelledby={`${uid}-h`}>
-        <h6 id={`${uid}-h`}>Preparer's sign-off</h6>
         <div className="ps-row">
-          <p className="ps-line">
-            {preparedLine(prepared.by, prepared.on, prepared.version)}
-          </p>
+          <div className="ps-copy">
+            <h6 id={`${uid}-h`}>Preparer's sign-off</h6>
+            <p className="ps-line">
+              {preparedLine(prepared.by, prepared.on, prepared.version)}
+            </p>
+          </div>
           {mayAct && !reopening ? (
             <button
               type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => setReopening(true)}
+              className="dw-link"
+              onClick={() => {
+                setReopening(true);
+                // The note's box is the sign-off's: it opens again only when asked.
+                setNoting(false);
+              }}
             >
               {REOPEN_TO_CHANGE}
             </button>
@@ -136,7 +150,7 @@ export function PreparerSignOff({
               <div className="ps-actions">
                 <button
                   type="button"
-                  className="btn btn-secondary btn-sm"
+                  className="dw-link"
                   disabled={sending}
                   onClick={() => {
                     setReopening(false);
@@ -148,7 +162,7 @@ export function PreparerSignOff({
                 </button>
                 <button
                   type="submit"
-                  className="btn btn-sm"
+                  className="dw-ink btn-sm"
                   disabled={sending || text.trim().length < 3}
                 >
                   {sending ? "Reopening…" : "Reopen"}
@@ -168,15 +182,16 @@ export function PreparerSignOff({
   if (facts.status !== "DRAFT" || !mayAct) {
     return (
       <section className="ps" aria-labelledby={`${uid}-h`}>
-        <h6 id={`${uid}-h`}>Preparer's sign-off</h6>
-        <p className="ps-line dw-quiet">Not signed by the preparer yet.</p>
+        <div className="ps-copy">
+          <h6 id={`${uid}-h`}>Preparer's sign-off</h6>
+          <p className="ps-line">Not signed by the preparer yet.</p>
+        </div>
       </section>
     );
   }
   const ready = problems.length === 0;
   return (
     <section className="ps" aria-labelledby={`${uid}-h`}>
-      <h6 id={`${uid}-h`}>Preparer's sign-off</h6>
       <form
         autoComplete="off"
         className="ps-form"
@@ -188,16 +203,20 @@ export function PreparerSignOff({
           }
         }}
       >
-        <p className="ps-attest">{ATTESTATION}</p>
-        <label htmlFor={`${uid}-n`}>{NOTE_LABEL}</label>
-        <textarea
-          id={`${uid}-n`}
-          rows={2}
-          maxLength={500}
-          value={text}
-          disabled={sending}
-          onChange={(event) => setText(event.currentTarget.value)}
-        />
+        <div className="ps-row">
+          <div className="ps-copy">
+            <h6 id={`${uid}-h`}>Preparer's sign-off</h6>
+            <p className="ps-attest">{ATTESTATION}</p>
+          </div>
+          <button
+            type="submit"
+            className="dw-ink btn-sm"
+            aria-disabled={!ready || sending}
+            aria-describedby={problems.length > 0 ? `${uid}-needs` : undefined}
+          >
+            {sending ? "Signing…" : SIGN_AS_PREPARER}
+          </button>
+        </div>
         {problems.length > 0 ? (
           <ul className="ps-needs" id={`${uid}-needs`}>
             {problems.map((problem) => (
@@ -205,16 +224,34 @@ export function PreparerSignOff({
             ))}
           </ul>
         ) : null}
-        <div className="ps-actions">
-          <button
-            type="submit"
-            className="btn btn-sm"
-            aria-disabled={!ready || sending}
-            aria-describedby={problems.length > 0 ? `${uid}-needs` : undefined}
-          >
-            {sending ? "Signing…" : SIGN_AS_PREPARER}
-          </button>
-        </div>
+        {noting || text !== "" ? (
+          <div className="ps-note">
+            <label htmlFor={`${uid}-n`}>{NOTE_LABEL}</label>
+            <textarea
+              id={`${uid}-n`}
+              rows={2}
+              maxLength={500}
+              value={text}
+              disabled={sending}
+              onChange={(event) => setText(event.currentTarget.value)}
+            />
+          </div>
+        ) : ready ? (
+          <p className="ps-add-note">
+            <button
+              type="button"
+              className="dw-link"
+              onClick={() => {
+                setNoting(true);
+                window.requestAnimationFrame(() =>
+                  document.getElementById(`${uid}-n`)?.focus(),
+                );
+              }}
+            >
+              Add a note for the reviewer
+            </button>
+          </p>
+        ) : null}
       </form>
       {refusal !== "" ? (
         <p className="ps-refusal" role="alert" tabIndex={-1} ref={alert}>

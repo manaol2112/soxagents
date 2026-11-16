@@ -52,7 +52,10 @@ describe("section 7 is where the preparer concludes", () => {
     const button = component(view, "EditConclusion");
     assert.match(button, /onClick=\{\(\) => onEdit\("conclusion"\)\}/);
     assert.match(button, /"Edit conclusion"/);
-    assert.match(button, /className="btn-secondary btn-sm"/);
+    // Rewritten (product owner, 16 November 2026: section 7 lighter, option A). Old:
+    // `className="btn-secondary btn-sm"`, an outlined button. New: `className="dw-link"`,
+    // a quiet text link under the text; the same action, off in the same cases.
+    assert.match(button, /className="dw-link"/);
     assert.match(
       sheet,
       /number=\{7\}\s+title="Conclusion"[\s\S]{0,400}<EditLink\s+section="conclusion"/,
@@ -69,15 +72,39 @@ describe("section 7 is where the preparer concludes", () => {
 
   it("draws the card top to bottom: the proposal, the results, the choice, the text", () => {
     const sheet = component(view, "DocumentSheet");
+    // Rewritten (product owner, 16 November 2026: section 7 lighter, option A). Old:
+    // `<ConclusionHead … /> <Results … /> <ConclusionChoiceOf … />` as three siblings
+    // before the text, the head showing PROPOSED_REVIEW as a pill and the agent's reasons
+    // as a list. New: ConclusionChoiceOf draws the head (with "Change" in its quiet
+    // line), the results it is given, then the choice in place, before the text; the
+    // agent's proposal is a quiet "Proposed by the agent: …" in the head's line, and its
+    // reasons are under "Why" on the results' line. The order is the same: the
+    // conclusion, the results, the choice, the text.
     assert.match(
       sheet,
-      /<ConclusionHead paper=\{paper\} conclusion=\{conclusion\} \/>\s*<Results paper=\{paper\} \/>\s*<ConclusionChoiceOf paper=\{paper\} actions=\{actions\} \/>\s*<div className="dw-concl-text">/,
+      /<ConclusionChoiceOf\s+paper=\{paper\}\s+conclusion=\{conclusion\}\s+actions=\{actions\}\s*>\s*<Results paper=\{paper\} why=\{actions !== null\} \/>\s*<\/ConclusionChoiceOf>\s*<div className="dw-concl-text">/,
+    );
+    const of = component(view, "ConclusionChoiceOf");
+    assert.match(
+      of,
+      /<ConclusionHead paper=\{paper\} conclusion=\{conclusion\} change=\{change\} \/>/,
+    );
+    assert.match(
+      of,
+      /head=\{head\}\s*>\s*\{children\}\s*\{deficiency\}\s*<\/ConclusionChoicePanel>/,
+    );
+    assert.match(
+      choice,
+      /\{head\(changeLink\)\}\s*\{children\}\s*\{editing \? \(\s*<form/,
     );
     const head = component(view, "ConclusionHead");
-    assert.match(head, /PROPOSED_REVIEW/);
+    assert.match(
+      head,
+      /`Proposed by the agent: \$\{CONCLUSION_WORDS\[proposal\]\}`/,
+    );
     assert.match(head, /recordedLine\(choice\)/);
-    assert.match(head, /keyed\(reasons, \(reason\) => reason\)/);
     const results = component(view, "Results");
+    assert.match(results, /keyed\(reasons, \(reason\) => reason\)/);
     assert.match(results, /resultBoxes\(paper\)/);
     // Section 3 says which part is the implementation; section 4 how each is shown.
     assert.match(
@@ -93,7 +120,13 @@ describe("section 7 is where the preparer concludes", () => {
   it("offers the choice only in section 7, on the editable draft, and never on paper", () => {
     assert.equal(count(view, /<ConclusionChoicePanel\b/g), 1);
     const of = component(view, "ConclusionChoiceOf");
-    assert.match(of, /if \(actions === null\) \{\s*return null;\s*\}/);
+    // Rewritten (product owner, 16 November 2026: section 7 lighter, option A). Old:
+    // `if (actions === null) { return null; }`, the head drawn apart. New: on paper it
+    // draws the head and the results only (it now draws the head), and still no choice.
+    assert.match(
+      of,
+      /if \(actions === null\) \{\s*\/\/ On paper: nothing to choose\.\s*return \(\s*<>\s*\{head\(null\)\}\s*\{children\}\s*<\/>\s*\);\s*\}/,
+    );
     assert.match(
       of,
       /paper\.canEdit && scope !== null && actions\.choice !== null/,

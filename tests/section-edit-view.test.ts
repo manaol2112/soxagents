@@ -128,12 +128,18 @@ describe("Edit opens the section's editor where the document shows it", () => {
     // conclusion (ConclusionHead), the design and implementation results, the choice,
     // then the text with its one editor (product owner, 15 November 2026,
     // docs/design-workpaper.md section 3.5/3.6). The editor stays in the text's place.
+    // Rewritten again (product owner, 16 November 2026: section 7 lighter, option A).
+    // Old: `<ConclusionHead/> <Results/> <ConclusionChoiceOf/>` as siblings before the
+    // text, and `<OutOfDate>` closing the text's block. New: ConclusionChoiceOf draws the
+    // head, the results and the choice; why a sign-off is out of date is quietly under
+    // the head (ConclusionHead); the text's block ends with "Edit conclusion". The
+    // editor still stays in the text's place.
     assert.match(
       sheet,
-      /<ConclusionHead paper=\{paper\} conclusion=\{conclusion\} \/>\s*<Results paper=\{paper\} \/>\s*<ConclusionChoiceOf paper=\{paper\} actions=\{actions\} \/>\s*<div className="dw-concl-text">\s*\{concluding !== null \? \(\s*<SectionEditorPanel \{\.\.\.concluding\} \/>\s*\) : conclusion\.text === "" \? \(/,
+      /<\/ConclusionChoiceOf>\s*<div className="dw-concl-text">\s*\{concluding !== null \? \(\s*<SectionEditorPanel \{\.\.\.concluding\} \/>\s*\) : conclusion\.text === "" \? \(/,
     );
     assert.match(
-      sheet,
+      component(view, "ConclusionHead"),
       /<OutOfDate reasons=\{conclusion\.outOfDate\} \/>\s*<\/div>/,
     );
     // The attributes' table stays as it is, inside the notes editor; each attribute's
