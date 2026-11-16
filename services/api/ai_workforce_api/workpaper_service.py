@@ -1443,104 +1443,129 @@ def _prepare(
 ) -> tuple[WorkpaperBody, list[UUID]]:
     """Prepare the workpaper. An effectiveness workpaper opens the control's independent
     review (Milestone 9.1); the returned ids are re-performances to schedule."""
+    _person(connection, principal, organization_id, project_id, Action.TASK_UPDATE)
+    with transaction(connection) as cursor:
+        queued = prepare_in(cursor, principal, organization_id, project_id, workpaper_id, body)
+    return _body(connection, project_id, workpaper_id), queued
+
+
+def prepare_in(
+    cursor: psycopg.Cursor[Any],
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    workpaper_id: UUID,
+    body: PrepareBody,
+) -> list[UUID]:
+    """The preparation itself, in the caller's transaction, for a person the caller has
+    authorized: `_prepare`, and "Sign and send for review" (design_review_requests,
+    docs/design-workpaper.md section 3.8), which opens the review request in the same
+    transaction. The returned ids are re-performances to schedule."""
     from ai_workforce_api.control_reviews import open_review
+    from ai_workforce_api.design_review_requests import end_standing
     from ai_workforce_api.workpaper_drafts import discard_all as discard_working_copies
 
-    _person(connection, principal, organization_id, project_id, Action.TASK_UPDATE)
+    connection = cursor.connection
     queued: list[UUID] = []
-    with transaction(connection) as cursor:
-        status, drafting, current, _org, control_id, stage, version = _locked(
-            cursor, project_id, workpaper_id
-        )
-        if status != "DRAFT" or int(version) != body.version:
-            raise WorkpaperState("the workpaper changed")
-        if drafting != "IDLE" or int(current) < 1:
-            raise WorkpaperState("wait for the draft to finish")
-        if stage == "DESIGN":
-            # The preparer attests that the conclusion above is complete and supported
-            # (docs/design-workpaper.md, section 3.7): one is recorded and it is not "Not
-            # concluded". Read under the workpaper's lock, which recording a choice also
-            # takes first, so a choice and a preparation never pass each other.
-            refusal = design_prepare_refusal(cursor, project_id, control_id)
-            if refusal is not None:
-                raise WorkpaperState(refusal)
-        if stage == "EFFECTIVENESS":
-            signed = cursor.execute(
-                "SELECT 1 FROM test_sheets WHERE project_id = %s AND engagement_control_id = %s "
-                "AND test_round_id IS NULL "
-                "AND status = 'SIGNED_OFF'",
-                (project_id, control_id),
-            ).fetchone()
-            if signed is None:
-                raise WorkpaperState("sign off the control's testing first")
-            # The workpaper is drafted from the testing as signed off: a draft from the
-            # records or the agent after the latest sign-off (bug hunt, 9 November 2026).
-            fresh = cursor.execute(
-                """
-                SELECT 1 FROM test_sheets s
-                WHERE s.project_id = %s AND s.engagement_control_id = %s
-                  AND s.test_round_id IS NULL AND s.status = 'SIGNED_OFF'
-                  AND EXISTS (SELECT 1 FROM workpaper_versions v
-                              WHERE v.workpaper_id = %s AND v.source <> 'PERSON'
-                                AND v.created_at >= s.signed_at)
-                """,
-                (project_id, control_id, workpaper_id),
-            ).fetchone()
-            if fresh is None:
-                raise WorkpaperState(
-                    "the workpaper was drafted before the testing was last signed off; "
-                    "draft it again from the signed-off testing"
-                )
-            # The AI-proposed testing rationale is reviewed by a person before the
-            # workpaper is prepared (M3c closure): an explicit confirmation, recorded.
-            content = _content(connection, workpaper_id, int(current))
-            if content is not None and rationale_pending(content):
-                if not body.rationale_reviewed:
-                    raise WorkpaperState(
-                        "review the AI-proposed testing rationale and confirm it before "
-                        "preparing the workpaper"
-                    )
-                person = cursor.execute(
-                    "SELECT display_name, to_char(clock_timestamp() AT TIME ZONE 'UTC', "
-                    '\'YYYY-MM-DD"T"HH24:MI:SS"Z"\') FROM users WHERE id = %s',
-                    (principal.id,),
-                ).fetchone()
-                reviewed = approve_rationale(
-                    content,
-                    principal.id,
-                    "" if person is None else str(person[0] or ""),
-                    "" if person is None else str(person[1]),
-                    int(current),
-                )
-                number = _save(
-                    cursor, workpaper_id, reviewed, "PERSON", principal.id,
-                    "The AI-proposed testing rationale was reviewed.",
-                )  # fmt: skip
-                _audit(cursor, organization_id, project_id, principal.id, workpaper_id,
-                       "workpaper.rationale_reviewed",
-                       {"version_reviewed": int(current), "version": number,
-                        "basis": rationale_basis(reviewed)})  # fmt: skip
-        cursor.execute(
+    status, drafting, current, _org, control_id, stage, version = _locked(
+        cursor, project_id, workpaper_id
+    )
+    if status != "DRAFT" or int(version) != body.version:
+        raise WorkpaperState("the workpaper changed")
+    if drafting != "IDLE" or int(current) < 1:
+        raise WorkpaperState("wait for the draft to finish")
+    if stage == "DESIGN":
+        # The preparer attests that the conclusion above is complete and supported
+        # (docs/design-workpaper.md, section 3.7): one is recorded and it is not "Not
+        # concluded". Read under the workpaper's lock, which recording a choice also
+        # takes first, so a choice and a preparation never pass each other.
+        refusal = design_prepare_refusal(cursor, project_id, control_id)
+        if refusal is not None:
+            raise WorkpaperState(refusal)
+    if stage == "EFFECTIVENESS":
+        signed = cursor.execute(
+            "SELECT 1 FROM test_sheets WHERE project_id = %s AND engagement_control_id = %s "
+            "AND test_round_id IS NULL "
+            "AND status = 'SIGNED_OFF'",
+            (project_id, control_id),
+        ).fetchone()
+        if signed is None:
+            raise WorkpaperState("sign off the control's testing first")
+        # The workpaper is drafted from the testing as signed off: a draft from the
+        # records or the agent after the latest sign-off (bug hunt, 9 November 2026).
+        fresh = cursor.execute(
             """
-            UPDATE workpapers
-            SET status = 'PREPARED', prepared_by = %s, prepared_at = clock_timestamp(),
-                prepared_version = current_version, version = version + 1
-            WHERE id = %s
+            SELECT 1 FROM test_sheets s
+            WHERE s.project_id = %s AND s.engagement_control_id = %s
+              AND s.test_round_id IS NULL AND s.status = 'SIGNED_OFF'
+              AND EXISTS (SELECT 1 FROM workpaper_versions v
+                          WHERE v.workpaper_id = %s AND v.source <> 'PERSON'
+                            AND v.created_at >= s.signed_at)
             """,
-            (principal.id, workpaper_id),
-        )
-        _start(cursor, workpaper_id)
-        _audit(cursor, organization_id, project_id, principal.id, workpaper_id,
-               "workpaper.prepared",
-               {"version": int(current), "note": clean_line(body.note, 500)})  # fmt: skip
-        # Nothing unfinished is carried past preparation: every working copy of it goes.
-        discard_working_copies(cursor, workpaper_id)
-        if stage == "EFFECTIVENESS":
-            review = open_review(
-                cursor, organization_id, project_id, UUID(str(control_id)), principal.id
+            (project_id, control_id, workpaper_id),
+        ).fetchone()
+        if fresh is None:
+            raise WorkpaperState(
+                "the workpaper was drafted before the testing was last signed off; "
+                "draft it again from the signed-off testing"
             )
-            queued = [] if review is None else [review]
-    return _body(connection, project_id, workpaper_id), queued
+        # The AI-proposed testing rationale is reviewed by a person before the
+        # workpaper is prepared (M3c closure): an explicit confirmation, recorded.
+        content = _content(connection, workpaper_id, int(current))
+        if content is not None and rationale_pending(content):
+            if not body.rationale_reviewed:
+                raise WorkpaperState(
+                    "review the AI-proposed testing rationale and confirm it before "
+                    "preparing the workpaper"
+                )
+            person = cursor.execute(
+                "SELECT display_name, to_char(clock_timestamp() AT TIME ZONE 'UTC', "
+                '\'YYYY-MM-DD"T"HH24:MI:SS"Z"\') FROM users WHERE id = %s',
+                (principal.id,),
+            ).fetchone()
+            reviewed = approve_rationale(
+                content,
+                principal.id,
+                "" if person is None else str(person[0] or ""),
+                "" if person is None else str(person[1]),
+                int(current),
+            )
+            number = _save(
+                cursor, workpaper_id, reviewed, "PERSON", principal.id,
+                "The AI-proposed testing rationale was reviewed.",
+            )  # fmt: skip
+            _audit(cursor, organization_id, project_id, principal.id, workpaper_id,
+                   "workpaper.rationale_reviewed",
+                   {"version_reviewed": int(current), "version": number,
+                    "basis": rationale_basis(reviewed)})  # fmt: skip
+    cursor.execute(
+        """
+        UPDATE workpapers
+        SET status = 'PREPARED', prepared_by = %s, prepared_at = clock_timestamp(),
+            prepared_version = current_version, version = version + 1
+        WHERE id = %s
+        """,
+        (principal.id, workpaper_id),
+    )
+    _start(cursor, workpaper_id)
+    _audit(cursor, organization_id, project_id, principal.id, workpaper_id,
+           "workpaper.prepared",
+           {"version": int(current), "note": clean_line(body.note, 500)})  # fmt: skip
+    # Nothing unfinished is carried past preparation: every working copy of it goes.
+    discard_working_copies(cursor, workpaper_id)
+    if stage == "DESIGN":
+        # A review request still standing from an earlier preparation is superseded by
+        # this one (section 3.8); "Sign and send for review" then opens its own.
+        end_standing(
+            cursor, organization_id, project_id, UUID(str(control_id)), principal.id,
+            "SUPERSEDED",
+        )  # fmt: skip
+    if stage == "EFFECTIVENESS":
+        review = open_review(
+            cursor, organization_id, project_id, UUID(str(control_id)), principal.id
+        )
+        queued = [] if review is None else [review]
+    return queued
 
 
 def _reopen_prepared(

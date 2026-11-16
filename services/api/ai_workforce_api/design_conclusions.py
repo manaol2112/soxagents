@@ -108,6 +108,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ai_workforce_api import (
     attribute_dispositions,
+    design_review_requests,
     file_reliability,
     independence,
     workpaper_review_notes,
@@ -124,6 +125,15 @@ from ai_workforce_api.authorization import (
 )
 from ai_workforce_api.control_reviews import _is_reviewer, reopen_review_for
 from ai_workforce_api.db import transaction
+from ai_workforce_api.design_review_requests import (
+    REQUEST_STALE,
+    ReturnRef,
+    ReviewerOption,
+    ReviewForbidden,
+    ReviewInvalid,
+    ReviewRequestRef,
+    in_review_with,
+)
 from ai_workforce_api.evidence_assurance import attribute_letter
 from ai_workforce_api.inbound import clean_line, clean_text
 from ai_workforce_api.settings import Settings
@@ -563,6 +573,10 @@ class DesignWorkpaperRef(BaseModel):
     drafting: bool
     prepared_by: str | None
     prepared_version: int | None
+    # The workpaper record's version, which "Sign and send for review" names
+    # (`workpaper_version`) as the prepare names it (`version`), so a page that has not
+    # seen a change prepares nothing (section 3.8).
+    version: int | None = None
 
 
 class SignoffRecord(BaseModel):
@@ -640,13 +654,22 @@ class DesignConclusionBody(BaseModel):
     # (docs/workpaper-review.md, section 4). While there is one, `blocking` says so and
     # the sign-off is refused.
     urgent_review_notes: int = 0
+    # Sending for review (section 3.8; design_review_requests): the request that stands,
+    # or null; the control's last return to the preparer where nothing was sent since, or
+    # null; who may be chosen as the reviewer, and where the picker starts.
+    review_request: ReviewRequestRef | None = None
+    last_return: ReturnRef | None = None
+    reviewers: list[ReviewerOption] = Field(default_factory=list)
+    default_reviewer_id: UUID | None = None
 
 
 class SignOffBody(BaseModel):
     """The reviewer signs the preparer's standing conclusion: `conclusion` is its kind and
     `choice_id` the choice the reviewer read, so that one recorded since is never signed
-    unread (CHOICE_NOT_STANDING). Nothing else is taken: the two-value `verdict` the
-    screen sent before section 3.6 is no longer accepted."""
+    unread (CHOICE_NOT_STANDING). `request_id` is the review request the reviewer read
+    (section 3.8): required where one stands, which only the reviewer it names signs, and
+    refused as stale where it is not the one standing. Nothing else is taken: the
+    two-value `verdict` the screen sent before section 3.6 is no longer accepted."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -654,6 +677,7 @@ class SignOffBody(BaseModel):
     choice_id: UUID
     workpaper_version: int = Field(ge=1)
     note: str = Field(default="", max_length=1000)
+    request_id: UUID | None = None
 
 
 class ChoiceBody(BaseModel):
@@ -678,7 +702,7 @@ class ReopenBody(BaseModel):
 class _Facts:
     organization_id: UUID
     # (id, status, draft_status, preparer's name, prepared_version, prepared_by,
-    # prepared_at, current_version) of the design workpaper.
+    # prepared_at, current_version, version) of the design workpaper.
     workpaper: tuple[Any, ...] | None
     deficiencies: list[DeficiencyRef]
     # (id, workpaper_version, verdict, deficiencies, signed_at, choice_id, conclusion,
@@ -960,7 +984,7 @@ def _facts(
     workpaper = connection.execute(
         """
         SELECT w.id, w.status, w.draft_status, u.display_name, w.prepared_version, w.prepared_by,
-               w.prepared_at, w.current_version
+               w.prepared_at, w.current_version, w.version
         FROM workpapers w LEFT JOIN users u ON u.id = w.prepared_by
         WHERE w.project_id = %s AND w.engagement_control_id = %s AND w.stage = 'DESIGN'
         """
@@ -1217,6 +1241,14 @@ def _body(
     prepared = paper is not None and paper[5] is not None and UUID(str(paper[5])) == viewer
     recorded = facts.choice_by is not None and facts.choice_by == viewer
     required = independence.required()
+    review = design_review_requests.fields(
+        connection, facts.organization_id, project_id, control_id, viewer,
+        None if paper is None or paper[5] is None else UUID(str(paper[5])), facts.choice_by,
+    )  # fmt: skip
+    request = review.review_request
+    if request is not None and reviewer and request.reviewer.id != viewer:
+        # Only the reviewer the request names signs it: another is told who it is with.
+        blocking.append(in_review_with(request.reviewer.name))
     if recorded and required and reviewer and status != "SIGNED_OFF":
         # Independence covers the conclusion itself: said to the reviewer it keeps from
         # signing, and to nobody else (the preparer who recorded it is not held by it).
@@ -1241,6 +1273,7 @@ def _body(
             drafting=paper[2] != "IDLE",
             prepared_by=None if paper[3] is None else str(paper[3]),
             prepared_version=None if paper[4] is None else int(paper[4]),
+            version=int(paper[8]) if len(paper) > 8 else None,
         ),
         deficiencies=facts.deficiencies,
         signed=signed,
@@ -1260,6 +1293,10 @@ def _body(
         design=results.design,
         implementation=results.implementation,
         urgent_review_notes=urgent,
+        review_request=request,
+        last_return=review.last_return,
+        reviewers=review.reviewers,
+        default_reviewer_id=review.default_reviewer_id,
     )
 
 
@@ -1482,6 +1519,16 @@ def sign_off(
             raise DesignConclusionState("prepare the design workpaper first")
         if int(paper[4]) != body.workpaper_version:
             raise DesignConclusionState("the design workpaper changed; review it again")
+        # Where the workpaper was sent for review, only the reviewer it was sent to signs,
+        # naming the request they read (section 3.8). Locked, so a change of reviewer and
+        # a sign-off never pass each other.
+        request = design_review_requests.standing(
+            cursor.connection, project_id, control_id, lock=True
+        )
+        if request is not None and request.reviewer_id != principal.id:
+            raise ReviewForbidden(in_review_with(request.reviewer_name))
+        if (None if request is None else request.id) != body.request_id:
+            raise DesignConclusionState(REQUEST_STALE)
         if facts.choice is not None and facts.choice.id != body.choice_id:
             raise DesignConclusionState(CHOICE_NOT_STANDING)
         # An urgent review note of the workpaper that is open or responded to holds the
@@ -1556,6 +1603,9 @@ def sign_off(
             ),
         ).fetchone()
         assert row is not None
+        if request is not None:
+            # The request is answered: it ends SIGNED with the sign-off.
+            design_review_requests.end(cursor, request.id, principal.id, "SIGNED")
         if kind == "NOT_EFFECTIVE":
             # OE is not performed: the control's review opens on the design alone, with no
             # testing for the reviewer agent to re-perform.
@@ -1574,7 +1624,8 @@ def sign_off(
                "design_conclusion.signed_off",
                {"control_id": str(control_id), "verdict": verdict, "conclusion": kind,
                 "basis": choice.basis, "choice_id": str(choice.id),
-                "workpaper_version": int(paper[4]), "deficiencies": basis})  # fmt: skip
+                "workpaper_version": int(paper[4]), "deficiencies": basis,
+                "request_id": None if request is None else str(request.id)})  # fmt: skip
     return _viewed(connection, principal, organization_id, project_id, control_id)
 
 
@@ -1611,7 +1662,11 @@ def reopen_for_workpaper(
     reason: str,
 ) -> None:
     """The design workpaper was reopened: the D&I conclusion that rests on it opens again,
-    in the same transaction."""
+    and the review request that stands, if any, ends REOPENED (section 3.8), in the same
+    transaction."""
+    design_review_requests.end_standing(
+        cursor, organization_id, project_id, control_id, actor, "REOPENED", reason
+    )
     row = cursor.execute(
         "SELECT id FROM design_conclusions WHERE project_id = %s AND engagement_control_id = %s "
         "AND reopened_at IS NULL FOR UPDATE",
@@ -1647,6 +1702,8 @@ def _audit(
 
 
 def register_design_conclusions(app: FastAPI, settings: Settings, scheduler: Any = None) -> None:
+    from ai_workforce_api.workpaper_service import WorkpaperState
+
     base = "/organizations/{organization_id}/projects/{project_id}/design-conclusions"
 
     def run[T](request: Request, work: Callable[[psycopg.Connection[Any], Principal], T]) -> T:
@@ -1657,6 +1714,14 @@ def register_design_conclusions(app: FastAPI, settings: Settings, scheduler: Any
             raise HTTPException(status_code=409, detail=error.detail) from None
         except ChoiceInvalid as error:
             raise HTTPException(status_code=422, detail=error.detail) from None
+        except ReviewInvalid as error:
+            raise HTTPException(status_code=422, detail=error.detail) from None
+        except ReviewForbidden as error:
+            raise HTTPException(status_code=403, detail=error.detail) from None
+        except WorkpaperState as error:
+            # Sign and send for review prepares the workpaper: its refusals, as the
+            # prepare route answers them.
+            raise HTTPException(status_code=409, detail=error.detail) from None
 
     @app.get(f"{base}/{{control_id}}", response_model=DesignConclusionBody)
     def conclusion(
@@ -1700,3 +1765,5 @@ def register_design_conclusions(app: FastAPI, settings: Settings, scheduler: Any
         return run(
             request, lambda c, p: reopen(c, p, organization_id, project_id, control_id, body)
         )
+
+    design_review_requests.register_design_review_requests(app, base, run, DesignConclusionBody)
