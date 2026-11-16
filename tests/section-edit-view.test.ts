@@ -415,7 +415,14 @@ describe("saving", () => {
     // And once more after a 409 (the workpaper is not as the page has it), so "Edit"
     // after "Cancel" opens the latest (review, 15 November 2026): never for any other
     // refusal.
-    assert.equal(count(view, /refreshRecords\(\)/g), 2);
+    // Rewritten (product owner, 15 November 2026, docs/design-workpaper.md section 3.7).
+    // Old: 2 (a confirmed save, a 409). New: 3, the third after the preparer's sign-off
+    // or reopening was confirmed (the `signOff.onDone` of the view).
+    assert.equal(count(view, /refreshRecords\(\)/g), 3);
+    assert.match(
+      view,
+      /onDone: \(\) => \{\s*setAttempt\(\(n\) => n \+ 1\);\s*refreshRecords\(\);\s*\}/,
+    );
     assert.match(
       body,
       /if \(answer\.status === 409\) \{\s*(?:\/\/ [^\n]*\n\s*)+refreshRecords\(\);/,

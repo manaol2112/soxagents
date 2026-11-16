@@ -217,11 +217,18 @@ describe("nothing in a view is a decision", () => {
         /name="intent"|intent="/,
         /\/workspace\/workpapers/,
         /design-conclusions/,
-        /\bsignOff\b|\bonSign\b|\bonPrepare\b|\bonApprove\b|\bonReopen\b/,
+        // Rewritten (product owner, 15 November 2026, docs/design-workpaper.md section
+        // 3.7). Old: no `signOff` at all in the view. New: the preparer signs at the end
+        // of section 7, so the view hands the sign-off its ids and its "done" callback
+        // (`signOff`); the form and the write are preparer-signoff.tsx's, tested there,
+        // and the view itself still defines no form and no write.
+        /\bonSign\b|\bonPrepare\b|\bonApprove\b|\bonReopen\b/,
       ]) {
         assert.ok(!pattern.test(source), `${name}: ${pattern}`);
       }
     }
+    assert.equal(count(view, /\bsignOff\b/g) >= 1, true);
+    assert.equal(count(model, /\bsignOff\b/g), 0);
     // Every button a view defines is a plain button: it opens, selects or prints.
     assert.equal(count(view, /<button\b/g), count(view, /\btype="button"/g));
     assert.equal(count(model, /fetch\(/g), 0);

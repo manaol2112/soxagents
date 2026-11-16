@@ -452,7 +452,10 @@ function WorkpaperCard({
               <UiIcon name="table" size={13} /> Download .xlsx
             </a>
           ) : null}
+          {/* The D&I workpaper is signed by its preparer at the end of its section 7
+              (the views' own sign-off, contract section 3.7): one place, not here too. */}
           {canAct &&
+          paper.stage !== "DESIGN" &&
           paper.status === "DRAFT" &&
           paper.currentVersion > 0 &&
           !old ? (

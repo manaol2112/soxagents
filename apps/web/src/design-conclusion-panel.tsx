@@ -373,21 +373,24 @@ export function DesignConclusionPanel({
         ) : null}
         <dl className="dc-basis">
           <div>
-            <dt>Design workpaper</dt>
+            {/* The two signatures in order (docs/design-workpaper.md, section 3.7):
+                the preparer's, signed at the end of section 7, then the reviewer's,
+                below. */}
+            <dt>Preparer's sign-off</dt>
             <dd>
               {paper === null ? (
-                "Not started"
+                "No design workpaper yet"
               ) : paper.status === "PREPARED" ? (
                 <>
-                  Prepared by {paper.preparedBy || "a team member"}
+                  Signed by {paper.preparedBy || "a team member"}
                   {paper.preparedVersion !== null
                     ? ` · version ${paper.preparedVersion}`
                     : ""}
                 </>
               ) : (
-                "Draft, not prepared"
+                "Not signed yet: the preparer signs at the end of section 7"
               )}{" "}
-              <a href={assessmentHref}>Open D&amp;I Assessment</a>
+              <a href={conclusionHref(assessmentHref)}>Open section 7</a>
             </dd>
           </div>
           <div>

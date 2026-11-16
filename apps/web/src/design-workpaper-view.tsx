@@ -91,6 +91,7 @@ import {
   setLeaveAsker,
   whenAsked,
 } from "./leave-guard";
+import { PreparerSignOff } from "./preparer-signoff";
 import { RichText } from "./rich-text";
 import { destinationHref } from "./routes";
 import {
@@ -205,6 +206,14 @@ type Actions = {
   /** Where a design deficiency is logged (the deficiency log's form for this control);
    * null where the page has no link to it. */
   deficiencyHref: string | null;
+  /** The preparer's sign-off at the end of section 7 (section 3.7): the control's ids,
+   * what the page knows that the sign-off needs, and what it does once confirmed. */
+  signOff: {
+    ids: { organizationId: string; projectId: string; controlId: string };
+    unsaved: boolean;
+    behind: boolean;
+    onDone: () => void;
+  } | null;
 };
 
 /* The mount: the views, and the existing card in a fold under them ---------------------- */
@@ -1162,6 +1171,17 @@ export function DesignWorkpaper({
       },
     },
     deficiencyHref,
+    signOff: {
+      ids: scope,
+      unsaved: editing !== null,
+      behind,
+      // Signed or reopened: the views and the page's records are read again, as after
+      // any confirmed write; nothing is shown as done before the server confirmed.
+      onDone: () => {
+        setAttempt((n) => n + 1);
+        refreshRecords();
+      },
+    },
   };
   // A paper kept after a read that failed may be out of date: it says so, and is not
   // printed until it is read again.
@@ -1696,6 +1716,49 @@ function Results({ paper }: { paper: Paper }) {
         </div>
       ))}
     </div>
+  );
+}
+
+/** The preparer's sign-off at the end of section 7 (section 3.7); on paper, the
+ * signature lines under the sheet say it. */
+function SignOffOf({
+  paper,
+  actions,
+  head,
+}: {
+  paper: Paper;
+  actions: Actions | null;
+  head: ReturnType<typeof headerOf>;
+}) {
+  const workpaper = paper.workpaper;
+  const sign = actions?.signOff ?? null;
+  if (workpaper === null || sign === null) {
+    return null;
+  }
+  return (
+    <PreparerSignOff
+      ids={sign.ids}
+      workpaperId={workpaper.id}
+      version={workpaper.version}
+      mayAct={paper.canEdit || workpaper.status === "PREPARED"}
+      facts={{
+        status: workpaper.status,
+        drafting: workpaper.drafting,
+        latest:
+          workpaper.shownVersion === 0 ||
+          workpaper.shownVersion === workpaper.currentVersion,
+        choice: paper.conclusion.choice,
+        unsaved: sign.unsaved,
+        behind: sign.behind,
+      }}
+      prepared={{
+        by: head.prepared.by,
+        on: head.prepared.on,
+        version:
+          workpaper.status === "PREPARED" ? workpaper.currentVersion : null,
+      }}
+      onDone={sign.onDone}
+    />
   );
 }
 
@@ -2348,6 +2411,7 @@ function DocumentSheet({
             ) : null}
             <OutOfDate reasons={conclusion.outOfDate} />
           </div>
+          <SignOffOf paper={paper} actions={actions} head={head} />
         </div>
       </Section>
 
