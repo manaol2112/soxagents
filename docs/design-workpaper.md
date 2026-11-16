@@ -517,6 +517,40 @@ text with Edit conclusion. D&I Conclusion and Review shows the recorded conclusi
 reason and basis, read-only, with the sign-off (the button reads "Sign off: <the
 conclusion's words>").
 
+## 3.7 The preparer's sign-off, where the conclusion is (product owner, 15 November 2026)
+
+"Isn't there any separate requirement for D&I sign-off by the preparer? I see a prepared by
+and reviewed by in the conclusion section. I don't know how that sign-off works right now."
+
+Until now the preparer signed with "Prepare", a small button inside the folded "Edit,
+prepare and versions" card at the bottom of D&I Assessment, with nothing saying what it
+attests or what it needs. It now sits at the end of section 7, after the conclusion, as
+the preparer's sign-off; the reviewer's sign-off stays in D&I Conclusion and Review.
+
+- **What it is.** "Sign as preparer" is the existing prepare (`POST …/workpapers/{id}/
+  prepare`, its version check, its record `prepared_by` / `prepared_at` /
+  `prepared_version`, its audit event); nothing new is recorded. Its words say what is
+  attested: "I prepared this workpaper; the evidence, the testing and the conclusion above
+  are complete and supported." An optional note goes with it, as today.
+- **What it needs** (the server refuses, the page says so before the press, each in one
+  line): the workpaper is a draft that is not being drafted and is shown at its latest
+  version; a conclusion is recorded (3.6) and it is not "Not concluded" ("record a
+  conclusion first" / "Not concluded is not signed: record the conclusion the records
+  support"); no section is open in its editor with changes not saved (the page's own
+  check). Urgent review notes do not hold the preparer's sign-off (they hold the
+  reviewer's: docs/workpaper-review.md, section 4). The server's new refusal applies to the
+  design workpaper only; the testing workpaper's prepare is unchanged.
+- **After it.** Section 7 ends with "Prepared by Dana Lee on 15 Nov 2026 · version 4" and,
+  for the preparer, "Reopen to change" (the existing reopen, with its reason). The header
+  table's "Prepared by" and "Reviewed by" read the same records: a name and a date where
+  signed, "Not yet" otherwise, each linking to where it is signed.
+- **D&I Conclusion and Review** shows both signatures in order: the preparer's (signed or
+  not, with a link to section 7 where not) and the reviewer's (the sign-off).
+- **One place.** The D&I card in the fold no longer offers Prepare (it keeps Draft again,
+  Reopen, the versions and the Excel export); the testing workpaper's card is unchanged.
+- The reviewer still cannot be the preparer, nor the person who recorded the conclusion,
+  where independence is required (3.6).
+
 ## 4. Tests
 
 Server: the assembly from synthetic records (each attribute state, the evidence numbering
