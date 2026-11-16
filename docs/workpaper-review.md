@@ -40,8 +40,10 @@ record anchored in a workpaper's text. They may be brought together later.
 - the anchor: `anchor_kind` (`FIELD`, `TEXT`, `WORKPAPER`); `field` (the field's key,
   section 3; '' for `WORKPAPER`); for `TEXT`: `quote` (the highlighted characters, 1 to
   500), `prefix` and `suffix` (up to 60 characters around it, to find it again), and
-  `occurrence` (which match of the quote in the field it was, from 0); `workpaper_version`
-  (the version it was raised on);
+  `occurrence` (which match of the quote in the field it was, from 0); for `FIELD`:
+  `field_text` (migration 0167: the field's text as the page sent it when the note was
+  raised, kept as a highlight's words are, up to 12,000 characters; null where none was
+  sent); `workpaper_version` (the version it was raised on);
 - `text` (10 to 2000 characters; a person's own, cleaned as text is);
 - `criticality`, `status`, `owner_id` (a user);
 - `raised_by`, `raised_at`; `cleared_by`, `cleared_at`; `dismissed_by`, `dismissed_at`,
@@ -71,6 +73,13 @@ whose surroundings fit `prefix`/`suffix` best. Where the words are no longer the
 text was edited), the note stays on its field and says "The highlighted words have
 changed since this note was raised", with the words as they were.
 
+A key that is a place in a list (`procedures.<n>`, `matters.<n>`, `reports.<row>.<column>`)
+names other text once the workpaper is drafted again or a row is added before it. A
+`FIELD` note therefore keeps the field's text when it was raised (`field_text`, sent by
+the page; review of 16 November 2026), so the page can say "This field has changed since
+the note was raised" where the text now differs. The server stores and returns it; the
+page sending it and saying so is the web's part, not built yet.
+
 Highlighted words are drawn in the note's criticality colour (the words themselves take
 the colour, with a thin underline; no background colour), and nothing else in the
 workpaper is coloured by notes. A field with a note carries a small numbered marker.
@@ -86,6 +95,11 @@ workpaper is coloured by notes. A field with a note carries a small numbered mar
   Never the resolution owner on their own note to themselves unless they raised it; a
   preparer cannot clear a reviewer's note.
 - **Dismiss** (with a reason): the person who raised it, or a reviewer.
+- Both, made exact after the review of 16 November 2026: "a reviewer" is one who is not
+  the workpaper's preparer of record (a preparer who also holds the reviewer role still
+  responds and hands the note on, never decides it) and who is not, and never was, the
+  note's resolution owner (handing a note on does not let its owner close it; the OWNER
+  events say who it was addressed to). The person who raised a note always decides it.
 - **Change the owner**: the person who raised it, a reviewer, or the current owner
   (handing it on).
 - A note is raised on any version of the workpaper, prepared or draft.
@@ -100,8 +114,9 @@ Under `/organizations/{o}/projects/{p}/workpapers/{workpaper_id}/review-notes`:
 
 - `GET` → `{notes: [...], members: [{id, name, role}], can_raise, can_review, counts}`:
   every note with its events, the people who can own one, and what the caller may do.
-- `POST` `{anchor_kind, field, quote?, prefix?, suffix?, occurrence?, workpaper_version,
-  text, criticality, owner_id}` → the note.
+- `POST` `{anchor_kind, field, quote?, prefix?, suffix?, occurrence?, field_text?,
+  workpaper_version, text, criticality, owner_id}` → the note (`field_text` on a `FIELD`
+  note only: 422 "only a note on a field carries the field's text" otherwise).
 - `POST /{note_id}/reply` `{text, responds: bool, version}`.
 - `POST /{note_id}/clear` `{version}`; `/reopen` `{text, version}`; `/dismiss`
   `{reason, version}`; `/criticality` `{criticality, version}`; `/owner`
@@ -162,4 +177,5 @@ who accepts it into the section's editor (a working copy, saved by them).
 | --- | --- |
 | Prototypes; layout, criticalities and colour agreed | done, 15 November 2026 |
 | Notes: record, API, the rail, All notes, filters, sign-off held by urgent notes (1–6) | being built |
+| Review fixes, 16 November 2026: a preparer who reviews, and an owner who hands a note on, do not decide it; a field note keeps the field's text (migration 0167, not yet applied to dev) | server built (`workpaper_review_notes.py`, tests in `test_workpaper_review_notes.py` and `test_workpaper_review_notes_model.py`); the page sending `field_text` and saying the field changed is not built |
 | The agent's help (7) | next |

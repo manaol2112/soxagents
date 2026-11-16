@@ -8,7 +8,7 @@ from uuid import UUID
 
 import psycopg
 import pytest
-from support import Database
+from support import Database, record_design_choice
 from test_control_progress import _controls
 from test_control_reviews import _prepared_control
 from test_master_plans import _approve
@@ -309,6 +309,11 @@ def _reprepare_design(client: Any, team: dict[str, Any], control: str) -> None:
         json={"based_on": design["current_version"], "text": "Updated after the review."},
     )
     assert saved.status_code == 200, saved.text
+    # Preparing a design workpaper needs a conclusion recorded on it (docs/design-
+    # workpaper.md, section 3.7; 16 November 2026). Old: prepared again with none standing
+    # (the setup's sign-off names none). New: the preparer records one on the reopened
+    # workpaper first; the review's coverage is what this test is about.
+    record_design_choice(client, _base(team), control)
     current = next(
         w for w in client.get(base, params={"control_id": control}).json() if w["stage"] == "DESIGN"
     )

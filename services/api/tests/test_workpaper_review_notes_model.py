@@ -18,6 +18,9 @@ from ai_workforce_api.workpaper_review_notes import (
     AROUND_LONG,
     FIELD_NEEDED,
     FIELD_NOT_TAKEN,
+    FIELD_TEXT_LONG,
+    FIELD_TEXT_MAX,
+    FIELD_TEXT_NOT_TAKEN,
     QUOTE_NEEDED,
     QUOTE_NOT_TAKEN,
     REASON_LONG,
@@ -45,6 +48,7 @@ from ai_workforce_api.workpaper_review_notes import (
     clean_reason,
     clean_reply,
     counts_of,
+    handed,
     is_preparer,
     may_change_owner,
     may_decide,
@@ -158,6 +162,46 @@ def test_an_anchor_is_a_field_highlighted_words_or_the_workpaper() -> None:
     assert anchor_of("TEXT", "understanding", "a" * 500, "p" * 60, "s" * 60, 0).occurrence == 0
 
 
+def test_a_field_note_keeps_the_fields_text_as_the_person_saw_it() -> None:
+    """Review of 16 November 2026, finding 4 (migration 0167). A field keyed by its place
+    (procedures.2) names other text once the workpaper changes; the note keeps the field's
+    text when it was raised, exactly as highlighted words are kept, so that the page can
+    say the field changed since. Optional, on a field note only."""
+    seen = "  Inspect the ticket\nfor the approval.\u200b "
+    kept = anchor_of("FIELD", "procedures.2", None, None, None, None, seen)
+    assert kept == Anchor("FIELD", "procedures.2", "", "", "", 0, clean_quote(seen))
+    assert kept.field_text == "  Inspect the ticket\nfor the approval. "
+    # An empty field is kept as empty; none sent is none recorded.
+    assert anchor_of("FIELD", "procedures.2", None, None, None, None, "").field_text == ""
+    assert anchor_of("FIELD", "procedures.2", None, None, None, None).field_text is None
+    assert anchor_of("FIELD", "matters.1", None, None, None, None, "m" * FIELD_TEXT_MAX) == (
+        Anchor("FIELD", "matters.1", "", "", "", 0, "m" * FIELD_TEXT_MAX)
+    )
+    # Measured once cleaned.
+    padded = "m" * FIELD_TEXT_MAX + "\u200b" * 10
+    assert anchor_of("FIELD", "matters.1", None, None, None, None, padded).field_text == (
+        "m" * FIELD_TEXT_MAX
+    )
+    for sent, sentence in (
+        (("FIELD", "matters.1", None, None, None, None, "m" * (FIELD_TEXT_MAX + 1)),
+         FIELD_TEXT_LONG),
+        (("TEXT", "understanding", "words", None, None, None, "the field"), FIELD_TEXT_NOT_TAKEN),
+        (("TEXT", "understanding", "words", None, None, None, ""), FIELD_TEXT_NOT_TAKEN),
+        (("WORKPAPER", "", None, None, None, None, "the field"), FIELD_TEXT_NOT_TAKEN),
+    ):  # fmt: skip
+        with pytest.raises(NoteInvalid) as refused:
+            anchor_of(*sent)
+        assert refused.value.detail == sentence, sent[:2]
+    body = {
+        "anchor_kind": "FIELD", "field": "procedures.2", "workpaper_version": 1,
+        "text": "No sample size is stated.", "criticality": "URGENT", "owner_id": str(OWNER),
+    }  # fmt: skip
+    assert RaiseBody.model_validate(body).field_text is None
+    assert RaiseBody.model_validate({**body, "field_text": "x"}).field_text == "x"
+    with pytest.raises(ValidationError):
+        RaiseBody.model_validate({**body, "field_text": "x" * (4 * FIELD_TEXT_MAX + 1)})
+
+
 def test_a_notes_text_a_reply_and_a_reason_are_cleaned_and_bounded() -> None:
     assert clean_note("  Ten chars.  ") == "Ten chars."
     assert clean_note("<p>Who <b>approves</b> the access?</p>") == "Who approves the access?"
@@ -249,7 +293,12 @@ def test_who_may_raise_respond_decide_and_hand_on() -> None:
         # Nobody closes a note addressed to them unless they raised it, a reviewer included.
         ("the owner, a reviewer", OWNER, True, True, PREPARER, (True, False, True)),
         ("the preparer", PREPARER, True, False, PREPARER, (True, False, False)),
-        ("the preparer, a reviewer", PREPARER, True, True, PREPARER, (True, True, True)),
+        # A preparer who also holds the reviewer role cannot clear a reviewer's note on the
+        # workpaper they prepared (review of 16 November 2026, finding 2; docs/workpaper-
+        # review.md, section 4: "a preparer cannot clear a reviewer's note"). Old: (True,
+        # True, True), which let them clear, dismiss or re-rate an urgent note and lift the
+        # sign-off's hold. New: they respond and hand it on, and never decide it.
+        ("the preparer, a reviewer", PREPARER, True, True, PREPARER, (True, False, True)),
         ("another reviewer", OTHER, True, True, PREPARER, (False, True, True)),
         ("a reviewer who only reads", OTHER, False, True, PREPARER, (False, True, True)),
         ("a colleague", OTHER, True, False, PREPARER, (False, False, False)),
@@ -263,7 +312,7 @@ def test_who_may_raise_respond_decide_and_hand_on() -> None:
         person = viewer(who, may_update, reviewer)
         found = (
             may_respond(person, note, prepared_by),
-            may_decide(person, note),
+            may_decide(person, note, prepared_by),
             may_change_owner(person, note),
         )
         assert found == expected, name
@@ -277,12 +326,60 @@ def test_who_may_raise_respond_decide_and_hand_on() -> None:
 
     # A person who raised a note to themselves decides it.
     own = Standing(status="OPEN", raised_by=OWNER, owner_id=OWNER)
-    assert may_decide(viewer(OWNER, True, False), own) is True
+    assert may_decide(viewer(OWNER, True, False), own, PREPARER) is True
+    # The preparer decides a note they raised themselves, a reviewer or not.
+    theirs = Standing(status="OPEN", raised_by=PREPARER, owner_id=OWNER)
+    for reviewer in (False, True):
+        assert may_decide(viewer(PREPARER, True, reviewer), theirs, PREPARER) is True
     # The rules read who the person is, never the note's status.
     for status in STATUSES:
         closed = Standing(status=status, raised_by=RAISER, owner_id=OWNER)
-        assert may_decide(viewer(PREPARER, True, False), closed) is False
-        assert may_decide(viewer(RAISER, True, False), closed) is True
+        assert may_decide(viewer(PREPARER, True, False), closed, PREPARER) is False
+        assert may_decide(viewer(PREPARER, True, True), closed, PREPARER) is False
+        assert may_decide(viewer(RAISER, True, False), closed, PREPARER) is True
+
+
+def test_nobody_closes_a_note_addressed_to_them_by_handing_it_on_first() -> None:
+    """Review of 16 November 2026, finding 3 (docs/workpaper-review.md, section 4: "never
+    the resolution owner on their own note to themselves unless they raised it"). A
+    reviewer the note was ever addressed to decides it no more once they have handed it on;
+    the person who raised it, and a reviewer it was never addressed to, still do."""
+    first, second = UUID(int=5), UUID(int=6)
+    # The note was the owner's, and was handed to `first`, then to `second`.
+    before = handed(
+        [{"from": str(OWNER), "to": str(first), "from_name": "O", "to_name": "F"},
+         {"from": str(first), "to": str(second), "from_name": "F", "to_name": "S"}]
+    )  # fmt: skip
+    assert before == frozenset({OWNER, first, second})
+    note = Standing(status="OPEN", raised_by=RAISER, owner_id=second, owned_before=before)
+    for who in (OWNER, first, second):
+        assert note.ever_owned_by(who) is True
+        person = Viewer(who, True, True)
+        assert may_decide(person, note, PREPARER) is False, who
+        for act in ("clear", "reopen", "dismiss", "criticality"):
+            assert allowed(act, person, note, PREPARER) is False, (who, act)
+        # They still reply, and a reviewer still hands it on.
+        assert allowed("reply", person, note, PREPARER) is True
+        assert allowed("owner", person, note, PREPARER) is True
+    assert note.ever_owned_by(OTHER) is False
+    assert may_decide(Viewer(OTHER, True, True), note, PREPARER) is True
+    assert may_decide(Viewer(RAISER, True, False), note, PREPARER) is True
+    # The raiser decides a note they raised to themselves and handed on.
+    mine = Standing(status="OPEN", raised_by=OWNER, owner_id=first, owned_before=before)
+    assert may_decide(Viewer(OWNER, True, True), mine, PREPARER) is True
+    # A note never handed on names its owner only.
+    assert handed([]) == frozenset()
+    plain = Standing(status="OPEN", raised_by=RAISER, owner_id=OWNER)
+    assert (plain.ever_owned_by(OWNER), plain.ever_owned_by(first)) == (True, False)
+    # What is not a person's id in an event's data is passed over, never guessed.
+    assert handed([{"from": "nobody", "to": str(first)}, {}, "not data", {"to": None}]) == (
+        frozenset({first})
+    )
+    # The flags say the same: the owner who handed it on may reply and hand it on only.
+    assert {
+        act for act, may in can_of(Viewer(first, True, True), note, PREPARER, True)
+        .model_dump().items() if may
+    } == {"reply", "owner"}  # fmt: skip
 
 
 def test_each_act_is_taken_from_its_statuses_only() -> None:

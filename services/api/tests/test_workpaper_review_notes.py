@@ -9,8 +9,12 @@ Audit integrity:
 - every write adds one event row and one audit event (never more than 200 characters of
   text) and moves the note's version on, and a stale page changes nothing;
 - the resolution owner or the workpaper's preparer responds; only the person who raised a
-  note, or a reviewer who is not its owner, clears, reopens, dismisses or re-rates it: a
-  preparer cannot clear or dismiss a reviewer's note;
+  note, or a reviewer who is not and never was its owner and who did not prepare the
+  workpaper, clears, reopens, dismisses or re-rates it: a preparer cannot clear or dismiss
+  a reviewer's note, even holding the reviewer role, and an owner does not close a note
+  addressed to them by handing it on first;
+- a field note keeps the field's text as the person saw it, where the page sends it
+  (migration 0167), and what it kept never changes;
 - what a note records never changes and a note or an event is never deleted (the tables
   refuse it), and an archived engagement's notes are read-only;
 - the D&I sign-off is refused while a note of the design workpaper is urgent and open or
@@ -44,6 +48,9 @@ from ai_workforce_api.workpaper_review_notes import (
     DECIDE_FORBIDDEN,
     FIELD_NEEDED,
     FIELD_NOT_TAKEN,
+    FIELD_TEXT_LONG,
+    FIELD_TEXT_MAX,
+    FIELD_TEXT_NOT_TAKEN,
     NO_SUCH_VERSION,
     OWNER_FORBIDDEN,
     OWNER_NOT_MEMBER,
@@ -120,7 +127,10 @@ class _Notes:
         return user, client
 
     def prepare(self) -> None:
-        """The engagement's owner prepares the design workpaper: its preparer of record."""
+        """The engagement's owner prepares the design workpaper: its preparer of record. A
+        conclusion is recorded on it first, as preparing it needs (docs/design-workpaper.md,
+        section 3.7)."""
+        self.desk.conclude()
         paper = self.desk.paper()
         prepared = self.desk.owner.post(
             f"{self.desk.base}/{self.desk.paper_id}/prepare", json={"version": paper["version"]}
@@ -264,11 +274,13 @@ def test_a_note_is_raised_on_a_field_on_highlighted_words_and_on_the_workpaper(
         "RAISED", notes.person(owner_id), "", {},
     )  # fmt: skip
     assert set(raised) == {"id", "kind", "by", "at", "text", "data"}
+    # field_text: a field note's copy of the field's text (migration 0167); null here.
+    assert words["field_text"] is None
     assert set(words) == {
         "id", "number", "anchor_kind", "field", "quote", "prefix", "suffix", "occurrence",
-        "workpaper_version", "text", "criticality", "status", "owner", "raised_by", "raised_at",
-        "cleared_by", "cleared_at", "dismissed_by", "dismissed_at", "dismiss_reason", "version",
-        "events", "can",
+        "field_text", "workpaper_version", "text", "criticality", "status", "owner",
+        "raised_by", "raised_at", "cleared_by", "cleared_at", "dismissed_by", "dismissed_at",
+        "dismiss_reason", "version", "events", "can",
     }  # fmt: skip
     # The table holds the same characters.
     [(stored,)] = notes.rows("SELECT quote FROM workpaper_review_notes WHERE id = %s", words["id"])
@@ -626,6 +638,201 @@ def test_a_notes_thread_its_statuses_and_who_may_do_what(migrated: Database) -> 
     assert notes.act(str(uuid4()), "clear", reviewer, version=1).status_code == 404
     counts = notes.read()["counts"]
     assert counts == {"open": 2, "responded": 0, "cleared": 1, "dismissed": 1, "urgent_open": 1}
+
+
+def test_a_preparer_who_reviews_never_closes_a_reviewers_note_on_their_own_workpaper(
+    migrated: Database,
+) -> None:
+    """Review of 16 November 2026, finding 2 (docs/workpaper-review.md, section 4: "a
+    preparer cannot clear a reviewer's note"). The workpaper's preparer of record also holds
+    the engagement's reviewer role, as the D&I sign-off allows (another reviewer signs). A
+    reviewer raises an urgent note: whether its owner is someone else, or the preparer who
+    hands it on, the preparer never clears, dismisses, reopens or re-rates it, so the
+    sign-off's hold is not lifted by the person it waits on. A reviewer who did not prepare
+    it, and the person who raised it, still do; the preparer decides a note they raised."""
+    desk = _Desk(migrated, "wrn-preparer-reviews")
+    notes = _Notes(desk)
+    preparer_id, preparer = notes.owner_id, desk.owner
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "INSERT INTO project_memberships (organization_id, project_id, user_id, "
+            "engagement_role) VALUES (%s, %s, %s, 'REVIEWER') "
+            "ON CONFLICT (project_id, user_id) DO UPDATE SET engagement_role = 'REVIEWER'",
+            (desk.team["org"], desk.team["project"], preparer_id),
+        )
+    notes.prepare()
+    assert notes.read(preparer)["can_review"] is True
+    raiser_id, raiser = notes.reviewer()
+    other_id, other = notes.reviewer()
+    colleague_id, _colleague = desk.member("CONTRIBUTOR")
+
+    def refused_to(note_id: str, client: TestClient) -> None:
+        before = notes.state()
+        _refused(notes.act(note_id, "clear", client), 403, DECIDE_FORBIDDEN)
+        _refused(notes.act(note_id, "dismiss", client, reason=REASON), 403, DECIDE_FORBIDDEN)
+        _refused(notes.act(note_id, "reopen", client, text="Open again."), 403, DECIDE_FORBIDDEN)
+        _refused(
+            notes.act(note_id, "criticality", client, criticality="NORMAL"), 403, DECIDE_FORBIDDEN
+        )
+        assert notes.state() == before
+
+    # Path 1: the reviewer names a colleague the note's owner; the preparer, who is not
+    # its owner and holds the reviewer role, still does not decide it.
+    named = notes.raised(raiser, criticality="URGENT", owner_id=str(colleague_id))["id"]
+    assert _can(notes.note(named, preparer)) == {"reply", "respond", "owner"}
+    refused_to(named, preparer)
+
+    # Path 2: the note is the preparer's by default; they hand it on, which they may, and
+    # then still do not decide it.
+    assert notes.read(raiser)["default_owner_id"] == str(preparer_id)
+    theirs = notes.raised(raiser, criticality="URGENT", owner_id=str(preparer_id))["id"]
+    handed = notes.done(theirs, "owner", preparer, owner_id=str(colleague_id))
+    assert handed["owner"] == notes.person(colleague_id)
+    assert _can(handed) == {"reply", "respond", "owner"}
+    refused_to(theirs, preparer)
+    assert notes.read()["counts"]["urgent_open"] == 2
+
+    # Another reviewer, who neither prepared it nor owned the note, clears it; the person
+    # who raised the other dismisses it. Then nothing holds the sign-off.
+    assert notes.done(theirs, "clear", other)["cleared_by"] == notes.person(other_id)
+    assert notes.done(named, "dismiss", raiser, reason=REASON)["status"] == "DISMISSED"
+    assert notes.read()["counts"]["urgent_open"] == 0
+    # The preparer reopens neither.
+    refused_to(theirs, preparer)
+    # A note the preparer raised themselves is theirs to decide.
+    own = notes.raised(preparer, owner_id=str(raiser_id))["id"]
+    assert notes.done(own, "clear", preparer)["cleared_by"] == notes.person(preparer_id)
+
+
+def test_an_owner_does_not_close_a_note_addressed_to_them_by_handing_it_on_first(
+    migrated: Database,
+) -> None:
+    """Review of 16 November 2026, finding 3 (docs/workpaper-review.md, section 4: "never
+    the resolution owner on their own note to themselves unless they raised it"). A
+    reviewer the note is addressed to does not clear it; handing it on, which a reviewer
+    may, does not change that: whoever the note was ever addressed to does not clear,
+    dismiss, reopen or re-rate it, the next time or later. The person who raised it, and a
+    reviewer it was never addressed to, still do."""
+    desk = _Desk(migrated, "wrn-handed-on")
+    notes = _Notes(desk)
+    notes.prepare()
+    raiser_id, raiser = notes.reviewer()
+    owner_id, owner = notes.reviewer()
+    third_id, third = notes.reviewer()
+    colleague_id, colleague = desk.member("CONTRIBUTOR")
+
+    note_id = notes.raised(raiser, criticality="URGENT", owner_id=str(owner_id))["id"]
+    _refused(notes.act(note_id, "clear", owner), 403, DECIDE_FORBIDDEN)
+    # Handed on to a colleague, then on to the third reviewer, by the owner.
+    notes.done(note_id, "owner", owner, owner_id=str(colleague_id))
+    assert _can(notes.note(note_id, owner)) == {"reply", "owner"}
+    before = notes.state()
+    _refused(notes.act(note_id, "clear", owner), 403, DECIDE_FORBIDDEN)
+    _refused(notes.act(note_id, "dismiss", owner, reason=REASON), 403, DECIDE_FORBIDDEN)
+    _refused(notes.act(note_id, "criticality", owner, criticality="NORMAL"), 403, DECIDE_FORBIDDEN)
+    _refused(notes.act(note_id, "reopen", owner, text="Open again."), 403, DECIDE_FORBIDDEN)
+    assert notes.state() == before
+    assert notes.read()["counts"]["urgent_open"] == 1
+    # The colleague, now its owner, hands it to the third reviewer: the note was addressed
+    # to them too, so they do not close it either; the first owner still does not.
+    notes.done(note_id, "owner", colleague, owner_id=str(third_id))
+    notes.done(note_id, "owner", third, owner_id=str(colleague_id))
+    for client in (owner, third):
+        _refused(notes.act(note_id, "clear", client), 403, DECIDE_FORBIDDEN)
+    assert notes.read()["counts"]["urgent_open"] == 1
+    # Each refusal changed nothing: the note's thread is the raise and its three hand-ons.
+    assert [kind for kind, *_rest in notes.trail(note_id)] == ["RAISED", "OWNER", "OWNER", "OWNER"]
+    # The person who raised it clears it.
+    assert notes.done(note_id, "clear", raiser)["cleared_by"] == notes.person(raiser_id)
+    # A reviewer the note was never addressed to decides it: here, on a second note.
+    again = notes.raised(raiser, criticality="URGENT", owner_id=str(owner_id))["id"]
+    notes.done(again, "owner", owner, owner_id=str(colleague_id))
+    assert notes.done(again, "dismiss", third, reason=REASON)["status"] == "DISMISSED"
+    assert notes.read()["counts"]["urgent_open"] == 0
+
+
+def test_a_field_note_keeps_the_fields_text_as_it_was_when_raised(migrated: Database) -> None:
+    """Review of 16 November 2026, finding 4 (migration 0167). A field keyed by its place in
+    a list (procedures.2) names other text once the workpaper changes. A field note keeps
+    the field's text as the page sent it, as highlighted words are kept, so that the page
+    can say the field changed since; null where none was sent. Never on another note, never
+    longer than a section's text, and never changed afterwards."""
+    desk = _Desk(migrated, "wrn-field-text")
+    notes = _Notes(desk)
+    seen = "  Inspect the ticket\nfor the approver.\u200b "
+    field = notes.raised(field="procedures.2", field_text=seen)
+    assert (field["anchor_kind"], field["field"]) == ("FIELD", "procedures.2")
+    assert field["field_text"] == "  Inspect the ticket\nfor the approver. "
+    assert notes.note(field["id"])["field_text"] == field["field_text"]
+    [(stored,)] = notes.rows(
+        "SELECT field_text FROM workpaper_review_notes WHERE id = %s", field["id"]
+    )
+    assert stored == field["field_text"]
+    # An empty field is kept as empty; none sent is none recorded.
+    assert notes.raised(field="matters.1", field_text="")["field_text"] == ""
+    assert notes.raised(field="matters.2")["field_text"] is None
+    longest = notes.raised(field="reports.1.2", field_text="r" * FIELD_TEXT_MAX)
+    assert longest["field_text"] == "r" * FIELD_TEXT_MAX
+    # The audit event says what the note is about, not the field's text.
+    [(_action, _actor, payload)] = notes.audited(field["id"])
+    assert "field_text" not in payload and "Inspect the ticket" not in str(payload)
+
+    before = notes.state()
+    wrong: tuple[tuple[dict[str, Any], str], ...] = (
+        ({"field_text": "r" * (FIELD_TEXT_MAX + 1)}, FIELD_TEXT_LONG),
+        ({"anchor_kind": "TEXT", "quote": "the", "field_text": "the field"}, FIELD_TEXT_NOT_TAKEN),
+        ({"anchor_kind": "WORKPAPER", "field": "", "field_text": ""}, FIELD_TEXT_NOT_TAKEN),
+    )
+    for over, sentence in wrong:
+        _refused(notes.post(**over), 422, sentence)
+    assert notes.post(field_text="r" * (4 * FIELD_TEXT_MAX + 1)).status_code == 422
+    assert notes.state() == before
+
+    # The table keeps it: never changed, on a field note only, and bounded.
+    with (
+        connect(migrated.url) as connection,
+        pytest.raises(psycopg.errors.RaiseException, match="never changes"),
+    ):
+        connection.execute(
+            "UPDATE workpaper_review_notes SET field_text = 'Other text.', "
+            "version = version + 1 WHERE id = %s",
+            (field["id"],),
+        )
+    words = notes.raised(anchor_kind="TEXT", quote="the words")
+    with (
+        connect(migrated.url) as connection,
+        pytest.raises(psycopg.errors.RaiseException, match="never changes"),
+    ):
+        connection.execute(
+            "UPDATE workpaper_review_notes SET field_text = '', version = version + 1 "
+            "WHERE id = %s",
+            (words["id"],),
+        )
+    for anchor, field_key, quote, text in (
+        ("TEXT", "understanding", "the words", "the field"),
+        ("WORKPAPER", "", "", ""),
+        ("FIELD", "procedures.3", "", "r" * (FIELD_TEXT_MAX + 1)),
+    ):
+        with (
+            connect(migrated.url) as connection,
+            pytest.raises(psycopg.errors.CheckViolation, match="workpaper_review_notes_field_text"),
+        ):
+            connection.execute(
+                """
+                INSERT INTO workpaper_review_notes (
+                    organization_id, project_id, workpaper_id, number, anchor_kind, field,
+                    quote, field_text, workpaper_version, text, criticality, owner_id,
+                    raised_by
+                )
+                VALUES (%s, %s, %s, 99, %s, %s, %s, %s, 1, 'A note written directly.',
+                        'NORMAL', %s, %s)
+                """,
+                (desk.team["org"], desk.team["project"], desk.paper_id, anchor, field_key,
+                 quote, text, notes.owner_id, notes.owner_id),
+            )  # fmt: skip
+    assert notes.rows(
+        "SELECT field_text FROM workpaper_review_notes WHERE id = %s", field["id"]
+    ) == [(field["field_text"],)]
 
 
 def test_only_a_person_on_the_engagement_who_may_update_or_review_writes_a_note(

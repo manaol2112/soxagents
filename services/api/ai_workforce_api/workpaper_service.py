@@ -1409,6 +1409,30 @@ def _edit(
     return _body(connection, project_id, workpaper_id)
 
 
+# What the preparer's sign-off of a design workpaper needs (docs/design-workpaper.md,
+# section 3.7), each one sentence.
+PREPARE_NEEDS_CONCLUSION = "record a conclusion first"
+PREPARE_NOT_CONCLUDED = "Not concluded is not signed: record the conclusion the records support"
+
+
+def design_prepare_refusal(
+    cursor: psycopg.Cursor[Any], project_id: UUID, control_id: UUID
+) -> str | None:
+    """Why the control's design workpaper cannot be prepared on its conclusion: none of
+    the preparer's stands (design_conclusion_choices, migration 0165), or the one that
+    stands is "Not concluded", which is never signed. None where it can be."""
+    row = cursor.execute(
+        "SELECT kind FROM design_conclusion_choices WHERE project_id = %s "
+        "AND engagement_control_id = %s AND ended_at IS NULL",
+        (project_id, control_id),
+    ).fetchone()
+    if row is None:
+        return PREPARE_NEEDS_CONCLUSION
+    if str(row[0]) == "NOT_CONCLUDED":
+        return PREPARE_NOT_CONCLUDED
+    return None
+
+
 def _prepare(
     connection: psycopg.Connection[Any],
     principal: Principal,
@@ -1432,6 +1456,14 @@ def _prepare(
             raise WorkpaperState("the workpaper changed")
         if drafting != "IDLE" or int(current) < 1:
             raise WorkpaperState("wait for the draft to finish")
+        if stage == "DESIGN":
+            # The preparer attests that the conclusion above is complete and supported
+            # (docs/design-workpaper.md, section 3.7): one is recorded and it is not "Not
+            # concluded". Read under the workpaper's lock, which recording a choice also
+            # takes first, so a choice and a preparation never pass each other.
+            refusal = design_prepare_refusal(cursor, project_id, control_id)
+            if refusal is not None:
+                raise WorkpaperState(refusal)
         if stage == "EFFECTIVENESS":
             signed = cursor.execute(
                 "SELECT 1 FROM test_sheets WHERE project_id = %s AND engagement_control_id = %s "

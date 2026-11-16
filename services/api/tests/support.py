@@ -1,3 +1,6 @@
+from typing import Any
+
+
 class Database:
     """Connection target for one temporary database. The URL is omitted from repr."""
 
@@ -262,6 +265,36 @@ def sign_off_design(
                 """,
                 (organization, project_id, control, paper[0], paper[1], owner),
             )
+
+
+DESIGN_CHOICE_REASON = "Recorded in the test setup: the design has no approval step."
+
+
+def record_design_choice(client: Any, root: str, control_id: object) -> dict[str, Any]:
+    """The preparer records a conclusion on the control's draft design workpaper, through
+    the route, as preparing it needs (docs/design-workpaper.md, section 3.7: the server
+    refuses a prepare with no conclusion, or with "Not concluded"). `root` is the
+    engagement's path (/organizations/{org}/projects/{project}).
+
+    Added 16 November 2026 for tests that prepare a design workpaper and are not about its
+    conclusion. Old: they prepared it with no conclusion recorded. New: the server refuses
+    that, so they record one first: not effective on the design, the one conclusion the
+    records' rules never refuse, whatever evidence the test set up (it is never signed
+    here; a sign-off of it would also need a standing design deficiency). Recording it
+    moves the workpaper's version on, so the caller reads the workpaper again before
+    preparing. The choice's body as the route answers it."""
+    path = f"{root}/design-conclusions/{control_id}"
+    read = client.get(path)
+    assert read.status_code == 200, read.text
+    standing = read.json()["choice"]
+    chosen = client.post(
+        f"{path}/choice",
+        json={"kind": "NOT_EFFECTIVE", "basis": "DESIGN", "reason": DESIGN_CHOICE_REASON,
+              "replaces": None if standing is None else standing["id"]},
+    )  # fmt: skip
+    assert chosen.status_code == 200, chosen.text
+    found: dict[str, Any] = chosen.json()["choice"]
+    return found
 
 
 def release_interim(database: Database, project_id: object, design: bool = True) -> None:

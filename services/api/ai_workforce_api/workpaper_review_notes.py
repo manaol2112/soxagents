@@ -1,4 +1,4 @@
-"""Workpaper review notes (docs/workpaper-review.md, sections 1 to 5; migration 0166).
+"""Workpaper review notes (docs/workpaper-review.md, sections 1 to 5; migrations 0166, 0167).
 
 A person raises a review note on a workpaper: on one of its fields, on highlighted words
 inside a field, or on the workpaper as a whole. A note has a criticality, a status, a
@@ -18,8 +18,9 @@ Who may do what is decided here, by the functions the read uses for its `can` fl
   the workpaper's preparer: the person who prepared it while it is prepared, and anyone who
   may update the engagement's work while it is a draft;
 - clear, reopen, dismiss, change the criticality: the person who raised the note, or a
-  reviewer who is not its resolution owner (nobody closes a note addressed to them unless
-  they raised it);
+  reviewer who is not, and has never been, its resolution owner and who did not prepare
+  the workpaper (nobody closes a note addressed to them unless they raised it, handing it
+  on first included, and a preparer cannot clear a reviewer's note);
 - change the owner: the person who raised it, a reviewer, or the current owner, and only
   to a member of the engagement.
 
@@ -34,7 +35,7 @@ RESPONDED (`urgent_open`, `signoff_refusal`; design_conclusions.sign_off).
 
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal, Protocol
@@ -90,6 +91,9 @@ REASON_MAX = 500
 QUOTE_MAX = 500
 AROUND_MAX = 60
 FIELD_MAX = 120
+# A field note's copy of the field's text as the person saw it (migration 0167): as long as
+# a workpaper section's text can be.
+FIELD_TEXT_MAX = 12_000
 OCCURRENCE_MAX = 100_000
 # How much of a note's, a reply's or a reason's text an audit event carries.
 AUDIT_TEXT = 200
@@ -109,8 +113,8 @@ REPLY_FORBIDDEN = (
 )
 RESPOND_FORBIDDEN = "only the note's resolution owner or the workpaper's preparer responds to it"
 DECIDE_FORBIDDEN = (
-    "only the person who raised the note, or a reviewer who is not its resolution owner, "
-    "can do this"
+    "only the person who raised the note, or a reviewer who neither prepared the workpaper "
+    "nor is or was its resolution owner, can do this"
 )
 OWNER_FORBIDDEN = (
     "only the person who raised the note, a reviewer or its resolution owner changes its owner"
@@ -130,6 +134,8 @@ FIELD_NOT_TAKEN = "a note on the workpaper as a whole names no field"
 QUOTE_NEEDED = f"a note on highlighted words carries the words, 1 to {QUOTE_MAX} characters"
 QUOTE_NOT_TAKEN = "only a note on highlighted words carries the words and where they were"
 AROUND_LONG = f"the text around the highlighted words can be at most {AROUND_MAX} characters"
+FIELD_TEXT_LONG = f"the field's text can be at most {FIELD_TEXT_MAX} characters"
+FIELD_TEXT_NOT_TAKEN = "only a note on a field carries the field's text"
 
 
 class NoteState(Exception):
@@ -168,11 +174,17 @@ class Viewer:
 
 @dataclass(frozen=True)
 class Standing:
-    """What the rules read of a note as it stands."""
+    """What the rules read of a note as it stands. `owned_before` is everyone the note was
+    handed from or to (its OWNER events): with `owner_id`, everyone it was ever addressed
+    to."""
 
     status: str
     raised_by: UUID
     owner_id: UUID
+    owned_before: frozenset[UUID] = frozenset()
+
+    def ever_owned_by(self, person: UUID) -> bool:
+        return person == self.owner_id or person in self.owned_before
 
 
 def clean_quote(raw: str) -> str:
@@ -201,10 +213,19 @@ def may_respond(viewer: Viewer, note: Standing, prepared_by: UUID | None) -> boo
     return viewer.id == note.owner_id or is_preparer(viewer, prepared_by)
 
 
-def may_decide(viewer: Viewer, note: Standing) -> bool:
+def may_decide(viewer: Viewer, note: Standing, prepared_by: UUID | None) -> bool:
     """Clear, reopen, dismiss, change the criticality: the person who raised the note, or
-    a reviewer who is not its resolution owner."""
-    return viewer.id == note.raised_by or (viewer.reviewer and viewer.id != note.owner_id)
+    a reviewer who is not, and has never been, its resolution owner (handing a note on does
+    not let its owner close it) and who is not the workpaper's preparer of record (a
+    preparer who also holds the reviewer role cannot clear a reviewer's note on their own
+    workpaper, which would lift the sign-off's hold)."""
+    if viewer.id == note.raised_by:
+        return True
+    return (
+        viewer.reviewer
+        and not note.ever_owned_by(viewer.id)
+        and (prepared_by is None or viewer.id != prepared_by)
+    )
 
 
 def may_change_owner(viewer: Viewer, note: Standing) -> bool:
@@ -219,7 +240,7 @@ def allowed(act: Act, viewer: Viewer, note: Standing, prepared_by: UUID | None) 
         return may_respond(viewer, note, prepared_by)
     if act == "owner":
         return may_change_owner(viewer, note)
-    return may_decide(viewer, note)
+    return may_decide(viewer, note, prepared_by)
 
 
 _FORBIDDEN: dict[Act, str] = {
@@ -340,6 +361,9 @@ class Anchor:
     prefix: str
     suffix: str
     occurrence: int
+    # FIELD only: the field's text when the note was raised, as the page sent it; None where
+    # it sent none.
+    field_text: str | None = None
 
 
 def anchor_of(
@@ -349,19 +373,28 @@ def anchor_of(
     prefix: str | None,
     suffix: str | None,
     occurrence: int | None,
+    field_text: str | None = None,
 ) -> Anchor:
     """What the note is about, as it is stored; NoteInvalid where it is not one of the
     three: highlighted words name their field and the words, a field names itself and no
-    words, the workpaper as a whole names neither."""
+    words, the workpaper as a whole names neither. A field note may carry the field's text
+    as the person saw it, kept as highlighted words are (`clean_quote`), so that the page
+    can say the field changed since: a field keyed by its place (procedures.2) is otherwise
+    moved silently to other text (migration 0167)."""
     if kind == "WORKPAPER":
         if field != "":
             raise NoteInvalid(FIELD_NOT_TAKEN)
     elif FIELD_KEY.fullmatch(field) is None:
         raise NoteInvalid(FIELD_NEEDED)
+    if kind != "FIELD" and field_text is not None:
+        raise NoteInvalid(FIELD_TEXT_NOT_TAKEN)
     if kind != "TEXT":
         if quote or prefix or suffix or occurrence:
             raise NoteInvalid(QUOTE_NOT_TAKEN)
-        return Anchor(kind, field, "", "", "", 0)
+        seen = None if field_text is None else clean_quote(field_text)
+        if seen is not None and len(seen) > FIELD_TEXT_MAX:
+            raise NoteInvalid(FIELD_TEXT_LONG)
+        return Anchor(kind, field, "", "", "", 0, seen)
     words = clean_quote(quote or "")
     if not 1 <= len(words) <= QUOTE_MAX:
         raise NoteInvalid(QUOTE_NEEDED)
@@ -386,6 +419,8 @@ class RaiseBody(BaseModel):
     prefix: str | None = Field(default=None, max_length=4 * AROUND_MAX)
     suffix: str | None = Field(default=None, max_length=4 * AROUND_MAX)
     occurrence: int | None = Field(default=None, ge=0, le=OCCURRENCE_MAX)
+    # A field note's copy of the field's text as the person saw it (FIELD only; optional).
+    field_text: str | None = Field(default=None, max_length=4 * FIELD_TEXT_MAX)
     workpaper_version: int = Field(ge=1)
     text: str = Field(max_length=4 * TEXT_MAX)
     criticality: Criticality
@@ -461,6 +496,10 @@ class NoteBody(BaseModel):
     prefix: str
     suffix: str
     occurrence: int
+    # FIELD only: the field's text when the note was raised; null where it was not sent
+    # (or the note predates migration 0167). The page compares it with the field's text now
+    # and says where the field changed since.
+    field_text: str | None = None
     workpaper_version: int
     text: str
     criticality: Criticality
@@ -662,7 +701,8 @@ _NOTES = """
            n.workpaper_version, n.text, n.criticality, n.status,
            n.owner_id, o.display_name, n.raised_by, r.display_name, n.raised_at,
            n.cleared_by, c.display_name, n.cleared_at,
-           n.dismissed_by, d.display_name, n.dismissed_at, n.dismiss_reason, n.version
+           n.dismissed_by, d.display_name, n.dismissed_at, n.dismiss_reason, n.version,
+           n.field_text
     FROM workpaper_review_notes AS n
     JOIN users AS o ON o.id = n.owner_id
     JOIN users AS r ON r.id = n.raised_by
@@ -672,6 +712,21 @@ _NOTES = """
       AND (%s::uuid IS NULL OR n.id = %s::uuid)
     ORDER BY n.number
 """
+
+
+def handed(owner_events: Iterable[Any]) -> frozenset[UUID]:
+    """Everyone a note was handed from or to, read from its OWNER events' data ({from,
+    to}); what is not a person's id is passed over."""
+    people: set[UUID] = set()
+    for data in owner_events:
+        if not isinstance(data, dict):
+            continue
+        for key in ("from", "to"):
+            try:
+                people.add(UUID(str(data[key])))
+            except KeyError, ValueError:
+                continue
+    return frozenset(people)
 
 
 def _person(user_id: Any, name: Any) -> PersonRef | None:
@@ -716,7 +771,12 @@ def _notes(
     found: list[NoteBody] = []
     for row in rows:
         note_id, owner, raised_by = UUID(str(row[0])), UUID(str(row[12])), UUID(str(row[14]))
-        standing = Standing(status=str(row[11]), raised_by=raised_by, owner_id=owner)
+        standing = Standing(
+            status=str(row[11]),
+            raised_by=raised_by,
+            owner_id=owner,
+            owned_before=handed(event.data for event in events[note_id] if event.kind == "OWNER"),
+        )
         found.append(
             NoteBody(
                 id=note_id,
@@ -727,6 +787,7 @@ def _notes(
                 prefix=str(row[5]),
                 suffix=str(row[6]),
                 occurrence=int(row[7]),
+                field_text=None if row[25] is None else str(row[25]),
                 workpaper_version=int(row[8]),
                 text=str(row[9]),
                 criticality=row[10],
@@ -856,8 +917,9 @@ def raise_note(
     if not may_raise(viewer):
         raise NoteForbidden(RAISE_FORBIDDEN)
     anchor = anchor_of(
-        body.anchor_kind, body.field, body.quote, body.prefix, body.suffix, body.occurrence
-    )
+        body.anchor_kind, body.field, body.quote, body.prefix, body.suffix, body.occurrence,
+        body.field_text,
+    )  # fmt: skip
     text = clean_note(body.text)
     with transaction(connection) as cursor:
         paper = _paper(connection, organization_id, project_id, workpaper_id, lock=True)
@@ -870,19 +932,20 @@ def raise_note(
             """
             INSERT INTO workpaper_review_notes (
                 organization_id, project_id, workpaper_id, number, anchor_kind, field, quote,
-                prefix, suffix, occurrence, workpaper_version, text, criticality, owner_id,
-                raised_by
+                prefix, suffix, occurrence, field_text, workpaper_version, text, criticality,
+                owner_id, raised_by
             )
             SELECT %s, %s, %s,
                    coalesce((SELECT max(n.number) FROM workpaper_review_notes n
                              WHERE n.workpaper_id = %s), 0) + 1,
-                   %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                   %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             RETURNING id, number
             """,
             (
                 paper.organization_id, project_id, workpaper_id, workpaper_id, anchor.kind,
                 anchor.field, anchor.quote, anchor.prefix, anchor.suffix, anchor.occurrence,
-                body.workpaper_version, text, body.criticality, body.owner_id, viewer.id,
+                anchor.field_text, body.workpaper_version, text, body.criticality,
+                body.owner_id, viewer.id,
             ),
         ).fetchone()  # fmt: skip
         assert row is not None
@@ -938,10 +1001,16 @@ class _Locked:
     owner_name: str
     raised_by: UUID
     version: int
+    owned_before: frozenset[UUID]
 
     @property
     def standing(self) -> Standing:
-        return Standing(status=self.status, raised_by=self.raised_by, owner_id=self.owner_id)
+        return Standing(
+            status=self.status,
+            raised_by=self.raised_by,
+            owner_id=self.owner_id,
+            owned_before=self.owned_before,
+        )
 
 
 def _locked(cursor: psycopg.Cursor[Any], project_id: UUID, paper: _Paper, note_id: UUID) -> _Locked:
@@ -958,6 +1027,12 @@ def _locked(cursor: psycopg.Cursor[Any], project_id: UUID, paper: _Paper, note_i
     ).fetchone()
     if row is None:
         raise NotVisible()
+    # Who the note was ever handed from or to: its OWNER events, written only under this
+    # lock, so none is added before the act commits.
+    owners = cursor.execute(
+        "SELECT data FROM workpaper_review_note_events WHERE note_id = %s AND kind = 'OWNER'",
+        (note_id,),
+    ).fetchall()
     return _Locked(
         id=note_id,
         number=int(row[0]),
@@ -967,6 +1042,7 @@ def _locked(cursor: psycopg.Cursor[Any], project_id: UUID, paper: _Paper, note_i
         owner_name=str(row[4]),
         raised_by=UUID(str(row[5])),
         version=int(row[6]),
+        owned_before=handed(owner[0] for owner in owners),
     )
 
 
@@ -1309,6 +1385,7 @@ __all__ = [
     "clear",
     "counts_of",
     "dismiss",
+    "handed",
     "is_preparer",
     "may_change_owner",
     "may_decide",

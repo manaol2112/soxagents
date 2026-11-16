@@ -13,7 +13,7 @@ import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from psycopg.types.json import Json
-from support import Database
+from support import Database, record_design_choice
 from test_evidence_intake import _engagement
 from test_execution import _add_project_member, _add_user, _ready
 from test_outbound import _session, migrated
@@ -75,6 +75,12 @@ class _Desk:
     @property
     def current(self) -> int:
         return int(self.paper()["current_version"])
+
+    def conclude(self) -> None:
+        """The preparer records a conclusion on the draft design workpaper, as preparing it
+        needs (docs/design-workpaper.md, section 3.7). It moves the workpaper's version on:
+        read the workpaper again before preparing."""
+        record_design_choice(self.owner, self.root, self.control_id)
 
     def url(self, key: str, paper_id: str | None = None, root: str | None = None) -> str:
         base = self.base if root is None else f"{root}/workpapers"
@@ -438,7 +444,10 @@ def test_saving_a_section_deletes_my_working_copy_and_preparing_deletes_every_on
     assert desk.kept() == held and len(held) == 2
 
     # Prepared: every working copy of the workpaper is deleted with it, whoever's, and
-    # none is kept until it is reopened.
+    # none is kept until it is reopened. A conclusion is recorded first, as preparing a
+    # design workpaper needs (section 3.7); recording it keeps the working copies.
+    desk.conclude()
+    assert desk.kept() == held
     paper = desk.paper()
     prepared = desk.owner.post(
         f"{desk.base}/{desk.paper_id}/prepare", json={"version": paper["version"]}
@@ -565,8 +574,11 @@ def test_where_the_migration_is_not_applied_a_section_is_still_saved_and_prepare
             (desk.paper_id,),
         ).fetchone()
     assert edited == (1,)
+    # A conclusion is recorded first, as preparing a design workpaper needs (section 3.7):
+    # it moves the workpaper's version on past the save's.
+    desk.conclude()
     prepared = desk.owner.post(
-        f"{desk.base}/{desk.paper_id}/prepare", json={"version": saved.json()["version"]}
+        f"{desk.base}/{desk.paper_id}/prepare", json={"version": desk.paper()["version"]}
     )
     assert prepared.status_code == 200, prepared.text
     assert prepared.json()["status"] == "PREPARED"

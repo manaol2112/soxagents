@@ -5,7 +5,7 @@ from typing import Any
 from uuid import UUID
 
 from openpyxl import load_workbook
-from support import Database
+from support import Database, record_design_choice
 from test_evidence_analysis import _Provider
 from test_evidence_intake import _accept_population, _engagement, _request
 from test_outbound import migrated
@@ -13,7 +13,7 @@ from test_testing_engine import _add, _answer, _base, _Citing, _read_all, _sheet
 
 from ai_workforce_api.db import connect
 from ai_workforce_api.testing_engine import run_sheet
-from ai_workforce_api.workpaper_service import run_draft
+from ai_workforce_api.workpaper_service import PREPARE_NEEDS_CONCLUSION, run_draft
 
 _ = migrated
 
@@ -244,10 +244,22 @@ def test_an_effectiveness_workpaper_needs_signed_off_testing(migrated: Database)
     assert early.status_code == 409
     assert "testing" in early.json()["detail"]
     assert "No model is configured" in papers["DESIGN"]["draft_note"]
+    # The design workpaper is prepared once its preparer recorded a conclusion
+    # (docs/design-workpaper.md, section 3.7; 16 November 2026). Old: prepared at once, 200,
+    # with no conclusion on record. New: refused with the sentence until one is recorded,
+    # then prepared, 200.
+    unconcluded = client.post(
+        f"{base}/{papers['DESIGN']['id']}/prepare", json={"version": papers["DESIGN"]["version"]}
+    )
+    assert (unconcluded.status_code, unconcluded.json()["detail"]) == (
+        409, PREPARE_NEEDS_CONCLUSION,
+    )  # fmt: skip
+    record_design_choice(client, _base(team), control["id"])
+    papers = {w["stage"]: w for w in client.get(base, params={"control_id": control["id"]}).json()}
     design = client.post(
         f"{base}/{papers['DESIGN']['id']}/prepare", json={"version": papers["DESIGN"]["version"]}
     )
-    assert design.status_code == 200
+    assert design.status_code == 200, design.text
 
 
 def test_the_testers_first_results_start_the_effectiveness_workpaper(

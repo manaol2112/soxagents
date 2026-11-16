@@ -11,6 +11,9 @@ Audit integrity:
   anything open stands; exceptions noted and no instance while a deficiency stands), and a
   basis or reason missing where the table needs one is a 422; no instance is refused,
   at the choice and at the sign-off, unless the design result is DESIGNED;
+- the design workpaper is prepared only on a standing conclusion that is not "Not
+  concluded" (section 3.7): the server refuses it otherwise, whatever page sent it, and
+  prepares nothing;
 - the reviewer signs exactly the preparer's standing conclusion, recorded before the
   preparation, with its rules read again in the transaction; not concluded is never
   signed; not effective needs a standing design deficiency and opens the control's review
@@ -85,6 +88,7 @@ from ai_workforce_api.design_conclusions import (
 )
 from ai_workforce_api.engagement_close import closed_detail
 from ai_workforce_api.migrate import apply_migrations, migrations_dir
+from ai_workforce_api.workpaper_service import PREPARE_NEEDS_CONCLUSION, PREPARE_NOT_CONCLUDED
 
 __all__ = ["migrated"]
 
@@ -170,6 +174,48 @@ class _Draft:
         )
         assert prepared.status_code == 200, prepared.text
         self.version = int(prepared.json()["prepared_version"])
+
+    def prepare_refused(self, detail: str) -> None:
+        """The owner's Prepare, sent from a page that has the latest version, is refused
+        with the sentence, and nothing is prepared or audited."""
+        paper = self.paper()
+        before = self.rows(
+            "SELECT status, prepared_by, prepared_at, prepared_version, version, "
+            "(SELECT count(*) FROM audit_events WHERE action = 'workpaper.prepared' "
+            "AND target_id = w.id) FROM workpapers w WHERE id = %s",
+            UUID(paper["id"]),
+        )
+        refused = self.bench.owner.post(
+            f"{self.bench.base}/workpapers/{paper['id']}/prepare",
+            json={"version": paper["version"]},
+        )
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["detail"] == detail
+        assert (
+            self.rows(
+                "SELECT status, prepared_by, prepared_at, prepared_version, version, "
+                "(SELECT count(*) FROM audit_events WHERE action = 'workpaper.prepared' "
+                "AND target_id = w.id) FROM workpapers w WHERE id = %s",
+                UUID(paper["id"]),
+            )
+            == before
+        )
+        assert before[0][0] == "DRAFT" and before[0][1] is None
+
+    def prepared_before_the_rule(self) -> None:
+        """The design workpaper marked prepared at its current version, written directly:
+        a workpaper prepared before the server refused a prepare with no conclusion, or
+        with "Not concluded" (section 3.7, 16 November 2026), which the service cannot
+        make now. The sign-off still refuses to sign it."""
+        with connect(self.database.url) as connection:
+            row = connection.execute(
+                "UPDATE workpapers SET status = 'PREPARED', prepared_by = requested_by, "
+                "prepared_at = clock_timestamp(), prepared_version = current_version, "
+                "version = version + 1 WHERE id = %s RETURNING prepared_version",
+                (self.paper()["id"],),
+            ).fetchone()
+        assert row is not None
+        self.version = int(row[0])
 
     def reopen(self) -> None:
         paper = self.paper()
@@ -584,8 +630,13 @@ def test_the_reviewer_signs_the_preparers_conclusion_and_the_oe_gate_reads_its_v
     migrated: Database,
 ) -> None:
     case = _Draft(migrated, "dcc-sign")
-    # Prepared with no conclusion recorded: nothing to sign.
-    case.prepare()
+    # No conclusion recorded: nothing to sign. Rewritten 16 November 2026 (section 3.7, the
+    # server refuses the preparer's sign-off without a conclusion). Old: the workpaper was
+    # prepared with none, then the sign-off refused. New: the prepare is refused with the
+    # sentence; a workpaper prepared before that rule (written directly) is still not
+    # signed, with the same sentence as before.
+    case.prepare_refused(PREPARE_NEEDS_CONCLUSION)
+    case.prepared_before_the_rule()
     body = case.body(case.reviewer)
     assert NO_CHOICE in body["blocking"] and body["can_sign"] is False
     _refused(case.sign_as("EFFECTIVE"), 409, NO_CHOICE)
@@ -636,10 +687,14 @@ def test_the_reviewer_signs_the_preparers_conclusion_and_the_oe_gate_reads_its_v
     assert body["blocking"] == [RECORDED_AFTER]
     _refused(case.sign_as("NO_INSTANCE"), 409, RECORDED_AFTER)
 
-    # Not concluded is never signed.
+    # Not concluded is never signed. Rewritten 16 November 2026 (section 3.7). Old: the
+    # workpaper was prepared on Not concluded, then the sign-off refused. New: the prepare
+    # is refused with the sentence; one prepared before that rule (written directly) is
+    # still never signed, with the same sentence as before.
     case.reopen()
     case.chosen("NOT_CONCLUDED")
-    case.prepare()
+    case.prepare_refused(PREPARE_NOT_CONCLUDED)
+    case.prepared_before_the_rule()
     body = case.body(case.reviewer)
     assert (body["blocking"], body["can_sign"]) == ([NEVER_SIGNED], False)
     _refused(case.sign_as("NOT_CONCLUDED"), 409, NEVER_SIGNED)
@@ -1018,6 +1073,50 @@ def test_the_sign_off_names_the_choice_it_signs(migrated: Database) -> None:
     signed = case.sign_as("NO_INSTANCE", choice_id=second["id"])
     assert signed.status_code == 200, signed.text
     assert case.signed_row()[4] == UUID(second["id"])
+
+
+def test_the_design_workpaper_is_prepared_only_on_a_recorded_conclusion(
+    migrated: Database,
+) -> None:
+    """Review of 16 November 2026, finding 1 (docs/design-workpaper.md, section 3.7: "a
+    conclusion is recorded (3.6) and it is not 'Not concluded' ... the server refuses").
+    The preparer's attestation says the conclusion above is complete and supported, so a
+    Prepare sent from any page (a stale tab, the older form route, a direct request) is
+    refused where none stands, or where the standing one is Not concluded: nothing is
+    prepared and nothing is audited. A conclusion recorded and then replaced by Not
+    concluded is refused too; replaced again by one that can be signed, it is prepared."""
+    case = _Draft(migrated, "dcc-prepare-needs")
+    case.prepare_refused(PREPARE_NEEDS_CONCLUSION)
+    # A page that has not read the latest version is told so first, as before.
+    paper = case.paper()
+    stale = case.bench.owner.post(
+        f"{case.bench.base}/workpapers/{paper['id']}/prepare",
+        json={"version": paper["version"] + 1},
+    )
+    assert (stale.status_code, stale.json()["detail"]) == (409, "the workpaper changed")
+    # Not concluded, recorded by the preparer (as the proposal, or with a reason): refused.
+    case.chosen("NOT_CONCLUDED")
+    case.prepare_refused(PREPARE_NOT_CONCLUDED)
+    case.chosen("EFFECTIVE")
+    case.chosen("NOT_CONCLUDED")
+    case.prepare_refused(PREPARE_NOT_CONCLUDED)
+    assert [kind for kind, _ended_as, _by in case.choices()] == [
+        "NOT_CONCLUDED", "EFFECTIVE", "NOT_CONCLUDED",
+    ]  # fmt: skip
+    # Each conclusion that can be signed is prepared on: here, not effective and effective.
+    case.chosen("NOT_EFFECTIVE")
+    case.prepare()
+    paper = case.paper()
+    assert (paper["status"], paper["prepared_version"]) == ("PREPARED", case.version)
+    [(audited,)] = case.rows(
+        "SELECT count(*) FROM audit_events WHERE action = 'workpaper.prepared' AND target_id = %s",
+        UUID(paper["id"]),
+    )
+    assert audited == 1
+    case.reopen()
+    case.chosen("EFFECTIVE")
+    case.prepare()
+    assert case.paper()["status"] == "PREPARED"
 
 
 def test_recording_a_choice_makes_a_prepare_from_an_older_page_stale(migrated: Database) -> None:
