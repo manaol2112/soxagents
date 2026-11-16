@@ -556,6 +556,68 @@ the preparer's sign-off; the reviewer's sign-off stays in D&I Conclusion and Rev
 - The reviewer still cannot be the preparer, nor the person who recorded the conclusion,
   where independence is required (3.6).
 
+## 3.8 One D&I step: the preparer sends it for review, the reviewer signs in section 7 (product owner, 16 November 2026)
+
+"Does it make sense to separate those? I don't see the value of having a separate D&I
+conclusion and review in Step 6", then "I still want to have a sign-off of the reviewer on
+the D&I. When the user signs-off he/she has the option to send the workpaper for review to
+another team member", then "Looks good to me" to the prototype
+(scratchpad send-proto/send-for-review.png). Supersedes the separate step of 3.5: the D&I
+conclusion and its review are both in D&I Assessment, section 7.
+
+- **The workflow.** The step "D&I Conclusion and Review" (`designconclusion`) is removed;
+  the D&I Assessment step carries the status: Draft · Prepared, in review with <name> ·
+  Returned to the preparer · Signed off: <conclusion> · Sign-off out of date. Old links to
+  the removed step land on D&I Assessment at section 7. Scope & Sampling still waits for
+  the reviewer's D&I sign-off (the OE gate is unchanged).
+- **Sending for review.** "Sign as preparer" becomes "Sign and send for review": one press
+  prepares the design workpaper (3.7, unchanged rules) and sends it to the reviewer chosen
+  in **Send for review to**, with an optional message (up to 1,000 characters, a person's
+  own, untrusted). The picker lists the engagement's members whose engagement role is
+  REVIEWER (the people who may sign: `control_reviews._is_reviewer`), each with how many
+  D&I workpapers wait for them; the preparer and the person who recorded the standing
+  conclusion are shown but not offered, with the reason, where independence is required.
+  It starts on the reviewer this preparer last sent to on this engagement, else the only
+  reviewer, else nothing (a choice is needed). A reviewer must be chosen to sign.
+- **The record** (migration 0168, `design_review_requests`, written once and ended once,
+  no delete, archived guard): control, workpaper, `workpaper_version` (the prepared
+  version), `reviewer_id`, `sent_by`, `sent_at`, `message`, `reminded_at` (the last
+  reminder, the one column that may change, and only forward), `ended_at`, `ended_by`,
+  `ended_as` (`SIGNED` with the sign-off; `RETURNED` with a reason; `REASSIGNED` when
+  another reviewer is chosen; `REOPENED` when the preparer reopens; `SUPERSEDED` when the
+  workpaper is prepared again), `ended_reason`. One stands per control.
+- **What the preparer sees after sending:** Prepared ✓ (who, when, version; Reopen), then
+  "In review with <name> · sent <when>" with the message, **Change reviewer** (ends the
+  request REASSIGNED and opens one to the new reviewer; the same picker rules) and
+  **Remind** (an in-app notice to the reviewer; at most once an hour; no email).
+- **What the reviewer sees** (the same section 7): the message, one line of what the
+  sign-off rests on (deficiencies, exceptions, open and urgent review notes), an optional
+  sign-off note, **Sign off: <conclusion>** (the existing sign-off of 3.6, which now also
+  ends the request SIGNED) and **Return to preparer** (a reason, 10 to 1,000 characters:
+  the design workpaper goes back to a draft through the existing reopen, the request ends
+  RETURNED with the reason, and the preparer sees it). Only the reviewer the request names
+  may sign it or return it; another reviewer is told who it is with and may be made the
+  reviewer through Change reviewer by the preparer or a lead. Urgent review notes hold the
+  sign-off (workpaper-review.md, section 4).
+- **Returned:** the preparer sees "Returned by <name> · <when>" with the reason; the
+  workpaper is a draft again; **Sign and send again** prepares it and opens a new request,
+  starting on the same reviewer.
+- **The reviewer's list on Home:** "Waiting for your review": one line per standing
+  request for the viewer (control reference and title, "D&I", from whom, when, the
+  conclusion, or "N urgent notes"), linking to D&I Assessment at section 7; the count in
+  the navigation.
+- **API** (`/organizations/{o}/projects/{p}/design-conclusions/{control_id}`): the body
+  gains `review_request` (`{id, reviewer {id, name}, sent_by {id, name}, sent_at, message,
+  reminded_at, version}` or null), `last_return` (`{by {id, name}, at, reason}` or null),
+  `reviewers` (`[{id, name, waiting, offered, why_not}]`) and `default_reviewer_id`.
+  `POST …/send-for-review` `{workpaper_version, reviewer_id, message, prepare_note}`
+  (prepares, then opens the request, in one transaction); `POST …/review-request/reviewer`
+  `{request_id, reviewer_id}`; `POST …/review-request/remind` `{request_id}`;
+  `POST …/return` `{request_id, reason}`. The sign-off body gains `request_id` (required
+  where a request stands; a stale one is a 409). `GET /organizations/{o}/projects/{p}/
+  review-requests/mine` lists the viewer's standing requests for Home. Each write is one
+  audit event; the message and reason at most 200 characters in it.
+
 ## 4. Tests
 
 Server: the assembly from synthetic records (each attribute state, the evidence numbering
