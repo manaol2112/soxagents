@@ -8,10 +8,14 @@
  */
 
 import {
+  type ConclusionKind,
   type DesignConclusionStatus,
   type DesignVerdict,
   EXCEPTION_TO_RESOLVE,
   exceptionHolds,
+  type StandingKind,
+  signableKind,
+  standingWords,
 } from "./design-conclusion-model.ts";
 import {
   type EvidenceWorkflowHeader,
@@ -286,6 +290,17 @@ export type WorkflowInput = {
     /** What holds the sign-off, as the server sends it (`blocking`): an exception a
      * person recorded is read from it. Absent where it was not read. */
     blocking?: readonly string[];
+    /** On a body that follows docs/design-workpaper.md section 3.6
+     * (design-conclusion-model.namedConclusion): the conclusion that stands (the signed
+     * one while the sign-off holds, else the preparer's; null where none is recorded,
+     * "NOT_STATED" where one this page cannot read) and the agent's proposal. Absent on
+     * a body from before 3.6, whose two-value verdict is read as before. */
+    named?:
+      | {
+          standing: StandingKind | null;
+          proposed: ConclusionKind | null;
+        }
+      | undefined;
   } | null;
   effectivenessPaper: Paper | null;
   /** Steps an agent is working on now. */
@@ -527,16 +542,45 @@ function designConclusionState(input: WorkflowInput): State {
   if (conclusion.status === "NOT_READY") {
     return waiting("designassessment");
   }
+  // Section 3.6: on a body that names the conclusion, the step says the one that stands,
+  // in its own words ("Exceptions noted · signed off"); the records' two-value proposal
+  // is never said as anyone's conclusion (independent review, 15 November 2026).
+  const named = conclusion.named;
   if (conclusion.status === "SIGNED_OFF" && conclusion.signed !== null) {
     return {
       tone: "done",
-      status: `${VERDICT_WORDS[conclusion.signed]} · signed off`,
+      status: `${
+        named === undefined
+          ? VERDICT_WORDS[conclusion.signed]
+          : standingWords(named.standing)
+      } · signed off`,
     };
   }
   // The server refuses every sign-off while an exception a person recorded stands
   // unanswered: never "Effective · to sign off", nor "to sign again", over one.
   if (excepted(input)) {
     return { tone: "blocked", status: EXCEPTION_TO_RESOLVE };
+  }
+  if (named !== undefined) {
+    // Nothing to sign while no conclusion that can be signed stands: none recorded,
+    // "Not concluded" (never signed), or one this page cannot read.
+    const signable = signableKind(named.standing);
+    if (conclusion.status === "OUT_OF_DATE") {
+      return {
+        tone: "attention",
+        status:
+          signable === null
+            ? `Out of date · ${standingWords(named.standing).toLowerCase()}`
+            : "Out of date · to sign again",
+      };
+    }
+    return {
+      tone: "attention",
+      status:
+        signable === null
+          ? standingWords(named.standing)
+          : `${standingWords(signable)} · to sign off`,
+    };
   }
   if (conclusion.status === "OUT_OF_DATE") {
     return { tone: "attention", status: "Out of date · to sign again" };

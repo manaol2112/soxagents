@@ -492,3 +492,59 @@ describe("D&I Evidence once its requests are drafted (12 November 2026)", () => 
     assert.notDeepEqual(agentNote(step, input), header.agent);
   });
 });
+
+// The independent review of section 3.6 (15 November 2026; docs/design-workpaper.md,
+// section 3.6, finding 6): the agent's strip on D&I Conclusion and Review says the
+// conclusion that stands, and the agent's proposal only as a proposal.
+describe("the D&I conclusion's strip says the conclusion that stands", () => {
+  const found = (designConclusion: WorkflowInput["designConclusion"]) => {
+    const input = midway({ designConclusion });
+    const step = workflowOf(input).find(
+      (item) => item.key === "designconclusion",
+    );
+    assert.ok(step !== undefined);
+    return agentNote(step, input).found;
+  };
+
+  it("with none recorded: says so, never “Proposed: effective”", () => {
+    const lines = found({
+      status: "TO_SIGN",
+      proposed: "EFFECTIVE",
+      signed: null,
+      named: { standing: null, proposed: "NOT_CONCLUDED" },
+    });
+    assert.deepEqual(lines, [
+      "No conclusion recorded yet: the preparer records it in section 7 of D&I Assessment.",
+      "Proposed by the agent: Not concluded.",
+    ]);
+  });
+
+  it("the preparer's, or the signed one, in its own words", () => {
+    assert.deepEqual(
+      found({
+        status: "TO_SIGN",
+        proposed: "EFFECTIVE",
+        signed: null,
+        named: { standing: "EXCEPTIONS_NOTED", proposed: "EXCEPTIONS_NOTED" },
+      }),
+      [
+        "Recorded by the preparer: Exceptions noted.",
+        "Proposed by the agent: Exceptions noted.",
+      ],
+    );
+    assert.deepEqual(
+      found({
+        status: "SIGNED_OFF",
+        proposed: "EFFECTIVE",
+        signed: "EFFECTIVE",
+        named: { standing: "NO_INSTANCE", proposed: "EFFECTIVE" },
+      }),
+      ["Signed off: Design effective, no instance to walk through."],
+    );
+    // Before 3.6, as before.
+    assert.deepEqual(
+      found({ status: "TO_SIGN", proposed: "EFFECTIVE", signed: null }),
+      ["Proposed: effective."],
+    );
+  });
+});

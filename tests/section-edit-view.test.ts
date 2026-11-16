@@ -74,9 +74,13 @@ describe("Edit opens the section's editor where the document shows it", () => {
     // The fold's own way in is as it was.
     const step = component(view, "DesignWorkpaperStep");
     assert.match(step, /onEdit=\{reveal\}/);
+    // Rewritten (independent review, 15 November 2026, docs/design-workpaper.md section 3.6).
+    // Old: `<WorkpapersTab compact {...props} stage="DESIGN" />`. New: the same card with
+    // `prepareHeld={behind}`: a recorded conclusion moves the workpaper's version, and
+    // Prepare waits until the page's records are read again.
     assert.match(
       step,
-      /<WorkpapersTab compact \{\.\.\.props\} stage="DESIGN" \/>/,
+      /<WorkpapersTab\s+compact\s+\{\.\.\.props\}\s+stage="DESIGN"\s+prepareHeld=\{behind\}\s*\/>/,
     );
   });
 

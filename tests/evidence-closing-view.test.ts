@@ -468,7 +468,13 @@ describe("the D&I conclusion", () => {
     has(panel, "<div className={`dc-verdict is-@{head.tone}`}>");
     has(panel, '<h3 id="dc-heading">{head.heading}</h3>');
     has(panel, "<span className={`dc-status is-@{head.statusTone}`}>");
-    has(panel, '<p className="dc-verdict-word">{head.word}</p>');
+    // Rewritten (independent review, 15 November 2026, docs/design-workpaper.md section 3.6, finding 6). Old: `<p
+    // className="dc-verdict-word">{head.word}</p>`. New: the same word, said quietly
+    // where no conclusion is recorded (`is-none`).
+    has(
+      panel,
+      '<p className={`dc-verdict-word@{none ? " is-none" : ""}`}> {head.word} </p>',
+    );
     has(panel, '<p className="dc-effect">{head.effect}</p>');
     has(panel, "{head.next}");
     // What misled is no longer written in the panel at all: the model says it, and only
@@ -507,7 +513,11 @@ describe("the D&I conclusion", () => {
     // holds its own punctuation) no longer reads in. New: one line per reason, as sent.
     has(
       panel,
-      '<div className="dc-outdated"> <p>The sign-off no longer holds:</p> <ul> {conclusion.outOfDate.map((reason) => ( <li key={reason}>{reason}</li> ))} </ul> <p>OE waits until a reviewer signs off again.</p> </div>',
+      // Rewritten again (independent review, 15 November 2026, docs/design-workpaper.md section 3.6, finding 6). Old:
+      // the last line was always "OE waits until a reviewer signs off again.". New: the
+      // model's (outOfDateNext), which says what to do first where no conclusion that
+      // can be signed stands (a sign-off from before 3.6).
+      '<div className="dc-outdated"> <p>The sign-off no longer holds:</p> <ul> {conclusion.outOfDate.map((reason) => ( <li key={reason}>{reason}</li> ))} </ul> <p>{outOfDateNext(conclusion)}</p> </div>',
     );
     assert.equal(/outOfDate\.join|outOfDate\[0\]/.test(panel), false);
     assert.match(

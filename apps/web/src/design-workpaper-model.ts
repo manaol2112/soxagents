@@ -205,12 +205,13 @@ export type Attribute = {
   checks: string[];
   notes: string;
   /** How a current check shows an attribute that reads "Shown" (section 3.6): in the
-   * records of an instance, or only as a document requires it; null otherwise, and for
-   * anything this page does not know. */
+   * records of an instance, or only as a document requires it; or that it is shown only
+   * on files a person decided are not relied on (NOT_RELIED, whatever the attribute's
+   * state reads); null otherwise, and for anything this page does not know. */
   shownBy: ShownBy | null;
 };
 
-export type ShownBy = "IMPLEMENTATION" | "DESIGN";
+export type ShownBy = "IMPLEMENTATION" | "DESIGN" | "NOT_RELIED";
 
 export type Matter = {
   state: "OPEN" | "NOTED";
@@ -474,11 +475,14 @@ function attributeOf(item: Raw, known: ReadonlySet<string>): Attribute | null {
     checks: lines(item.checks, 20),
     notes: prose(item.notes, 4000),
     // Only of an attribute that reads "Shown": a way of being shown is never read into
-    // another state.
+    // another state. That it rests only on files not relied on is said whatever the
+    // state reads: it takes nothing for shown.
     shownBy:
-      state === "SHOWN"
-        ? oneOf(["IMPLEMENTATION", "DESIGN"] as const, item.shown_by)
-        : null,
+      item.shown_by === "NOT_RELIED"
+        ? "NOT_RELIED"
+        : state === "SHOWN"
+          ? oneOf(["IMPLEMENTATION", "DESIGN"] as const, item.shown_by)
+          : null,
   };
 }
 
@@ -1225,12 +1229,13 @@ export function conclusionOf(paper: Standing): ConclusionView {
   };
 }
 
-/** A signed conclusion's tone: green for effective and no instance, the warning tone for
- * exceptions noted (concluded on, never green), red for not effective. Only of a
- * sign-off that stands. */
+/** A signed conclusion's tone: green for effective only; neutral for no instance (the
+ * design alone, never the green of effective: independent review, 15 November 2026);
+ * the warning tone for exceptions noted (concluded on, never green); red for not
+ * effective. Only of a sign-off that stands. */
 const KIND_TONES: Readonly<Record<ConclusionKind, Tone>> = {
   EFFECTIVE: "success",
-  NO_INSTANCE: "success",
+  NO_INSTANCE: "neutral",
   EXCEPTIONS_NOTED: "warning",
   NOT_EFFECTIVE: "danger",
   NOT_CONCLUDED: "neutral",
@@ -1298,10 +1303,12 @@ export function resultBoxes(
   });
 }
 
-/** Under an attribute's result in section 4: how it is shown (section 3.6). */
+/** Under an attribute's result in section 4: how it is shown (section 3.6), or that it
+ * is shown only on files a person decided are not relied on. */
 export const SHOWN_BY_WORDS: Readonly<Record<ShownBy, string>> = {
   IMPLEMENTATION: "In the instance",
   DESIGN: "As designed",
+  NOT_RELIED: "On files not relied on",
 };
 
 /** What the page knows of the records the preparer's choice is ruled by (section 3.6):
@@ -1324,6 +1331,7 @@ export function choiceFactsOf(
       .map((item) => item.code),
     design: paper.design?.result ?? null,
     implementation: paper.implementation?.result ?? null,
+    designOpen: paper.design?.open ?? [],
     implementationOpen: paper.implementation?.open ?? [],
   };
 }

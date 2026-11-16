@@ -866,7 +866,7 @@ button.dw-edit:focus-visible:not(:disabled) {
     border-color 120ms ease;
 }
 
-.cc-kind:hover:not(.is-off) {
+.cc-kind:hover:not(.is-off, .is-unavailable) {
   background: var(--surface-muted);
 }
 
@@ -875,7 +875,14 @@ button.dw-edit:focus-visible:not(:disabled) {
   border-color: var(--accent);
 }
 
-.cc-kind:has(input:disabled) {
+/* Not offered now, or not being changed: it stays in reach (never `disabled`), and reads
+   as something that cannot be chosen. */
+.cc-kind.is-unavailable {
+  cursor: default;
+}
+
+.cc-kind input[aria-disabled="true"] {
+  opacity: 0.55;
   cursor: default;
 }
 
@@ -980,6 +987,17 @@ button.dw-edit:focus-visible:not(:disabled) {
   border: 1px solid var(--danger-border);
   border-radius: var(--radius);
   overflow-wrap: anywhere;
+}
+
+/* The focus is brought to it after an answer; it is read, not pressed. */
+.cc-refusal:focus {
+  outline: none;
+}
+
+/* Recorded, though the page could not read the answer: said plainly, not as a refusal. */
+.cc-refusal.is-recorded {
+  background: var(--surface-muted);
+  border-color: var(--border);
 }
 
 /* The way to the document's section 7, from the Matrix and the Evidence view. */

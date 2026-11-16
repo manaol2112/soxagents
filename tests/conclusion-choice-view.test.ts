@@ -150,7 +150,14 @@ describe("the choice is recorded by the server, and shown as recorded only then"
     );
     assert.match(choice, /aria-describedby=\{reasonHint\}/);
     // A refusal is an alert, in the server's sentence; what was chosen stays.
-    assert.match(choice, /<p className="cc-refusal" role="alert">/);
+    // Rewritten (independent review, 15 November 2026, docs/design-workpaper.md section 3.6). Old: `<p
+    // className="cc-refusal" role="alert">`. New: the same alert takes the focus after an
+    // answer (`tabIndex={-1}`, finding 12), and reads as recorded where a 200 could not
+    // be read (finding 10).
+    assert.match(
+      choice,
+      /<p\s+ref=\{alertBox\}\s+className=\{`cc-refusal\$\{unread \? " is-recorded" : ""\}`\}\s+role="alert"\s+tabIndex=\{-1\}\s*>/,
+    );
     assert.match(
       choice,
       /setRefusal\(choiceRefusal\(answer\.status, answer\.detail\)\);/,
@@ -191,15 +198,22 @@ describe("the choice is recorded by the server, and shown as recorded only then"
 
   it("shows it as recorded only after the server confirmed it, then reads again without a reload", () => {
     const record = component(choice, "ConclusionChoicePanel");
+    // Rewritten (independent review, 15 November 2026, docs/design-workpaper.md section 3.6, finding 10). Old: a 200
+    // whose body did not parse set the standing conclusion to none and the notice to
+    // "" (`setStanding(confirmed)` whatever it was). New: it keeps the standing choice
+    // and the draft, says "Recorded, but the page could not read it again", and reads
+    // the records again; "Conclusion recorded." is said once a confirmed choice is read
+    // (from the answer, or from that read).
     assert.match(
       record,
-      /if \(answer\.status === 200\) \{[\s\S]{0,200}const confirmed = parseDesignConclusion\(answer\.result\)\?\.choice \?\? null;\s*setStanding\(confirmed\);/,
+      /if \(answer\.status === 200\) \{\s*const confirmed = parseDesignConclusion\(answer\.result\)\?\.choice \?\? null;\s*if \(confirmed === null\) \{[\s\S]{0,400}setUnread\(true\);\s*setRefusal\(RECORDED_UNREAD\);\s*focusAfter\.current = "alert";\s*onRefused\(\);\s*refreshRecords\(\);\s*return;\s*\}[\s\S]{0,120}setStanding\(confirmed\);/,
     );
-    assert.match(
-      record,
-      /setNotice\(confirmed === null \? "" : "Conclusion recorded\."\)/,
+    const unreadBranch = record.slice(
+      record.indexOf("if (confirmed === null) {"),
+      record.indexOf("setStanding(confirmed);"),
     );
-    assert.equal(count(record, /setNotice\("Conclusion recorded/g), 0);
+    assert.equal(/setStanding|setDraft/.test(unreadBranch), false);
+    assert.equal(count(record, /setNotice\("Conclusion recorded\."\)/g), 2);
     assert.match(record, /onRecorded\(confirmed\);\s*refreshRecords\(\);/);
     assert.equal(
       /location\.(reload|assign|href)|window\.location\.href/.test(choice),
@@ -273,9 +287,20 @@ describe("D&I Conclusion and Review is the reviewer's, and read-only", () => {
       panel,
       /`Sign off: \$\{signable === null \? "" : CONCLUSION_WORDS\[signable\]\}`/,
     );
+    // Rewritten (independent review, 15 November 2026, docs/design-workpaper.md section 3.6, finding 4). Old: `body: {
+    // conclusion, workpaper_version: version, note }`. New: the standing choice's id is
+    // posted, and there is no sign-off without one.
     assert.match(
       conclusionModel,
-      /body: \{ conclusion, workpaper_version: version, note \},/,
+      /body: \{\s*conclusion,\s*choice_id: choice,\s*workpaper_version: version,\s*note,\s*\},/,
+    );
+    assert.match(
+      panel,
+      /<input type="hidden" name="choice_id" value=\{choice\?\.id \?\? ""\} \/>/,
+    );
+    assert.match(
+      panel,
+      /const signs =\s*conclusion\.canSign &&\s*choice !== null &&\s*signable !== null &&/,
     );
     assert.equal(/body: \{ verdict,/.test(conclusionModel), false);
     // The route still posts the sign-off through the model's write.
@@ -284,11 +309,89 @@ describe("D&I Conclusion and Review is the reviewer's, and read-only", () => {
 
   it("says the conclusion once in the step", () => {
     // The sign-off line names it only where it signed another one.
+    // Rewritten (independent review, 15 November 2026, docs/design-workpaper.md section 3.6, finding 6). Old: compared
+    // with `choice.kind`, which a pre-3.6 sign-off with no choice could not be. New:
+    // with the conclusion the card says (`standing`).
     assert.match(
       panel,
-      /signed\.conclusion !== choice\.kind\s*\?\s*` · signed as “\$\{CONCLUSION_WORDS\[signed\.conclusion\]\}”`/,
+      /signed\.conclusion !== null && signed\.conclusion !== standing\s*\?\s*` · signed as “\$\{CONCLUSION_WORDS\[signed\.conclusion\]\}”`/,
     );
     assert.equal(count(panel, /\{head\.word\}/g), 1);
+  });
+});
+
+// The independent review of section 3.6 (15 November 2026), read from the screen's own
+// files: what must hold however it looks. The browser harness checks the behavior.
+describe("the independent review of the conclusion's screens", () => {
+  it("5: the step reads the text again for the version it signs, and holds Sign off meanwhile", () => {
+    for (const part of [
+      "conclusion?.choice?.id",
+      "conclusion?.status",
+      "conclusion?.workpaper?.status",
+      "conclusion?.workpaper?.preparedVersion",
+    ]) {
+      assert.ok(panel.includes(part), part);
+    }
+    assert.match(panel, /text: wanted && read !== null && read\.key === key/);
+    assert.match(panel, /"Reading the conclusion…"/);
+    assert.match(panel, /"The conclusion could not be read: try again"/);
+    assert.match(
+      panel,
+      /if \(intent === "sign" && typeof text !== "string"\) \{\s*return;\s*\}/,
+    );
+    assert.match(
+      panel,
+      /aria-disabled=\{textHold !== "" \? "true" : undefined\}/,
+    );
+  });
+
+  it("10: the sign-off's refusal is the server's own sentence, shown at once", () => {
+    assert.match(
+      panel,
+      /setRefusal\(designConclusionRefusal\(intent, result, detail\)\);/,
+    );
+    assert.match(route, /return NextResponse\.json\(\{ notice, detail \}\);/);
+  });
+
+  it("a recorded conclusion moves the workpaper's version: the fold's Prepare waits for the page's records", () => {
+    const paperView = read("apps/web/src/workpaper-view.tsx");
+    assert.match(paperView, /disabled=\{paper\.drafting \|\| prepareHeld\}/);
+    assert.match(paperView, /Reading the workpaper again…/);
+    const step = component(view, "DesignWorkpaperStep");
+    assert.match(step, /onBehind=\{setBehind\}/);
+    assert.match(step, /prepareHeld=\{behind\}/);
+    assert.match(
+      view,
+      /const held = useMemo\(\s*\(\) => behind \|\| recordVersionBehind\(papers, paper\),/,
+    );
+    // The choice reads both again once confirmed: the views and the page's records.
+    assert.match(choice, /onRecorded\(confirmed\);\s*refreshRecords\(\);/);
+  });
+
+  it("12: a conclusion not offered stays focusable, never `disabled`", () => {
+    const kinds = choice.slice(
+      choice.indexOf('<fieldset className="cc-kinds">'),
+      choice.indexOf("</fieldset>"),
+    );
+    assert.equal(/(?<![-\w])disabled=/.test(kinds), false);
+    assert.match(kinds, /aria-disabled=\{unavailable \? "true" : undefined\}/);
+    assert.match(kinds, /aria-labelledby=\{wordsId\}/);
+    assert.match(kinds, /aria-describedby=\{hintId\}/);
+    assert.match(
+      kinds,
+      /onClick=\{\(event\) => \{\s*if \(unavailable\) \{\s*event\.preventDefault\(\);/,
+    );
+    assert.match(
+      css,
+      /\.cc-kind input\[aria-disabled="true"\] \{[^}]*opacity: 0\.55;/,
+    );
+    // The focus goes to the alert or to Change, and is kept as a target until that is
+    // drawn: never dropped on a commit that does not show it yet.
+    assert.match(
+      choice,
+      /if \(node !== null\) \{\s*focusAfter\.current = null;\s*node\.focus\(\);\s*\}/,
+    );
+    assert.match(choice, /document\.activeElement !== alertBox\.current;/);
   });
 });
 

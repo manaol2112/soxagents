@@ -77,6 +77,10 @@ export type DesignSignoff = {
   /** The conclusion the reviewer signed (section 3.6); null where the server does not
    * say, or says a kind this page does not know (then only `verdict` is read). */
   conclusion: SignedKind | null;
+  /** The server names a conclusion on the sign-off that this page cannot read: a kind
+   * it does not know, or one that disagrees with `verdict`. It is then said as "Not
+   * stated", never by its verdict as effective. */
+  conclusionUnread: boolean;
   basis: ConclusionBasis | null;
   reason: string;
   workpaperVersion: number;
@@ -124,6 +128,9 @@ export type DesignConclusion = {
   exceptions: RecordedException[];
   viewerIsReviewer: boolean;
   viewerPrepared: boolean;
+  /** The viewer recorded the standing conclusion (section 3.6, "Tightened after the
+   * independent review"): where independence is required they cannot sign it. */
+  viewerRecorded: boolean;
   independenceRequired: boolean;
   canSign: boolean;
   history: DesignSignoff[];
@@ -134,6 +141,13 @@ export type DesignConclusion = {
   /** The preparer's conclusion that stands; null where none does, or where the server
    * sends one this page cannot read (an unknown kind is never read as effective). */
   choice: ConclusionChoice | null;
+  /** The server sent a standing conclusion this page cannot read (a kind it does not
+   * know, or no id): one stands, and it is never said as "none recorded". */
+  choiceUnread: boolean;
+  /** The body follows section 3.6: it names the conclusion (it carries
+   * `proposed_conclusion` or `choice`). The two-value `proposed` is then never read for
+   * the conclusion's words or tone; it is on a body from before 3.6 only. */
+  namesConclusion: boolean;
   /** Whether the viewer may record the conclusion now: the server's word only. */
   canChoose: boolean;
   design: ConclusionResult | null;
@@ -243,6 +257,10 @@ function signoffOf(value: unknown): DesignSignoff | null {
     id: value.id,
     verdict,
     conclusion,
+    conclusionUnread:
+      conclusion === null &&
+      value.conclusion !== undefined &&
+      value.conclusion !== null,
     basis: conclusion === "NOT_EFFECTIVE" ? basisOf(value.basis) : null,
     reason: text(value.reason).trim().slice(0, 1000),
     workpaperVersion: value.workpaper_version,
@@ -318,6 +336,7 @@ export function parseDesignConclusion(value: unknown): DesignConclusion | null {
       : [],
     viewerIsReviewer: value.viewer_is_reviewer === true,
     viewerPrepared: value.viewer_prepared === true,
+    viewerRecorded: value.viewer_recorded === true,
     independenceRequired: value.independence_required !== false,
     canSign: value.can_sign === true,
     history: Array.isArray(value.history)
@@ -331,11 +350,19 @@ export function parseDesignConclusion(value: unknown): DesignConclusion | null {
       .filter((item) => item !== "")
       .slice(0, 12),
     choice: conclusionChoiceOf(value.choice),
+    choiceUnread:
+      isRaw(value.choice) && conclusionChoiceOf(value.choice) === null,
+    namesConclusion: "proposed_conclusion" in value || "choice" in value,
     canChoose: value.can_choose === true,
     design: conclusionResultOf(value.design),
     implementation: conclusionResultOf(value.implementation),
   };
 }
+
+/** The server's sentence for a viewer who recorded the standing conclusion
+ * (design_conclusions, tightened 15 November 2026), as the page shows it. */
+export const RECORDED_BY_VIEWER =
+  "You recorded this conclusion; another reviewer must sign it off.";
 
 /** Why the viewer cannot sign, in the page's words; null when they can. */
 export function signBlockedReason(conclusion: DesignConclusion): string | null {
@@ -354,18 +381,105 @@ export function signBlockedReason(conclusion: DesignConclusion): string | null {
   if (conclusion.viewerPrepared && conclusion.independenceRequired) {
     return "The preparer of the design workpaper cannot sign off its conclusion. Another reviewer signs.";
   }
+  if (conclusion.viewerRecorded && conclusion.independenceRequired) {
+    // The server's own sentence, as the page shows it: said once with `blocking`'s.
+    return RECORDED_BY_VIEWER;
+  }
   return conclusion.blocking[0] ?? null;
 }
 
+/* The conclusion that stands (docs/design-workpaper.md, section 3.6) ------------------- */
+
+/** A conclusion the server names that this page cannot read. */
+export type StandingKind = ConclusionKind | "NOT_STATED";
+
+/** In place of a conclusion's words: none is recorded, or the one on record is of a
+ * kind this page does not know (never said as effective). */
+export const NO_CONCLUSION_YET = "No conclusion recorded yet";
+export const NO_CONCLUSION = "No conclusion recorded";
+export const NOT_STATED = "Not stated";
+
+/**
+ * The conclusion the step speaks of, on a body that follows section 3.6: the one the
+ * reviewer signed while the sign-off stands, otherwise the preparer's that stands.
+ * `null` where none is recorded; "NOT_STATED" where one is, of a kind this page cannot
+ * read; `undefined` on a body from before 3.6, which names none (its two-value verdict
+ * is read as before). The two-value `proposed` is never read here: what the records
+ * propose is not what anyone concluded.
+ */
+export function standingKind(
+  conclusion: DesignConclusion,
+): StandingKind | null | undefined {
+  if (!conclusion.namesConclusion) {
+    return undefined;
+  }
+  const chosen: StandingKind | null =
+    conclusion.choice?.kind ?? (conclusion.choiceUnread ? "NOT_STATED" : null);
+  const signed = conclusion.signed;
+  if (conclusion.status !== "SIGNED_OFF" || signed === null) {
+    return chosen;
+  }
+  if (signed.conclusion !== null) {
+    return signed.conclusion;
+  }
+  if (signed.conclusionUnread) {
+    return "NOT_STATED";
+  }
+  // A sign-off that names no conclusion: the preparer's that it signed, or the one
+  // conclusion its verdict can only be; never "Effective" on the verdict alone.
+  return (
+    chosen ??
+    (signed.verdict === "NOT_EFFECTIVE" ? "NOT_EFFECTIVE" : "NOT_STATED")
+  );
+}
+
+/** The words of the conclusion that stands. */
+export function standingWords(standing: StandingKind | null): string {
+  return standing === null
+    ? NO_CONCLUSION
+    : standing === "NOT_STATED"
+      ? NOT_STATED
+      : CONCLUSION_WORDS[standing];
+}
+
+/** Whether a reviewer can be asked to sign the conclusion that stands: one of the four
+ * that are signed, read by this page. */
+export function signableKind(standing: StandingKind | null): SignedKind | null {
+  return standing === null ||
+    standing === "NOT_STATED" ||
+    standing === "NOT_CONCLUDED"
+    ? null
+    : standing;
+}
+
+/** What the workflow and the step's strip read of a body that follows section 3.6
+ * (control-workflow-model, step-panel-model): the conclusion that stands and what the
+ * records propose. `undefined` on a body from before 3.6. */
+export function namedConclusion(
+  conclusion: DesignConclusion,
+):
+  | { standing: StandingKind | null; proposed: ConclusionKind | null }
+  | undefined {
+  const standing = standingKind(conclusion);
+  return standing === undefined
+    ? undefined
+    : { standing, proposed: conclusion.proposedConclusion };
+}
+
+/** The server's fragment where no conclusion stands (design_conclusions.NO_CHOICE). The
+ * step's card says it itself, with the way to section 7, wherever none is recorded. */
+const NO_CHOICE = "the preparer has not recorded a conclusion";
+
 /** What the server says of the workpaper and of a standing sign-off as fragments
  * (design_conclusions.py), in the page's own sentences: each is said once, and never as
- * a fragment beside its sentence. "" where the page already says it another way. */
+ * a fragment beside its sentence. "" where the page already says it another way. A
+ * sentence that is not listed here is shown as the server sent it: nothing it sends is
+ * hidden. */
 const BLOCKING_WORDS: Readonly<Record<string, string>> = {
   "the design workpaper is not prepared":
     "The design workpaper is prepared first, in D&I Assessment.",
   "the D&I conclusion is signed off": "",
-  // Section 3.6: the step says it already, with the way to section 7.
-  "the preparer has not recorded a conclusion": "",
+  [NO_CHOICE]: "The preparer has not recorded a conclusion.",
   "the preparer's conclusion is “Not concluded”, which is never signed":
     "The preparer's conclusion is “Not concluded”, which is never signed off.",
   "log the design deficiency first":
@@ -384,13 +498,40 @@ const BLOCKING_WORDS: Readonly<Record<string, string>> = {
  * conclusion is signed off. It decides nothing: the server's `can_sign` does.
  */
 export function signHolds(conclusion: DesignConclusion): string[] {
+  return holds(conclusion).map((item) => item.shown);
+}
+
+/** A sentence of the server's as the page shows it: whole, its first letter a capital,
+ * ended where it is not. Its words are never changed. */
+function wholeSentence(said: string): string {
+  const trimmed = said.trim();
+  if (trimmed === "") {
+    return "";
+  }
+  const capital = `${trimmed.charAt(0).toUpperCase()}${trimmed.slice(1)}`;
+  return /[.!?…]$/.test(capital) ? capital : `${capital}.`;
+}
+
+/** Each sentence that holds the sign-off, as the server sent it (`raw`) and as it is
+ * shown, once. */
+function holds(
+  conclusion: DesignConclusion,
+): Array<{ raw: string; shown: string }> {
   if (conclusion.status === "SIGNED_OFF") {
     return [];
   }
-  const said = (item: string) => (BLOCKING_WORDS[item] ?? item).trim();
   return [signBlockedReason(conclusion) ?? "", ...conclusion.blocking]
-    .map(said)
-    .filter((item, at, all) => item !== "" && all.indexOf(item) === at);
+    .map((item) => ({
+      raw: item.trim(),
+      shown: Object.hasOwn(BLOCKING_WORDS, item.trim())
+        ? (BLOCKING_WORDS[item.trim()] ?? "")
+        : wholeSentence(item),
+    }))
+    .filter(
+      (item, at, all) =>
+        item.shown !== "" &&
+        all.findIndex((other) => other.shown === item.shown) === at,
+    );
 }
 
 // An exception a person recorded holds the sign-off (docs/evidence-assurance.md, section
@@ -462,6 +603,10 @@ export type ConclusionHead = {
   next: string;
 };
 
+/** The status in place of "Awaiting reviewer sign-off" while no conclusion that can be
+ * signed stands: none recorded, "Not concluded", or one this page cannot read. */
+export const NOT_READY_TO_SIGN = "Not ready to sign";
+
 const STATUS_WORDS: Record<DesignConclusionStatus, string> = {
   SIGNED_OFF: "Signed off",
   OUT_OF_DATE: "Out of date",
@@ -484,6 +629,7 @@ export function conclusionHead(conclusion: DesignConclusion): ConclusionHead {
       ? "D&I conclusion"
       : "Proposed D&I conclusion";
   const reasons = exceptionHolds(conclusion);
+  const standing = standingKind(conclusion);
   if (reasons.length > 0) {
     return {
       heading: "D&I conclusion",
@@ -493,41 +639,64 @@ export function conclusionHead(conclusion: DesignConclusion): ConclusionHead {
       // The preparer's conclusion, where one stands, is still what the card says it is
       // (section 3.6); the status and the reasons say it cannot be signed off now.
       word:
-        conclusion.choice !== null
-          ? CONCLUSION_WORDS[conclusion.choice.kind]
-          : EXCEPTION_TO_RESOLVE,
+        standing === null || standing === undefined
+          ? EXCEPTION_TO_RESOLVE
+          : standingWords(standing),
       effect: "",
       reasons,
       next: EXCEPTION_NEXT,
     };
   }
-  // Section 3.6: the conclusion is the preparer's, and the reviewer signs it. Where the
-  // server says which (a choice stands, or the sign-off names it), its words are the
-  // card's; the two-value verdict is read only where it does not.
-  const kind: ConclusionKind | null = signedOff
-    ? (conclusion.signed?.conclusion ?? conclusion.choice?.kind ?? null)
-    : (conclusion.choice?.kind ?? null);
-  if (kind !== null) {
-    return {
+  // Section 3.6: the conclusion is the preparer's, and the reviewer signs it. On a body
+  // that names it, the card says the one that stands and nothing else: the two-value
+  // `proposed` is what the records propose, never what was concluded, so it gives the
+  // card neither its words nor its tone.
+  if (standing !== undefined) {
+    const signable = signableKind(standing);
+    // Nothing awaits the reviewer while there is no conclusion that can be signed.
+    const waits = conclusion.status === "TO_SIGN" && signable === null;
+    const common = {
       heading: "D&I conclusion",
-      status: STATUS_WORDS[conclusion.status],
-      statusTone:
-        conclusion.status.toLowerCase() as ConclusionHead["statusTone"],
-      tone:
-        kind === "NOT_EFFECTIVE"
-          ? "not_effective"
-          : kind === "NOT_CONCLUDED"
-            ? "none"
-            : // Effective is green only once signed; exceptions noted never is.
-              signedOff && kind !== "EXCEPTIONS_NOTED"
-              ? "effective"
-              : "none",
-      word: CONCLUSION_WORDS[kind],
-      effect: KIND_EFFECTS[kind](signedOff),
+      status: waits ? NOT_READY_TO_SIGN : STATUS_WORDS[conclusion.status],
+      statusTone: (waits
+        ? "not_ready"
+        : conclusion.status.toLowerCase()) as ConclusionHead["statusTone"],
       reasons: [],
       next: "",
     };
+    if (standing === null) {
+      return {
+        ...common,
+        tone: "none",
+        word: NO_CONCLUSION_YET,
+        effect:
+          "OE evidence and testing wait until a conclusion is recorded and signed off.",
+      };
+    }
+    if (standing === "NOT_STATED") {
+      return {
+        ...common,
+        tone: "none",
+        word: NOT_STATED,
+        effect:
+          "The conclusion on record is one this page cannot read, so nothing is signed off from here. Refresh the page.",
+      };
+    }
+    return {
+      ...common,
+      tone:
+        standing === "NOT_EFFECTIVE"
+          ? "not_effective"
+          : // Green is for "Effective", and only once signed: exceptions noted, no
+            // instance and not concluded are never toned as effective.
+            signedOff && standing === "EFFECTIVE"
+            ? "effective"
+            : "none",
+      word: CONCLUSION_WORDS[standing],
+      effect: KIND_EFFECTS[standing](signedOff),
+    };
   }
+  // A body from before section 3.6 names no conclusion: its two-value verdict, as before.
   const verdict = signedOff
     ? (conclusion.signed?.verdict ?? null)
     : conclusion.proposed;
@@ -576,10 +745,37 @@ const KIND_EFFECTS: Readonly<
 };
 
 /** What holds the sign-off, under the card: every sentence of signHolds that the card
- * does not already give as the exception's reason. */
+ * does not already give, as the exception's reason or (where no conclusion is recorded)
+ * as its own sentence with the way to section 7. Nothing else the server sends is left
+ * out. */
 export function holdsBelow(conclusion: DesignConclusion): string[] {
   const said = exceptionHolds(conclusion);
-  return signHolds(conclusion).filter((item) => !said.includes(item));
+  const none = standingKind(conclusion) === null;
+  return holds(conclusion)
+    .filter(
+      (item) =>
+        !said.includes(item.raw) &&
+        !said.includes(item.shown) &&
+        !(none && item.raw === NO_CHOICE),
+    )
+    .map((item) => item.shown);
+}
+
+/** What to do about a sign-off that no longer holds, after its reasons (`out_of_date`,
+ * the server's sentences). Where no conclusion stands (a sign-off from before the
+ * preparer recorded one, section 3.6) there is nothing to sign again yet, and it says
+ * what comes first. */
+export function outOfDateNext(conclusion: DesignConclusion): string {
+  const standing = standingKind(conclusion);
+  if (standing === undefined || signableKind(standing) !== null) {
+    return "OE waits until a reviewer signs off again.";
+  }
+  if (standing === "NOT_STATED") {
+    return "OE waits until a reviewer signs off again. Refresh the page to read the conclusion on record.";
+  }
+  // A conclusion is recorded on the draft: a prepared workpaper is reopened first.
+  const reopen = conclusion.workpaper?.status === "PREPARED";
+  return `What to do: ${reopen ? "reopen the design workpaper, record" : "record"} a conclusion in section 7 of D&I Assessment, and prepare the workpaper${reopen ? " again" : ""}. OE waits until a reviewer signs that conclusion off.`;
 }
 
 /** "Attribute B · Dana Lee on Nov 15, 2026": who recorded an exception, and when. The
@@ -625,14 +821,19 @@ export function designConclusionWrite(
   }
   const path = `/organizations/${organization}/projects/${project}/design-conclusions/${control}`;
   if (fields.intent === "sign") {
-    // Section 3.6: the reviewer signs the preparer's conclusion, named by its kind. "Not
-    // concluded" is never signed, so it is never sent.
+    // Section 3.6: the reviewer signs the preparer's conclusion, named by its kind and
+    // by its id (`choice_id`, the standing choice's: the server refuses any other, so a
+    // conclusion changed since the page read it is never signed). "Not concluded" is
+    // never signed, so it is never sent; with no standing choice there is no id, and
+    // nothing is sent.
     const named = conclusionKindOf(fields.conclusion);
     const conclusion = named === "NOT_CONCLUDED" ? null : named;
+    const choice = fields.choice_id ?? "";
     const version = Number(fields.workpaper_version ?? "");
     const note = (fields.note ?? "").trim();
     if (
       conclusion === null ||
+      !UUID.test(choice) ||
       !Number.isInteger(version) ||
       version < 1 ||
       note.length > 1000 ||
@@ -643,7 +844,12 @@ export function designConclusionWrite(
     return {
       intent: "sign",
       path: `${path}/sign-off`,
-      body: { conclusion, workpaper_version: version, note },
+      body: {
+        conclusion,
+        choice_id: choice,
+        workpaper_version: version,
+        note,
+      },
       controlId: control,
     };
   }
@@ -718,6 +924,23 @@ export function designConclusionNoticeFor(
   return "dc-unavailable";
 }
 
+/** Why a sign-off or a reopening was not taken, in the server's own sentence, shown at
+ * once in place of the page's general notice: "Not signed off: the preparer's conclusion
+ * changed; read it again." "" where the server gave none, and where it was taken. */
+export function designConclusionRefusal(
+  intent: DesignConclusionIntent,
+  notice: DesignConclusionNotice,
+  detail: string,
+): string {
+  if (notice === DONE[intent]) {
+    return "";
+  }
+  const said = detail.trim().replace(/[.\s]+$/, "");
+  return said === ""
+    ? ""
+    : `${intent === "sign" ? "Not signed off" : "Not reopened"}: ${said}.`;
+}
+
 export function parseDesignConclusionNotice(
   value: string | null,
 ): DesignConclusionNotice | null {
@@ -755,13 +978,15 @@ export const CONCLUSION_HINTS: Readonly<Record<ConclusionKind, string>> = {
 
 /** What the page knows of the records the server's rules read (section 3.6): whether a
  * design deficiency stands, the letters of the attributes an exception stands on, the
- * design and the implementation results (null where not known), and the letters not yet
- * shown in an instance. */
+ * design and the implementation results (null where not known), the letters not yet
+ * shown at all (as designed or in an instance: the design result's `open`) and the
+ * letters not yet shown in an instance. */
 export type ChoiceFacts = {
   deficiency: boolean;
   exceptions: readonly string[];
   design: ResultKind | null;
   implementation: ResultKind | null;
+  designOpen: readonly string[];
   implementationOpen: readonly string[];
 };
 
@@ -802,9 +1027,15 @@ function attributesWord(codes: readonly string[]): string {
   return `${codes.length === 1 ? "Attribute" : "Attributes"} ${listedCodes(codes)}`;
 }
 
+/** The server's sentence for "Exceptions noted" without an exception, or with another
+ * attribute still open (design_conclusions, tightened 15 November 2026). */
+export const EXCEPTIONS_NEED =
+  "Exceptions noted needs an exception on record and every other attribute shown or settled.";
+
 /** Why a conclusion cannot be recorded on the records as the page knows them: the
  * server's own sentences (design_conclusions.choice_refusal), as a sentence. "" where it
- * can. Not effective and not concluded are never refused here. */
+ * can. Not effective and not concluded are never refused here. The server stays the
+ * authority: what it refuses beyond this is shown in its own sentence. */
 export function kindRefusal(kind: ConclusionKind, facts: ChoiceFacts): string {
   const words = CONCLUSION_WORDS[kind];
   const deficiency = `A design deficiency is logged, so the conclusion cannot be “${words}”.`;
@@ -832,8 +1063,26 @@ export function kindRefusal(kind: ConclusionKind, facts: ChoiceFacts): string {
     }
     return "";
   }
-  if (kind === "EXCEPTIONS_NOTED" && facts.deficiency) {
-    return deficiency;
+  if (kind === "EXCEPTIONS_NOTED") {
+    if (facts.deficiency) {
+      return deficiency;
+    }
+    // Tightened after the independent review (15 November 2026): it needs an exception
+    // on record, and every other attribute shown or settled by a closing tickmark. The
+    // others are judged only where the page knows which attributes the exceptions stand
+    // on (an excepted attribute is itself listed as open); where it does not, the server
+    // decides.
+    const excepted =
+      facts.exceptions.length > 0 ||
+      facts.design === "EXCEPTIONS" ||
+      facts.implementation === "EXCEPTIONS";
+    const others =
+      facts.exceptions.length === 0
+        ? []
+        : facts.designOpen.filter((code) => !facts.exceptions.includes(code));
+    if (!excepted || others.length > 0) {
+      return EXCEPTIONS_NEED;
+    }
   }
   if (kind === "NO_INSTANCE") {
     if (facts.deficiency) {
@@ -904,6 +1153,56 @@ export function choiceProblems(
     reasonWhy,
     ready: kindProblem === "" && basisProblem === "" && reasonProblem === "",
   };
+}
+
+/** The reasons typed in this session, each kept under the conclusion it was typed for. */
+export type TypedReasons = Readonly<Partial<Record<ConclusionKind, string>>>;
+
+/**
+ * The reason the box holds when a conclusion is chosen: a reason belongs to the
+ * conclusion it was written for. What the person typed for this conclusion in this
+ * session; else, for the conclusion that stands, its own recorded reason; else nothing.
+ * A reason written for another conclusion is never carried over.
+ */
+export function reasonOnChoosing(
+  kind: ConclusionKind,
+  typed: TypedReasons,
+  standing: Pick<ConclusionChoice, "kind" | "reason"> | null,
+): string {
+  return typed[kind] ?? (standing?.kind === kind ? standing.reason : "");
+}
+
+/**
+ * Whether the draft is the conclusion that stands, so that there is nothing to record:
+ * the same conclusion, the same basis of "Not effective", and the same reason where the
+ * draft needs one. Where it needs none, a reason recorded with the standing conclusion
+ * is not something the draft changes: recording it again would only drop that reason
+ * without anyone having chosen to, so "Record conclusion" stays off until something
+ * really changes.
+ */
+export function draftUnchanged(
+  draft: ChoiceDraft,
+  reasonNeeded: boolean,
+  standing: Pick<ConclusionChoice, "kind" | "basis" | "reason"> | null,
+): boolean {
+  return (
+    standing !== null &&
+    draft.kind === standing.kind &&
+    (draft.kind !== "NOT_EFFECTIVE" || draft.basis === standing.basis) &&
+    (!reasonNeeded || draft.reason.trim() === standing.reason.trim())
+  );
+}
+
+/** A 200 whose body the page could not read: the conclusion is recorded, and nothing the
+ * page holds is taken as gone. */
+export const RECORDED_UNREAD =
+  "Recorded, but the page could not read it again. It is being read again: what you chose is still here.";
+
+/** Another conclusion was read while this one was being chosen (after a refusal, or
+ * recorded by someone else): it is shown as what stands, and replacing it is a new
+ * decision. */
+export function anotherStands(choice: Pick<ConclusionChoice, "recordedBy">) {
+  return `${choice.recordedBy === "" ? "Another conclusion was recorded" : `${choice.recordedBy} recorded another conclusion`} meanwhile, and it stands now. Read it, then press Change to replace it.`;
 }
 
 export type ChoiceWrite =

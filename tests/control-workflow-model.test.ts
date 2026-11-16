@@ -1495,3 +1495,69 @@ describe("D&I Evidence once its requests are drafted (12 November 2026)", () => 
     assert.equal(by(drafting, "designevidence")?.need, undefined);
   });
 });
+
+// The independent review of section 3.6 (15 November 2026; docs/design-workpaper.md,
+// section 3.6, finding 6): on a body that names the conclusion, the D&I Conclusion and
+// Review tile says the one that stands, in its words, never the records' two-value
+// proposal as anyone's conclusion. A body from before 3.6 reads as it did.
+describe("the D&I conclusion tile says the conclusion that stands", () => {
+  const tile = (designConclusion: WorkflowInput["designConclusion"]) =>
+    state(workflowOf({ ...midway(), designConclusion }), "designconclusion");
+
+  it("words a sign-off by the conclusion it signed", () => {
+    assert.deepEqual(
+      tile({
+        ...signedEffective,
+        named: { standing: "EXCEPTIONS_NOTED", proposed: "EXCEPTIONS_NOTED" },
+      }),
+      ["done", "Exceptions noted · signed off"],
+    );
+    assert.deepEqual(
+      tile({
+        ...signedEffective,
+        named: { standing: "EFFECTIVE", proposed: "EFFECTIVE" },
+      }),
+      ["done", "Effective · signed off"],
+    );
+    // Before 3.6: the verdict, as before.
+    assert.deepEqual(tile(signedEffective), ["done", "Effective · signed off"]);
+  });
+
+  it("never says the proposal where no conclusion is recorded", () => {
+    assert.deepEqual(
+      tile({ ...toSign, named: { standing: null, proposed: "EFFECTIVE" } }),
+      ["attention", "No conclusion recorded"],
+    );
+    assert.deepEqual(
+      tile({
+        ...toSign,
+        named: { standing: "NOT_CONCLUDED", proposed: "EFFECTIVE" },
+      }),
+      ["attention", "Not concluded"],
+    );
+    assert.deepEqual(
+      tile({ ...toSign, named: { standing: "NOT_STATED", proposed: null } }),
+      ["attention", "Not stated"],
+    );
+    assert.deepEqual(
+      tile({
+        ...toSign,
+        named: { standing: "NO_INSTANCE", proposed: "NOT_CONCLUDED" },
+      }),
+      [
+        "attention",
+        "Design effective, no instance to walk through · to sign off",
+      ],
+    );
+    assert.deepEqual(
+      tile({
+        ...toSign,
+        status: "OUT_OF_DATE",
+        named: { standing: null, proposed: "NOT_CONCLUDED" },
+      }),
+      ["attention", "Out of date · no conclusion recorded"],
+    );
+    // Before 3.6: the proposed verdict, as before.
+    assert.deepEqual(tile(toSign), ["attention", "Effective · to sign off"]);
+  });
+});

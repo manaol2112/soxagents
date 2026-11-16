@@ -147,6 +147,28 @@ export function recordsBehind(
   return stored !== undefined && stored.currentVersion < shown.currentVersion;
 }
 
+/**
+ * Whether the page's records are behind the views by the record's own version
+ * (`workpapers.version`), which a write that changes no section also moves: recording
+ * the preparer's conclusion does (docs/design-workpaper.md, section 3.6, "Tightened
+ * after the independent review"). Until the page's records are read again, Prepare and
+ * Reopen would post the version before it, which the server refuses: the fold holds
+ * them. False where either is not known.
+ */
+export function recordVersionBehind(
+  papers: ReadonlyArray<Pick<Workpaper, "id" | "stage" | "version">> | null,
+  paper: { workpaper: { id: string; version: number } | null } | null,
+): boolean {
+  const shown = paper?.workpaper ?? null;
+  if (shown === null) {
+    return false;
+  }
+  const stored = (papers ?? []).find(
+    (item) => item.stage === "DESIGN" && item.id === shown.id,
+  );
+  return stored !== undefined && stored.version < shown.version;
+}
+
 const GRID_WORDS: Partial<
   Record<EditableSection, { addLabel: string; rowWord: string; note: string }>
 > = {

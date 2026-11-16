@@ -11,10 +11,21 @@ import {
   choiceWrite,
   conclusionHead,
   designConclusionNoticeFor,
+  designConclusionRefusal,
   designConclusionWrite,
+  draftUnchanged,
+  EXCEPTIONS_NEED,
   holdsBelow,
+  NOT_READY_TO_SIGN,
+  namedConclusion,
+  outOfDateNext,
   parseDesignConclusion,
+  RECORDED_BY_VIEWER,
+  RECORDED_UNREAD,
+  reasonOnChoosing,
   signBlockedReason,
+  signHolds,
+  standingKind,
 } from "../apps/web/src/design-conclusion-model.ts";
 
 const ORG = "01900000-0000-7000-8000-000000000001";
@@ -48,6 +59,8 @@ function body(
     ...overrides,
   };
 }
+
+const SIGNED_CHOICE = "01900000-0000-7000-8000-000000000016";
 
 const signoff = {
   id: "01900000-0000-7000-8000-000000000005",
@@ -128,10 +141,16 @@ describe("the D&I conclusion", () => {
     // reviewer signs the preparer's conclusion by its kind, `{conclusion,
     // workpaper_version, note}`; the server takes `verdict` for one release only
     // (product owner, 15 November 2026, docs/design-workpaper.md section 3.5/3.6).
+    //
+    // Rewritten again (independent review, 15 November 2026, docs/design-workpaper.md section 3.6). Old: `{conclusion,
+    // workpaper_version, note}`. New: the sign-off names the standing choice by its id,
+    // `{conclusion, choice_id, workpaper_version, note}`; the server refuses any other id
+    // ("the preparer's conclusion changed; read it again") and no longer takes `verdict`.
     const signed = designConclusionWrite({
       ...ids,
       intent: "sign",
       conclusion: "EXCEPTIONS_NOTED",
+      choice_id: SIGNED_CHOICE,
       workpaper_version: "2",
       note: " Reviewed. ",
     });
@@ -140,6 +159,7 @@ describe("the D&I conclusion", () => {
       path: `/organizations/${ORG}/projects/${PROJECT}/design-conclusions/${CONTROL}/sign-off`,
       body: {
         conclusion: "EXCEPTIONS_NOTED",
+        choice_id: SIGNED_CHOICE,
         workpaper_version: 2,
         note: "Reviewed.",
       },
@@ -174,6 +194,27 @@ describe("the D&I conclusion", () => {
         ...ids,
         intent: "sign",
         conclusion: "NOT_CONCLUDED",
+        workpaper_version: "2",
+      },
+      // No standing choice, or an id that is not one: nothing is sent (finding 4).
+      {
+        ...ids,
+        intent: "sign",
+        conclusion: "EFFECTIVE",
+        workpaper_version: "2",
+      },
+      {
+        ...ids,
+        intent: "sign",
+        conclusion: "EFFECTIVE",
+        choice_id: "",
+        workpaper_version: "2",
+      },
+      {
+        ...ids,
+        intent: "sign",
+        conclusion: "EFFECTIVE",
+        choice_id: "../choice",
         workpaper_version: "2",
       },
       { ...ids, intent: "reopen", reason: "Too short" },
@@ -247,6 +288,7 @@ const facts = (over: Partial<ChoiceFacts> = {}): ChoiceFacts => ({
   exceptions: [],
   design: "DESIGNED",
   implementation: "IN_PLACE",
+  designOpen: [],
   implementationOpen: [],
   ...over,
 });
@@ -391,7 +433,10 @@ describe("the preparer's conclusion: reading it", () => {
       }),
     );
     assert.equal(signed.word, "Design effective, no instance to walk through");
-    assert.equal(signed.tone, "effective");
+    // Rewritten (independent review, 15 November 2026, docs/design-workpaper.md section 3.6). Old: a signed "Design
+    // effective, no instance" was toned "effective" (green). New: green is for
+    // "Effective" only; no instance is concluded on the design alone and is neutral.
+    assert.equal(signed.tone, "none");
     assert.match(signed.effect, /cleared to proceed/);
     const notConcluded = conclusionHead(
       read({ choice: { ...choice, kind: "NOT_CONCLUDED" } }),
@@ -414,17 +459,29 @@ describe("the preparer's conclusion: reading it", () => {
   });
 
   it("says the server's new fragments as the page's sentences, or not where said already", () => {
-    const parsed = parseDesignConclusion(
-      body({
-        can_sign: false,
-        blocking: [
-          "the preparer has not recorded a conclusion",
-          "log the design deficiency first",
-        ],
-      }),
+    const fragments = {
+      can_sign: false,
+      blocking: [
+        "the preparer has not recorded a conclusion",
+        "log the design deficiency first",
+      ],
+    };
+    // Rewritten (independent review, 15 November 2026, docs/design-workpaper.md section 3.6). Old: "the preparer has
+    // not recorded a conclusion" was blanked on every body, so where the card did not
+    // say it nothing did. New: it is left out below the card only where the card says it
+    // itself, with the way to section 7 (a 3.6 body with no choice); elsewhere it is the
+    // page's sentence.
+    const named = parseDesignConclusion(
+      body({ ...fragments, choice: null, proposed_conclusion: "EFFECTIVE" }),
     );
-    assert.ok(parsed !== null);
-    assert.deepEqual(holdsBelow(parsed), [
+    assert.ok(named !== null);
+    assert.deepEqual(holdsBelow(named), [
+      "A conclusion of “Not effective” is signed off once the design deficiency is logged.",
+    ]);
+    const old = parseDesignConclusion(body(fragments));
+    assert.ok(old !== null);
+    assert.deepEqual(holdsBelow(old), [
+      "The preparer has not recorded a conclusion.",
       "A conclusion of “Not effective” is signed off once the design deficiency is logged.",
     ]);
   });
@@ -440,8 +497,15 @@ describe("the preparer's conclusion: what stands in the way", () => {
 
   it("offers every conclusion where the records allow it", () => {
     const problems = choiceProblems(draft(), "EFFECTIVE", facts());
+    // Rewritten (independent review, 15 November 2026, docs/design-workpaper.md section 3.6). Old: every conclusion,
+    // "Exceptions noted" too, was offered on records with no exception. New: "Exceptions
+    // noted" needs an exception on record (the server refuses it otherwise).
     for (const kind of CONCLUSION_KINDS) {
-      assert.equal(problems.unavailable[kind], "", kind);
+      assert.equal(
+        problems.unavailable[kind],
+        kind === "EXCEPTIONS_NOTED" ? EXCEPTIONS_NEED : "",
+        kind,
+      );
     }
     assert.equal(problems.kind, "Choose a conclusion.");
     assert.equal(problems.ready, false);
@@ -698,5 +762,314 @@ describe("the preparer's conclusion: the write", () => {
     );
     assert.match(choiceRefusal(401, ""), /session has ended/);
     assert.match(choiceRefusal(0, ""), /could not be reached/);
+  });
+});
+
+// The independent review of section 3.6 (15 November 2026; docs/design-workpaper.md,
+// section 3.6, "Tightened after the independent review"): each finding, as the model
+// says it. Each case failed before the fix.
+describe("the independent review of the preparer's conclusion", () => {
+  const read = (over: Record<string, unknown>) => {
+    const parsed = parseDesignConclusion(body(over));
+    assert.ok(parsed !== null);
+    return parsed;
+  };
+  const prepared = {
+    id: "01900000-0000-7000-8000-000000000004",
+    status: "PREPARED",
+    drafting: false,
+    prepared_by: "Dana Preparer",
+    prepared_version: 2,
+  };
+
+  it("4: the sign-off names the standing choice by its id, and none is built without one", () => {
+    const ids = {
+      organization_id: ORG,
+      project_id: PROJECT,
+      control_id: CONTROL,
+    };
+    const signed = designConclusionWrite({
+      ...ids,
+      intent: "sign",
+      conclusion: "EFFECTIVE",
+      choice_id: CHOICE,
+      workpaper_version: "2",
+    });
+    assert.ok(!("error" in signed));
+    assert.equal(signed.body.choice_id, CHOICE);
+    assert.equal("verdict" in signed.body, false);
+    assert.deepEqual(
+      designConclusionWrite({
+        ...ids,
+        intent: "sign",
+        conclusion: "EFFECTIVE",
+        workpaper_version: "2",
+      }),
+      { error: "invalid" },
+    );
+  });
+
+  it("6: with no conclusion recorded, never the records' two-value proposal, never green", () => {
+    const none = read({
+      proposed: "EFFECTIVE",
+      proposed_conclusion: "EFFECTIVE",
+      choice: null,
+      can_sign: false,
+      blocking: ["the preparer has not recorded a conclusion"],
+    });
+    assert.equal(standingKind(none), null);
+    const head = conclusionHead(none);
+    assert.equal(head.word, "No conclusion recorded yet");
+    assert.equal(head.tone, "none");
+    assert.equal(head.status, NOT_READY_TO_SIGN);
+    assert.doesNotMatch(head.effect, /cleared to proceed/);
+    // The card says it with the way to section 7; nothing below says it again.
+    assert.deepEqual(holdsBelow(none), []);
+    // A body from before 3.6 still reads its verdict.
+    const old = conclusionHead(read({}));
+    assert.equal(old.word, "Effective");
+    assert.equal(standingKind(read({})), undefined);
+    assert.equal(namedConclusion(read({})), undefined);
+    assert.deepEqual(namedConclusion(none), {
+      standing: null,
+      proposed: "EFFECTIVE",
+    });
+  });
+
+  it("6: a conclusion of a kind the page does not know is “Not stated”, neutral, and cannot be signed", () => {
+    const odd = read({
+      proposed_conclusion: "EFFECTIVE",
+      choice: { ...choice, kind: "MOSTLY_EFFECTIVE" },
+    });
+    assert.equal(odd.choice, null);
+    assert.equal(standingKind(odd), "NOT_STATED");
+    const head = conclusionHead(odd);
+    assert.equal(head.word, "Not stated");
+    assert.equal(head.tone, "none");
+    assert.equal(head.status, NOT_READY_TO_SIGN);
+    const signedOdd = read({
+      status: "SIGNED_OFF",
+      proposed_conclusion: "EFFECTIVE",
+      choice: null,
+      signed: { ...signoff, verdict: "EFFECTIVE", conclusion: "GREAT" },
+    });
+    assert.equal(conclusionHead(signedOdd).word, "Not stated");
+    assert.equal(conclusionHead(signedOdd).tone, "none");
+  });
+
+  it("6: a sign-off from before 3.6 gone out of date says why and what to do", () => {
+    const stale = read({
+      status: "OUT_OF_DATE",
+      proposed_conclusion: "NOT_CONCLUDED",
+      choice: null,
+      can_sign: false,
+      signed: { ...signoff, verdict: "EFFECTIVE", conclusion: "EFFECTIVE" },
+      out_of_date: ["a tickmark on attribute B changed after the sign-off"],
+    });
+    assert.deepEqual(stale.outOfDate, [
+      "a tickmark on attribute B changed after the sign-off",
+    ]);
+    assert.equal(conclusionHead(stale).word, "No conclusion recorded yet");
+    assert.equal(
+      outOfDateNext(stale),
+      "What to do: reopen the design workpaper, record a conclusion in section 7 of D&I Assessment, and prepare the workpaper again. OE waits until a reviewer signs that conclusion off.",
+    );
+    // On a draft there is nothing to reopen.
+    assert.equal(
+      outOfDateNext(
+        read({
+          status: "OUT_OF_DATE",
+          proposed_conclusion: "NOT_CONCLUDED",
+          choice: null,
+          workpaper: { ...prepared, status: "DRAFT", prepared_version: null },
+        }),
+      ),
+      "What to do: record a conclusion in section 7 of D&I Assessment, and prepare the workpaper. OE waits until a reviewer signs that conclusion off.",
+    );
+    // With a conclusion that can be signed, as before.
+    assert.equal(
+      outOfDateNext(
+        read({
+          status: "OUT_OF_DATE",
+          choice: { ...choice, kind: "EFFECTIVE" },
+          proposed_conclusion: "EFFECTIVE",
+        }),
+      ),
+      "OE waits until a reviewer signs off again.",
+    );
+  });
+
+  it("shows whatever `blocking` carries, a new sentence of the server's whole", () => {
+    const blocked = read({
+      choice,
+      proposed_conclusion: "EXCEPTIONS_NOTED",
+      can_sign: false,
+      workpaper: prepared,
+      blocking: [
+        "you recorded this conclusion; another reviewer must sign it off",
+        "something this page has never seen",
+      ],
+    });
+    assert.deepEqual(signHolds(blocked), [
+      "You recorded this conclusion; another reviewer must sign it off.",
+      "Something this page has never seen.",
+    ]);
+    assert.deepEqual(holdsBelow(blocked), signHolds(blocked));
+  });
+
+  it("the person who recorded the conclusion is told another reviewer signs it, once", () => {
+    const recorder = read({
+      choice,
+      proposed_conclusion: "EXCEPTIONS_NOTED",
+      can_sign: false,
+      viewer_recorded: true,
+      blocking: [
+        "you recorded this conclusion; another reviewer must sign it off",
+      ],
+    });
+    assert.equal(recorder.viewerRecorded, true);
+    assert.equal(signBlockedReason(recorder), RECORDED_BY_VIEWER);
+    assert.deepEqual(signHolds(recorder), [RECORDED_BY_VIEWER]);
+    // Without the flag, the server's sentence alone says it.
+    const flagless = read({
+      choice,
+      proposed_conclusion: "EXCEPTIONS_NOTED",
+      can_sign: false,
+      blocking: [
+        "you recorded this conclusion; another reviewer must sign it off",
+      ],
+    });
+    assert.equal(flagless.viewerRecorded, false);
+    assert.deepEqual(signHolds(flagless), [RECORDED_BY_VIEWER]);
+  });
+
+  it("“Exceptions noted” needs an exception on record and every other attribute shown or settled", () => {
+    const excepted = (over: Partial<ChoiceFacts>) =>
+      choiceProblems(
+        { kind: null, basis: null, reason: "" },
+        "EXCEPTIONS_NOTED",
+        facts({
+          exceptions: ["B"],
+          design: "EXCEPTIONS",
+          implementation: "EXCEPTIONS",
+          designOpen: ["B"],
+          ...over,
+        }),
+      ).unavailable.EXCEPTIONS_NOTED;
+    assert.equal(excepted({}), "");
+    assert.equal(excepted({ designOpen: ["B", "D"] }), EXCEPTIONS_NEED);
+    assert.equal(
+      excepted({ exceptions: [], design: "DESIGNED", implementation: "OPEN" }),
+      EXCEPTIONS_NEED,
+    );
+    assert.equal(
+      EXCEPTIONS_NEED,
+      "Exceptions noted needs an exception on record and every other attribute shown or settled.",
+    );
+  });
+
+  it("8: a reason belongs to the conclusion it was typed for", () => {
+    const standing = {
+      kind: "NOT_CONCLUDED" as const,
+      reason: "Waiting on C.",
+    };
+    // Typed in this session for that conclusion: it comes back with it.
+    assert.equal(
+      reasonOnChoosing(
+        "NOT_EFFECTIVE",
+        { NOT_EFFECTIVE: "The design lacks a second approval." },
+        standing,
+      ),
+      "The design lacks a second approval.",
+    );
+    // Typed for another conclusion: never carried over.
+    assert.equal(
+      reasonOnChoosing(
+        "EXCEPTIONS_NOTED",
+        { NOT_EFFECTIVE: "The design lacks a second approval." },
+        standing,
+      ),
+      "",
+    );
+    // The standing conclusion's own reason comes back with it.
+    assert.equal(
+      reasonOnChoosing("NOT_CONCLUDED", {}, standing),
+      "Waiting on C.",
+    );
+  });
+
+  it("8: Change with nothing changed keeps Record off, and a standing reason is never dropped by it", () => {
+    const standing = {
+      kind: "NOT_CONCLUDED" as const,
+      basis: null,
+      reason: "Waiting on C, which the owner sends Monday.",
+    };
+    // The proposal moved to "Not concluded": the reason is no longer needed, and
+    // recording the same conclusion again would only drop it.
+    assert.equal(
+      draftUnchanged(
+        { kind: "NOT_CONCLUDED", basis: null, reason: standing.reason },
+        false,
+        standing,
+      ),
+      true,
+    );
+    assert.equal(
+      draftUnchanged(
+        {
+          kind: "NOT_CONCLUDED",
+          basis: null,
+          reason: "Another reason, typed.",
+        },
+        true,
+        standing,
+      ),
+      false,
+    );
+    assert.equal(
+      draftUnchanged(
+        { kind: "EFFECTIVE", basis: null, reason: "" },
+        false,
+        standing,
+      ),
+      false,
+    );
+    assert.equal(
+      draftUnchanged(
+        { kind: "NOT_EFFECTIVE", basis: "DESIGN", reason: "Same." },
+        true,
+        { kind: "NOT_EFFECTIVE", basis: "BOTH", reason: "Same." },
+      ),
+      false,
+    );
+    assert.equal(
+      draftUnchanged(
+        { kind: "EFFECTIVE", basis: null, reason: "" },
+        false,
+        null,
+      ),
+      false,
+    );
+  });
+
+  it("10: a refused sign-off says the server's own sentence; a 200 the page cannot read is said as recorded", () => {
+    assert.equal(
+      designConclusionRefusal(
+        "sign",
+        "dc-blocked",
+        "the preparer's conclusion changed; read it again",
+      ),
+      "Not signed off: the preparer's conclusion changed; read it again.",
+    );
+    assert.equal(
+      designConclusionRefusal("sign", "dc-denied", ""),
+      "",
+      "no sentence: the notice says it",
+    );
+    assert.equal(designConclusionRefusal("sign", "dc-signed", "x"), "");
+    assert.match(
+      RECORDED_UNREAD,
+      /^Recorded, but the page could not read it again/,
+    );
   });
 });

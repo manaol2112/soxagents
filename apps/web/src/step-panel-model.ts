@@ -13,9 +13,11 @@ import {
   workflowLayout,
 } from "./control-workflow-model.ts";
 import {
+  CONCLUSION_WORDS,
   type DesignVerdict,
   EXCEPTION_TO_RESOLVE,
   exceptionHolds,
+  standingWords,
 } from "./design-conclusion-model.ts";
 import { requestsNeed } from "./design-requests-model.ts";
 
@@ -425,11 +427,39 @@ export function agentNote(
               status: input.designConclusion.status,
               blocking: input.designConclusion.blocking ?? [],
             }).length;
+      const holdLine = `Not ready to sign: ${held === 1 ? "an exception is" : `${held} exceptions are`} recorded with no design deficiency logged.`;
+      const deficiencyLines =
+        design.length > 0
+          ? [
+              `Design deficiencies: ${design.map((item) => item.reference).join(", ")}.`,
+            ]
+          : [];
+      // Section 3.6: on a body that names the conclusion, the strip says the one that
+      // stands (signed, or the preparer's) and the agent's proposal as a proposal: never
+      // the records' two-value verdict as the conclusion (independent review, 15
+      // November 2026).
+      const named = input.designConclusion?.named;
+      if (named !== undefined) {
+        const signedOff = input.designConclusion?.status === "SIGNED_OFF";
+        return {
+          did: "Proposed the D&I conclusion from the records; the preparer records it in D&I Assessment, and a reviewer signs it off.",
+          found: [
+            ...(held > 0 ? [holdLine] : []),
+            named.standing === null
+              ? "No conclusion recorded yet: the preparer records it in section 7 of D&I Assessment."
+              : `${signedOff ? "Signed off" : "Recorded by the preparer"}: ${standingWords(named.standing)}.`,
+            ...(named.proposed !== null && !signedOff
+              ? [`Proposed by the agent: ${CONCLUSION_WORDS[named.proposed]}.`]
+              : []),
+            ...deficiencyLines,
+          ],
+        };
+      }
       return {
         did: "Proposed the D&I verdict from the prepared design workpaper and the design deficiencies.",
         found: [
           held > 0
-            ? `Not ready to sign: ${held === 1 ? "an exception is" : `${held} exceptions are`} recorded with no design deficiency logged.`
+            ? holdLine
             : proposed === null
               ? "No verdict yet: the design workpaper is not prepared."
               : `Proposed: ${proposed === "EFFECTIVE" ? "effective" : "not effective"}.`,

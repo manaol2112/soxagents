@@ -1239,6 +1239,22 @@
   line-height: 1.2;
 }
 
+/* No conclusion recorded yet (docs/design-workpaper.md, section 3.6): said plainly, in
+   the quieter words of a state, never as a verdict. */
+.dc-verdict-word.is-none {
+  color: var(--text-secondary);
+  font-size: 1.1rem;
+  font-weight: 650;
+}
+
+/* Sign off waits for the conclusion's text it signs: off, said beside it, and still in
+   the tab order (never `disabled`). */
+.dc-actions button[type="submit"][aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.5;
+  box-shadow: none;
+}
+
 .dc-effect {
   margin: 0;
   color: var(--text-secondary);

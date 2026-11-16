@@ -20,6 +20,7 @@ import {
   type NotesEditor,
   notesRows,
   recordsBehind,
+  recordVersionBehind,
   removeRow,
   SAVED,
   SAVING,
@@ -223,6 +224,31 @@ describe("the moment after a save", () => {
     assert.equal(recordsBehind([stored()], { workpaper: null }), false);
     // While they are behind, no editor opens in place either.
     assert.equal(editSource([stored()], shown({ currentVersion: 4 })), null);
+  });
+});
+
+describe("the moment after a recorded conclusion", () => {
+  it("says the page's records are behind by the record's own version, which a recorded conclusion moves", () => {
+    // Recording the preparer's conclusion bumps `workpapers.version` (no section
+    // changes): until the page's records are read again, Prepare would post the
+    // version before it (docs/design-workpaper.md section 3.6, "Tightened after the independent review").
+    const record = { id: PAPER, stage: "DESIGN" as const, version: 9 };
+    const records = [record];
+    assert.equal(recordVersionBehind(records, shown()), false);
+    assert.equal(recordVersionBehind(records, shown({ version: 10 })), true);
+    assert.equal(
+      recordVersionBehind([{ ...record, version: 11 }], shown({ version: 10 })),
+      false,
+    );
+    assert.equal(
+      recordVersionBehind(
+        [{ ...record, stage: "EFFECTIVENESS" as const }],
+        shown({ version: 10 }),
+      ),
+      false,
+    );
+    assert.equal(recordVersionBehind(null, shown({ version: 10 })), false);
+    assert.equal(recordVersionBehind(records, { workpaper: null }), false);
   });
 });
 

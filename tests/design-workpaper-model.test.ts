@@ -2280,6 +2280,18 @@ describe("the conclusion the preparer records, and the agent's proposal", () => 
       })),
     });
     assert.ok(notShown.attributes.every((item) => item.shownBy === null));
+    // Finding 11 (independent review, 15 November 2026, docs/design-workpaper.md section 3.6): shown only on files a
+    // person decided are not relied on, whatever the attribute's state reads.
+    const notRelied = parsed({
+      attributes: attributesOf().map((item, at) => ({
+        ...item,
+        state: at === 0 ? "SHOWN" : "NOT_SHOWN",
+        shown_by: "NOT_RELIED",
+      })),
+    });
+    assert.ok(
+      notRelied.attributes.every((item) => item.shownBy === "NOT_RELIED"),
+    );
     // Unknown kinds: never effective, never a choice.
     const odd = withConclusion(
       {
@@ -2384,6 +2396,28 @@ describe("the conclusion the preparer records, and the agent's proposal", () => 
       }),
     );
     assert.equal(effective.tone, "success");
+    // Rewritten (independent review, 15 November 2026, docs/design-workpaper.md section 3.6). Old: a signed "Design
+    // effective, no instance" took the green of effective. New: green is for Effective
+    // only; no instance is neutral.
+    const noInstance = conclusionOf(
+      parsed({
+        review: {
+          status: "SIGNED_OFF",
+          proposed: "EFFECTIVE",
+          signed_verdict: "EFFECTIVE",
+          signed_by: "Riley Reviewer",
+          signed_at: "2026-11-16T09:00:00Z",
+          out_of_date: [],
+        },
+        conclusion: {
+          ...(sample().conclusion as Record<string, unknown>),
+          signed: true,
+          choice: { ...choice, kind: "NO_INSTANCE" },
+        },
+      }),
+    );
+    assert.equal(noInstance.signed, true);
+    assert.equal(noInstance.tone, "neutral");
     // Out of date: never signed, and says so.
     const stale = conclusionOf(
       parsed({
@@ -2460,9 +2494,13 @@ describe("the conclusion the preparer records, and the agent's proposal", () => 
     );
     // Settled is never the green of a sign-off.
     assert.ok(boxes.every((box) => box.tone !== "success"));
+    // Rewritten (independent review, 15 November 2026, docs/design-workpaper.md section 3.6). Old: two ways of being
+    // shown. New: a third, an attribute shown only on files a person decided are not
+    // relied on (`shown_by: "NOT_RELIED"`), said quietly under its result.
     assert.deepEqual(SHOWN_BY_WORDS, {
       IMPLEMENTATION: "In the instance",
       DESIGN: "As designed",
+      NOT_RELIED: "On files not relied on",
     });
   });
 
@@ -2492,6 +2530,10 @@ describe("the conclusion the preparer records, and the agent's proposal", () => 
       exceptions: ["B"],
       design: "EXCEPTIONS",
       implementation: "EXCEPTIONS",
+      // Added (independent review, 15 November 2026, docs/design-workpaper.md section 3.6): the letters not yet shown at
+      // all, which "Exceptions noted" is refused over (every other attribute shown or
+      // settled). Old: only `implementationOpen` was given.
+      designOpen: ["D"],
       implementationOpen: ["D"],
     });
     assert.equal(deficiencyWanted(facts, "EXCEPTIONS_NOTED"), true);

@@ -103,6 +103,7 @@ import {
   editorFor,
   editSource,
   recordsBehind,
+  recordVersionBehind,
   SAVED,
   SAVED_NOT_READ,
   type SectionEditor,
@@ -232,6 +233,10 @@ export function DesignWorkpaperStep(props: CardProps) {
   );
   const starts = foldStartsOpen({ papers, notice, viewing });
   const [open, setOpen] = useState(starts);
+  // The page's records are behind the views (a save or a recorded conclusion moved the
+  // workpaper's version, and the records are being read again): the fold's Prepare
+  // waits, so it never posts the version before it.
+  const [behind, setBehind] = useState(false);
   const fold = useRef<HTMLDetailsElement>(null);
   const key = recordKey(papers);
   // A draft that starts, or something just done in the card, opens the fold; a person
@@ -311,6 +316,7 @@ export function DesignWorkpaperStep(props: CardProps) {
         onEdit={reveal}
         onDraft={() => reveal(null)}
         deficiencyHref={deficiencyHref}
+        onBehind={setBehind}
       />
       <details
         ref={fold}
@@ -331,7 +337,12 @@ export function DesignWorkpaperStep(props: CardProps) {
           </span>
         </summary>
         <div className="dw-fold-body">
-          <WorkpapersTab compact {...props} stage="DESIGN" />
+          <WorkpapersTab
+            compact
+            {...props}
+            stage="DESIGN"
+            prepareHeld={behind}
+          />
         </div>
       </details>
     </div>
@@ -381,6 +392,7 @@ export function DesignWorkpaper({
   onEdit,
   onDraft,
   deficiencyHref = null,
+  onBehind,
 }: {
   scope: WorkpaperScope;
   /** Changes when the workpaper record does: the views then read again. */
@@ -394,6 +406,9 @@ export function DesignWorkpaper({
   onDraft?: () => void;
   /** Where a design deficiency is logged for this control; null where not linked. */
   deficiencyHref?: string | null;
+  /** Told whether the page's records are behind the views (by the content's version or
+   * the record's): the fold's Prepare waits while they are. */
+  onBehind?: (behind: boolean) => void;
 }) {
   const uid = useId();
   const query = designWorkpaperQuery(scope);
@@ -674,6 +689,15 @@ export function DesignWorkpaper({
   // The page's records are a version behind the views (a save's reading of them has not
   // landed): "Edit" waits for them, so no editor opens on the text before the save.
   const behind = useMemo(() => recordsBehind(papers, paper), [papers, paper]);
+  // Behind by the record's own version too (a recorded conclusion moves it, section
+  // 3.6): the step holds the fold's Prepare until the page's records are read again.
+  const held = useMemo(
+    () => behind || recordVersionBehind(papers, paper),
+    [behind, papers, paper],
+  );
+  useEffect(() => {
+    onBehind?.(held);
+  }, [onBehind, held]);
 
   // The person's working copies of this workpaper (section 3.4): what they typed and did
   // not save, kept on the server and private to them. Read while "Edit" opens in place.

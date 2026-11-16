@@ -92,6 +92,7 @@ export function WorkpapersTab({
   hasInput,
   compact = false,
   automation = null,
+  prepareHeld = false,
 }: {
   papers: Workpaper[] | null;
   notice: WorkpaperNotice | null;
@@ -109,6 +110,9 @@ export function WorkpapersTab({
   compact?: boolean;
   /** Whether an agent worker will pick up a queued draft (M1d). */
   automation?: Automation | null;
+  /** The page's records are behind what the views read (a recorded D&I conclusion
+   * moves the record's version): Prepare would post an older version, so it waits. */
+  prepareHeld?: boolean;
 }) {
   const papers =
     all === null || stage === undefined
@@ -179,6 +183,7 @@ export function WorkpapersTab({
         canAct={canAct}
         viewing={viewing}
         initial={initial}
+        prepareHeld={prepareHeld}
       />
     );
   if (compact) {
@@ -274,12 +279,14 @@ function WorkpaperBook({
   canAct,
   viewing,
   initial: wanted,
+  prepareHeld,
 }: {
   papers: Workpaper[];
   ids: Ids;
   canAct: boolean;
   viewing: { id: string; version: number } | null;
   initial?: string | undefined;
+  prepareHeld: boolean;
 }) {
   const ordered = [...papers].sort((a, b) =>
     a.stage === b.stage ? 0 : a.stage === "DESIGN" ? -1 : 1,
@@ -332,6 +339,7 @@ function WorkpaperBook({
             ids={ids}
             canAct={canAct}
             old={old}
+            prepareHeld={prepareHeld}
           />
         ),
       });
@@ -378,12 +386,14 @@ function WorkpaperCard({
   ids,
   canAct,
   old,
+  prepareHeld,
 }: {
   paper: Workpaper;
   tab: WorkpaperTab & { sections: WorkpaperSection[] };
   ids: Ids;
   canAct: boolean;
   old: boolean;
+  prepareHeld: boolean;
 }) {
   const editable =
     canAct && paper.status === "DRAFT" && !paper.drafting && !old;
@@ -472,10 +482,15 @@ function WorkpaperCard({
               <button
                 type="submit"
                 className="btn-sm"
-                disabled={paper.drafting}
+                disabled={paper.drafting || prepareHeld}
               >
                 <UiIcon name="check" size={13} /> Prepare
               </button>
+              {prepareHeld ? (
+                <span className="form-hint" role="status">
+                  Reading the workpaper again…
+                </span>
+              ) : null}
             </form>
           ) : null}
           {canAct && paper.status === "PREPARED" ? (

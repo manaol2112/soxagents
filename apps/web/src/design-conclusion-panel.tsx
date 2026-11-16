@@ -1,7 +1,13 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { type FormEvent, useEffect, useState, useTransition } from "react";
+import {
+  type FormEvent,
+  useEffect,
+  useId,
+  useState,
+  useTransition,
+} from "react";
 import {
   BASIS_WORDS,
   CONCLUSION_WORDS,
@@ -10,9 +16,13 @@ import {
   type DesignConclusion,
   type DesignConclusionNotice,
   type DesignSignoff,
+  designConclusionRefusal,
   exceptionLine,
   holdsBelow,
+  outOfDateNext,
   parseDesignConclusionNotice,
+  signableKind,
+  standingKind,
   VERDICT_LABELS,
 } from "./design-conclusion-model";
 import {
@@ -43,23 +53,30 @@ const REOPENED_FROM: Record<
 };
 
 /** The conclusion's text as section 7 shows it: one read of the D&I workpaper through
- * the views' own route, stopped when the step goes, and again when the preparer's
- * conclusion changes. `null` while it is read; `false` where it could not be. */
+ * the views' own route, stopped when the step goes, and again whenever `again` changes:
+ * the preparer's conclusion, the sign-off's status, or the workpaper's status or
+ * prepared version (the text is rewritten only by preparing another version, and the
+ * reviewer signs the version shown). `null` while it is read, and until the read for
+ * what is shown now has answered: a text read for an earlier version is never shown
+ * beside a later one. `false` where it could not be read; `retry` reads it again. */
 function useConclusionText(
   ids: { organizationId: string; projectId: string; controlId: string },
   again: string,
   wanted: boolean,
-): string | null | false {
-  const [text, setText] = useState<string | null | false>(null);
+): { text: string | null | false; retry: () => void } {
+  const [read, setRead] = useState<{
+    key: string;
+    text: string | false;
+  } | null>(null);
+  const [tries, setTries] = useState(0);
   const query = designWorkpaperQuery(ids);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: `again` is what asks for another read.
+  const key = `${query}|${again}|${tries}`;
   useEffect(() => {
     if (!wanted) {
       return;
     }
     const control = new AbortController();
     let current = true;
-    setText(null);
     (async () => {
       let read: string | false = false;
       try {
@@ -78,15 +95,18 @@ function useConclusionText(
         read = false;
       }
       if (current) {
-        setText(read);
+        setRead({ key, text: read });
       }
     })();
     return () => {
       current = false;
       control.abort();
     };
-  }, [query, again, wanted]);
-  return text;
+  }, [query, key, wanted]);
+  return {
+    text: wanted && read !== null && read.key === key ? read.text : null,
+    retry: () => setTries((n) => n + 1),
+  };
 }
 
 /**
@@ -127,12 +147,26 @@ export function DesignConclusionPanel({
   const [pending, startTransition] = useTransition();
   const [pressed, setPressed] = useState<"sign" | "reopen" | null>(null);
   const [shown, setShown] = useState<DesignConclusionNotice | null>(notice);
-  // Read only where there is a conclusion to show it with.
-  const text = useConclusionText(
+  // The server's own sentence for a refusal, shown at once in place of the notice's.
+  const [refusal, setRefusal] = useState("");
+  const uid = useId();
+  // The conclusion the step speaks of (section 3.6): the signed one while the sign-off
+  // stands, otherwise the preparer's; null where none is recorded; undefined on a body
+  // from before 3.6.
+  const standing = conclusion === null ? undefined : standingKind(conclusion);
+  const named = standing !== undefined && standing !== null;
+  // Read only where there is a conclusion to show it with, and again whenever the
+  // conclusion, the sign-off or the prepared version it would be signed at changes.
+  const { text, retry } = useConclusionText(
     ids,
-    `${conclusion?.choice?.id ?? ""}:${conclusion?.status ?? ""}`,
-    conclusion !== null &&
-      (conclusion.choice !== null || conclusion.signed?.conclusion != null),
+    [
+      conclusion?.choice?.id ?? "",
+      conclusion?.status ?? "",
+      conclusion?.workpaper?.id ?? "",
+      conclusion?.workpaper?.status ?? "",
+      conclusion?.workpaper?.preparedVersion ?? "",
+    ].join(":"),
+    named,
   );
 
   if (conclusion === null) {
@@ -148,24 +182,38 @@ export function DesignConclusionPanel({
     event.preventDefault();
     const data = new FormData(event.currentTarget);
     const intent = data.get("intent") === "reopen" ? "reopen" : "sign";
+    // The reviewer signs the text they can read: not while it is being read, and not
+    // where it could not be.
+    if (intent === "sign" && typeof text !== "string") {
+      return;
+    }
     setPressed(intent);
     setShown(null);
+    setRefusal("");
     startTransition(async () => {
       let result: DesignConclusionNotice = "dc-unavailable";
+      let detail = "";
       try {
         const response = await fetch("/workspace/design-conclusions", {
           method: "POST",
           body: data,
           headers: { "x-dc-fetch": "1" },
         });
-        const body = (await response.json()) as { notice?: unknown };
+        const body = (await response.json()) as {
+          notice?: unknown;
+          detail?: unknown;
+        };
         result =
           parseDesignConclusionNotice(
             typeof body.notice === "string" ? body.notice : null,
           ) ?? "dc-unavailable";
+        detail = typeof body.detail === "string" ? body.detail : "";
       } catch {
         result = "dc-unavailable";
       }
+      // The server's sentence for a refusal is shown now, before the records are read
+      // again: it says what to do, which the notice alone does not.
+      setRefusal(designConclusionRefusal(intent, result, detail));
       setShown(result);
       router.refresh();
     });
@@ -186,32 +234,48 @@ export function DesignConclusionPanel({
   // each the server gives that the card does not already say.
   const holds = holdsBelow(conclusion);
   const earlier = conclusion.history.filter((item) => item.reopenedAt !== null);
-  // Section 3.6: the reviewer signs the preparer's conclusion that stands, never "Not
-  // concluded".
+  // Section 3.6: the reviewer signs the preparer's conclusion that stands, named by its
+  // kind and its id, never "Not concluded". With no standing conclusion there is nothing
+  // to sign, and no button.
   const choice = conclusion.choice;
   const signed = conclusion.signed;
-  const signable =
-    choice === null || choice.kind === "NOT_CONCLUDED" ? null : choice.kind;
+  const signable = choice === null ? null : signableKind(choice.kind);
   const signs =
-    conclusion.canSign && signable !== null && paper?.preparedVersion != null;
-  // What the step says first: the conclusion recorded (or signed). An answer from before
-  // section 3.6 names none, and its verdict is read as before.
-  const named = choice !== null || signed?.conclusion != null;
-  const before36 =
-    conclusion.proposedConclusion === null && choice === null && !named;
+    conclusion.canSign &&
+    choice !== null &&
+    signable !== null &&
+    paper?.preparedVersion != null;
+  // What the step says first: the conclusion that stands. An answer from before section
+  // 3.6 names none, and its verdict is read as before; one that follows it and has none
+  // recorded says so, with the way to section 7 (never the records' two-value proposal).
+  const before36 = standing === undefined;
+  const none = standing === null;
   const section7 = conclusionHref(assessmentHref);
   const preparerSide =
-    conclusion.viewerPrepared || !conclusion.viewerIsReviewer;
+    conclusion.viewerPrepared ||
+    conclusion.viewerRecorded ||
+    !conclusion.viewerIsReviewer;
+  // The sign-off waits for the text the reviewer signs: read, for the version shown.
+  const textHold =
+    text === null
+      ? "Reading the conclusion…"
+      : text === false
+        ? "The conclusion could not be read: try again"
+        : "";
+  const signHoldId = `${uid}-sign-hold`;
+  const failed = shown !== null && FAILED.includes(shown);
 
   return (
     <section className="dc" aria-labelledby="dc-heading">
       {shown !== null ? (
         <p
-          className={`banner ${FAILED.includes(shown) ? "banner-warning" : ""}`}
-          role="status"
+          className={`banner ${failed ? "banner-warning" : ""}`}
+          role={failed ? "alert" : "status"}
         >
-          <UiIcon name={FAILED.includes(shown) ? "risk" : "info"} size={16} />
-          <span>{DESIGN_CONCLUSION_NOTICES[shown]}</span>
+          <UiIcon name={failed ? "risk" : "info"} size={16} />
+          <span>
+            {refusal !== "" ? refusal : DESIGN_CONCLUSION_NOTICES[shown]}
+          </span>
         </p>
       ) : null}
 
@@ -225,14 +289,16 @@ export function DesignConclusionPanel({
             {head.status}
           </span>
         </div>
-        {named || before36 ? (
-          <p className="dc-verdict-word">{head.word}</p>
-        ) : (
+        <p className={`dc-verdict-word${none ? " is-none" : ""}`}>
+          {head.word}
+        </p>
+        {none ? (
+          // Always said where no conclusion stands, whatever else the card says.
           <p className="dc-none">
             The preparer has not recorded a conclusion yet.{" "}
             <a href={section7}>Open section 7 in D&amp;I Assessment</a>
           </p>
-        )}
+        ) : null}
         {choice !== null ? (
           <div className="dc-chosen">
             <p className="dc-recorded">{recordedLine(choice)}</p>
@@ -256,8 +322,21 @@ export function DesignConclusionPanel({
               <p className="dc-quiet">Reading the conclusion…</p>
             ) : text === false ? (
               <p className="dc-quiet">
-                The conclusion's text could not be read. Open section 7 in
-                D&amp;I Assessment to read it.
+                The conclusion's text could not be read.
+                {/* One way to read it again: beside Sign off where the sign-off is
+                    offered, here otherwise. */}
+                {signs ? null : (
+                  <>
+                    {" "}
+                    <button
+                      type="button"
+                      className="btn-secondary btn-sm"
+                      onClick={retry}
+                    >
+                      Try again
+                    </button>
+                  </>
+                )}
               </p>
             ) : text === "" ? (
               <p className="dc-quiet">No conclusion is written yet.</p>
@@ -289,9 +368,9 @@ export function DesignConclusionPanel({
               ) : null}
             </p>
           </div>
-        ) : (
+        ) : head.effect !== "" ? (
           <p className="dc-effect">{head.effect}</p>
-        )}
+        ) : null}
         <dl className="dc-basis">
           <div>
             <dt>Design workpaper</dt>
@@ -346,18 +425,21 @@ export function DesignConclusionPanel({
           ) : null}
           {signed !== null ? (
             <div>
-              <dt>Signed off</dt>
+              <dt>
+                {conclusion.status === "SIGNED_OFF"
+                  ? "Signed off"
+                  : "Earlier sign-off"}
+              </dt>
               <dd>
                 {signed.signedBy || "A reviewer"} on{" "}
                 {formatDate(signed.signedAt)}
                 {/* The conclusion is said once, above; the sign-off names it only where
-                    it signed another (the preparer's changed since). */}
-                {signed.conclusion !== null &&
-                choice !== null &&
-                signed.conclusion !== choice.kind
-                  ? ` · signed as “${CONCLUSION_WORDS[signed.conclusion]}”`
-                  : before36
-                    ? ` · ${VERDICT_LABELS[signed.verdict]}`
+                    it signed another than the card says (the preparer's changed since,
+                    or none stands now). */}
+                {before36
+                  ? ` · ${VERDICT_LABELS[signed.verdict]}`
+                  : signed.conclusion !== null && signed.conclusion !== standing
+                    ? ` · signed as “${CONCLUSION_WORDS[signed.conclusion]}”`
                     : ""}{" "}
                 · workpaper version {signed.workpaperVersion}
                 {signed.note !== "" ? (
@@ -381,7 +463,7 @@ export function DesignConclusionPanel({
                 <li key={reason}>{reason}</li>
               ))}
             </ul>
-            <p>OE waits until a reviewer signs off again.</p>
+            <p>{outOfDateNext(conclusion)}</p>
           </div>
         </div>
       ) : null}
@@ -398,6 +480,7 @@ export function DesignConclusionPanel({
           {hidden}
           <input type="hidden" name="intent" value="sign" />
           <input type="hidden" name="conclusion" value={signable ?? ""} />
+          <input type="hidden" name="choice_id" value={choice?.id ?? ""} />
           <input
             type="hidden"
             name="workpaper_version"
@@ -414,15 +497,40 @@ export function DesignConclusionPanel({
             />
           </label>
           <div className="dc-actions">
-            <button type="submit" disabled={pending}>
+            {/* Off while the conclusion's text is read, and where it could not be: said
+                beside it, and the button keeps its place in the tab order. */}
+            <button
+              type="submit"
+              disabled={pending}
+              aria-disabled={textHold !== "" ? "true" : undefined}
+              aria-describedby={textHold !== "" ? signHoldId : undefined}
+            >
               {pending && pressed === "sign"
                 ? "Signing off…"
                 : `Sign off: ${signable === null ? "" : CONCLUSION_WORDS[signable]}`}
             </button>
-            <span className="form-hint">
-              You sign the preparer's conclusion. A different one is theirs to
-              record: reopen the design workpaper for them to change it.
-            </span>
+            {textHold !== "" ? (
+              <span id={signHoldId} className="form-hint dc-sign-hold">
+                {textHold}
+                {text === false ? (
+                  <>
+                    {" "}
+                    <button
+                      type="button"
+                      className="btn-secondary btn-sm"
+                      onClick={retry}
+                    >
+                      Try again
+                    </button>
+                  </>
+                ) : null}
+              </span>
+            ) : (
+              <span className="form-hint">
+                You sign the preparer's conclusion. A different one is theirs to
+                record: reopen the design workpaper for them to change it.
+              </span>
+            )}
           </div>
         </form>
       ) : null}

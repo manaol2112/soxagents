@@ -7,6 +7,9 @@ import {
 } from "../../../src/design-conclusion-model";
 import { apiBaseUrl, sessionToken } from "../../../src/load-workspace";
 
+/** The refusals whose `detail` is the server's sentence for the person. */
+const REFUSED: ReadonlySet<number> = new Set([403, 409]);
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** A reviewer's sign-off or reopening of a control's D&I conclusion, back to its step. The
@@ -21,10 +24,10 @@ export async function POST(request: Request) {
   }
   const write = designConclusionWrite(fields);
   let notice = "dc-invalid";
+  let detail = "";
   if (!("error" in write)) {
     const session = sessionToken((await cookies()).get("aw_session")?.value);
     let status = 0;
-    let detail = "";
     try {
       const headers = new Headers({ "content-type": "application/json" });
       if (session !== undefined) {
@@ -38,14 +41,18 @@ export async function POST(request: Request) {
         signal: AbortSignal.timeout(15000),
       });
       status = response.status;
-      if (status === 409) {
+      // The server's own sentence for a refusal (docs/design-workpaper.md section 3.6:
+      // "the preparer's conclusion changed; read it again", "you recorded this
+      // conclusion; another reviewer must sign it off"): the panel shows it at once.
+      // Read as text only, bounded; a validation list (422) is not a sentence.
+      if (REFUSED.has(status)) {
         const body: unknown = await response.json().catch(() => null);
         detail =
           typeof body === "object" &&
           body !== null &&
           "detail" in body &&
           typeof body.detail === "string"
-            ? body.detail
+            ? body.detail.replace(/\s+/g, " ").trim().slice(0, 300)
             : "";
       }
     } catch {
@@ -53,9 +60,10 @@ export async function POST(request: Request) {
     }
     notice = designConclusionNoticeFor(write.intent, status, detail);
   }
-  // The panel saves in the background and refreshes in place.
+  // The panel saves in the background and refreshes in place; it shows the server's
+  // sentence for a refusal (`detail`, "" where there is none).
   if (request.headers.get("x-dc-fetch") === "1") {
-    return NextResponse.json({ notice });
+    return NextResponse.json({ notice, detail });
   }
   const destination = browserUrl("/", request);
   destination.searchParams.set("section", "controls");

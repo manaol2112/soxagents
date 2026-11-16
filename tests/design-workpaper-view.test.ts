@@ -113,9 +113,13 @@ describe("the existing workpaper card, kept once per mount", () => {
   it("holds today's card for the D&I stage in the fold, unchanged", () => {
     const step = component(view, "DesignWorkpaperStep");
     assert.equal(count(view, /<WorkpapersTab\b/g), 1);
+    // Rewritten (independent review, 15 November 2026, docs/design-workpaper.md section 3.6).
+    // Old: `<WorkpapersTab compact {...props} stage="DESIGN" />`. New: the same card with
+    // `prepareHeld={behind}`: a recorded conclusion moves the workpaper's version, and
+    // Prepare waits until the page's records are read again.
     assert.match(
       step,
-      /<details\s+ref=\{fold\}\s+className="dw-fold"[\s\S]*<strong>Edit, prepare and versions<\/strong>[\s\S]*<div className="dw-fold-body">\s*<WorkpapersTab compact \{\.\.\.props\} stage="DESIGN" \/>\s*<\/div>\s*<\/details>/,
+      /<details\s+ref=\{fold\}\s+className="dw-fold"[\s\S]*<strong>Edit, prepare and versions<\/strong>[\s\S]*<div className="dw-fold-body">\s*<WorkpapersTab\s+compact\s+\{\.\.\.props\}\s+stage="DESIGN"\s+prepareHeld=\{behind\}\s*\/>\s*<\/div>\s*<\/details>/,
     );
     // The views come first, the fold under them.
     assert.ok(step.indexOf("<DesignWorkpaper\n") < step.indexOf("<details"));

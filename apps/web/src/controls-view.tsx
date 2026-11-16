@@ -105,6 +105,7 @@ import {
 } from "./controls-register-model";
 import { ControlsToolbar } from "./controls-toolbar";
 import { CoverageForm } from "./coverage-form";
+import { namedConclusion } from "./design-conclusion-model";
 import { DesignConclusionPanel } from "./design-conclusion-panel";
 import { DesignEvidence } from "./design-evidence";
 import {
@@ -2101,6 +2102,9 @@ function ControlRecord({
             signed: engagement.designConclusion.signed?.verdict ?? null,
             // What holds the sign-off: an exception a person recorded is read from it.
             blocking: engagement.designConclusion.blocking,
+            // Section 3.6: the conclusion that stands and the agent's proposal, where
+            // the body names them (never the two-value `proposed` as a conclusion).
+            named: namedConclusion(engagement.designConclusion),
           },
     effectivenessPaper: paperOf("EFFECTIVENESS"),
     busy,
