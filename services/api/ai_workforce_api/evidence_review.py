@@ -37,6 +37,7 @@ from ai_workforce_api.db import transaction
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.model_providers import CLAUDE_CONFIG, call_note
 from ai_workforce_api.models import ModelImage, ModelProvider, ModelRaw, ModelRequest, complete
+from ai_workforce_api.prompt_data import neutral
 from ai_workforce_api.settings import Settings
 
 CHECK_LABELS = {
@@ -207,9 +208,10 @@ def review_prompt(context: ReviewContext) -> str:
         f"{index}. {attribute}" for index, attribute in enumerate(context.attributes)
     )
     requested = "\n".join(f"- {item}" for item in context.requested) or "- (not itemised)"
-    return (
-        "Review these screenshots for the control below.\n\n"
-        "<control>\n"
+    # The control's record (a client's RCM may have written it), the file's name and the
+    # text read from its images are untrusted: none of the prompt's tags in them can close
+    # a block (prompt_data; security review, 17 November 2026).
+    control = neutral(
         f"Reference: {context.control_ref}\n"
         f"Title: {context.control_title}\n"
         f"Description: {context.control_activity[:1500]}\n"
@@ -217,9 +219,13 @@ def review_prompt(context: ReviewContext) -> str:
         f"Audit period: {context.period}\n"
         f"Test attributes:\n{attributes or '(none recorded)'}\n"
         f"Evidence requested:\n{requested}\n"
-        "</control>\n\n"
-        f"<file_name>{context.file_name[:200]}</file_name>\n"
-        f"<text_read_from_the_images>\n{context.ocr_text[:6000]}\n</text_read_from_the_images>"
+    )
+    return (
+        "Review these screenshots for the control below.\n\n"
+        f"<control>\n{control}</control>\n\n"
+        f"<file_name>{neutral(context.file_name[:200])}</file_name>\n"
+        f"<text_read_from_the_images>\n{neutral(context.ocr_text[:6000])}\n"
+        "</text_read_from_the_images>"
     )
 
 

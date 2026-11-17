@@ -327,7 +327,7 @@ def test_without_independence_one_admin_can_decide_and_the_page_says_so(
 ) -> None:
     team = _launched(migrated, "method-dev")
     owner = team["client"]
-    independence.configure(False)
+    independence.configure(False, "test")
     try:
         pending = _propose(owner, team).json()["pending"]
         read = owner.get(_base(team)).json()

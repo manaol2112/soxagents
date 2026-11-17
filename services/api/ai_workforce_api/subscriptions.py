@@ -31,7 +31,7 @@ import psycopg
 from fastapi import FastAPI, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from psycopg.conninfo import make_conninfo
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import JSONResponse
 
@@ -61,7 +61,11 @@ JOB_QUIET_SECONDS = 90
 # this is the fallback when a firm has no run limit (Step 6).
 ABANDONED_AFTER_SECONDS = 3600
 _WRITES = frozenset({"POST", "PUT", "PATCH", "DELETE"})
-_FIRM_PATH = re.compile(r"^/organizations/([0-9a-fA-F-]{36})(/[^?]*)?$")
+# Any segment where the firm's id stands: the route reads it with `path_id`, and so does
+# the gate (security sweep, 17 November 2026: a pattern of 36 hyphenated characters let
+# the other spellings the route accepts, such as 32 hex digits, through ungated).
+_FIRM_PATH = re.compile(r"^/organizations/([^/]+)(/[^?]*)?$")
+_PATH_ID: TypeAdapter[UUID] = TypeAdapter(UUID)
 # What stays open under an inactive subscription (the owner's policy of 29 October 2026):
 # the subscription's own actions, so a firm can get back to work. Signing out and the
 # account's own settings are not under /organizations and are never gated.
@@ -629,9 +633,9 @@ def register_subscription_gate(app: FastAPI, settings: Settings) -> None:
         user_id = getattr(request.state, "user_id", None)
         if not isinstance(user_id, UUID):
             return await call_next(request)
-        try:
-            organization_id = UUID(match.group(1))
-        except ValueError:
+        organization_id = path_id(match.group(1))
+        if organization_id is None:
+            # Not an id the route takes either: it answers 422 or 404, and changes nothing.
             return await call_next(request)
         current = await run_in_threadpool(
             _member_state, settings.database_url, user_id, organization_id
@@ -639,6 +643,18 @@ def register_subscription_gate(app: FastAPI, settings: Settings) -> None:
         if current is not None and current not in WRITABLE:
             return JSONResponse(inactive_detail(current), status_code=402)
         return await call_next(request)
+
+
+def path_id(segment: str) -> UUID | None:
+    """An id in a request's path, read exactly as the route reads it: FastAPI parses a UUID
+    path parameter with pydantic, which takes the hyphenated, plain 32-digit, braced and
+    `urn:uuid:` spellings alike. A gate in front of the routes reads the id with this, so
+    that no spelling the route accepts passes the gate unread. None for a segment the
+    route refuses as well."""
+    try:
+        return _PATH_ID.validate_python(segment)
+    except ValidationError:
+        return None
 
 
 def _member_state(database_url: str, user_id: UUID, organization_id: UUID) -> str | None:

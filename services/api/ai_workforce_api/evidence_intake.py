@@ -22,6 +22,7 @@ from fastapi import FastAPI, HTTPException, Request
 from psycopg.errors import UniqueViolation
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from ai_workforce_api.authorization import (
     Action,
@@ -72,6 +73,7 @@ from ai_workforce_api.settings import Settings
 from ai_workforce_api.storage import StoreError, digest_of, open_store
 from ai_workforce_api.storage_sweep import discard
 from ai_workforce_api.testing_engine import TestScheduler, request_run, schedule_runs
+from ai_workforce_api.upload_body import read_body
 
 MAX_PATH = 500
 # Files a computer adds to folders on its own. They are not evidence.
@@ -237,11 +239,13 @@ def register_evidence_intake(
     ) -> UploadBody:
         file_name = clean_name(name)
         folder = clean_folder(path)
-        content = await request.body()
-        if not content or len(content) > MAX_BYTES:
-            raise HTTPException(status_code=422, detail="file is empty or too large")
+        content = await read_body(request, MAX_BYTES, "file is larger than 25 MB")
+        if not content:
+            raise HTTPException(status_code=422, detail="file is empty")
         content_type = clean_type(request.headers.get("content-type", ""))
-        stored, queued = run(
+        # The database, storage and reading work runs off the event loop (upload_body).
+        stored, queued = await run_in_threadpool(
+            run,
             request,
             lambda c, p: _upload(
                 c,

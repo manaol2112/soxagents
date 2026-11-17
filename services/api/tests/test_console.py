@@ -85,6 +85,10 @@ def test_every_tool_is_registered_with_a_schema_and_a_risk() -> None:
         "link_test_evidence",
         "sign_off_testing",
         "decide_test_deficiency",
+        # A retest clears every result a person set on the sheet (security review,
+        # 17 November 2026). Old expectation: ROUTINE, run at once on the model's call.
+        # New: CONFIRM, pinned to the sheet, run only when the person confirms it.
+        "retest_control",
     }
     assert {tool.name for tool in TOOLS if tool.risk == "CONFIRM"} == sensitive
     assert {tool.name for tool in TOOLS if tool.risk == "ROUTINE"} == {
@@ -92,7 +96,6 @@ def test_every_tool_is_registered_with_a_schema_and_a_risk() -> None:
         "reread_evidence",
         "reperform_review",
         "propose_samples",
-        "retest_control",
         "draft_workpapers",
         # A file of what was shown (8.20), or a report (8.21): neither changes any records.
         "export_records",
@@ -106,6 +109,59 @@ def test_every_tool_is_registered_with_a_schema_and_a_risk() -> None:
         "list_exceptions",
         "list_review_items",
     } <= {tool.name for tool in TOOLS if tool.risk == "READ"}
+
+
+def test_a_retest_waits_for_the_person_and_says_what_it_clears(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Security review, 17 November 2026: a retest clears every override a person set, so
+    the model can only propose it; its description no longer says it runs at once, it is
+    pinned to the sheet, and the step names how many of the person's results it clears."""
+    from ai_workforce_api import console_tools
+
+    tool = BY_NAME["retest_control"]
+    assert tool.risk == "CONFIRM"
+    assert tool.pin is console_tools._pin_sheet
+    described = tool.chat_tool().description
+    assert "Runs at once" not in described
+    assert "It runs after the person confirms it." in described
+    assert "pinned" not in tool.chat_tool().input_schema.get("properties", {})
+
+    class _Rows:
+        def __init__(self, value: int) -> None:
+            self.value = value
+
+        def fetchone(self) -> tuple[int]:
+            return (self.value,)
+
+    class _Connection:
+        def __init__(self, value: int) -> None:
+            self.value = value
+            self.sql = ""
+
+        def execute(self, sql: str, params: Any = None) -> _Rows:
+            del params
+            self.sql = sql
+            return _Rows(self.value)
+
+    sheet = uuid4()
+    monkeypatch.setattr(console_tools, "_sheet_for", lambda context, ref: (sheet, None))
+    _tool, arguments = parse("retest_control", {"control_ref": "ITGC-AC-01"})
+    for value, expected in (
+        (0, "Test ITGC-AC-01 again; no result set by a person is cleared"),
+        (1, "Test ITGC-AC-01 again, clearing 1 result set by a person"),
+        (3, "Test ITGC-AC-01 again, clearing 3 results set by a person"),
+    ):
+        connection = _Connection(value)
+        context = console_tools.ToolContext(
+            connection=connection,  # type: ignore[arg-type]
+            settings=Settings(),
+            principal=None,  # type: ignore[arg-type]
+            organization_id=uuid4(),
+            project_id=uuid4(),
+        )
+        assert console_tools.describe(tool, arguments, context) == expected
+        assert "overrides" in connection.sql
 
 
 def test_the_agent_answers_a_question_from_the_records(migrated: Database) -> None:

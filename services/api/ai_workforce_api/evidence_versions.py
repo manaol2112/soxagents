@@ -22,6 +22,7 @@ import psycopg
 from fastapi import FastAPI, HTTPException, Request
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field, ValidationError, field_validator
+from starlette.concurrency import run_in_threadpool
 
 from ai_workforce_api.authorization import (
     Action,
@@ -58,6 +59,7 @@ from ai_workforce_api.settings import Settings
 from ai_workforce_api.storage import StoreError, digest_of, open_store
 from ai_workforce_api.storage_sweep import discarding
 from ai_workforce_api.testing_engine import TestScheduler, request_run, schedule_runs
+from ai_workforce_api.upload_body import read_body
 
 
 class ReasonBody(BaseModel):
@@ -162,11 +164,13 @@ def register_evidence_versions(
             why = ReasonBody(reason=reason).reason
         except ValidationError:
             raise HTTPException(status_code=422, detail="give a reason") from None
-        content = await request.body()
-        if not content or len(content) > MAX_BYTES:
-            raise HTTPException(status_code=422, detail="file is empty or too large")
+        content = await read_body(request, MAX_BYTES, "file is larger than 25 MB")
+        if not content:
+            raise HTTPException(status_code=422, detail="file is empty")
         content_type = clean_type(request.headers.get("content-type", ""))
-        result, queued, runs = run(
+        # The database, storage and reading work runs off the event loop (upload_body).
+        result, queued, runs = await run_in_threadpool(
+            run,
             request,
             lambda c, p: replace(
                 c,
@@ -182,7 +186,8 @@ def register_evidence_versions(
             ),
         )
         await asyncio.to_thread(schedule_analyses, analyses, [] if queued is None else [queued])
-        schedule_runs(tests(), runs)
+        # Off the event loop too: the workflow engine's handoff runs its own loop.
+        await asyncio.to_thread(schedule_runs, tests(), runs)
         return result
 
 

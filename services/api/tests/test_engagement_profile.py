@@ -321,7 +321,7 @@ def test_development_mode_is_said_plainly_in_readiness(migrated: Database) -> No
     team = _new_engagement(migrated, "dev-mode")
     owner, base = team["owner"], _base(team["org"], team["project"])
     assert _readiness(owner, base)["team"]["advisories"] == []
-    independence.configure(False)
+    independence.configure(False, "test")
     advisories = _readiness(owner, base)["team"]["advisories"]
     assert any(advice.startswith("Development mode") for advice in advisories)
 
@@ -343,7 +343,7 @@ def test_several_roles_are_given_at_once_only_without_independence(migrated: Dat
     assert refused.status_code == 409, refused.text
     assert refused.json()["detail"] == "one role per person while reviewer independence is required"
     assert roles() == set()
-    independence.configure(False)
+    independence.configure(False, "test")
     given = owner.post(f"{base}/team", json=both)
     assert given.status_code == 200, given.text
     assert roles() == {"PREPARER", "REVIEWER"}

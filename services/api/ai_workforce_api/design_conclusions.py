@@ -98,6 +98,7 @@ whose choice is no longer the standing one.
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
+from functools import partial
 from typing import Any, Literal
 from uuid import UUID
 
@@ -114,6 +115,7 @@ from ai_workforce_api import (
     independence,
     workpaper_review_notes,
 )
+from ai_workforce_api.after_commit import after_commit, committed
 from ai_workforce_api.authorization import (
     Action,
     NotVisible,
@@ -1743,7 +1745,11 @@ def register_design_conclusions(app: FastAPI, settings: Settings, scheduler: Any
     def run[T](request: Request, work: Callable[[psycopg.Connection[Any], Principal], T]) -> T:
         principal = _session_principal(request)
         try:
-            return _call(settings, lambda connection: work(connection, principal))
+            # What the work hands to the worker goes once the request has committed
+            # (after_commit; reliability audit, 17 November 2026).
+            return committed(
+                lambda: _call(settings, lambda connection: work(connection, principal))
+            )
         except DesignConclusionState as error:
             raise HTTPException(status_code=409, detail=error.detail) from None
         except ChoiceInvalid as error:
@@ -1777,7 +1783,8 @@ def register_design_conclusions(app: FastAPI, settings: Settings, scheduler: Any
             # verdict effective (effective, exceptions noted, no instance).
             if signed_off.signed is not None and signed_off.signed.verdict == "EFFECTIVE":
                 tests = scheduler if isinstance(scheduler, TestScheduler) else None
-                schedule_runs(tests, resume_testing(c, project_id, control_id))
+                resumed = resume_testing(c, project_id, control_id)
+                after_commit(partial(schedule_runs, tests, resumed))
             return signed_off
 
         return run(request, work)

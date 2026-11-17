@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 from ai_workforce_api.actions import contains_secret
 from ai_workforce_api.db import connect, transaction
 from ai_workforce_api.inbound import clean_line, clean_text
+from ai_workforce_api.rate_limit import client_address
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.support_notifications import (
     deliver_held,
@@ -55,7 +56,11 @@ def register_demo_requests(app: FastAPI, settings: Settings) -> None:
     ) -> DemoRequestReceipt:
         if settings.database_url == "":
             raise HTTPException(status_code=503, detail="demo requests unavailable")
-        source = request.client.host if request.client is not None else ""
+        # The visitor's address: the web tier forwards it, believed only from a trusted
+        # proxy (rate_limit.client_address). Before, it was the socket's peer, the web
+        # server itself for every visitor, so five requests from anyone closed the form
+        # for everyone for an hour (security review, 17 November 2026).
+        source = client_address(request, settings)
         agent = request.headers.get("user-agent", "")
         try:
             with connect(settings.database_url) as connection:

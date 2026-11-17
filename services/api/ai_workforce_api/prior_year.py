@@ -51,7 +51,7 @@ from ai_workforce_api.control_context import (
     link_document,
     raise_issues,
 )
-from ai_workforce_api.db import independent_steps, transaction
+from ai_workforce_api.db import hold_claim, independent_steps, releasing_claims, transaction
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.model_providers import live_model, provider_for
 from ai_workforce_api.models import ModelProvider, ModelRequest
@@ -793,6 +793,11 @@ def run_prior_year(
             """,
             (LEASE_MINUTES, document_id, RUN_ATTEMPTS),
         ).fetchone()
+        if row is not None:
+            hold_claim(
+                cursor, "prior_year_runs", "document_id", document_id, "run_status",
+                attempts_column="run_attempts", lease_column="run_lease_until",
+            )  # fmt: skip
     if row is None:
         return "SKIPPED"
     organization_id, project_id, requester = (UUID(str(item)) for item in row)
@@ -929,7 +934,8 @@ def prior_year_runner(settings: Settings) -> Callable[[UUID], str]:
 
     def run(document_id: UUID) -> str:
         provider = provider_for(settings) if live_model(settings) else None
-        with connect(settings.database_url) as connection:
+        # A run that raises gives its claim back, so the retry runs it (db.Claim).
+        with releasing_claims(settings.database_url), connect(settings.database_url) as connection:
             return run_prior_year(connection, provider, document_id)
 
     return run

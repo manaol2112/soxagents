@@ -9,6 +9,7 @@ never typed in. Signing off with exceptions drafts a deficiency, which the perso
 
 from collections.abc import Callable
 from datetime import datetime
+from functools import partial
 from typing import Any, Literal
 from uuid import UUID
 
@@ -17,6 +18,7 @@ from fastapi import FastAPI, HTTPException, Request
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field, field_validator
 
+from ai_workforce_api.after_commit import after_commit, committed
 from ai_workforce_api.agent_runs import CancelState, RunState, cancel_state, run_state
 from ai_workforce_api.authorization import (
     Action,
@@ -279,7 +281,13 @@ def register_test_sheets(app: FastAPI, settings: Settings, scheduler: TestSchedu
     def run[T](request: Request, work: Callable[[psycopg.Connection[Any], Principal], T]) -> T:
         principal = _session_principal(request)
         try:
-            return _call(settings, lambda connection: work(connection, principal))
+            # What the work hands to the worker goes once the request has committed
+            # (after_commit; reliability audit, 17 November 2026): handed over inside
+            # it, the worker's claim saw the sheet and the workpaper as they were before
+            # and skipped them.
+            return committed(
+                lambda: _call(settings, lambda connection: work(connection, principal))
+            )
         except SheetState as error:
             raise HTTPException(status_code=409, detail=error.detail) from None
 
@@ -290,8 +298,8 @@ def register_test_sheets(app: FastAPI, settings: Settings, scheduler: TestSchedu
             sheet, queued = change_sheet(
                 connection, principal, organization_id, project_id, sheet_id, work
             )
-            schedule_runs(scheduler, [] if queued is None else [queued])
-            schedule_drafts(scheduler, open_workpapers(connection))
+            after_commit(partial(schedule_runs, scheduler, [] if queued is None else [queued]))
+            after_commit(partial(schedule_drafts, scheduler, open_workpapers(connection)))
             return sheet
 
         return run(request, change)

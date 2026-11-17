@@ -31,6 +31,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from psycopg.errors import UniqueViolation
 from psycopg.types.json import Json
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from ai_workforce_api.authorization import (
     Action,
@@ -68,6 +69,7 @@ from ai_workforce_api.portal_workspace import (
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.storage import ObjectStore, StoreError, digest_of, open_store
 from ai_workforce_api.storage_sweep import discard
+from ai_workforce_api.upload_body import read_body
 
 logger = logging.getLogger(__name__)
 
@@ -501,7 +503,7 @@ def send_code(
         raise PortalState(
             "the code could not be emailed; contact the audit team that sent the request"
         )
-    preview = _mock_mail(settings)
+    preview = code_preview(settings)
     return CodeSentBody(
         sent=True, expires_in_minutes=CODE_MINUTES, preview_code=code if preview else None
     )
@@ -511,6 +513,13 @@ def _mock_mail(settings: Settings) -> bool:
     return settings.email_provider.strip().lower() in ("", "mock") and (
         settings.email_mock_inbound_enabled
     )
+
+
+def code_preview(settings: Settings) -> bool:
+    """Whether the one-time code is also given in the answer, for local testing with the mock
+    inbox, which sends nothing. Never in production, whatever the mailbox settings say: there
+    the code reaches only the link's own mailbox (security review, 17 November 2026)."""
+    return _mock_mail(settings) and settings.app_env.strip().lower() != "production"
 
 
 def verify_code(connection: psycopg.Connection[Any], token: str, code: str) -> SessionBody:
@@ -1359,9 +1368,14 @@ def register_evidence_portal(
     ) -> PortalUploadBody:
         token = session_of(request)
         file_name = clean_name(name)
-        content = await request.body()
+        # The session is checked before a byte of the file is read: a caller without a
+        # valid one sends nothing the server holds (security review, 17 November 2026).
+        await run_in_threadpool(run, lambda connection: _session(connection, token))
+        content = await read_body(request, MAX_BYTES, "the file is larger than 25 MB")
         content_type = clean_type(request.headers.get("content-type", ""))
-        stored, queued = run(
+        # The database and storage work runs off the event loop (upload_body).
+        stored, queued = await run_in_threadpool(
+            run,
             lambda connection: upload(
                 connection,
                 store(settings, connection),

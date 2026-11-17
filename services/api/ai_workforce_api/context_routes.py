@@ -14,6 +14,7 @@ import psycopg
 from fastapi import FastAPI, HTTPException, Query, Request
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from ai_workforce_api import (
     authentication_profile,
@@ -76,6 +77,7 @@ from ai_workforce_api.pbc_drafting import load_context
 from ai_workforce_api.readiness import ReadinessBody, assess, resume_testing
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.testing_engine import TestScheduler, schedule_runs
+from ai_workforce_api.upload_body import read_body
 
 
 class AttributesRunBody(BaseModel):
@@ -1068,9 +1070,7 @@ def register_control_context(
         file_name: str = "",
         control_id: list[UUID] = Query(default=[]),  # noqa: B008
     ) -> UploadResult:
-        content = await request.body()
-        if len(content) > MAX_UPLOAD:
-            raise HTTPException(status_code=413, detail="file is larger than 5 MB")
+        content = await read_body(request, MAX_UPLOAD, "file is larger than 5 MB")
         if not content:
             raise HTTPException(status_code=422, detail="file is empty")
         content_type = request.headers.get("content-type", "")
@@ -1102,7 +1102,8 @@ def register_control_context(
             found = next(d for d in documents(c, project_id) if d.id == document_id)
             return UploadResult(document=found, readable=True, note=read.note, linked=linked)
 
-        return run(request, work)
+        # Reading the file (OCR, a model) and storing it run off the event loop.
+        return await run_in_threadpool(run, request, work)
 
     @app.post(f"{base}/source-documents/{{document_id}}/links")
     def link(

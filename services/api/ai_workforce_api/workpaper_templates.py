@@ -29,6 +29,7 @@ from defusedxml import ElementTree
 from fastapi import FastAPI, HTTPException, Request
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field, field_validator
+from starlette.concurrency import run_in_threadpool
 
 from ai_workforce_api.authorization import Principal, _call, _session_principal
 from ai_workforce_api.controls import KINDS, Kind, kind_domains, kind_for_domain
@@ -43,6 +44,7 @@ from ai_workforce_api.onboarding import (
     _snapshot,
 )
 from ai_workforce_api.settings import Settings
+from ai_workforce_api.upload_body import read_body
 from ai_workforce_api.workpapers import (
     BY_KEY,
     PERIOD_LABELS,
@@ -825,10 +827,10 @@ def register_workpaper_templates(app: FastAPI, settings: Settings) -> None:
         request: Request,
         part: str = "whole",
     ) -> OnboardingBody:
-        content = await request.body()
-        if len(content) > MAX_BYTES:
-            raise HTTPException(status_code=413, detail="file is too large")
-        return run(
+        content = await read_body(request, MAX_BYTES, "file is too large")
+        # Reading the template and storing it run off the event loop (upload_body).
+        return await run_in_threadpool(
+            run,
             request,
             lambda c, p: upload_template(
                 c, p, organization_id, project_id, file_name, kind, part, content

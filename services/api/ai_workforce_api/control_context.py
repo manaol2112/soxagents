@@ -33,6 +33,7 @@ from ai_workforce_api.actions import contains_secret
 from ai_workforce_api.console_citations import find_quote
 from ai_workforce_api.controls import DOMAIN_LABELS, ITGC_DOMAINS, SYSTEM_DOMAINS
 from ai_workforce_api.evidence_extraction import extract
+from ai_workforce_api.prompt_data import attribute_value, neutral
 
 Classification = Literal[
     "ITGC",
@@ -916,9 +917,14 @@ def approved_narrative(
 
 
 def source_blocks(sources: list[Source]) -> str:
+    """The control's sources as the prompts give them. A linked document is untrusted: none
+    of the prompt's tags in its title or text can close a source or open another, and its
+    title cannot end the attribute it sits in (prompt_data; security review, 17 November
+    2026). A quote of the text still matches the stored text (find_quote folds "‹")."""
     return "\n".join(
-        f'<source id="{item.key}" kind="{item.kind}" title="{line(item.title, 120)}">\n'
-        f"{item.text[:SOURCE_EXCERPT]}\n</source>"
+        f'<source id="{attribute_value(item.key)}" kind="{attribute_value(item.kind)}" '
+        f'title="{attribute_value(line(item.title, 120))}">\n'
+        f"{neutral(item.text[:SOURCE_EXCERPT])}\n</source>"
         for item in sources
     )
 

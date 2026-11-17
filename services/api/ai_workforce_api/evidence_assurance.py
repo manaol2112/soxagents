@@ -70,7 +70,12 @@ from fastapi import FastAPI, HTTPException, Request
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field, ValidationError
 
-from ai_workforce_api import assurance_facts, attribute_dispositions, file_reliability
+from ai_workforce_api import (
+    assurance_facts,
+    attribute_dispositions,
+    file_reliability,
+    prompt_data,
+)
 from ai_workforce_api.actions import contains_secret
 from ai_workforce_api.after_commit import after_commit, committed
 from ai_workforce_api.assurance_context import ControlContext, ControlSide, load_control_side
@@ -427,20 +432,14 @@ PLACEHOLDER_YIELDS = (
     "may be its approved copy: not an exception shown."
 )
 # The prompt's own delimiters, neutralised wherever the files (or anything else from the
-# engagement) carry them, so that no text can close a block or open another.
-# The angle bracket and its look-alikes (fullwidth, small, CJK and mathematical angle
-# brackets, and the HTML entity).
-_DELIMITER = re.compile(
-    r"(?:<|&lt;|\uff1c|\ufe64|\u3008|\u2329|\u27e8)(\s*/?\s*)"
-    r"(file|evidence|control_and_attributes)\b",
-    re.I,
-)
+# engagement) carry them, so that no text can close a block or open another. One
+# neutraliser serves every prompt (prompt_data; security review, 17 November 2026).
 
 
 def neutral(text: str) -> str:
     """Text with the prompt's delimiters made inert (‹file instead of <file). A quote
     of it folds back to the stored text's own (console_citations.find_passage)."""
-    return _DELIMITER.sub(lambda found: "‹" + found.group(1) + found.group(2), text)
+    return prompt_data.neutral(text)
 
 
 def _clause_asserts(clause: str) -> bool:

@@ -259,6 +259,44 @@ def test_an_ended_trial_keeps_its_records_read_only(migrated: Database) -> None:
     assert client.get("/organizations").json()[0]["subscription_state"] == "TRIAL_EXPIRED"
 
 
+def test_no_spelling_of_the_firms_id_writes_under_an_ended_trial(migrated: Database) -> None:
+    """Security sweep, 17 November 2026: the gate matched only the 36-character hyphenated
+    spelling of the firm's id, so a change sent with the id as 32 hex digits, braced, or
+    as `urn:uuid:` (all of which the routes accept) went through under an ended trial."""
+    client, organization_id, user_id = _sign_up(migrated)
+    created = _project(client, organization_id, user_id, "sox-fy27")
+    assert created.status_code == 201, created.text
+    project_id = UUID(created.json()["id"])
+    _end_trial(migrated.url, organization_id, user_id)
+    org_spellings = [
+        organization_id.hex,
+        f"{{{organization_id}}}",
+        f"urn:uuid:{organization_id}",
+        organization_id.hex.upper(),
+    ]
+    for spelled in org_spellings:
+        refused = client.post(
+            f"/organizations/{spelled}/projects",
+            json={"name": "X", "slug": f"x-{uuid4().hex[:6]}", "scope": "",
+                  "owner_user_id": str(user_id), "status": "DRAFT"},
+        )  # fmt: skip
+        assert refused.status_code == 402, (spelled, refused.text)
+        assert refused.json()["state"] == "TRIAL_EXPIRED"
+        edited = client.patch(
+            f"/organizations/{spelled}/projects/{project_id.hex}",
+            json={"name": "Renamed", "version": 1},
+        )
+        assert edited.status_code == 402, (spelled, edited.text)
+    with connect(migrated.url) as connection:
+        row = connection.execute(
+            "SELECT count(*), max(name) FROM projects WHERE organization_id = %s",
+            (organization_id,),
+        ).fetchone()
+    assert row is not None and (row[0], row[1]) == (1, "SOX-FY27")
+    # A segment that is no id at all is refused by the route itself, never written.
+    assert client.post("/organizations/not-an-id/projects", json={}).status_code in (404, 422)
+
+
 # The trial's allowances
 
 

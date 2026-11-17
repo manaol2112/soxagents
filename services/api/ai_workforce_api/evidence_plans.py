@@ -30,6 +30,7 @@ import re
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, date, datetime, timedelta
+from functools import partial
 from typing import Any, Literal
 from uuid import UUID
 
@@ -39,7 +40,7 @@ from psycopg.types.json import Json
 from pydantic import BaseModel, Field
 
 from ai_workforce_api.actions import contains_secret
-from ai_workforce_api.after_commit import committed
+from ai_workforce_api.after_commit import after_commit, committed
 from ai_workforce_api.agent_answers import note_unusable, note_used, plain_problem
 from ai_workforce_api.authorization import (
     Action,
@@ -51,7 +52,7 @@ from ai_workforce_api.authorization import (
     authorize,
 )
 from ai_workforce_api.controls import basis_of
-from ai_workforce_api.db import independent_steps, transaction
+from ai_workforce_api.db import hold_claim, independent_steps, releasing_claims, transaction
 from ai_workforce_api.evidence_apps import tag_covers
 from ai_workforce_api.evidence_planning import (
     _MISSING_AS_REASON,
@@ -2860,6 +2861,11 @@ def run_plan(
             """,
             (PLAN_LEASE_MINUTES, plan_id, PLAN_RUN_ATTEMPTS),
         ).fetchone()
+        if row is not None:
+            hold_claim(
+                cursor, "evidence_plans", "id", plan_id, "run_status",
+                attempts_column="run_attempts", lease_column="run_lease_until",
+            )  # fmt: skip
     if row is None:
         return "SKIPPED"
     organization_id, project_id, control_id = (
@@ -3078,7 +3084,8 @@ def plan_runner(settings: Settings) -> Callable[[UUID], str]:
 
     def run(plan_id: UUID) -> str:
         provider = provider_for(settings) if live_model(settings) else None
-        with connect(settings.database_url) as connection:
+        # A run that raises gives its claim back, so the retry plans it (db.Claim).
+        with releasing_claims(settings.database_url), connect(settings.database_url) as connection:
             return run_plan(connection, provider, plan_id)
 
     return run
@@ -6234,9 +6241,13 @@ def register_evidence_plans(
             raise HTTPException(status_code=422, detail=str(error) or "plan is invalid") from None
 
     def drafted(ids: list[UUID]) -> None:
+        # Handed to the worker once the request has committed (after_commit): handed
+        # over inside it, the worker's claim ran against the drafts as they were before
+        # and skipped them, and they waited, PENDING, for a restart (reliability audit,
+        # 17 November 2026).
         from ai_workforce_api.pbc_drafting import schedule
 
-        schedule(scheduler, ids)
+        after_commit(partial(schedule, scheduler, ids))
 
     def assured_plan(
         c: psycopg.Connection[Any], p: Principal, project_id: UUID, control_id: UUID
@@ -6443,12 +6454,12 @@ def register_evidence_plans(
             filled = approve_master_plan(c, organization_id, project_id, control_id, p.id, body)
             tests = scheduler if isinstance(scheduler, TestScheduler) else None
             drafted(release(c, organization_id, project_id, control_id, p.id))
-            schedule_runs(tests, resume_testing(c, project_id, control_id))
+            after_commit(partial(schedule_runs, tests, resume_testing(c, project_id, control_id)))
             # Values answered with the approval may also fill other controls that asked
             # for them: their own requests and testing follow, as a values change does.
             for other in filled:
                 drafted(release(c, organization_id, project_id, other, p.id))
-                schedule_runs(tests, resume_testing(c, project_id, other))
+                after_commit(partial(schedule_runs, tests, resume_testing(c, project_id, other)))
             assured_plan(c, p, project_id, control_id)
             return plan_body(c, project_id, control_id)
 

@@ -56,7 +56,13 @@ from ai_workforce_api.authorization import (
 )
 from ai_workforce_api.console_citations import find_quote
 from ai_workforce_api.control_instances import control_label
-from ai_workforce_api.db import connect, independent_steps, transaction
+from ai_workforce_api.db import (
+    connect,
+    hold_claim,
+    independent_steps,
+    releasing_claims,
+    transaction,
+)
 from ai_workforce_api.inbound import clean_line, clean_text
 from ai_workforce_api.methodology import PLATFORM_DEFAULT, Rules, rules_for
 from ai_workforce_api.model_providers import live_model, provider_for
@@ -176,10 +182,20 @@ def schedule_reviews(scheduler: Any, review_ids: list[UUID]) -> None:
     """Hand re-performances to the background. If that fails, they resume later."""
     if scheduler is None or not review_ids or not hasattr(scheduler, "schedule_reviews"):
         return
-    try:
-        scheduler.schedule_reviews(review_ids)
-    except Exception:
-        logger.warning("reviews could not be scheduled; they will resume on restart")
+    ids = list(review_ids)
+
+    def hand_over() -> None:
+        try:
+            scheduler.schedule_reviews(ids)
+        except Exception:
+            logger.warning("reviews could not be scheduled; they will resume on restart")
+
+    # Inside a request the handoff waits until the request has committed (after_commit.py):
+    # handed over before, the worker's claim saw the rows as they were and skipped them.
+    # Outside one (a worker, a script) it is made at once, as before.
+    from ai_workforce_api.after_commit import after_commit
+
+    after_commit(hand_over)
 
 
 class ReviewState(Exception):
@@ -320,7 +336,8 @@ def review_runner(settings: Settings, provider: ModelProvider | None = None) -> 
         return stored_image(settings, connection, file_id)
 
     def run(review_id: UUID) -> str:
-        with connect(settings.database_url) as connection:
+        # A run that raises gives its claim back, so the retry re-performs it (db.Claim).
+        with releasing_claims(settings.database_url), connect(settings.database_url) as connection:
             return run_reperformance(
                 connection, model if use_model else None, review_id, load, settings
             )
@@ -658,6 +675,8 @@ def run_reperformance(
             """,
             (LEASE_MINUTES, review_id, MAX_ATTEMPTS),
         ).fetchone()
+        if claimed is not None:
+            hold_claim(cursor, "control_reviews", "id", review_id, "reperform_status")
     if claimed is None:
         return "SKIPPED"
     organization_id, project_id, control_id, requester = (

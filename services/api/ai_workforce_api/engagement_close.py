@@ -45,6 +45,7 @@ from ai_workforce_api.authorization import (
 from ai_workforce_api.control_instances import control_label
 from ai_workforce_api.db import connect, transaction
 from ai_workforce_api.settings import Settings
+from ai_workforce_api.subscriptions import path_id
 
 CLOSED = ("COMPLETED", "ARCHIVED")
 # Agent tasks that have not started or are waiting; a running one is let finish first.
@@ -206,13 +207,14 @@ def register_engagement_close(app: FastAPI, settings: Settings) -> None:
 
 
 # The engagement's own lifecycle actions; everything else under a closed engagement waits.
-_PROJECT_PATH = re.compile(
-    r"^/organizations/([0-9a-fA-F-]{36})/projects/([0-9a-fA-F-]{36})(/[^?]*)?$"
-)
+# Any segment where an id stands, read as the route reads it (subscriptions.path_id;
+# security sweep, 17 November 2026: a pattern of 36 hyphenated characters let the other
+# spellings the route accepts, such as 32 hex digits or `urn:uuid:`, write ungated).
+_PROJECT_PATH = re.compile(r"^/organizations/([^/]+)/projects/([^/]+)(/[^?]*)?$")
 _LIFECYCLE = frozenset({"", "/complete", "/reopen", "/delete"})
 # Asking the console about a closed engagement changes nothing in it; its actions are
 # refused by the policy engine, which allows only reads there.
-_READ_ONLY_QUESTIONS = re.compile(r"^/console/(threads|messages(/[0-9a-fA-F-]{36}/retry)?)$")
+_READ_ONLY_QUESTIONS = re.compile(r"^/console/(threads|messages(/[^/]+/retry)?)$")
 _WRITES = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
@@ -239,9 +241,9 @@ def register_closed_engagements(app: FastAPI, settings: Settings) -> None:
         user_id = getattr(request.state, "user_id", None)
         if not isinstance(user_id, UUID):
             return await call_next(request)
-        try:
-            organization_id, project_id = UUID(match.group(1)), UUID(match.group(2))
-        except ValueError:
+        organization_id, project_id = path_id(match.group(1)), path_id(match.group(2))
+        if organization_id is None or project_id is None:
+            # Not ids the route takes either: it answers 422 or 404, and changes nothing.
             return await call_next(request)
         status = await run_in_threadpool(
             _closed_status, settings.database_url, user_id, organization_id, project_id

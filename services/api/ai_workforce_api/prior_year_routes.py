@@ -9,6 +9,7 @@ from uuid import UUID
 import psycopg
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from ai_workforce_api import prior_year
 from ai_workforce_api.authorization import Action, Principal, _call, _session_principal
@@ -22,6 +23,7 @@ from ai_workforce_api.control_context import (
 )
 from ai_workforce_api.db import transaction
 from ai_workforce_api.settings import Settings
+from ai_workforce_api.upload_body import read_body
 
 
 class PriorYearUpload(BaseModel):
@@ -82,9 +84,7 @@ def register_prior_year(app: FastAPI, settings: Settings, scheduler: object | No
         title: str = "",
         file_name: str = "",
     ) -> PriorYearUpload:
-        content = await request.body()
-        if len(content) > MAX_UPLOAD:
-            raise HTTPException(status_code=413, detail="file is larger than 5 MB")
+        content = await read_body(request, MAX_UPLOAD, "file is larger than 5 MB")
         if not content:
             raise HTTPException(status_code=422, detail="file is empty")
         content_type = request.headers.get("content-type", "")
@@ -109,7 +109,8 @@ def register_prior_year(app: FastAPI, settings: Settings, scheduler: object | No
                 reference=one(c, project_id, document_id), readable=True, note=read.note
             )
 
-        return run(request, work)
+        # Reading the file and storing it run off the event loop (upload_body).
+        return await run_in_threadpool(run, request, work)
 
     @app.post(f"{reference}/matches")
     def decide_matches(

@@ -24,6 +24,7 @@ import psycopg
 from fastapi import FastAPI, HTTPException, Request, Response
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from ai_workforce_api.actions import contains_secret
 from ai_workforce_api.authorization import (
@@ -53,6 +54,7 @@ from ai_workforce_api.portal_workspace import (
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.storage import StoreError, digest_of, open_store
 from ai_workforce_api.storage_sweep import discarding
+from ai_workforce_api.upload_body import read_body
 
 RequestType = Literal[
     "POPULATION",
@@ -532,11 +534,13 @@ def register_request_details(
         request: Request,
     ) -> AttachmentBody:
         file_name = clean_name(name)
-        content = await request.body()
-        if not content or len(content) > MAX_BYTES:
-            raise HTTPException(status_code=422, detail="the file is empty or larger than 25 MB")
+        content = await read_body(request, MAX_BYTES, "the file is larger than 25 MB")
+        if not content:
+            raise HTTPException(status_code=422, detail="the file is empty")
         content_type = clean_type(request.headers.get("content-type", ""))
-        return run(
+        # The database and storage work runs off the event loop (upload_body).
+        return await run_in_threadpool(
+            run,
             request,
             lambda c, p: _upload(
                 c,

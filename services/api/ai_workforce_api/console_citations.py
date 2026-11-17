@@ -29,6 +29,9 @@ _UNCHECKED = re.compile(r"[ \t]*" + _MARKER.pattern, re.S)
 # Where a passage sits, from the markers the reader writes into a file's text.
 _PLACE = re.compile(r"^\[(Page \d+|Image \d+)[^\]]*\]|^## Sheet: (.+)$", re.M)
 _FOLD = str.maketrans({"’": "'", "‘": "'", "“": '"', "”": '"', "–": "-", "—": "-", " ": " "})
+# A prompt gives a file's tags inert ("‹file", prompt_data.neutral): a quote of that text
+# folds back to the stored "<file" (security review, 17 November 2026).
+_FOLD[ord("‹")] = "<"
 
 
 def unchecked_hidden(text: str) -> str:

@@ -35,7 +35,13 @@ from ai_workforce_api.authorization import (
 )
 from ai_workforce_api.control_instances import family_applications
 from ai_workforce_api.control_tests import approved, control_for_population, propose
-from ai_workforce_api.db import connect, independent_steps, transaction
+from ai_workforce_api.db import (
+    connect,
+    hold_claim,
+    independent_steps,
+    releasing_claims,
+    transaction,
+)
 from ai_workforce_api.evidence_apps import (
     model_tag,
     own_application,
@@ -169,7 +175,8 @@ def analysis_runner(
     engines = ocr if ocr is not None else engines_for(settings)
 
     def run(analysis_id: UUID) -> str:
-        with connect(settings.database_url) as connection:
+        # A run that raises gives its claim back, so the retry reads the file (db.Claim).
+        with releasing_claims(settings.database_url), connect(settings.database_url) as connection:
             return run_analysis(
                 connection, settings, model if use_model else None, analysis_id, engines, store
             )
@@ -205,10 +212,18 @@ def schedule_analyses(
     """Hand analyses to the background. If that fails, they stay pending and resume later."""
     if scheduler is None or not analysis_ids:
         return
-    try:
-        scheduler.schedule_evidence_analyses(analysis_ids)
-    except Exception:
-        logger.warning("evidence analyses could not be scheduled; they will resume on restart")
+    ids = list(analysis_ids)
+
+    def hand_over() -> None:
+        try:
+            scheduler.schedule_evidence_analyses(ids)
+        except Exception:
+            logger.warning("evidence analyses could not be scheduled; they will resume on restart")
+
+    # Inside a request the handoff waits until the request has committed (after_commit.py):
+    # handed over before, the worker's claim saw the rows as they were and skipped them.
+    # Outside one (a worker, a script) it is made at once, as before.
+    after_commit(hand_over)
 
 
 # The job
@@ -238,6 +253,8 @@ def run_analysis(
             """,
             (LEASE_MINUTES, analysis_id, MAX_ATTEMPTS),
         ).fetchone()
+        if claimed is not None:
+            hold_claim(cursor, "evidence_analyses", "id", analysis_id, "status")
     if claimed is None:
         return "SKIPPED"
     organization_id, project_id, file_id, requester = claimed

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from ipaddress import IPv4Address, IPv4Network, IPv6Address, IPv6Network, ip_address
 from typing import Any, Literal
 
 import psycopg
@@ -47,16 +48,38 @@ class RateLimited(Exception):
         self.retry_after = retry_after
 
 
-def client_address(request: Request) -> str:
-    """The caller's network address: the first hop of X-Forwarded-For when the request
-    came through the web proxy, else the socket's peer. Never empty."""
-    forwarded = request.headers.get("x-forwarded-for", "")
-    if forwarded:
-        first = forwarded.split(",")[0].strip()
-        if first:
-            return first[:120]
-    host = request.client.host if request.client is not None else ""
-    return (host or "unknown")[:120]
+def client_address(request: Request, settings: Settings) -> str:
+    """The caller's network address. Never empty.
+
+    The socket's peer, unless the peer is one of the trusted proxies (TRUSTED_PROXIES):
+    then the right-most X-Forwarded-For hop that is not itself a trusted proxy, which is
+    the address the nearest trusted proxy saw. Before (security review, 17 November 2026),
+    the first hop was believed from anyone, so a caller could name any address it liked
+    and pass every per-address limit; the hops left of the proxies' own are the caller's
+    words and are never read."""
+    peer = request.client.host if request.client is not None else ""
+    trusted = settings.trusted_proxy_networks()
+    if trusted and _within(peer, trusted):
+        hops = request.headers.get("x-forwarded-for", "").split(",")
+        for hop in reversed(hops):
+            address = _address(hop.strip())
+            if address is None:
+                continue
+            if not _within(str(address), trusted):
+                return str(address)[:120]
+    return (peer or "unknown")[:120]
+
+
+def _address(value: str) -> IPv4Address | IPv6Address | None:
+    try:
+        return ip_address(value)
+    except ValueError:
+        return None
+
+
+def _within(value: str, networks: tuple[IPv4Network | IPv6Network, ...]) -> bool:
+    address = _address(value)
+    return address is not None and any(address in network for network in networks)
 
 
 def normalized_identity(email: str) -> str:

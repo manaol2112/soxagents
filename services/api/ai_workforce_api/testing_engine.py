@@ -29,11 +29,18 @@ import psycopg
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field, ValidationError
 
+from ai_workforce_api.after_commit import after_commit
 from ai_workforce_api.agent_answers import plain_problem
 from ai_workforce_api.agent_runs import cancel_requested, finish_cancelled
 from ai_workforce_api.control_design import design_for
 from ai_workforce_api.control_instances import FAMILY_FILES, family_ids, shared_with_family
-from ai_workforce_api.db import connect, independent_steps, transaction
+from ai_workforce_api.db import (
+    connect,
+    hold_claim,
+    independent_steps,
+    releasing_claims,
+    transaction,
+)
 from ai_workforce_api.evidence_apps import (
     Application,
     control_applications,
@@ -44,6 +51,7 @@ from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.library_definitions import sheet_definitions
 from ai_workforce_api.model_providers import live_model, provider_for
 from ai_workforce_api.models import ModelImage, ModelProvider, ModelRequest
+from ai_workforce_api.prompt_data import neutral
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor, record_outcome
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.test_citations import (
@@ -85,10 +93,18 @@ def schedule_runs(scheduler: TestScheduler | None, sheet_ids: list[UUID]) -> Non
     """Hand runs to the background. If that fails, they stay pending and resume later."""
     if scheduler is None or not sheet_ids:
         return
-    try:
-        scheduler.schedule_test_runs(sheet_ids)
-    except Exception:
-        logger.warning("test runs could not be scheduled; they will resume on restart")
+    ids = list(sheet_ids)
+
+    def hand_over() -> None:
+        try:
+            scheduler.schedule_test_runs(ids)
+        except Exception:
+            logger.warning("test runs could not be scheduled; they will resume on restart")
+
+    # Inside a request the handoff waits until the request has committed (after_commit.py):
+    # handed over before, the worker's claim saw the rows as they were and skipped them.
+    # Outside one (a worker, a script) it is made at once, as before.
+    after_commit(hand_over)
 
 
 # Results
@@ -516,9 +532,10 @@ def prompt_for(context: ItemContext) -> str:
     for index, item in enumerate(context.files):
         part = excerpt(item.text, "" if context.test_of_one else context.item_label)[:budget]
         budget -= len(part)
-        blocks.append(
-            f"<file index={index} name={json.dumps(item.file_name[:200])}>\n{part}\n</file>"
-        )
+        # A file's name and words are the client's: none of the prompt's tags in them can
+        # close the file or the evidence (prompt_data; security review, 17 November 2026).
+        name = neutral(json.dumps(item.file_name[:200]))
+        blocks.append(f"<file index={index} name={name}>\n{neutral(part)}\n</file>")
         if budget <= 0:
             break
     shown = [index for index, item in enumerate(context.files) if item.seen_as_image]
@@ -531,7 +548,7 @@ def prompt_for(context: ItemContext) -> str:
         "Passages an earlier evidence mapping found in this item's files. They are context, "
         "not results: a passage being relevant does not mean an attribute is met. Verify "
         "against the files and cite the files yourself.\n"
-        f"<mapped_passages>\n{json.dumps(list(context.passages), ensure_ascii=False)}\n"
+        f"<mapped_passages>\n{neutral(json.dumps(list(context.passages), ensure_ascii=False))}\n"
         "</mapped_passages>\n\n"
         if context.passages
         else ""
@@ -540,7 +557,7 @@ def prompt_for(context: ItemContext) -> str:
         "Test this item against each attribute.\n\n"
         f"{context_block}"
         f"{images}"
-        f"<control_and_item>\n{json.dumps(facts, ensure_ascii=False, indent=1)}\n"
+        f"<control_and_item>\n{neutral(json.dumps(facts, ensure_ascii=False, indent=1))}\n"
         "</control_and_item>\n\n"
         f"<evidence>\n{chr(10).join(blocks)}\n</evidence>"
     )
@@ -1207,6 +1224,16 @@ def fail_run(connection: psycopg.Connection[Any], sheet_id: UUID, reason: str = 
             )
 
 
+def renew_lease(connection: psycopg.Connection[Any], sheet_id: UUID) -> None:
+    """A working run's lease, from now: the sheet stays this run's while it works."""
+    with transaction(connection) as cursor:
+        cursor.execute(
+            "UPDATE test_sheets SET lease_until = clock_timestamp() "
+            "+ make_interval(mins => %s) WHERE id = %s AND run_status = 'WORKING'",
+            (LEASE_MINUTES, sheet_id),
+        )
+
+
 def test_runner(settings: Settings, provider: ModelProvider | None = None) -> TestRunner:
     model = provider if provider is not None else provider_for(settings)
     use_model = provider is not None or live_model(settings)
@@ -1215,7 +1242,8 @@ def test_runner(settings: Settings, provider: ModelProvider | None = None) -> Te
         return stored_image(settings, connection, file_id)
 
     def run(sheet_id: UUID) -> str:
-        with connect(settings.database_url) as connection:
+        # A run that raises gives its claim back, so the retry tests the sheet (db.Claim).
+        with releasing_claims(settings.database_url), connect(settings.database_url) as connection:
             return run_sheet(connection, model if use_model else None, sheet_id, load, settings)
 
     return run
@@ -1277,6 +1305,8 @@ def run_sheet(
             """,
             (LEASE_MINUTES, sheet_id, MAX_ATTEMPTS),
         ).fetchone()
+        if claimed is not None:
+            hold_claim(cursor, "test_sheets", "id", sheet_id, "run_status")
     if claimed is None:
         return "SKIPPED"
     organization_id, project_id, control_id, method, test_id, attributes_raw, requester = claimed[
@@ -1331,6 +1361,10 @@ def run_sheet(
         if caller is not None and caller.cancelled():
             cancelled = True
             break
+        # Each item renews the lease, as a prior-year run does: a sheet of many samples
+        # outlasts one lease, and a run whose lease ran out was taken over by a second run
+        # of the same sheet while it still worked (reliability audit, 17 November 2026).
+        renew_lease(connection, sheet_id)
         if not _test_item(
             connection,
             caller,

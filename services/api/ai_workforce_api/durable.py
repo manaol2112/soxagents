@@ -856,14 +856,19 @@ def activities_for(
     async def advance_follow_up(
         organization_id: str, project_id: str, request_id: str, now: str
     ) -> int:
-        with connect(database_url) as connection:
-            return advance(
-                connection,
-                UUID(organization_id),
-                UUID(project_id),
-                UUID(request_id),
-                datetime.fromisoformat(now),
-            )
+        def advanced() -> int:
+            with connect(database_url) as connection:
+                return advance(
+                    connection,
+                    UUID(organization_id),
+                    UUID(project_id),
+                    UUID(request_id),
+                    datetime.fromisoformat(now),
+                )
+
+        # The database work runs off the event loop, which the API's requests and the
+        # worker's other activities share (reliability audit, 17 November 2026).
+        return await asyncio.to_thread(advanced)
 
     @activity.defn(name="draft_pbc_request")
     async def draft_pbc_request(draft_id: str) -> str:

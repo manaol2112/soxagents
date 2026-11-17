@@ -21,6 +21,7 @@ from fastapi import FastAPI, HTTPException, Request
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field, field_validator
 
+from ai_workforce_api.after_commit import committed
 from ai_workforce_api.authorization import (
     Action,
     NotVisible,
@@ -34,6 +35,7 @@ from ai_workforce_api.console_citations import Citation, resolve, unchecked_hidd
 from ai_workforce_api.console_tools import (
     BY_NAME,
     TOOLS,
+    Tool,
     ToolContext,
     ToolFailed,
     check,
@@ -46,6 +48,7 @@ from ai_workforce_api.console_tools import (
     result_text,
     verify_pin,
 )
+from ai_workforce_api.console_tools import _failed as failure_of
 from ai_workforce_api.db import connect, independent_steps, transaction
 from ai_workforce_api.inbound import clean_text
 from ai_workforce_api.model_providers import chat_provider_for
@@ -1322,6 +1325,44 @@ def _retry(
     return _thread_body(connection, settings, thread_id), agent_id
 
 
+# The confirmed steps whose service commits part of its own work on purpose: sending an
+# approved request records the message and commits it before the mailbox is called
+# (outbound._send_once), so it cannot run inside one transaction. It runs as before.
+_COMMITS_ITSELF = frozenset({"send_request"})
+
+
+def run_step(tool: Tool, arguments: Any, context: ToolContext) -> dict[str, Any]:
+    """Run one confirmed step as one transaction (reliability audit, 17 November 2026).
+
+    The step's connection commits each statement by itself (independent_steps, for the
+    claim and the outcome), so a service written for a request's one transaction
+    committed each of its blocks as it went: a step that failed part way kept what it
+    had done, such as an approval asked for on a request whose submission was then
+    refused. Now a step that raises changes nothing. A refusal the tool itself gives
+    (ToolFailed) keeps what the tool recorded before giving it, as before: an approval
+    found expired is recorded as expired. What the step hands to the worker goes once
+    the step has committed (after_commit)."""
+    if tool.name in _COMMITS_ITSELF:
+        return execute(tool, arguments, context)
+    refused: list[ToolFailed] = []
+
+    def step() -> dict[str, Any]:
+        with context.connection.transaction():
+            try:
+                return tool.run(context, arguments)
+            except ToolFailed as failed:
+                refused.append(failed)
+                return {}
+
+    try:
+        result = committed(step)
+    except Exception as error:
+        raise failure_of(tool, error) from None
+    if refused:
+        raise refused[0]
+    return result
+
+
 def _confirm(
     connection: psycopg.Connection[Any],
     principal: Principal,
@@ -1379,7 +1420,7 @@ def _confirm(
             tool, parsed = parse(str(row[0]), dict(row[1]))
             # The record the step decides on is as it was when the person saw it.
             before = verify_pin(tool, parsed, context)
-            result = execute(tool, parsed, context)
+            result = run_step(tool, parsed, context)
             after = pinned_after(tool, parsed, context)
         except ToolFailed as failed:
             status, error = "FAILED", str(failed)

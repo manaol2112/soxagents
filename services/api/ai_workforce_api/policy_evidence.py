@@ -42,7 +42,7 @@ from ai_workforce_api.authorization import Action, Principal, _call, _session_pr
 from ai_workforce_api.console_citations import find_quote
 from ai_workforce_api.context_routes import _project
 from ai_workforce_api.control_context import applies_to, line
-from ai_workforce_api.db import independent_steps, transaction
+from ai_workforce_api.db import hold_claim, independent_steps, releasing_claims, transaction
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.model_providers import live_model, provider_for
 from ai_workforce_api.models import ModelProvider, ModelRequest
@@ -370,6 +370,11 @@ def run_policy_evidence(
             """,
             (LEASE_MINUTES, project_id, RUN_ATTEMPTS),
         ).fetchone()
+        if row is not None:
+            hold_claim(
+                cursor, "policy_evidence_runs", "project_id", project_id, "run_status",
+                attempts_column="run_attempts", lease_column="run_lease_until",
+            )  # fmt: skip
     if row is None:
         return "SKIPPED"
     organization_id, requester = UUID(str(row[0])), UUID(str(row[1]))
@@ -446,7 +451,8 @@ def policy_evidence_runner(settings: Settings) -> Callable[[UUID], str]:
 
     def run(project_id: UUID) -> str:
         provider = provider_for(settings) if live_model(settings) else None
-        with connect(settings.database_url) as connection:
+        # A run that raises gives its claim back, so the retry reads on (db.Claim).
+        with releasing_claims(settings.database_url), connect(settings.database_url) as connection:
             return run_policy_evidence(connection, provider, project_id)
 
     return run

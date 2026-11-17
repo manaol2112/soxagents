@@ -35,6 +35,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from functools import partial
 from typing import Any, Literal
 from uuid import UUID
 
@@ -43,7 +44,7 @@ from fastapi import FastAPI, HTTPException, Request
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field
 
-from ai_workforce_api.after_commit import committed
+from ai_workforce_api.after_commit import after_commit, committed
 from ai_workforce_api.authorization import (
     AccessDenied,
     Action,
@@ -2994,11 +2995,14 @@ def register_master_plans(app: FastAPI, settings: Settings, scheduler: Any = Non
                         detail=error.detail,
                     ))  # fmt: skip
                     continue
-                schedule(scheduler, release(c, organization_id, project_id, item.control_id, p.id))
-                schedule_runs(
+                # Handed to the worker once the request has committed (after_commit).
+                released = release(c, organization_id, project_id, item.control_id, p.id)
+                after_commit(partial(schedule, scheduler, released))
+                after_commit(partial(
+                    schedule_runs,
                     scheduler if isinstance(scheduler, TestScheduler) else None,
                     resume_testing(c, project_id, item.control_id),
-                )
+                ))  # fmt: skip
                 outcomes.append(BatchOutcome(
                     control_id=item.control_id, control_ref=str(found[0]), approved=True,
                     detail="",
@@ -3035,11 +3039,14 @@ def register_master_plans(app: FastAPI, settings: Settings, scheduler: Any = Non
             allowed(c, p, organization_id, project_id, None, Action.PROJECT_UPDATE)
             result = approve_group(c, organization_id, project_id, p.id, body)
             for control_id in result.approved:
-                schedule(scheduler, release(c, organization_id, project_id, control_id, p.id))
-                schedule_runs(
+                # Handed to the worker once the request has committed (after_commit).
+                released = release(c, organization_id, project_id, control_id, p.id)
+                after_commit(partial(schedule, scheduler, released))
+                after_commit(partial(
+                    schedule_runs,
                     scheduler if isinstance(scheduler, TestScheduler) else None,
                     resume_testing(c, project_id, control_id),
-                )
+                ))  # fmt: skip
             return result
 
         return run(request, work)
@@ -3107,7 +3114,7 @@ def register_master_plans(app: FastAPI, settings: Settings, scheduler: Any = Non
                 _changes, queued, _note = generate(c, None, organization_id, project_id,
                                                    planned, p.id)  # fmt: skip
                 drafts += queued
-            schedule(scheduler, drafts)
+            after_commit(partial(schedule, scheduler, drafts))
             return created
 
         return run(request, work)

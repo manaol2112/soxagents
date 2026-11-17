@@ -230,6 +230,44 @@ def test_the_closed_check_tells_nothing_to_another_firm(migrated: Database) -> N
     assert probe.status_code in (403, 404)
 
 
+def spellings(value: Any) -> list[str]:
+    """Every spelling of an id that the routes accept (pydantic's UUID parsing) besides
+    the hyphenated one: 32 hex digits, braced, `urn:uuid:`, and upper case 32 digits."""
+    plain = UUID(str(value))
+    return [plain.hex, f"{{{plain}}}", f"urn:uuid:{plain}", plain.hex.upper()]
+
+
+def test_no_spelling_of_the_ids_writes_to_a_completed_engagement(migrated: Database) -> None:
+    """Security sweep, 17 November 2026: the closed-engagement gate matched only the
+    36-character hyphenated spelling of the ids, so the same write sent with the ids
+    spelled as 32 hex digits, braced, or as `urn:uuid:` reached the route ungated."""
+    team = _launched(migrated, "spelled")
+    owner, project = team["owner"], _project(team)
+    _finish_the_work(migrated, team)
+    version = owner.get(f"{project}/completion").json()["version"]
+    assert owner.post(f"{project}/complete", json={"version": version}).status_code == 200
+    before = owner.get(f"{project}/tasks").json()
+    for org, proj in zip(spellings(team["org"]), spellings(team["project"]), strict=True):
+        refused = owner.post(f"/organizations/{org}/projects/{proj}/tasks", json={"title": "x"})
+        assert refused.status_code == 409, (org, refused.text)
+        assert refused.json()["detail"] == "engagement is not active: it is completed and read-only"
+    assert owner.get(f"{project}/tasks").json() == before
+    # A segment that is no id at all is refused by the route itself.
+    assert owner.post(f"/organizations/{team['org']}/projects/not-an-id/tasks",
+                      json={"title": "x"}).status_code in (404, 422)  # fmt: skip
+    # Reopened with a reason, any spelling writes again.
+    detail = owner.get(project).json()
+    reopened = owner.post(
+        f"/organizations/{spellings(team['org'])[0]}/projects/{spellings(team['project'])[2]}"
+        "/reopen",
+        json={"version": detail["version"], "reason": "Client sent a corrected listing"},
+    )
+    assert reopened.status_code == 200, reopened.text
+    org, proj = spellings(team["org"])[1], spellings(team["project"])[0]
+    written = owner.post(f"/organizations/{org}/projects/{proj}/tasks", json={"title": "x"})
+    assert written.status_code != 409, written.text
+
+
 def test_a_draft_that_never_launched_is_deleted_by_an_owner(migrated: Database) -> None:
     team = _new_engagement(migrated, "delete")
     owner, project = team["owner"], _project(team)

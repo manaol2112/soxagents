@@ -13,6 +13,13 @@ from support import Database
 from temporalio.testing import WorkflowEnvironment
 
 from ai_workforce_api import independence
+from ai_workforce_api.settings import loopback_database_url
+
+# The tests read DATABASE_URL from the environment directly: the same localhost-to-127.0.0.1
+# rewrite as the API's settings (settings.loopback_database_url), so a `localhost` URL does
+# not cost seconds per connection on Windows.
+if os.environ.get("DATABASE_URL"):
+    os.environ["DATABASE_URL"] = loopback_database_url(os.environ["DATABASE_URL"])
 
 # Temporal's time-skipping test server (test_durable, test_failures, test_followups) is a
 # child process that sdk-core gives a fixed 5 seconds to accept connections. On a loaded
@@ -75,6 +82,14 @@ def workflow_address_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DEMO_DATASET", "")
     # A developer's .env may relax these for local use; tests start from the strict defaults.
     monkeypatch.setenv("REVIEW_INDEPENDENCE_REQUIRED", "true")
+    # Tests run as a test environment, whatever the developer's .env says: a test that
+    # switches independence off does so where that is allowed (independence.py).
+    monkeypatch.setenv("APP_ENV", "test")
+    # The developer's .env may turn the preview sign-in on, and trust a local proxy; tests
+    # start with neither (a test that needs one passes it in Settings). Settings refuses the
+    # preview sign-in with APP_ENV=production (security review, 17 November 2026).
+    monkeypatch.setenv("PREVIEW_LOGIN_ENABLED", "false")
+    monkeypatch.setenv("TRUSTED_PROXIES", "")
     monkeypatch.setenv("GOOGLE_CLIENT_ID", "")
     monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "")
     monkeypatch.setenv("GOOGLE_REDIRECT_URL", "")

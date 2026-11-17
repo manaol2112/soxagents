@@ -26,6 +26,7 @@ import psycopg
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from ai_workforce_api.authorization import Action, NotVisible, Principal, _call, _session_principal
 from ai_workforce_api.context_routes import _project
@@ -49,6 +50,7 @@ from ai_workforce_api.provenance import AgentCaller, CallerProvider, Job, agent_
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.storage import StoreError, open_store
 from ai_workforce_api.storage_sweep import discarding
+from ai_workforce_api.upload_body import read_body
 
 # Policies and procedures govern; process narratives and flow diagrams describe (decided by
 # the product owner on 26 October 2026, the References tab). Each is linked the same way.
@@ -440,9 +442,7 @@ def register_governing_documents(
         system_id: list[UUID] = Query(default=[]),  # noqa: B008
         process_id: list[UUID] = Query(default=[]),  # noqa: B008
     ) -> PolicyResult:
-        content = await request.body()
-        if len(content) > MAX_UPLOAD:
-            raise HTTPException(status_code=413, detail="file is larger than 5 MB")
+        content = await read_body(request, MAX_UPLOAD, "file is larger than 5 MB")
         if not content:
             raise HTTPException(status_code=422, detail="file is empty")
         content_type = request.headers.get("content-type", "")
@@ -473,9 +473,14 @@ def register_governing_documents(
                                 note=read.note)  # fmt: skip
 
         queued: list[UUID] = []
-        result = run(request, work)
-        schedule_policy_evidence(scheduler, queued)
-        return result
+
+        def stored() -> PolicyResult:
+            result = run(request, work)
+            schedule_policy_evidence(scheduler, queued)
+            return result
+
+        # Reading the file (OCR, a model) and storing it run off the event loop.
+        return await run_in_threadpool(stored)
 
     @app.get(f"{base}/policies/{{document_id}}/file")
     def policy_file(
@@ -531,9 +536,7 @@ def register_governing_documents(
         title: str = "",
         file_name: str = "",
     ) -> PolicyResult:
-        content = await request.body()
-        if len(content) > MAX_UPLOAD:
-            raise HTTPException(status_code=413, detail="file is larger than 5 MB")
+        content = await read_body(request, MAX_UPLOAD, "file is larger than 5 MB")
         if not content:
             raise HTTPException(status_code=422, detail="file is empty")
         content_type = request.headers.get("content-type", "")
@@ -561,9 +564,14 @@ def register_governing_documents(
                                 note=read.note)  # fmt: skip
 
         queued: list[UUID] = []
-        result = run(request, work)
-        schedule_policy_evidence(scheduler, queued)
-        return result
+
+        def stored() -> PolicyResult:
+            result = run(request, work)
+            schedule_policy_evidence(scheduler, queued)
+            return result
+
+        # Reading the file (OCR, a model) and storing it run off the event loop.
+        return await run_in_threadpool(stored)
 
     @app.put(f"{base}/policies/{{document_id}}/scope")
     def scope_policy(

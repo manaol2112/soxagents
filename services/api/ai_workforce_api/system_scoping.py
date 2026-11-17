@@ -21,6 +21,7 @@ import psycopg
 from fastapi import FastAPI, HTTPException, Request
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from ai_workforce_api.adapted_controls import (
     adapted_ref,
@@ -36,7 +37,13 @@ from ai_workforce_api.controls import (
     LIBRARY_VERSION,
     runs_on_a_system,
 )
-from ai_workforce_api.db import connect, independent_steps, transaction
+from ai_workforce_api.db import (
+    connect,
+    hold_claim,
+    independent_steps,
+    releasing_claims,
+    transaction,
+)
 from ai_workforce_api.model_providers import live_model, provider_for
 from ai_workforce_api.models import ModelProvider
 from ai_workforce_api.onboarding import (
@@ -56,6 +63,7 @@ from ai_workforce_api.system_review_queue import (
     request_review,
     schedule_system_reviews,
 )
+from ai_workforce_api.upload_body import read_body
 from ai_workforce_api.workpapers import default_template
 
 logger = logging.getLogger(__name__)
@@ -439,7 +447,8 @@ def review_runner(
     use_model = provider is not None or live_model(settings)
 
     def run(application_id: UUID) -> str:
-        with connect(settings.database_url) as connection:
+        # A run that raises gives its claim back, so the retry reviews it (db.Claim).
+        with releasing_claims(settings.database_url), connect(settings.database_url) as connection:
             return run_review(connection, model if use_model else None, application_id)
 
     return run
@@ -474,6 +483,10 @@ def _review_once(
             """,
             (LEASE_MINUTES, application_id, MAX_ATTEMPTS),
         ).fetchone()
+        if claimed is not None:
+            hold_claim(
+                cursor, "system_reviews", "application_id", application_id, "review_status"
+            )
     if claimed is None:
         return "SKIPPED"
     requester = UUID(str(claimed[0]))
@@ -1077,21 +1090,24 @@ def register_system_scoping(
         request: Request,
         file_name: str = "",
     ) -> OnboardingBody:
-        content = await request.body()
-        if len(content) > wizard.MAX_REPORT_BYTES:
-            raise HTTPException(status_code=413, detail="file is larger than 25 MB")
+        content = await read_body(request, wizard.MAX_REPORT_BYTES, "file is larger than 25 MB")
         if not content:
             raise HTTPException(status_code=422, detail="file is empty")
         content_type = request.headers.get("content-type", "")
-        body = act(
-            request, organization_id, project_id,
-            lambda c, p: None if wizard.upload_report(
-                c, organization_id, project_id, application_id, p.id, content, file_name,
-                content_type,
-            ) else None,
-        )  # fmt: skip
-        schedule_system_reviews(scheduler, [application_id])
-        return body
+
+        def stored() -> OnboardingBody:
+            body = act(
+                request, organization_id, project_id,
+                lambda c, p: None if wizard.upload_report(
+                    c, organization_id, project_id, application_id, p.id, content, file_name,
+                    content_type,
+                ) else None,
+            )  # fmt: skip
+            schedule_system_reviews(scheduler, [application_id])
+            return body
+
+        # Reading the report and storing it run off the event loop (upload_body).
+        return await run_in_threadpool(stored)
 
     @app.post(f"{base}/soc-reports/{{report_id}}/remove")
     def remove_soc_report(
