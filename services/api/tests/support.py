@@ -294,7 +294,41 @@ def record_design_choice(client: Any, root: str, control_id: object) -> dict[str
     )  # fmt: skip
     assert chosen.status_code == 200, chosen.text
     found: dict[str, Any] = chosen.json()["choice"]
+    # Preparing also needs every point of the workpaper settled (section 3.9).
+    consider_design_points(client, root, control_id)
     return found
+
+
+POINT_REASON = "Considered in the test setup: this point is not what the test covers."
+
+
+def consider_design_points(client: Any, root: str, control_id: object) -> int:
+    """Every point of the control's design workpaper that is not settled is considered,
+    with a reason, through the route, as preparing the workpaper needs
+    (docs/design-workpaper.md, section 3.9: the server refuses a prepare while a point is
+    not settled). `root` is the engagement's path.
+
+    Added 16 November 2026 for tests that prepare a design workpaper and are not about its
+    points. Old: they prepared it whatever the records still asked of a person (the
+    "matters for the reviewer" were only listed). New: the server refuses that, so they
+    consider each point first, as a person would, and the rule itself stays as it is.
+    Each consideration moves the workpaper's version on, so the caller reads the
+    workpaper again before preparing. How many points were considered."""
+    url = f"{root}/controls/{control_id}/design-workpaper"
+    considered = 0
+    while True:
+        read = client.get(url)
+        assert read.status_code == 200, read.text
+        body = read.json()
+        waiting = [p for p in body["points"] if p["considered"] is None]
+        if not waiting or body["workpaper"] is None:
+            return considered
+        answer = client.post(
+            f"{root}/design-conclusions/{control_id}/points/{waiting[0]['key']}/consider",
+            json={"reason": POINT_REASON, "workpaper_version": body["workpaper"]["version"]},
+        )
+        assert answer.status_code == 200, answer.text
+        considered += 1
 
 
 def release_interim(database: Database, project_id: object, design: bool = True) -> None:

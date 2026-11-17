@@ -13,9 +13,10 @@ Audit integrity:
 - in the workpaper: a file established on review counts as reliable for the tickmark rule,
   its report row carries the inspected mark with who, when and what was relied on, and a
   procedure says so; a file not relied on is said so in the evidence index, an attribute
-  shown only on files not relied on never carries an agreed or compared mark and is an
-  open matter, and is never counted as more shown; each decision is a noted matter; a
-  decision on a check that is not current, or on a file not in force, is never read.
+  shown only on files not relied on never carries an agreed or compared mark and is a
+  point (section 3.9; it was an open matter), and is never counted as more shown; each
+  decision is said at its place (the report row, the file's line; it was a noted matter);
+  a decision on a check that is not current, or on a file not in force, is never read.
 """
 
 from datetime import UTC, datetime
@@ -45,13 +46,12 @@ from test_design_workpaper_model import (
 
 from ai_workforce_api import design_workpaper as view
 from ai_workforce_api import file_reliability as reliability
+from ai_workforce_api.design_points import points_of
 from ai_workforce_api.design_workpaper import (
     attributes_of,
-    decision_matters,
     decisions_applying,
     evidence_index,
     legend,
-    matters_of,
     procedures_of,
     readings_of,
     reliability_open,
@@ -374,7 +374,7 @@ def test_a_file_established_on_review_counts_as_reliable_for_the_tickmark() -> N
     assert reliability_open(_check(_item(A), engine=1), (F1,), established)
 
 
-def test_a_file_not_relied_on_takes_the_mark_away_and_is_an_open_matter() -> None:
+def test_a_file_not_relied_on_takes_the_mark_away_and_is_a_point() -> None:
     review = _unresolved(_said(F1), _said(F2, basis="NOT_SHOWN"))
     checks = {R1: _check(_item(A, files=(F2,)), _item(B, files=(F1, F2)), review=review)}
     decisions = [_decided("NOT_RELIED_ON", F2)]
@@ -391,16 +391,18 @@ def test_a_file_not_relied_on_takes_the_mark_away_and_is_an_open_matter() -> Non
     assert [(a.state, a.basis) for a in plain] == [(a.state, a.basis) for a in shown]
     # Before the decision, the question on the log keeps every mark away.
     assert [a.tickmark for a in plain[:2]] == ["NONE", "NONE"]
-    matters = matters_of(
-        REQUESTS, checks, ATTRIBUTES, left, [], evidence, 0,
-        decision_matters(decisions, REQUESTS, evidence), decisions,
-    )  # fmt: skip
-    assert [(m.kind, m.state, m.text, m.refs) for m in matters[:2]] == [
-        ("UNSETTLED", "OPEN", "Attribute A is shown only on a file not relied on: "
-         "“sap change log.txt”.", ["E2"]),
-        ("DISPOSITION", "NOTED", "sap change log.txt: “Not relied on”, recorded by Dana Lee on "
-         f"14 November 2026. Reason: {REASON}", ["E2"]),
+    # Rewritten for section 3.9 (16 November 2026). Old: an UNSETTLED, OPEN matter for
+    # attribute A, then the decision as a NOTED DISPOSITION matter ("sap change log.txt:
+    # “Not relied on”, recorded by ..."). New: attribute A is a NOT_RELIED point at its row,
+    # settled by a decision on the file (or a consideration); the decision itself is no
+    # point: the evidence index says it on the file's line (below). Why: the product owner
+    # removed the matters; each item is at its place.
+    points = points_of(REQUESTS, checks, ATTRIBUTES, left, [], evidence, decisions)
+    assert [(p.kind, p.text, p.refs, p.place.at, p.place.attribute_id) for p in points] == [
+        ("NOT_RELIED", "Attribute A is shown only on a file not relied on: "
+         "“sap change log.txt”.", ["E2"], "ATTRIBUTE", A),
     ]  # fmt: skip
+    assert points[0].settle == ["RELIABILITY", "CONSIDER"]
     # In the evidence index, said so with the reason; another file is not.
     index, _more = evidence_index(REQUESTS, checks, [], decisions)
     assert [(e.ref, e.not_relied_on) for e in index] == [
@@ -411,7 +413,7 @@ def test_a_file_not_relied_on_takes_the_mark_away_and_is_an_open_matter() -> Non
     assert [e.not_relied_on for e in evidence_index(REQUESTS, checks, [])[0]] == [None] * 3
 
 
-def test_an_established_report_carries_the_mark_the_procedure_and_a_noted_matter() -> None:
+def test_an_established_report_carries_the_mark_the_procedure_and_its_index_line() -> None:
     review = _unresolved(_said(F1), _said(F2, basis="NOT_SHOWN"))
     checks = {R1: _check(_item(A, files=(F2,)), review=review)}
     decisions = [_decided("ESTABLISHED_ON_REVIEW", F2)]
@@ -440,27 +442,36 @@ def test_an_established_report_carries_the_mark_the_procedure_and_a_noted_matter
     # The legend's entry for the mark goes with it.
     assert "INSPECTED" in [t.mark for t in legend(True)]
     _shown, left = attributes_of(ATTRIBUTES, REQUESTS, checks, [], evidence, None, (), decisions)
-    matters = matters_of(
-        REQUESTS, checks, ATTRIBUTES, left, [], evidence, 0,
-        decision_matters(decisions, REQUESTS, evidence), decisions,
-    )  # fmt: skip
+    # Rewritten for section 3.9 (16 November 2026). Old: the decision was a NOTED
+    # DISPOSITION matter ("sap change log.txt: “Reliability established on the auditor's
+    # review”, recorded by ..."), and the check's sentence a COMPLETENESS matter only
+    # without it. New: the check's sentence is a COMPLETENESS point at the file, settled by
+    # a decision on it, and gone once one is recorded; the decision is said on the report
+    # row naming the file (above) and on the file's line in the evidence index, so a file
+    # no row names still shows it. Why: each item at its place, nothing repeated.
+    points = points_of(REQUESTS, checks, ATTRIBUTES, left, [], evidence, decisions)
     # The check's own sentence about the file no longer waits: the decision settles it.
-    assert NOT_SHOWN_F2 not in [m.text for m in matters]
-    assert [(m.kind, m.state, m.text, m.refs) for m in matters if m.kind == "DISPOSITION"] == [
-        ("DISPOSITION", "NOTED",
-         "sap change log.txt: “Reliability established on the auditor's review”, recorded by "
-         f"Dana Lee on 14 November 2026. Relied on: {RELIED} Reason: {REASON}", ["E2"]),
+    assert NOT_SHOWN_F2 not in [p.text for p in points]
+    index, _more = evidence_index(REQUESTS, checks, [], decisions)
+    assert [(e.ref, e.established) for e in index] == [
+        ("E1", ""),
+        ("E2", "Reliability established on review by Dana Lee on 14 November 2026. "
+               f"Relied on: {RELIED}"),
+        ("E3", ""),
     ]  # fmt: skip
-    # Without the decision, the sentence waits on a person as before.
-    plain = matters_of(REQUESTS, checks, ATTRIBUTES, left, [], evidence)
-    assert ("COMPLETENESS", "OPEN", NOT_SHOWN_F2) in [(m.kind, m.state, m.text) for m in plain]
+    assert [e.established for e in evidence_index(REQUESTS, checks, [])[0]] == [""] * 3
+    # Without the decision, the sentence waits on a person as before, at the file, and a
+    # decision on the file settles it.
+    [waits] = points_of(REQUESTS, checks, ATTRIBUTES, left, [], evidence)
+    assert (waits.kind, waits.text, waits.refs) == ("COMPLETENESS", NOT_SHOWN_F2, ["E2"])
+    assert (waits.place.at, waits.place.file_id, waits.place.requirement_id) == ("FILE", F2, R1)
+    assert waits.settle == ["RELIABILITY", "CONSIDER"]
 
 
 def test_the_words_written_for_a_decision_never_say_the_client() -> None:
     decided = [_decided(), _decided("NOT_RELIED_ON", F2)]
     texts = [
         *view.RELIABILITY_WORDS.values(),
-        *(m.text for m in decision_matters(decided, REQUESTS, _index())),
         view.not_relied_sentence(decided[1]),
         view.established_sentence(decided[0]),
     ]

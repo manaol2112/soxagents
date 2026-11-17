@@ -1402,7 +1402,9 @@ def test_where_the_migration_is_not_applied_nothing_is_read_or_ended_and_nothing
     # The workpaper reads.
     paper = bench.owner.get(f"{bench.base}/controls/{bench.control}/design-workpaper")
     assert paper.status_code == 200, paper.text
-    assert not [m for m in paper.json()["matters"] if m["kind"] == "DISPOSITION"]
+    # Section 3.9 (16 November 2026): old, no DISPOSITION matter; new, no tickmark said on
+    # any attribute's row (the matters are gone; a tickmark is said on its row).
+    assert {a["tickmark_note"] for a in paper.json()["attributes"]} == {""}
     # Recording has nowhere to be kept: it fails as a whole, and says nothing was done.
     assert _record(bench, ids["B"], "NOT_APPLICABLE").status_code == 503
     assert bench.entry() == first

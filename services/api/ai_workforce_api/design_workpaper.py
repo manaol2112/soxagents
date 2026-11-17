@@ -4,7 +4,8 @@ One read-only route assembles, in code and from the records alone, what the Docu
 Matrix and Evidence views of a control's design workpaper are built from: the control, the
 workpaper's own sections, the evidence index (`E1`, `E2`, ...), the approved attributes
 with what the current checks of the control's D&I requests find, the walkthrough row by
-row, the reports relied on, the matters for the reviewer and the conclusion.
+row, the reports relied on, the points that wait on a person (design_points;
+docs/design-workpaper.md, section 3.9) and the conclusion.
 
 Rules held here, whatever the records hold:
 
@@ -12,7 +13,7 @@ Rules held here, whatever the records hold:
   read-only transaction. No file's bytes or stored text are read.
 - A check counts only while it is current: reviewed, and not out of date. One that is out
   of date, failed, cancelled, queued or running gives no state, mark, procedure or
-  follow-up; the views are told so in a matter.
+  follow-up; the views are told so in a point (design_points).
 - Across requests the most cautious reading stands: an exception the records show, then
   what any current check leaves open, then shown. A tickmark never claims more than the
   state: agreed or compared only for an attribute that is shown by the records of an
@@ -30,23 +31,23 @@ Rules held here, whatever the records hold:
   the attribute themselves: an exception a check shows wins over every disposition, what
   another request's check leaves open still waits, and an attribute a check shows stays
   "Shown". An attribute that reads by a disposition is never marked as agreed or compared,
-  never counted as shown by the records, and every disposition is a matter for the
-  reviewer with the person, the date and the reason. A person's exception is never
-  counted as shown: where the attribute would read as shown (by a check or by a closing
-  disposition) it reads "Exception recorded by the auditor", an open matter.
+  never counted as shown by the records, and every disposition is said on the
+  attribute's row with the person, the date and the reason (in its basis, or, where it
+  does not change the state, in `tickmark_note`). A person's exception is never counted
+  as shown: where the attribute would read as shown (by a check or by a closing
+  disposition) it reads "Exception recorded by the auditor".
 - A person's decision on a file's reliability (docs/evidence-assurance.md, section 10.14)
   is read only on a request whose check is current, for a file in force on it. A file
   whose reliability was established on review counts as reliable for the tickmark rule;
   its report row carries the inspected mark with the person, the date and what was relied
   on, and a procedure says how many reports were established so. A file not relied on is
-  said so in the evidence index; an attribute whose support rests only on files not
-  relied on reads as the check found it, never with an agreed or compared mark, and is an
-  open matter. Each decision is a noted matter, and the check's own sentence about a
-  decided file's reliability no longer waits on a person.
+  said so in the evidence index, and one established on review on the file's entry
+  (`established`); an attribute whose support rests only on files not relied on reads as
+  the check found it, never with an agreed or compared mark, and is a point. The check's
+  own sentence about a decided file's reliability no longer waits on a person.
 - What a person's tickmarks settle is carried on (docs/evidence-assurance.md, section
   10.15): a check's follow-up whose attributes all carry a closing tickmark on that
-  request is no longer a matter; a matter for a tickmark or a decision is never dropped
-  for room (considerations go first); every exception a person recorded that stands on
+  request is no longer a point; every exception a person recorded that stands on
   a request of the control, whatever its check, is what the D&I conclusion refuses to
   sign over (`exceptions_standing`, which says of each whether its check is current: one
   on a check that is not current is not read into the attributes here); and the
@@ -96,6 +97,14 @@ from ai_workforce_api.authorization import (
     authorize,
     permits,
 )
+from ai_workforce_api.design_points import (
+    ObservationBody,
+    PointBody,
+    considerations_standing,
+    observations_of,
+    points_of,
+    with_considerations,
+)
 from ai_workforce_api.engagement_close import CLOSED
 from ai_workforce_api.evidence_annotations import _order as annotation_order
 from ai_workforce_api.evidence_classify import KIND_LABELS as FILE_KIND_WORDS
@@ -128,17 +137,11 @@ AttributeState = Literal[
 Mark = Literal["EXCEPTION", "SHOWS", "REVIEWED", "IDENTIFIES", "SOURCE"]
 Tickmark = Literal["COMPARED", "AGREED", "REVIEWED", "EXCEPTION", "NONE"]
 LegendMark = Literal["AGREED", "COMPARED", "INSPECTED", "REVIEWED", "EXCEPTION"]
-MatterState = Literal["OPEN", "NOTED"]
-MatterKind = Literal[
-    "FINDING", "FOLLOW_UP", "CONSIDERATION", "UNSETTLED", "FILE", "COMPLETENESS",
-    "DISPOSITION", "NOTE",
-]  # fmt: skip
 SectionSource = Literal["RECORDS", "AGENT", "PERSON"]
 WorkpaperStatus = Literal["DRAFT", "PREPARED"]
 CheckStatus = assurance.RequestStatus
 
 MAX_EVIDENCE = 60
-MAX_MATTERS = 12
 MAX_PROCEDURES = 8
 MAX_REPORTS = 20
 MAX_FACTS = 60
@@ -216,12 +219,6 @@ _MARK_RANK: dict[Mark, int] = {
 }  # fmt: skip
 VERDICT_WORDS: dict[str, str] = {"EFFECTIVE": "Effective", "NOT_EFFECTIVE": "Not effective"}
 NOT_CONCLUDED_WORDS = "Not concluded yet"
-SEPARATE_NOTE = (
-    "Operating effectiveness is tested separately; this workpaper covers design and "
-    "implementation only."
-)
-# The gate's codes a person has nothing to do about: the file is left out by purpose.
-_LEFT_OUT_BY_PURPOSE = frozenset({"POPULATION"})
 
 
 class ControlBody(BaseModel):
@@ -282,6 +279,10 @@ class EvidenceBody(BaseModel):
     # Where a person decided the file is not relied on for the request its entry is
     # under (section 10.14): "Not relied on", who, when and the reason; null otherwise.
     not_relied_on: str | None = None
+    # Where a person established the file's reliability on review (section 10.14): the
+    # sentence section 5's row naming the file carries, so that a file no row names says
+    # it too (section 3.9); "" otherwise.
+    established: str = ""
 
 
 class StepBody(BaseModel):
@@ -323,6 +324,11 @@ class AttributeBody(BaseModel):
     # shown only on files a person decided are not relied on (which counts for neither the
     # design nor the implementation); null for every other state.
     shown_by: design_conclusions.ShownBy | None = None
+    # Each tickmark a person recorded on the attribute that its state and basis do not
+    # already say (where the checks show the attribute, an exception, or leave it not
+    # concluded): "Tickmark: “<words>”, by <name>, <date>. Reason: <reason>", one sentence
+    # each (section 3.9); "" where there is none.
+    tickmark_note: str = ""
 
 
 class ReportBody(BaseModel):
@@ -335,13 +341,6 @@ class ReportBody(BaseModel):
     # their review (section 10.14), with who, when and what was relied on; else null, "".
     mark: Literal["INSPECTED"] | None = None
     established: str = ""
-
-
-class MatterBody(BaseModel):
-    state: MatterState
-    kind: MatterKind
-    text: str
-    refs: list[str] = Field(default_factory=list)
 
 
 class ConclusionBody(BaseModel):
@@ -378,7 +377,16 @@ class DesignWorkpaperBody(BaseModel):
     walkthrough: WalkthroughBody
     attributes: list[AttributeBody] = Field(default_factory=list)
     reports: list[ReportBody] = Field(default_factory=list)
-    matters: list[MatterBody] = Field(default_factory=list)
+    # What waits on a person, each at its place (section 3.9): every point assembled on
+    # this read, those a consideration settles included (`considered`).
+    points: list[PointBody] = Field(default_factory=list)
+    # The agent's observations (the checks' considerations): the draft of the preparer's
+    # message to the reviewer, never part of the workpaper.
+    observations: list[ObservationBody] = Field(default_factory=list)
+    # Whether the viewer may consider a point or withdraw a consideration now.
+    can_settle: bool = False
+    # How many files on the evidence list are not listed in `evidence`.
+    evidence_more: int = 0
     conclusion: ConclusionBody
     # The design and the implementation result (section 3.6), as the D&I conclusion
     # works them out from the attributes above.
@@ -533,6 +541,7 @@ class FindingRecord:
     id: UUID
     title: str
     file_id: UUID | None = None
+    requirement_id: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -807,8 +816,14 @@ def evidence_index(
     """Every file in force on a D&I request, once each under its first request, in the
     order of the list, numbered E1 on; and how many more there are than are listed. A
     file a person decided is not relied on for that request (`decisions`, of
-    `decisions_applying`) is said so, with who, when and the reason."""
+    `decisions_applying`) is said so, with who, when and the reason; one whose reliability
+    a person established on review (the earliest such decision on the file) carries the
+    sentence section 5 gives a row naming it (`established_sentence`)."""
     not_relied = {(d.requirement_id, d.file_id): d for d in decisions if d.kind == "NOT_RELIED_ON"}
+    established: dict[UUID, FileDecision] = {}
+    for decision in sorted(decisions, key=lambda d: (d.recorded_at, str(d.id))):
+        if decision.kind == "ESTABLISHED_ON_REVIEW":
+            established.setdefault(decision.file_id, decision)
     counted: dict[tuple[UUID, UUID], list[AnnotationRecord]] = {}
     for annotation in annotations:
         if _listed(annotation):
@@ -831,6 +846,7 @@ def evidence_index(
             mine = counted.get((request.requirement_id, file.file_id), [])
             reason = held.get(file.file_id)
             decided = not_relied.get((request.requirement_id, file.file_id))
+            relied = established.get(file.file_id)
             found.append(
                 EvidenceBody(
                     ref=f"E{len(found) + 1}",
@@ -845,6 +861,7 @@ def evidence_index(
                     left_out=None if reason is None else _sentence(reason),
                     image=_is_image(file.content_type),
                     not_relied_on=None if decided is None else not_relied_sentence(decided),
+                    established="" if relied is None else established_sentence(relied),
                 )
             )
     return found, more
@@ -1090,43 +1107,33 @@ def disposition_basis(disposition: Disposition, found: str = "") -> str:
     return _sentence(" ".join(parts), DISPOSITION_LIMIT)
 
 
-def disposition_matters(
-    attributes: Sequence[AttributeRecord],
-    applying: Mapping[UUID, Sequence[Disposition]],
-    standing_annotations: Sequence[AnnotationRecord],
-    evidence: Sequence[EvidenceBody],
-) -> list[MatterBody]:
-    """Each disposition that is read, as a matter for the reviewer, with the person, the
-    date and the reason: noted, but for an exception a person recorded, which closes
-    nothing and stays open until it is evaluated."""
-    files = {annotation.id: annotation.file_id for annotation in standing_annotations}
-    found: list[MatterBody] = []
-    for attribute in attributes:
-        for disposition in applying.get(attribute.id, ()):
-            if disposition.kind == "EXCEPTION":
-                text = (
-                    f"Attribute {attribute.code}: an exception recorded "
-                    f"{_recorded(disposition)}, still to be evaluated. "
-                    f"Reason: {_closed(disposition.reason)}"
-                )
-            else:
-                text = (
-                    f"Attribute {attribute.code}: "
-                    f"“{DISPOSITION_WORDS[disposition.kind]}”, recorded "
-                    f"{_recorded(disposition)}. Reason: {_closed(disposition.reason)}"
-                )
-                if disposition.relied_on:
-                    text += f" Relied on instead: {_closed(disposition.relied_on)}"
-            on = files.get(disposition.annotation_id) if disposition.annotation_id else None
-            found.append(
-                MatterBody(
-                    state="OPEN" if disposition.kind == "EXCEPTION" else "NOTED",
-                    kind="DISPOSITION",
-                    text=_sentence(text, DISPOSITION_LIMIT),
-                    refs=_refs([] if on is None else [on], evidence),
-                )
-            )
-    return found
+def tickmark_sentence(disposition: Disposition) -> str:
+    """A person's tickmark said on its attribute's row where the state does not read by
+    it (section 3.9): "Tickmark: “<words>”, by <name>, <date>. Reason: <reason>"."""
+    words = (
+        EXCEPTION_RECORDED_WORDS
+        if disposition.kind == "EXCEPTION"
+        else DISPOSITION_WORDS[disposition.kind]
+    )
+    name = clean_line(disposition.recorded_by_name, 120).strip() or "a person"
+    return _sentence(
+        f"Tickmark: “{words}”, by {name}, {_day(disposition.recorded_at)}. "
+        f"Reason: {_closed(disposition.reason)}",
+        DISPOSITION_LIMIT,
+    )
+
+
+def tickmark_note(dispositions: Sequence[Disposition], said: Sequence[Disposition] = ()) -> str:
+    """The tickmarks of an attribute (of `dispositions_applying`) that its state and basis
+    do not already say (`said`: the one it reads by, and the exception recorded its basis
+    names), as recorded, one sentence each; "" where there is none. Before section 3.9 each
+    was a matter for the reviewer; now each is on its own row."""
+    told = {disposition.id for disposition in said}
+    return " ".join(
+        tickmark_sentence(disposition)
+        for disposition in sorted(dispositions, key=lambda d: (d.recorded_at, str(d.id)))
+        if disposition.id not in told
+    )
 
 
 def exceptions_standing(
@@ -1298,32 +1305,6 @@ def established_sentence(decision: FileDecision) -> str:
     )
 
 
-def decision_matters(
-    decisions: Sequence[FileDecision],
-    requests: Sequence[RequestRecord],
-    evidence: Sequence[EvidenceBody],
-) -> list[MatterBody]:
-    """Each decision that is read, as a noted matter for the reviewer, with the file, the
-    person, the date, what was relied on and the reason."""
-    names = {file.file_id: file.file_name for request in requests for file in request.files}
-    found: list[MatterBody] = []
-    for decision in sorted(decisions, key=lambda d: (d.recorded_at, str(d.id))):
-        name = clean_line(names.get(decision.file_id, "A file"), NAME_LIMIT)
-        text = f"{name}: “{RELIABILITY_WORDS[decision.kind]}”, recorded {_recorded(decision)}."
-        if decision.relied_on:
-            text += f" Relied on: {_closed(decision.relied_on)}"
-        text += f" Reason: {_closed(decision.reason)}"
-        found.append(
-            MatterBody(
-                state="NOTED",
-                kind="DISPOSITION",
-                text=_sentence(text, DISPOSITION_LIMIT),
-                refs=_refs([decision.file_id], evidence),
-            )
-        )
-    return found
-
-
 def attributes_of(
     attributes: Sequence[AttributeRecord],
     requests: Sequence[RequestRecord],
@@ -1335,7 +1316,7 @@ def attributes_of(
     decisions: Sequence[FileDecision] = (),
 ) -> tuple[list[AttributeBody], dict[UUID, list[Reading]]]:
     """Each approved attribute with what the current checks find across the control's D&I
-    requests, in the list's order; and the checks' words on each, for the matters.
+    requests, in the list's order; and the checks' words on each, for the points.
 
     A person's disposition (`dispositions`: those standing on the control) stands in for
     the check of its own request, unless that check shows the attribute or an exception.
@@ -1343,7 +1324,7 @@ def attributes_of(
     then what a check of another request leaves open, then shown by a check; only then
     does the attribute read by the disposition, in its own state and words, with the mark
     REVIEWED for "Shown, auditor's judgment" and none for the others. The checks' words
-    given back for the matters leave out what a disposition stands in for. A person's
+    given back for the points leave out what a disposition stands in for. A person's
     decisions on the files' reliability (`decisions`, of `decisions_applying`) bear on
     the tickmark only (`readings_of`, `tickmark_of`)."""
     by_attribute: dict[UUID, list[Reading]] = {}
@@ -1384,9 +1365,12 @@ def attributes_of(
         words = STATE_WORDS[state]
         # What the checks found, for a sentence that reads by a person's act.
         found_by_checks = basis
+        # The tickmark the basis names, where it names one (`tickmark_note` says the rest).
+        named: list[Disposition] = []
         tickmark: Tickmark
         if closing and state not in _OVER_A_DISPOSITION:
             by = read_by(closing)
+            named = [by]
             stood_in = next(
                 (
                     reading.basis
@@ -1419,6 +1403,7 @@ def attributes_of(
             state = "EXCEPTION_RECORDED"
             words = EXCEPTION_RECORDED_WORDS
             basis = disposition_basis(excepted[0], found_by_checks)
+            named = [excepted[0]]
             tickmark = "NONE"
         # The sentence of a comparison that failed is never listed under "shown".
         said = _distinct(
@@ -1443,6 +1428,7 @@ def attributes_of(
                 marks=marks_of(attribute.id, readings, stand, requests, evidence, reviewed),
                 checks=list(said)[:MAX_CHECKS],
                 notes=attribute_notes(section, attribute.code, attribute.text),
+                tickmark_note=tickmark_note(mine, named),
             )
         )
     return found, left_to_checks
@@ -1661,7 +1647,7 @@ def reports_of(
     return found
 
 
-# --- Procedures and matters -------------------------------------------------------------
+# --- Procedures ------------------------------------------------------------------------
 
 
 def _count(number: int, one: str, many: str | None = None) -> str:
@@ -1794,251 +1780,6 @@ def procedures_of(
             "as recorded."
         )
     return found[:MAX_PROCEDURES]
-
-
-def _not_listed(dropped: Sequence[MatterBody]) -> MatterBody:
-    """The line that counts the matters the list has no room for."""
-    waits = sum(1 for matter in dropped if matter.state == "OPEN")
-    text = (
-        f"{_count(len(dropped), 'more matter')} {'is' if len(dropped) == 1 else 'are'} "
-        "not listed here"
-    )
-    if waits == 0:
-        text += "."
-    elif len(dropped) == 1:
-        text += "; it waits on a person."
-    else:
-        text += f"; {waits} of them {'waits' if waits == 1 else 'wait'} on a person."
-    return MatterBody(state="OPEN" if waits else "NOTED", kind="NOTE", text=text)
-
-
-def matters_of(
-    requests: Sequence[RequestRecord],
-    checks: Mapping[UUID, CheckRecord],
-    attributes: Sequence[AttributeRecord],
-    readings: Mapping[UUID, Sequence[Reading]],
-    findings: Sequence[FindingRecord],
-    evidence: Sequence[EvidenceBody],
-    more_files: int = 0,
-    dispositions: Sequence[MatterBody] = (),
-    decisions: Sequence[FileDecision] = (),
-    closed: Mapping[UUID, frozenset[UUID]] | None = None,
-) -> list[MatterBody]:
-    """What a reviewer should see first, from the records. First, a check that is out of
-    date. Then what waits on a person: open findings, an exception a person recorded,
-    attributes a check leaves to a person, an attribute one request shows and another
-    that asks for it does not, files left out, what each current check's review says is
-    incomplete or not yet reliable, and the checks' follow-ups. Then what is noted (each
-    disposition a person recorded, files left out by purpose, considerations), and one
-    note that operating effectiveness is tested separately. At most MAX_MATTERS: where
-    there are more, the last line before the note counts them; a matter for a tickmark or
-    a decision (`dispositions`) is never one of those left out, considerations are left
-    out first, then the last of the rest (so the list is longer than MAX_MATTERS only
-    where the tickmarks and decisions alone are). A check's follow-up whose attributes all
-    carry a closing tickmark on that request (`closed`, of `closed_by_tickmark`) is not a
-    matter: the person's tickmark answered it. `readings` are the checks'
-    words left to the checks (`attributes_of`), and `dispositions` the matters of the
-    dispositions that are read (`disposition_matters`, and `decision_matters`). A person's
-    decision on a file's reliability (`decisions`, of `decisions_applying`) settles the
-    check's own sentence about that file's reliability, which then no longer waits; an
-    attribute whose support rests only on files not relied on waits on a person."""
-    waiting: list[MatterBody] = []
-    noted: list[MatterBody] = [matter for matter in dispositions if matter.state == "NOTED"]
-    names = {file.file_id: file.file_name for request in requests for file in request.files}
-    titles = {request.requirement_id: clean_line(request.title, 120) for request in requests}
-    stale = [
-        (request, check)
-        for request in requests
-        if (check := checks.get(request.requirement_id)) is not None
-        and check.status == "OUT_OF_DATE"
-    ]
-    if stale:
-        files = [file.file_id for request, _check in stale for file in request.files]
-        if len(stale) == 1:
-            request, check = stale[0]
-            why = check.out_of_date[0] if check.out_of_date else ""
-            text = (
-                f"The check of \u201c{clean_line(request.title, 200)}\u201d is out of date, "
-                f"so nothing of it is used here. {why} Check the request again."
-            )
-        else:
-            text = (
-                f"The checks of {len(stale)} requests are out of date, so nothing of them "
-                "is used here. Check the requests again."
-            )
-        waiting.append(
-            MatterBody(
-                state="OPEN", kind="UNSETTLED", text=_sentence(text), refs=_refs(files, evidence)
-            )
-        )
-    for finding in findings:
-        waiting.append(
-            MatterBody(
-                state="OPEN",
-                kind="FINDING",
-                text=_sentence(finding.title, 300),
-                refs=_refs([finding.file_id] if finding.file_id else [], evidence),
-            )
-        )
-    waiting.extend(matter for matter in dispositions if matter.state == "OPEN")
-    for attribute in attributes:
-        mine = readings.get(attribute.id, [])
-        left = next((r for r in mine if r.open), None)
-        if left is not None:
-            waiting.append(
-                MatterBody(
-                    state="OPEN",
-                    kind="UNSETTLED",
-                    text=_sentence(f"Attribute {attribute.code} is not concluded. {left.basis}"),
-                    refs=_refs([*left.exceptions, *left.shows], evidence),
-                )
-            )
-    for attribute in attributes:
-        supporting = [
-            r for r in readings.get(attribute.id, []) if r.state in ("SHOWN", "SHOWN_IN_PART")
-        ]
-        if supporting and all(r.not_relied for r in supporting):
-            resting_on = _distinct(file_id for r in supporting for file_id in r.shows)
-            waiting.append(
-                MatterBody(
-                    state="OPEN",
-                    kind="UNSETTLED",
-                    text=_sentence(
-                        f"Attribute {attribute.code} is shown only on "
-                        f"{'files' if len(resting_on) > 1 else 'a file'} not relied on: "
-                        f"{_listed_names([names.get(f, 'a file') for f in resting_on])}."
-                    ),
-                    refs=_refs(resting_on, evidence),
-                )
-            )
-    for attribute in attributes:
-        mine = readings.get(attribute.id, [])
-        if standing(mine)[0] != "SHOWN":
-            continue
-        shown = next(r for r in mine if r.state == "SHOWN")
-        short = next((r for r in mine if r.state == "NOT_SHOWN"), None)
-        if short is not None:
-            waiting.append(
-                MatterBody(
-                    state="OPEN",
-                    kind="UNSETTLED",
-                    text=_sentence(
-                        f"Attribute {attribute.code} is shown by the evidence for "
-                        f"\u201c{titles.get(shown.requirement_id, '')}\u201d and not shown by "
-                        f"the evidence for \u201c{titles.get(short.requirement_id, '')}\u201d, "
-                        "which also asks for it."
-                    ),
-                    refs=_refs(shown.shows, evidence),
-                )
-            )
-    listed = {entry.file_id for entry in evidence}
-    told: set[UUID] = set()
-    for request in requests:
-        check = checks.get(request.requirement_id)
-        if check is None or not check.gated:
-            continue
-        for held in check.held:
-            if held.file_id in told or held.file_id not in listed:
-                continue
-            told.add(held.file_id)
-            name = clean_line(names.get(held.file_id, "A file"), NAME_LIMIT)
-            matter = MatterBody(
-                state="NOTED" if held.code in _LEFT_OUT_BY_PURPOSE else "OPEN",
-                kind="FILE",
-                text=_sentence(f"{name} is not part of the check. {held.reason}"),
-                refs=_refs([held.file_id], evidence),
-            )
-            (noted if matter.state == "NOTED" else waiting).append(matter)
-    current = [
-        (request, check)
-        for request, check in _current(requests, checks)
-        if check.review is not None and check.engine >= 2
-    ]
-    said: set[str] = set()
-    for request, check in current:
-        assert check.review is not None
-        mine_names = [file.file_name for file in request.files]
-        decided = {d.file_id for d in decisions if d.requirement_id == request.requirement_id}
-        asked = file_reliability.question_sentences(
-            check.review, check.file_ids, {file.file_id: file.file_name for file in request.files}
-        )
-        settled = {
-            _sentence(sentence)
-            for file_id, sentences in asked.items()
-            if file_id in decided
-            for sentence in sentences
-        }
-        for reason in check.review.completeness.reasons:
-            text = _sentence(reason)
-            about = [request.files[i].file_id for i in named_files(text, mine_names)]
-            # A file left out is already said, with the gate's own sentence; a person's
-            # decision on a file's reliability settles what the check says of it.
-            if (
-                not text
-                or text in said
-                or text in settled
-                or (about and all(f in told for f in about))
-            ):
-                continue
-            said.add(text)
-            waiting.append(
-                MatterBody(
-                    state="OPEN", kind="COMPLETENESS", text=text, refs=_refs(about, evidence)
-                )
-            )
-    for request, check in current:
-        assert check.review is not None
-        answered = (closed or {}).get(request.requirement_id, frozenset())
-        for follow_up in check.review.follow_ups:
-            # Every attribute it asks about carries a closing tickmark on this request:
-            # the tickmark's own matter says so, and nothing more waits for it.
-            if follow_up.attribute_ids and all(a in answered for a in follow_up.attribute_ids):
-                continue
-            waiting.append(
-                MatterBody(
-                    state="OPEN",
-                    kind="FOLLOW_UP",
-                    text=_sentence(follow_up.request, 500),
-                    refs=_refs(check.file_ids, evidence),
-                )
-            )
-        for remark in check.review.considerations:
-            noted.append(
-                MatterBody(
-                    state="NOTED",
-                    kind="CONSIDERATION",
-                    text=_sentence(remark.text),
-                    refs=_refs([passage.file_id for passage in remark.passages], evidence),
-                )
-            )
-    if more_files > 0:
-        noted.append(
-            MatterBody(
-                state="NOTED",
-                kind="FILE",
-                text=(
-                    f"{_count(more_files, 'more file')} on the evidence list "
-                    f"{'is' if more_files == 1 else 'are'} not listed here."
-                ),
-            )
-        )
-    kept = [matter for matter in (*waiting, *noted) if matter.text]
-    room = MAX_MATTERS - 1
-    if len(kept) > room:
-        # One line counts what is left out. Never a tickmark's or a decision's own matter:
-        # the considerations go first, from the last, then the last of the rest.
-        considerations = [
-            at for at, m in enumerate(kept) if m.kind == "CONSIDERATION" and m.state == "NOTED"
-        ]
-        others = [
-            at for at, m in enumerate(kept) if m.kind != "DISPOSITION" and at not in considerations
-        ]
-        leaving = set([*reversed(considerations), *reversed(others)][: len(kept) - (room - 1)])
-        dropped = [matter for at, matter in enumerate(kept) if at in leaving]
-        kept = [matter for at, matter in enumerate(kept) if at not in leaving]
-        if dropped:
-            kept.append(_not_listed(dropped))
-    return [*kept, MatterBody(state="NOTED", kind="NOTE", text=SEPARATE_NOTE)]
 
 
 # --- The workpaper's own sections -------------------------------------------------------
@@ -2357,7 +2098,7 @@ def load_findings(
     a file in force with no request named. Never one that is out of date."""
     rows = connection.execute(
         """
-        SELECT id, title, evidence_file_id FROM evidence_findings
+        SELECT id, title, evidence_file_id, requirement_id FROM evidence_findings
         WHERE engagement_control_id = %s AND project_id = %s AND NOT stale
           AND status = ANY(%s)
           AND (requirement_id = ANY(%s)
@@ -2379,6 +2120,7 @@ def load_findings(
             id=UUID(str(row[0])),
             title=str(row[1] or ""),
             file_id=None if row[2] is None else UUID(str(row[2])),
+            requirement_id=None if row[3] is None else UUID(str(row[3])),
         )
         for row in rows
     ]
@@ -2609,7 +2351,16 @@ def read_design_workpaper(
     )
     stand = annotations_standing(annotations, requests, checks)
     applying = dispositions_applying(dispositions, checks, stand)
-    recorded = disposition_matters(attributes, applying, stand, evidence)
+    # The sections are edited, and a point considered or a consideration withdrawn
+    # (design_points), by the same rule: a person who may update the work, on an open
+    # engagement, while the design workpaper is a draft the agent is not drafting.
+    editable = can_edit_sections(
+        may_update=may_update,
+        engagement_open=row.project_status not in CLOSED,
+        status=None if paper is None else paper.status,
+        drafting=paper is not None and paper.drafting,
+        current_version=0 if paper is None else paper.current_version,
+    )
     # The D&I conclusion reads every exception a person recorded that stands on a request
     # of the control, whatever its check: read only where one stands at all.
     excepted = (
@@ -2677,18 +2428,22 @@ def read_design_workpaper(
         reports=reports_of(
             _section(content, "information-produced-by-the-entity"), evidence, decisions
         ),
-        matters=matters_of(
-            requests,
-            checks,
-            attributes,
-            readings,
-            findings,
-            evidence,
-            more,
-            [*recorded, *decision_matters(decisions, requests, evidence)],
-            decisions,
-            closed_by_tickmark(applying),
+        points=with_considerations(
+            points_of(
+                requests,
+                checks,
+                attributes,
+                readings,
+                findings,
+                evidence,
+                decisions,
+                closed_by_tickmark(applying),
+            ),
+            considerations_standing(connection, None if paper is None else paper.id),
         ),  # fmt: skip
+        observations=observations_of(requests, checks, evidence),
+        can_settle=editable,
+        evidence_more=more,
         conclusion=conclusion_of(
             _text_section(content, ("design-conclusion",), "conclusion"), conclusion
         ),
@@ -2699,13 +2454,7 @@ def read_design_workpaper(
             or any(d.kind == "ESTABLISHED_ON_REVIEW" for d in decisions),
             any(attribute.tickmark == "REVIEWED" for attribute in shown),
         ),
-        can_edit=can_edit_sections(
-            may_update=may_update,
-            engagement_open=row.project_status not in CLOSED,
-            status=None if paper is None else paper.status,
-            drafting=paper is not None and paper.drafting,
-            current_version=0 if paper is None else paper.current_version,
-        ),
+        can_edit=editable,
     )
 
 
@@ -2750,10 +2499,8 @@ __all__ = [
     "closed_by_tickmark",
     "conclusion_of",
     "conclusion_records",
-    "decision_matters",
     "decisions_applying",
     "disposition_basis",
-    "disposition_matters",
     "dispositions_applying",
     "drafter_record",
     "drafter_record_of",
@@ -2764,7 +2511,8 @@ __all__ = [
     "legend",
     "load_exceptions",
     "marks_of",
-    "matters_of",
+    "tickmark_note",
+    "tickmark_sentence",
     "named_files",
     "not_relied_sentence",
     "procedures_of",

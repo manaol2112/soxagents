@@ -18,10 +18,13 @@ Audit integrity:
 - a conclusion is signed only from the D&I conclusion's own sign-off record;
 - an engine 1 check gives states and SHOWS marks, never a comparison or a follow-up;
 - what a person's tickmarks settle is carried on (docs/evidence-assurance.md, section
-  10.15): a follow-up whose attributes all carry a closing tickmark is no longer a matter,
-  a tickmark's matter is never left out for room, and the agent that drafts the workpaper
-  is given the assembled results and the tickmarks as bounded data in one block that a
-  person's reason cannot leave.
+  10.15): a follow-up whose attributes all carry a closing tickmark is no longer a point,
+  and the agent that drafts the workpaper is given the assembled results and the tickmarks
+  as bounded data in one block that a person's reason cannot leave;
+- what waits on a person is a point (docs/design-workpaper.md, section 3.9; rewritten from
+  the matters, each with its old and new expectation): every one is assembled, none is
+  left out for room, and a tickmark, a decision or a person's exception is never one: each
+  is said on its own row.
 """
 
 import json
@@ -37,11 +40,10 @@ from ai_workforce_api import design_workpaper as view
 from ai_workforce_api import workpaper_service
 from ai_workforce_api.attribute_dispositions import Disposition
 from ai_workforce_api.design_conclusions import DesignConclusionBody, SignoffRecord
+from ai_workforce_api.design_points import MAX_OBSERVATIONS, observations_of, points_of
 from ai_workforce_api.design_workpaper import (
     MAX_EVIDENCE,
-    MAX_MATTERS,
     ONLY_OUT_OF_DATE,
-    SEPARATE_NOTE,
     STATE_BASIS,
     STATE_WORDS,
     TICKMARKS,
@@ -63,7 +65,6 @@ from ai_workforce_api.design_workpaper import (
     first_date,
     legend,
     marks_of,
-    matters_of,
     named_files,
     procedures_of,
     readings_of,
@@ -307,20 +308,28 @@ def test_a_check_that_is_not_current_contributes_nothing_whatever_it_holds(statu
     assert all(a.tickmark == "NONE" for a in shown)
     assert procedures_of(REQUESTS, checks, ATTRIBUTES, _walk()) == []
     assert reports_inspected(REQUESTS, checks) == []
-    matters = matters_of(REQUESTS, checks, ATTRIBUTES, readings, [], evidence)
-    assert not [m for m in matters if m.kind in ("FOLLOW_UP", "CONSIDERATION", "COMPLETENESS")]
+    # Rewritten for section 3.9 (16 November 2026). Old: the matters held no follow-up,
+    # consideration or completeness matter, and a check out of date was the first matter
+    # (UNSETTLED, OPEN). New: the same of the points (and of the agent's observations),
+    # the stale check a STALE point at its request, settled by checking it again; the
+    # matters list is removed from the workpaper.
+    points = points_of(REQUESTS, checks, ATTRIBUTES, readings, [], evidence)
+    assert not [p for p in points if p.kind in ("FOLLOW_UP", "COMPLETENESS")]
+    assert observations_of(REQUESTS, checks, evidence) == []
     by_code = {a.code: a for a in shown}
     if status == "OUT_OF_DATE":
         # The views are told, first: the only checks are out of date.
         assert by_code["A"].basis == ONLY_OUT_OF_DATE
         assert by_code["D"].basis == STATE_BASIS["NOT_TESTED"]
-        told = matters[0]
-        assert (told.kind, told.state) == ("UNSETTLED", "OPEN") and "out of date" in told.text
+        told = points[0]
+        assert told.kind == "STALE" and "out of date" in told.text
+        assert (told.place.at, told.place.requirement_id) == ("REQUEST", R1)
+        assert told.settle == ["RERUN", "CONSIDER"]
         assert "A file was added to this request." in told.text
         assert told.refs == ["E1", "E2"]
     else:
         assert by_code["A"].basis == STATE_BASIS["NOT_TESTED"]
-        assert not [m for m in matters if m.kind == "UNSETTLED"]
+        assert not [p for p in points if p.kind == "STALE"]
 
 
 def test_across_requests_the_most_cautious_reading_stands() -> None:
@@ -411,11 +420,14 @@ def test_shown_on_one_request_and_not_on_another_stays_shown_and_is_a_matter() -
     # mark is given while a current check of the attribute holds one.
     assert found.checks == ["Approved before granted."] and late not in found.checks
     assert found.tickmark == "NONE"
-    [told] = [
-        m for m in matters_of(REQUESTS, checks, ATTRIBUTES, readings, [], evidence)
-        if m.kind == "UNSETTLED"
-    ]  # fmt: skip
-    assert (told.state, told.refs) == ("OPEN", ["E1"])
+    # Rewritten for section 3.9. Old: an UNSETTLED, OPEN matter. New: a CONFLICT point at
+    # the attribute, naming the request that does not show it, settled by a tickmark there.
+    [told] = points_of(REQUESTS, checks, ATTRIBUTES, readings, [], evidence)
+    assert (told.kind, told.refs) == ("CONFLICT", ["E1"])
+    assert (told.place.at, told.place.attribute_id, told.place.requirement_id) == (
+        "ATTRIBUTE", C, R2,
+    )  # fmt: skip
+    assert told.settle == ["TICKMARK", "CONSIDER"]
     assert told.text == (
         "Attribute C is shown by the evidence for \u201cWalkthrough instance\u201d and not "
         "shown by the evidence for \u201cRole configuration\u201d, which also asks for it."
@@ -497,8 +509,11 @@ def test_an_engine_1_check_gives_states_and_shows_marks_and_nothing_else() -> No
     checks = {R1: _check(supported, engine=1)}
     evidence = _index(checks=checks)
     _shown, readings = attributes_of(ATTRIBUTES, REQUESTS, checks, [], evidence, None)
-    kinds = {m.kind for m in matters_of(REQUESTS, checks, ATTRIBUTES, readings, [], evidence)}
-    assert kinds == {"NOTE"}
+    # Rewritten for section 3.9. Old: the only matter was the note that operating
+    # effectiveness is tested separately ({"NOTE"}). New: that note is gone, and no point
+    # and no observation comes of the check.
+    assert points_of(REQUESTS, checks, ATTRIBUTES, readings, [], evidence) == []
+    assert observations_of(REQUESTS, checks, evidence) == []
     procedures = procedures_of(REQUESTS, checks, ATTRIBUTES, _walk())
     assert not any("Compared" in line for line in procedures)
 
@@ -761,10 +776,10 @@ def test_the_index_is_bounded_and_says_how_many_more_there_are() -> None:
     evidence, more = evidence_index(requests, {}, [])
     assert (len(evidence), more) == (MAX_EVIDENCE, 3)
     assert (evidence[0].ref, evidence[-1].ref) == ("E1", f"E{MAX_EVIDENCE}")
-    matters = matters_of(requests, {}, [], {}, [], evidence, more)
-    assert [(m.kind, m.state, m.text) for m in matters][:1] == [
-        ("FILE", "NOTED", "3 more files on the evidence list are not listed here.")
-    ]
+    # Rewritten for section 3.9. Old: a noted FILE matter said "3 more files on the
+    # evidence list are not listed here." New: the count is the body's `evidence_more`
+    # (said under the list by the page), and it is no point: nothing waits on a person.
+    assert points_of(requests, {}, [], {}, [], evidence) == []
 
 
 # --- The walkthrough --------------------------------------------------------------------
@@ -1055,7 +1070,17 @@ def test_a_file_read_only_in_part_is_said_so_and_never_counted_as_inspected() ->
     assert procedures_of(REQUESTS, stale, ATTRIBUTES, _walk()) == []
 
 
-def test_matters_come_from_each_source_in_the_order_a_reviewer_needs() -> None:
+def test_points_come_from_each_source_in_the_order_a_reviewer_needs() -> None:
+    """Rewritten for section 3.9 (16 November 2026; was
+    `test_matters_come_from_each_source_in_the_order_a_reviewer_needs`). Old expectation:
+    nine matters, the open ones (FINDING, UNSETTLED, FILE, COMPLETENESS x2, FOLLOW_UP)
+    then the noted ones (the file left out by purpose, the check's consideration) and the
+    note that operating effectiveness is tested separately. New: the open ones are points,
+    in the same order and words, each with its place and the actions that settle it; a
+    file left out by purpose is no point (its line in the evidence index says so); the
+    consideration is one of the agent's observations, never part of the workpaper; the
+    note is gone. Why: the product owner removed "Matters for the reviewer" from the
+    workpaper and settles each point where it belongs."""
     review = _review(
         "RELIABILITY_UNRESOLVED",
         (
@@ -1089,19 +1114,16 @@ def test_matters_come_from_each_source_in_the_order_a_reviewer_needs() -> None:
     evidence = _index(checks=checks)
     _shown, readings = attributes_of(ATTRIBUTES, REQUESTS, checks, [], evidence, None)
     findings = [FindingRecord(UUID(int=70), "Attribute C not shown: ticket REQ-1041.txt", F1)]
-    matters = matters_of(REQUESTS, checks, ATTRIBUTES, readings, findings, evidence)
-    assert [(m.kind, m.state, m.refs) for m in matters] == [
-        ("FINDING", "OPEN", ["E1"]),
-        ("UNSETTLED", "OPEN", []),
-        ("FILE", "OPEN", ["E2"]),
-        ("COMPLETENESS", "OPEN", ["E1"]),
-        ("COMPLETENESS", "OPEN", ["E1"]),
-        ("FOLLOW_UP", "OPEN", ["E1"]),
-        ("FILE", "NOTED", ["E3"]),
-        ("CONSIDERATION", "NOTED", ["E2"]),
-        ("NOTE", "NOTED", []),
+    points = points_of(REQUESTS, checks, ATTRIBUTES, readings, findings, evidence)
+    assert [(p.kind, p.refs, p.place.at, p.settle) for p in points] == [
+        ("FINDING", ["E1"], "FILE", ["FINDING", "CONSIDER"]),
+        ("NOT_CONCLUDED", [], "ATTRIBUTE", ["TICKMARK", "CONSIDER"]),
+        ("HELD", ["E2"], "FILE", ["CONSIDER"]),
+        ("COMPLETENESS", ["E1"], "FILE", ["CONSIDER"]),
+        ("COMPLETENESS", ["E1"], "FILE", ["CONSIDER"]),
+        ("FOLLOW_UP", ["E1"], "REQUEST", ["CONSIDER"]),
     ]
-    texts = [m.text for m in matters]
+    texts = [p.text for p in points]
     assert texts[0] == "Attribute C not shown: ticket REQ-1041.txt"
     assert texts[1] == (
         "Attribute B is not concluded. The two readings do not agree. Your judgment is needed."
@@ -1113,12 +1135,22 @@ def test_matters_come_from_each_source_in_the_order_a_reviewer_needs() -> None:
     # sentences. The file left out is already said, with the gate's own sentence.
     assert texts[3:5] == list(review.completeness.reasons[1:])
     assert texts[5] == "Provide the record that shows who the line manager is."
-    assert texts[6] == "role screen.png is not part of the check. This file is a population."
-    assert texts[7] == "The screenshot shows the current state, not the state on the day."
-    assert texts[8] == SEPARATE_NOTE
+    assert [(p.place.attribute_id, p.place.file_id, p.place.requirement_id) for p in points] == [
+        (None, F1, None), (B, None, R1), (None, F2, R1), (None, F1, R1), (None, F1, R1),
+        (None, None, R1),
+    ]  # fmt: skip
+    # Nothing is left of the file left out by purpose, nor of the note.
+    assert not any("population" in text or "tested separately" in text for text in texts)
+    assert [(o.text, o.refs) for o in observations_of(REQUESTS, checks, evidence)] == [
+        ("The screenshot shows the current state, not the state on the day.", ["E2"])
+    ]
+    assert all(p.considered is None for p in points)
 
 
 def test_what_a_review_says_is_incomplete_is_said_once() -> None:
+    """Rewritten for section 3.9. Old: COMPLETENESS matters, OPEN, and an engine 1 or a
+    complete check leaving only the note. New: the same sentences, once each, as points
+    at the file they name (else at their request), and nothing at all for the quiet ones."""
     same = "ticket REQ-1041.txt is long and was read only in part."
     checks = {
         R1: _check(_item(A), review=_review("INCOMPLETE", (same, same)), partial=(F1,)),
@@ -1128,21 +1160,24 @@ def test_what_a_review_says_is_incomplete_is_said_once() -> None:
         ),
     }  # fmt: skip
     evidence = _index(checks=checks)
-    matters = matters_of(REQUESTS, checks, ATTRIBUTES, {}, [], evidence)
-    assert [(m.kind, m.state, m.text, m.refs) for m in matters if m.kind == "COMPLETENESS"] == [
-        ("COMPLETENESS", "OPEN", same, ["E1"]),
-        ("COMPLETENESS", "OPEN", "A file is partly unreadable: page 2.", []),
+    points = points_of(REQUESTS, checks, ATTRIBUTES, {}, [], evidence)
+    assert [(p.kind, p.text, p.refs, p.place.at, p.place.requirement_id) for p in points] == [
+        ("COMPLETENESS", same, ["E1"], "FILE", R1),
+        ("COMPLETENESS", "A file is partly unreadable: page 2.", [], "REQUEST", R2),
     ]
     # An engine 1 check has no review, and a complete one has nothing to say.
     quiet = {R1: _check(_item(A), engine=1), R2: _check(_item(D), requirement=R2, run=RUN2)}
-    kinds = [m.kind for m in matters_of(REQUESTS, quiet, ATTRIBUTES, {}, [], evidence)]
-    assert kinds == ["NOTE"]
+    assert points_of(REQUESTS, quiet, ATTRIBUTES, {}, [], evidence) == []
 
 
 IN_PART = "ticket REQ-1041.txt is long and was read only in part."
 
 
 def test_a_check_that_is_out_of_date_is_said_first() -> None:
+    """Rewritten for section 3.9. Old: an UNSETTLED matter first, and two requests out of
+    date one matter ("The checks of 2 requests are out of date ..."). New: a STALE point
+    first, one per request out of date (each is checked again on its own, so each is
+    settled at its own request), with the request's own sentence."""
     checks = {
         R1: _check(
             _item(B, verdict="UNSETTLED", assessment="INDETERMINATE", result=None, element=None,
@@ -1154,59 +1189,45 @@ def test_a_check_that_is_out_of_date_is_said_first() -> None:
     evidence = _index(checks=checks)
     _shown, readings = attributes_of(ATTRIBUTES, REQUESTS, checks, [], evidence, None)
     findings = [FindingRecord(UUID(int=70), "Attribute C not shown", F1)]
-    matters = matters_of(REQUESTS, checks, ATTRIBUTES, readings, findings, evidence)
-    assert [m.kind for m in matters] == [
-        "UNSETTLED", "FINDING", "UNSETTLED", "COMPLETENESS", "NOTE",
-    ]  # fmt: skip
-    first = matters[0]
-    assert (first.state, first.refs) == ("OPEN", ["E1", "E3"])
+    points = points_of(REQUESTS, checks, ATTRIBUTES, readings, findings, evidence)
+    assert [p.kind for p in points] == ["STALE", "FINDING", "NOT_CONCLUDED", "COMPLETENESS"]
+    first = points[0]
+    assert (first.refs, first.place.at, first.place.requirement_id) == (["E1", "E3"], "REQUEST", R2)
     assert first.text == (
-        "The check of \u201cRole configuration\u201d is out of date, so nothing of it is used "
+        "The check of “Role configuration” is out of date, so nothing of it is used "
         "here. A file was withdrawn. Check the request again."
     )
-    # Two requests out of date are one matter.
     stale = {
         R1: _check(status="OUT_OF_DATE", out_of_date=("A file was added to this request.",)),
         R2: _check(requirement=R2, status="OUT_OF_DATE", out_of_date=("A file was withdrawn.",)),
     }
-    [told, note] = matters_of(REQUESTS, stale, ATTRIBUTES, {}, [], evidence)
-    assert (told.kind, told.state, note.kind) == ("UNSETTLED", "OPEN", "NOTE")
-    assert told.text == (
-        "The checks of 2 requests are out of date, so nothing of them is used here. "
-        "Check the requests again."
+    told = points_of(REQUESTS, stale, ATTRIBUTES, {}, [], evidence)
+    assert [(p.kind, p.place.requirement_id) for p in told] == [("STALE", R1), ("STALE", R2)]
+    assert told[0].text == (
+        "The check of “Walkthrough instance” is out of date, so nothing of it is used "
+        "here. A file was added to this request. Check the request again."
     )
+    assert told[0].key != told[1].key
 
 
-def test_matters_are_bounded_and_the_last_line_counts_what_is_not_listed() -> None:
+def test_every_point_is_listed_and_none_is_left_out_for_room() -> None:
+    """Rewritten for section 3.9 (was
+    `test_matters_are_bounded_and_the_last_line_counts_what_is_not_listed`). Old: at most
+    MAX_MATTERS (12) matters, the last line before the note counting those left out ("21
+    more matters are not listed here; 21 of them wait on a person."). New: every point is
+    listed, since each is settled at its place and the preparer's sign-off waits for every
+    one: a point left out would be one nobody could settle. No counting line, no note."""
     findings = [
         FindingRecord(UUID(int=100 + number), f"Finding {number}", F1) for number in range(30)
     ]
     stale = {R1: _check(status="OUT_OF_DATE", out_of_date=("A file was withdrawn.",))}
-    matters = matters_of(REQUESTS, stale, ATTRIBUTES, {}, findings, _index())
-    assert len(matters) == MAX_MATTERS
-    # The out-of-date notice is first and is never among what is dropped.
-    assert [m.kind for m in matters] == ["UNSETTLED"] + ["FINDING"] * 9 + ["NOTE", "NOTE"]
-    assert "out of date" in matters[0].text
-    count, note = matters[-2], matters[-1]
-    assert (count.state, count.text) == (
-        "OPEN", "21 more matters are not listed here; 21 of them wait on a person.",
-    )  # fmt: skip
-    assert (note.state, note.text) == ("NOTED", SEPARATE_NOTE)
-    # Exactly as many as fit: nothing is dropped and no line counts.
-    fits = matters_of(REQUESTS, {}, ATTRIBUTES, {}, findings[: MAX_MATTERS - 1], _index())
-    assert [m.kind for m in fits] == ["FINDING"] * (MAX_MATTERS - 1) + ["NOTE"]
-    # One more than fits: the line says so in the singular.
-    over = matters_of(REQUESTS, {}, ATTRIBUTES, {}, findings[:MAX_MATTERS], _index())
-    assert len(over) == MAX_MATTERS
-    assert over[-2].text == "2 more matters are not listed here; 2 of them wait on a person."
-    one = view._not_listed([view.MatterBody(state="NOTED", kind="CONSIDERATION", text="x")])
-    assert (one.state, one.text) == ("NOTED", "1 more matter is not listed here.")
-    waits = view._not_listed([view.MatterBody(state="OPEN", kind="FINDING", text="x")])
-    assert (waits.state, waits.text) == (
-        "OPEN", "1 more matter is not listed here; it waits on a person.",
-    )  # fmt: skip
-    # With nothing on record there is still the one note.
-    assert [m.kind for m in matters_of([], {}, [], {}, [], [])] == ["NOTE"]
+    points = points_of(REQUESTS, stale, ATTRIBUTES, {}, findings, _index())
+    assert [p.kind for p in points] == ["STALE"] + ["FINDING"] * 30
+    assert "out of date" in points[0].text
+    assert [p.text for p in points[1:]] == [f"Finding {number}" for number in range(30)]
+    assert len({p.key for p in points}) == 31
+    # With nothing on record there is nothing.
+    assert points_of([], {}, [], {}, [], []) == []
 
 
 # --- The conclusion and who may edit ----------------------------------------------------
@@ -1277,7 +1298,7 @@ def test_sections_are_editable_by_the_section_editors_own_rule() -> None:
 
 def test_the_words_written_here_never_say_the_client() -> None:
     written = [
-        *STATE_WORDS.values(), *STATE_BASIS.values(), ONLY_OUT_OF_DATE, SEPARATE_NOTE,
+        *STATE_WORDS.values(), *STATE_BASIS.values(), ONLY_OUT_OF_DATE,
         *(t.meaning for t in TICKMARKS), *view.VERDICT_WORDS.values(), view.NOT_CONCLUDED_WORDS,
     ]  # fmt: skip
     assert all("client" not in text.lower() for text in written)
@@ -1534,7 +1555,18 @@ def test_a_disposition_on_a_check_that_is_not_current_is_not_read(status: str) -
     assert view.dispositions_applying([ended], {R1: _check(_gap())}, []) == {}
 
 
-def test_each_disposition_is_a_matter_and_an_exception_recorded_is_open() -> None:
+def test_each_disposition_is_said_on_its_row_and_is_never_a_point() -> None:
+    """Rewritten for section 3.9 (16 November 2026; was
+    `test_each_disposition_is_a_matter_and_an_exception_recorded_is_open`). Old
+    expectation: each disposition was a DISPOSITION matter (OPEN for a person's exception,
+    "still to be evaluated", NOTED for the others), listed after the findings, then the
+    note. New: no disposition is a point. Each is on its attribute's row: in the basis
+    where the attribute reads by it, else in `tickmark_note` ("Tickmark: “<words>”, by
+    <name>, <date>. Reason: <reason>"). What a person disposed of no longer waits as "not
+    concluded", as before; what another request's check leaves open still does. Why: the
+    product owner removed the matters; a tickmark is already, or now is, at its place, and
+    a person's exception is evaluated by the conclusion (Effective is refused while it
+    stands)."""
     checks = {R1: _check(_item(A), _gap(), _open())}
     evidence = _index(checks=checks)
     mine = _annotation(3, "SHOWS", C, file=F2, status="CONFIRMED", origin="PERSON", run=None)
@@ -1544,37 +1576,23 @@ def test_each_disposition_is_a_matter_and_an_exception_recorded_is_open() -> Non
         _disposed("SHOWN_ON_REVIEW", C, annotation=mine.id, recorded_by_name=""),
     ]
     shown, left = attributes_of(ATTRIBUTES, REQUESTS, checks, [mine], evidence, None, disposed)
-    stand = annotations_standing([mine], REQUESTS, checks)
-    recorded = view.disposition_matters(
-        ATTRIBUTES, view.dispositions_applying(disposed, checks, stand), stand, evidence
-    )
-    assert [(m.kind, m.state, m.refs) for m in recorded] == [
-        ("DISPOSITION", "OPEN", []), ("DISPOSITION", "NOTED", []), ("DISPOSITION", "NOTED", ["E2"]),
-    ]  # fmt: skip
-    assert [m.text for m in recorded] == [
-        "Attribute A: an exception recorded by Dana Lee on 14 November 2026, still to be "
-        "evaluated. Reason: The approval is dated after the grant.",
-        "Attribute B: “Evidence not available, accepted”, recorded by Dana Lee on "
-        f"14 November 2026. Reason: {REASON}. Relied on instead: The HR leaver report.",
-        "Attribute C: “Shown, auditor's judgment”, recorded by a person on "
-        f"14 November 2026. Reason: {REASON}.",
-    ]
+    by_code = {attribute.code: attribute for attribute in shown}
+    # Each reads by its disposition, which its basis names: nothing more on the row.
+    assert by_code["A"].basis.startswith("Recorded by Dana Lee on 14 November 2026: The approval")
+    assert by_code["B"].basis.startswith(f"Recorded by Dana Lee on 14 November 2026: {REASON}.")
+    assert "Relied on instead: The HR leaver report." in by_code["B"].basis
+    assert by_code["C"].basis.startswith(f"Recorded by a person on 14 November 2026: {REASON}.")
+    assert [a.tickmark_note for a in shown] == ["", "", "", ""]
     findings = [FindingRecord(UUID(int=70), "Attribute B not shown: ticket REQ-1041.txt", F1)]
-    matters = matters_of(REQUESTS, checks, ATTRIBUTES, left, findings, evidence, 0, recorded)
-    # The exception a person recorded waits, straight after the findings. What a person
-    # disposed of no longer waits as "not concluded": it is noted, with the person.
-    assert [(m.kind, m.state) for m in matters] == [
-        ("FINDING", "OPEN"), ("DISPOSITION", "OPEN"), ("DISPOSITION", "NOTED"),
-        ("DISPOSITION", "NOTED"), ("NOTE", "NOTED"),
-    ]  # fmt: skip
-    assert matters[-1].text == SEPARATE_NOTE
-    # Without the dispositions the check's own open attribute is the matter, as before.
+    points = points_of(REQUESTS, checks, ATTRIBUTES, left, findings, evidence)
+    # The finding waits; nothing a person disposed of does.
+    assert [p.kind for p in points] == ["FINDING"]
+    # Without the dispositions the check's own open attribute is a point, as before.
     _plain, readings = attributes_of(ATTRIBUTES, REQUESTS, checks, [mine], evidence, None)
-    before = matters_of(REQUESTS, checks, ATTRIBUTES, readings, findings, evidence)
-    assert [(m.kind, m.state) for m in before] == [
-        ("FINDING", "OPEN"), ("UNSETTLED", "OPEN"), ("NOTE", "NOTED"),
-    ]  # fmt: skip
+    before = points_of(REQUESTS, checks, ATTRIBUTES, readings, findings, evidence)
+    assert [p.kind for p in before] == ["FINDING", "NOT_CONCLUDED"]
     assert before[1].text == f"Attribute C is not concluded. {OPEN_C}"
+    assert (before[1].place.attribute_id, before[1].place.requirement_id) == (C, R1)
     # The attribute a person marked as an exception, which the check shows, is never
     # "Shown": it reads as an exception recorded, with no mark of agreement beside it.
     # Rewritten for review fix 4. Old expectation: ("SHOWN", "NONE"), so the workpaper's
@@ -1582,17 +1600,21 @@ def test_each_disposition_is_a_matter_and_an_exception_recorded_is_open() -> Non
     # ("EXCEPTION_RECORDED", "NONE"). Why: a person's exception says the control did not
     # work, and an exception found is evaluated, never set aside because a check shows
     # the attribute: it cannot be counted as shown while it is open.
-    by_code = {attribute.code: attribute for attribute in shown}
     assert (by_code["A"].state, by_code["A"].tickmark) == ("EXCEPTION_RECORDED", "NONE")
     assert (by_code["B"].state, by_code["C"].state) == ("NOT_AVAILABLE", "SHOWN_ON_REVIEW")
-    # Where a check of another request still leaves it open, that still waits.
+    # Where a check of another request still leaves it open, that still waits, at the
+    # attribute, naming that request; and the person's tickmark, which the state no longer
+    # reads by, is said on the row.
     two = {**checks, R2: _check(_open(), requirement=R2, run=RUN2, files=(F3, F1))}
-    _two, left_two = attributes_of(ATTRIBUTES, REQUESTS, two, [mine], evidence, None, disposed)
-    still = matters_of(REQUESTS, two, ATTRIBUTES, left_two, [], evidence, 0, recorded)
-    assert [(m.kind, m.state) for m in still][:2] == [
-        ("DISPOSITION", "OPEN"), ("UNSETTLED", "OPEN"),
-    ]  # fmt: skip
-    assert still[1].text == f"Attribute C is not concluded. {OPEN_C}"
+    shown_two, left_two = attributes_of(ATTRIBUTES, REQUESTS, two, [mine], evidence, None, disposed)
+    still = points_of(REQUESTS, two, ATTRIBUTES, left_two, [], evidence)
+    assert [(p.kind, p.place.requirement_id) for p in still] == [("NOT_CONCLUDED", R2)]
+    assert still[0].text == f"Attribute C is not concluded. {OPEN_C}"
+    c_two = next(a for a in shown_two if a.code == "C")
+    assert c_two.state == "NOT_CONCLUDED"
+    assert c_two.tickmark_note == (
+        f"Tickmark: “Shown, auditor's judgment”, by a person, 14 November 2026. Reason: {REASON}."
+    )
 
 
 def test_an_exception_a_person_recorded_is_never_counted_as_shown() -> None:
@@ -1655,13 +1677,21 @@ def test_an_exception_a_person_recorded_is_never_counted_as_shown() -> None:
     # shown, not concluded, as before.
     assert _read("C", {R1: _check(_gap(C))}, [excepted]).state == "NOT_SHOWN"
     assert _read("C", {R1: _check(_open())}, [excepted]).state == "NOT_CONCLUDED"
-    # It stays an open matter for the reviewer.
+    # Rewritten for section 3.9. Old: it stayed an open DISPOSITION matter for the
+    # reviewer. New: it is no point (the conclusion evaluates it: Effective is refused
+    # while it stands); section 4 shows it, in the state where it would read as shown and,
+    # where the state does not read by it, in the row's `tickmark_note`.
     checks = {R1: _check(_item(A), _gap(), _item(C, summary=shows))}
     evidence = _index(checks=checks)
-    [matter] = view.disposition_matters(
-        ATTRIBUTES, view.dispositions_applying([excepted], checks, []), [], evidence
+    shown, left = attributes_of(ATTRIBUTES, REQUESTS, checks, [], evidence, None, [excepted])
+    assert points_of(REQUESTS, checks, ATTRIBUTES, left, [], evidence) == []
+    by_code = {attribute.code: attribute for attribute in shown}
+    assert (by_code["C"].state, by_code["C"].tickmark_note) == ("EXCEPTION_RECORDED", "")
+    not_shown = _read("C", {R1: _check(_gap(C))}, [excepted])
+    assert not_shown.tickmark_note == (
+        "Tickmark: “Exception recorded by the auditor”, by Dana Lee, 14 November 2026. "
+        f"Reason: {reason}"
     )
-    assert (matter.kind, matter.state) == ("DISPOSITION", "OPEN")
     # Never inside the precedence of the checks' own states, nor among the dispositions
     # that close an attribute.
     assert "EXCEPTION_RECORDED" not in STATE_WORDS
@@ -1693,11 +1723,12 @@ def _asks(*attributes: UUID, request: str) -> ReviewFollowUpBody:
     )  # fmt: skip
 
 
-def test_a_follow_up_whose_attributes_all_carry_a_closing_tickmark_is_no_longer_a_matter() -> None:
+def test_a_follow_up_whose_attributes_all_carry_a_closing_tickmark_is_no_longer_a_point() -> None:
     """Section 10.15, item 6. Before: a check's follow-up stayed an open matter beside the
     tickmark that closed its attribute ("Provide the record ..." next to "Evidence not
-    available, accepted"). Now it is a matter only while an attribute it asks about has no
-    closing tickmark on that request; an exception a person recorded closes nothing."""
+    available, accepted"). Then it was a matter only while an attribute it asks about had no
+    closing tickmark on that request; an exception a person recorded closes nothing. Since
+    section 3.9 (16 November 2026) the same holds of the FOLLOW_UP point."""
     for_b = "Provide the record that shows who the line manager is."
     for_b_and_c = "Provide the approval and the access granted."
     for_none = "Say which system the request tool is."
@@ -1708,18 +1739,32 @@ def test_a_follow_up_whose_attributes_all_carry_a_closing_tickmark_is_no_longer_
     evidence = _index(checks=checks)
 
     def asked(disposed: list[Disposition], carried: bool = True) -> list[str]:
-        _shown, left = attributes_of(ATTRIBUTES, REQUESTS, checks, [], evidence, None, disposed)
+        shown, left = attributes_of(ATTRIBUTES, REQUESTS, checks, [], evidence, None, disposed)
         applying = view.dispositions_applying(disposed, checks, [])
-        recorded = view.disposition_matters(ATTRIBUTES, applying, [], evidence)
         closed = view.closed_by_tickmark(applying) if carried else None
-        matters = matters_of(
-            REQUESTS, checks, ATTRIBUTES, left, [], evidence, 0, recorded, (), closed
-        )
-        # The tickmark's own matter is always there, whatever became of the follow-up.
-        assert len([m for m in matters if m.kind == "DISPOSITION"]) == len(disposed)
-        return [m.text for m in matters if m.kind == "FOLLOW_UP"]
+        points = points_of(REQUESTS, checks, ATTRIBUTES, left, [], evidence, (), closed)
+        # Rewritten for section 3.9. Old: the tickmark's own matter was always listed
+        # (one DISPOSITION matter per tickmark). New: a tickmark is no point; it is said on
+        # its attribute's row (the basis, or `tickmark_note`), whatever became of the
+        # follow-up.
+        on_rows = " ".join(f"{a.basis} {a.tickmark_note}" for a in shown)
+        assert on_rows.count("by Dana Lee") >= len(disposed)
+        assert on_rows.count(REASON) >= len(disposed)
+        return [p.text for p in points if p.kind == "FOLLOW_UP"]
 
     assert asked([]) == [for_b, for_b_and_c, for_none]
+    # Each at its place: one attribute, under its row; two or none, at the request.
+    _shown, plain = attributes_of(ATTRIBUTES, REQUESTS, checks, [], evidence, None)
+    places = [
+        (p.place.at, p.place.attribute_id, p.place.requirement_id, p.settle)
+        for p in points_of(REQUESTS, checks, ATTRIBUTES, plain, [], evidence)
+        if p.kind == "FOLLOW_UP"
+    ]
+    assert places == [
+        ("ATTRIBUTE", B, R1, ["TICKMARK", "CONSIDER"]),
+        ("REQUEST", None, R1, ["TICKMARK", "CONSIDER"]),
+        ("REQUEST", None, R1, ["CONSIDER"]),
+    ]
     # B closed: the follow-up for B alone is answered; the one that also asks about C waits.
     assert asked([_disposed("NOT_AVAILABLE", B)]) == [for_b_and_c, for_none]
     # B and C closed, by any closing kind: both are answered. One that names no attribute
@@ -1742,59 +1787,49 @@ def test_a_follow_up_whose_attributes_all_carry_a_closing_tickmark_is_no_longer_
     assert view.closed_by_tickmark(view.dispositions_applying(both, stale, [])) == {}
 
 
-def _matter(kind: str, state: str, text: str) -> view.MatterBody:
-    return view.MatterBody(state=state, kind=kind, text=text)  # type: ignore[arg-type]
-
-
-def test_a_tickmarks_matter_is_never_left_out_for_room_and_considerations_go_first() -> None:
-    """Section 10.15, item 6. Before: the list kept its first ten matters, so on a control
-    with many findings the noted tickmarks (which come after everything that waits) were
-    the first to be left out. Now a tickmark's or a decision's matter is never left out:
-    the considerations go first, then the last of the rest."""
+def test_no_point_is_left_out_for_room_and_the_observations_are_apart() -> None:
+    """Rewritten for section 3.9 (was
+    `test_a_tickmarks_matter_is_never_left_out_for_room_and_considerations_go_first`).
+    Old expectation: at most MAX_MATTERS matters; the considerations left out first, then
+    the last of the rest, a line counting them ("5 more matters are not listed here; 2 of
+    them wait on a person."), and every tickmark's or decision's matter kept. New: there is
+    no list to make room in. Every point is assembled (each is settled at its place, and
+    the preparer's sign-off waits for all), a tickmark or a decision is no point (it is on
+    its row), and the considerations are the agent's observations, apart from the
+    workpaper, each once, at most MAX_OBSERVATIONS. Why: the product owner removed the
+    matters from the workpaper; the audit-integrity part kept is that nothing that waits on
+    a person is ever dropped."""
     findings = [FindingRecord(UUID(int=100 + n), f"Finding {n}", F1) for n in range(8)]
     review = _review(
         follow_ups=[_asks(D, request="Provide the leaver's removal record.")],
-        considerations=[ConsiderationBody(text=f"Consideration {n}.") for n in range(3)],
+        considerations=[
+            *(ConsiderationBody(text=f"Consideration {n}.") for n in range(3)),
+            ConsiderationBody(text="Consideration 0."),
+        ],
     )
     checks = {R1: _check(_item(A), review=review)}
     evidence = _index(checks=checks)
     _shown, left = attributes_of(ATTRIBUTES, REQUESTS, checks, [], evidence, None)
-    recorded = [
-        _matter("DISPOSITION", "OPEN", "Attribute A: an exception recorded, to be evaluated."),
-        _matter("DISPOSITION", "NOTED", "Attribute B: accepted without evidence."),
-        _matter("DISPOSITION", "NOTED", "A file: not relied on."),
-    ]
-    matters = matters_of(REQUESTS, checks, ATTRIBUTES, left, findings, evidence, 0, recorded)
-    assert len(matters) == MAX_MATTERS
-    assert [(m.kind, m.state) for m in matters] == [
-        *[("FINDING", "OPEN")] * 7,
-        ("DISPOSITION", "OPEN"), ("DISPOSITION", "NOTED"), ("DISPOSITION", "NOTED"),
-        ("NOTE", "OPEN"), ("NOTE", "NOTED"),
+    points = points_of(REQUESTS, checks, ATTRIBUTES, left, findings, evidence)
+    assert [p.kind for p in points] == [*["FINDING"] * 8, "FOLLOW_UP"]
+    assert [p.text for p in points if p.kind == "FINDING"] == [f"Finding {n}" for n in range(8)]
+    # The follow-up names one attribute: it is shown under that attribute's row.
+    follow_up = points[-1]
+    assert (follow_up.place.at, follow_up.place.attribute_id, follow_up.settle) == (
+        "ATTRIBUTE", D, ["TICKMARK", "CONSIDER"],
+    )  # fmt: skip
+    assert [o.text for o in observations_of(REQUESTS, checks, evidence)] == [
+        "Consideration 0.", "Consideration 1.", "Consideration 2.",
     ]  # fmt: skip
-    # Every tickmark's matter is listed, in its words.
-    assert [m.text for m in matters if m.kind == "DISPOSITION"] == [m.text for m in recorded]
-    # Left out: the three considerations, then the follow-up and the last finding.
-    assert matters[-2].text == "5 more matters are not listed here; 2 of them wait on a person."
-    assert [m.text for m in matters if m.kind == "FINDING"] == [f"Finding {n}" for n in range(7)]
-    assert matters[-1].text == SEPARATE_NOTE
-
-    # Room for the considerations' share only: they go, and everything that waits stays.
-    fewer = matters_of(REQUESTS, checks, ATTRIBUTES, left, findings[:5], evidence, 0, recorded)
-    assert [(m.kind, m.state) for m in fewer] == [
-        *[("FINDING", "OPEN")] * 5, ("DISPOSITION", "OPEN"), ("FOLLOW_UP", "OPEN"),
-        ("DISPOSITION", "NOTED"), ("DISPOSITION", "NOTED"), ("CONSIDERATION", "NOTED"),
-        ("NOTE", "NOTED"), ("NOTE", "NOTED"),
-    ]  # fmt: skip
-    assert fewer[-2].text == "2 more matters are not listed here."
-    assert [m.text for m in fewer if m.kind == "CONSIDERATION"] == ["Consideration 0."]
-
-    # More tickmarks than the list has room for: every one is still listed, and only then
-    # is the list longer than its bound.
-    many = [_matter("DISPOSITION", "NOTED", f"Tickmark {n}.") for n in range(MAX_MATTERS + 2)]
-    full = matters_of(REQUESTS, checks, ATTRIBUTES, left, findings[:3], evidence, 0, many)
-    assert [m.text for m in full if m.kind == "DISPOSITION"] == [m.text for m in many]
-    assert [m.kind for m in full if m.kind != "DISPOSITION"] == ["NOTE", "NOTE"]
-    assert full[-2].text == "7 more matters are not listed here; 4 of them wait on a person."
+    # Many observations: at most MAX_OBSERVATIONS, in order.
+    many = _review(considerations=[ConsiderationBody(text=f"Seen {n}.") for n in range(30)])
+    lots = {R1: _check(_item(A), review=many)}
+    told = observations_of(REQUESTS, lots, evidence)
+    assert [o.text for o in told] == [f"Seen {n}." for n in range(MAX_OBSERVATIONS)]
+    # An engine 1 check, or one that is not current, has no observation.
+    assert observations_of(REQUESTS, {R1: _check(_item(A), review=many, engine=1)}, evidence) == []
+    stale = {R1: _check(_item(A), review=many, status="OUT_OF_DATE")}
+    assert observations_of(REQUESTS, stale, evidence) == []
 
 
 def test_the_drafter_is_given_the_results_and_the_tickmarks_as_bounded_data() -> None:

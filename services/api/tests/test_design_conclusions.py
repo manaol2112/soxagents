@@ -16,7 +16,7 @@ import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from psycopg.types.json import Jsonb
-from support import Database
+from support import Database, consider_design_points
 from test_attribute_dispositions import REASON, _ids
 from test_attribute_dispositions import _record as _tickmark
 from test_attribute_dispositions import _reopen as _reopen_tickmark
@@ -481,6 +481,9 @@ class _Signing:
 
     def prepare(self) -> None:
         bench = self.bench
+        # Every point of the workpaper is settled first, as preparing it needs (section
+        # 3.9): the check's review leaves the ticket's reliability open.
+        consider_design_points(bench.owner, bench.base, bench.control)
         listed = bench.owner.get(f"{bench.base}/workpapers", params={"control_id": bench.control})
         paper = next(item for item in listed.json() if item["stage"] == "DESIGN")
         prepared = bench.owner.post(

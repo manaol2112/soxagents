@@ -1482,6 +1482,16 @@ def prepare_in(
         refusal = design_prepare_refusal(cursor, project_id, control_id)
         if refusal is not None:
             raise WorkpaperState(refusal)
+        # Then every point of the workpaper is settled, by its own action or by a
+        # consideration (section 3.9). Read under the same lock, which considering a point
+        # also takes first. The demo seeding its own engagement keeps the rules it had.
+        from ai_workforce_api.design_points import prepare_refusal as points_refusal
+
+        refusal = points_refusal(
+            connection, project_id, UUID(str(control_id)), workpaper_id, principal.id
+        )
+        if refusal is not None:
+            raise WorkpaperState(refusal)
     if stage == "EFFECTIVENESS":
         signed = cursor.execute(
             "SELECT 1 FROM test_sheets WHERE project_id = %s AND engagement_control_id = %s "

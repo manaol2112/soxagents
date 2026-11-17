@@ -31,7 +31,7 @@ from uuid import UUID, uuid4
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
-from support import Database, sign_off_design
+from support import Database, consider_design_points, sign_off_design
 from test_attribute_dispositions import _ids
 from test_attribute_dispositions import _record as _tickmark
 from test_attribute_dispositions import _reopen as _reopen_tickmark
@@ -166,7 +166,16 @@ class _Draft:
         found: dict[str, Any] = next(p for p in listed.json() if p["stage"] == "DESIGN")
         return found
 
+    def settle_points(self) -> None:
+        """Every point of the design workpaper not settled is considered, with a reason,
+        as preparing it needs (section 3.9, 16 November 2026). The check's review leaves
+        the ticket's reliability open (a report that does not show its basis): before
+        section 3.9 the workpaper was prepared over it; now its point is considered first.
+        Moves the workpaper's version on."""
+        consider_design_points(self.bench.owner, self.bench.base, self.bench.control)
+
     def prepare(self) -> None:
+        self.settle_points()
         paper = self.paper()
         prepared = self.bench.owner.post(
             f"{self.bench.base}/workpapers/{paper['id']}/prepare",

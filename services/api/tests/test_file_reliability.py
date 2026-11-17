@@ -23,7 +23,8 @@ Audit integrity (critical tier):
 - the workpaper: a file established on review counts as reliable for the tickmark, a
   procedure says so, and the check's own sentence about it no longer waits; a file not
   relied on is said so in the evidence index, what rests only on it carries no mark and is
-  an open matter; each decision is a noted matter;
+  a point (section 3.9; it was an open matter); each decision is said on the file's line
+  (it was a noted matter);
 - only a person who may decide evidence records or reopens: a Reviewer is refused, another
   firm finds nothing, an agent is refused, and an archived engagement is read-only.
 """
@@ -227,15 +228,20 @@ def test_each_kind_is_recorded_read_back_replaced_and_reopened_and_the_check_sta
     assert (row["assessment_id"], row["version"], row["ended_at"]) == (first["run_id"], 1, None)
 
     # The workpaper: the report counts as reliable, a procedure says so, and the check's
-    # sentence no longer waits; the decision is a noted matter.
+    # sentence no longer waits. Rewritten for section 3.9 (16 November 2026). Old: the
+    # decision was a NOTED DISPOSITION matter ("ticket REQ-1041.txt: “Reliability
+    # established on the auditor's review”, recorded by ..."). New: it is no point; the
+    # file's line in the evidence index says it (as section 5's row naming the file does),
+    # and the check's question is no longer a point. Why: each item at its place.
     paper = _paper(bench)
     assert {a["code"]: a["tickmark"] for a in paper["attributes"]}["A"] in ("AGREED", "COMPARED")
     assert "Established the reliability of 1 report on review, as recorded." in paper["procedures"]
-    assert question not in [m["text"] for m in paper["matters"]]
-    [noted] = [m for m in paper["matters"] if m["kind"] == "DISPOSITION"]
-    assert noted["state"] == "NOTED" and noted["text"].startswith(
-        "ticket REQ-1041.txt: “Reliability established on the auditor's review”, recorded by "
+    assert question not in [p["text"] for p in paper["points"]]
+    [on_index] = [e for e in paper["evidence"] if e["file_id"] == ticket]
+    assert on_index["established"].startswith(
+        f"Reliability established on review by {owner_name} on "
     )
+    assert f"Relied on: {RELIED}" in on_index["established"]
     assert "INSPECTED" in [t["mark"] for t in paper["tickmarks"]]
 
     # Replaced by "Not relied on", naming the one the person saw.
@@ -256,10 +262,15 @@ def test_each_kind_is_recorded_read_back_replaced_and_reopened_and_the_check_sta
     assert {a["code"]: a["state"] for a in paper["attributes"]}["A"] == "SHOWN"
     [entry_e1] = [e for e in paper["evidence"] if e["file_id"] == ticket]
     assert entry_e1["not_relied_on"].startswith("Not relied on, recorded by ")
-    assert any(
-        m["state"] == "OPEN" and m["text"].startswith("Attribute A is shown only on a file not")
-        for m in paper["matters"]
-    )
+    assert entry_e1["established"] == ""
+    # Section 3.9: old, an OPEN matter; new, a NOT_RELIED point at attribute A's row,
+    # settled by a decision on the file (or a consideration).
+    [resting] = [
+        p for p in paper["points"]
+        if p["text"].startswith("Attribute A is shown only on a file not")
+    ]  # fmt: skip
+    assert (resting["kind"], resting["settle"]) == ("NOT_RELIED", ["RELIABILITY", "CONSIDER"])
+    assert resting["place"]["at"] == "ATTRIBUTE"
 
     # Reopened, naming the one the person saw: nothing stands, both are kept.
     reopened = _reopen(bench, ticket, item["decision"]["id"])
@@ -275,7 +286,12 @@ def test_each_kind_is_recorded_read_back_replaced_and_reopened_and_the_check_sta
     assert [(r["kind"], r["ended_as"], r["version"]) for r in _rows(bench)] == [
         ("ESTABLISHED_ON_REVIEW", "REPLACED", 2), ("NOT_RELIED_ON", "REOPENED", 2),
     ]  # fmt: skip
-    assert not [m for m in _paper(bench)["matters"] if m["kind"] == "DISPOSITION"]
+    # Section 3.9: old, no DISPOSITION matter; new, the file's line says no decision, and
+    # the check's question waits again as a point at the file.
+    reread = _paper(bench)
+    [line] = [e for e in reread["evidence"] if e["file_id"] == ticket]
+    assert (line["established"], line["not_relied_on"]) == ("", None)
+    assert question in [p["text"] for p in reread["points"] if p["kind"] == "COMPLETENESS"]
 
     # The table keeps every decision as written: never rewritten, never deleted, ended once.
     with connect(migrated.url) as connection:
@@ -633,5 +649,8 @@ def test_where_the_migration_is_not_applied_nothing_is_read_or_ended_and_nothing
         f"{bench.base}/evidence-files/{log}/withdraw", json={"reason": "Sent in error"}
     )
     assert withdrawn.status_code == 200, withdrawn.text
-    assert not [m for m in _paper(bench)["matters"] if m["kind"] == "DISPOSITION"]
+    # Section 3.9: old, no DISPOSITION matter; new, no file's line says a decision.
+    assert {(e["established"], e["not_relied_on"]) for e in _paper(bench)["evidence"]} == {
+        ("", None)
+    }
     assert _record(bench, ticket, "NOT_RELIED_ON").status_code == 503

@@ -108,6 +108,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ai_workforce_api import (
     attribute_dispositions,
+    design_points,
     design_review_requests,
     file_reliability,
     independence,
@@ -1510,7 +1511,8 @@ def sign_off(
     another conclusion; and, as before, for the preparer (independence, which also covers
     the person who recorded the conclusion), another prepared version, and a sign-off that
     still holds. Refused too while a review note of the workpaper is urgent and open or
-    responded to (workpaper_review_notes)."""
+    responded to (workpaper_review_notes), and while a point of the workpaper is not
+    settled (design_points, section 3.9)."""
     _reviewer(connection, principal, organization_id, project_id)
     with transaction(connection) as cursor:
         facts = _facts(cursor.connection, project_id, control_id, lock=True, assemble=True)
@@ -1564,6 +1566,15 @@ def sign_off(
             )
         if independence.required() and facts.choice_by == principal.id:
             raise DesignConclusionState(RECORDER_CANNOT_SIGN)
+        # A point of the workpaper not settled (docs/design-workpaper.md, section 3.9): the
+        # preparer could not sign over one, so it was raised since, when the evidence or a
+        # check changed. Read under the workpaper's lock (above). The demo seeding its own
+        # engagement keeps the rules it had.
+        raised = design_points.signoff_refusal(
+            cursor.connection, project_id, control_id, UUID(str(paper[0])), principal.id
+        )
+        if raised is not None:
+            raise DesignConclusionState(raised)
         if facts.standing is not None:
             _reopen_standing(
                 cursor,
@@ -1767,3 +1778,4 @@ def register_design_conclusions(app: FastAPI, settings: Settings, scheduler: Any
         )
 
     design_review_requests.register_design_review_requests(app, base, run, DesignConclusionBody)
+    design_points.register_design_points(app, base, run)
