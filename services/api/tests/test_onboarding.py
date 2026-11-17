@@ -32,7 +32,10 @@ __all__ = ["migrated"]
 # Library version 3 (Milestones 8.8 and 8.9): statements and attributes, see
 # docs/testing-definitions.md.
 _REVIEWED_LIBRARY = "877a2d07fc2c62cf59edad4ac065d329ff7196c5054a2f55918836f82a8034f1"
-_REVIEWED_TEMPLATES = "77f32bb2e93e3c088cd67bbb54d35a6fd15a4cd4f43d0ff63764543fe5dc744c"
+# Rewritten (product owner, 16 November 2026; docs/design-workpaper.md, 3.10): the IT
+# general control template's "Understanding of the control" guidance now asks for a formal
+# design narrative. It was "77f32bb2e93e3c088cd67bbb54d35a6fd15a4cd4f43d0ff63764543fe5dc744c".
+_REVIEWED_TEMPLATES = "de9c32973d053466cad520ceb27d376e4e932a0e8be27ba79bcefe68e3746eee"
 
 
 def test_the_control_library_and_templates_are_the_reviewed_versions() -> None:

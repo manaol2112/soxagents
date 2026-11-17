@@ -215,9 +215,18 @@ TEMPLATES: tuple[WorkpaperTemplate, ...] = (
                     TemplateSection(
                         "Understanding of the control",
                         "guidance",
-                        "Describe how the control operates in the system: who performs it, "
-                        "how often, the tools or reports used, what is checked, and what "
-                        "happens when an exception is found.",
+                        # Product owner, 16 November 2026 (docs/design-workpaper.md, 3.10):
+                        # the understanding is a formal design narrative. It was "Describe
+                        # how the control operates in the system: who performs it, how
+                        # often, the tools or reports used, what is checked, and what
+                        # happens when an exception is found."
+                        "A formal narrative of how the control is designed, written from the "
+                        "procedures performed: the objective and risk, what starts it and how "
+                        "often, who owns and performs it, each step and system, the rule "
+                        "applied and the policy that sets it, what the approver examines and "
+                        "how precisely, what a system enforces, the reports relied on, "
+                        "segregation of duties, how exceptions are handled, the evidence of "
+                        "performance, and whether the design addresses the risk.",
                     ),
                     _walkthrough(),
                     _ipe(
