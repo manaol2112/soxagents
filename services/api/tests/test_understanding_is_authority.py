@@ -24,7 +24,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from support import Database
+from support import Database, run_plan_through
 from test_attributes_follow_understanding import (
     _Agents,
     _answer_required,
@@ -48,7 +48,7 @@ from ai_workforce_api.evidence_planning import (
     prompt_for,
 )
 from ai_workforce_api.evidence_planning import SYSTEM_PROMPT as PLANNER_SYSTEM
-from ai_workforce_api.evidence_plans import PLANNER_PROMPT_VERSION, load_facts, run_plan
+from ai_workforce_api.evidence_plans import PLANNER_PROMPT_VERSION, load_facts
 from ai_workforce_api.models import ModelConfig, ModelRaw, ModelRequest
 from ai_workforce_api.phase_release import attribute_waits
 from ai_workforce_api.provenance import agent_actor
@@ -395,7 +395,7 @@ def test_the_attribute_follows_the_understanding_and_the_conflict_is_never_raise
         "issues": [CONFLICT],
     }
     with connect(migrated.url) as connection:
-        assert run_plan(connection, agents, plan_id) == "DONE"
+        assert run_plan_through(connection, agents, plan_id) == "DONE"
         planner = agent_actor(connection, team["project"], "engagement-planner")
     assert [who for who in agents.calls if who != "other"] == [
         "attributes",
@@ -575,8 +575,9 @@ def test_the_attribute_follows_the_understanding_and_the_conflict_is_never_raise
     # named update changes only the attributes it names); the /5 rules this test reads
     # stand word for word (test_understanding_once_rules.py).
     # Old "attributes/6"; new "attributes/7" after the review of B1k (the correction carries
-    # the previous answer as escaped data).
-    assert payload["by"] == "engagement-planner" and payload["prompt_version"] == "attributes/7"
+    # the previous answer as escaped data). Old "attributes/7"; new "attributes/8" in the
+    # second fix round of B1k (each issue names the attribute codes it bears on).
+    assert payload["by"] == "engagement-planner" and payload["prompt_version"] == "attributes/8"
     assert payload["written_by"] == "independent-reviewer"
     [entry] = payload["followed"]
     assert (entry["attribute"], entry["change"]) == (proposed["id"], "CHANGE")
@@ -668,7 +669,7 @@ def test_the_line_is_not_shown_for_words_or_facts_that_changed_after_it(
     agents = _Understood(migrated, team, control)
     agents.answer = lambda facts: {"attributes": [_change(a3_id, facts)], "issues": []}
     with connect(migrated.url) as connection:
-        assert run_plan(connection, agents, plan_id) == "DONE"
+        assert run_plan_through(connection, agents, plan_id) == "DONE"
     [proposed] = _attributes(team, control)["proposed"]
     assert proposed["understanding_basis"]["follows"]["answer"] == TICKETS
     # The person answers the walkthrough question again, with another answer: the attribute
@@ -703,7 +704,7 @@ def test_the_line_is_not_shown_once_a_person_rewords_the_attribute(migrated: Dat
     agents = _Understood(migrated, team, control)
     agents.answer = lambda facts: {"attributes": [_change(a3_id, facts)], "issues": []}
     with connect(migrated.url) as connection:
-        assert run_plan(connection, agents, plan_id) == "DONE"
+        assert run_plan_through(connection, agents, plan_id) == "DONE"
     [proposed] = _attributes(team, control)["proposed"]
     assert proposed["understanding_basis"] is not None
     decided = team["owner"].post(
@@ -1546,7 +1547,7 @@ def test_the_reviewer_of_the_set_revises_merges_and_questions_a_followed_attribu
 
     agents.review = review
     with connect(migrated.url) as connection:
-        assert run_plan(connection, agents, plan_id) == "DONE"
+        assert run_plan_through(connection, agents, plan_id) == "DONE"
     [proposed] = _attributes(team, control)["proposed"]
     assert (
         proposed["proposal"] == "CHANGE" and proposed["pass_criteria"] == tighter["pass_criteria"]
@@ -1730,8 +1731,9 @@ def test_every_agent_that_reads_the_understanding_is_given_the_precedence(
         # and a named update, the precedence and every other rule word for word.
         # Old ("attributes/6", "attribute-review/3", "attribute-set-review/3"); new /7, /4
         # and /4 after the review of B1k (16 November 2026): their corrections carry the
-        # previous answer as escaped data; nothing this test reads changed.
-    ) == ("attributes/7", "attribute-review/4", "attribute-set-review/4", "engagement-planner/10")
+        # previous answer as escaped data; nothing this test reads changed. Old "attributes/7";
+        # new "attributes/8" in the second fix round of B1k (each issue names its codes).
+    ) == ("attributes/8", "attribute-review/4", "attribute-set-review/4", "engagement-planner/10")
     team, control, client, _a3 = _case(migrated, "uia-inputs")
     _walkthrough_confirmed(migrated, team, control, client)
     with connect(migrated.url) as connection:

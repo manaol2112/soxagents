@@ -224,14 +224,20 @@ def complete_if_accepted(cursor: psycopg.Cursor[Any], project_id: UUID, control_
 
 
 def after_agents(
-    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    control_id: UUID,
+    requeue: bool = False,
 ) -> UUID | None:
     """After an agent run on the control ended (a narrative run, in the local worker, with a
-    model; a plan run that failed): the understanding may be complete now, and the review or
-    what the attributes follow may be due (B1l point 1: a read that fell due while the run
-    was busy is queued now, never left unqueued). Returns the plan run queued, for the worker
+    model; a plan run that failed, in the local worker and the durable one): the
+    understanding may be complete now, and the review or what the attributes follow may be
+    due (B1l point 1: a read that fell due while the run was busy is queued now, never left
+    unqueued; one nothing could queue ends FAILED, understanding_review.follow_or_fail).
+    `requeue` (a failed plan run) keeps the plan run's attempts, so a run that keeps failing
+    is not queued again past PLAN_RUN_ATTEMPTS. Returns the plan run queued, for the worker
     to take."""
-    from ai_workforce_api.evidence_plans import queue_for_understanding
+    from ai_workforce_api.understanding_review import follow_or_fail
 
     complete(connection, project_id, control_id)
-    return queue_for_understanding(connection, project_id, control_id)
+    return follow_or_fail(connection, project_id, control_id, requeue=requeue)

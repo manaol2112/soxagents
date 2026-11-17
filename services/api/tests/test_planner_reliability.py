@@ -20,7 +20,7 @@ import re
 from typing import Any
 from uuid import UUID, uuid4
 
-from support import Database
+from support import Database, run_plan_through
 from test_attributes_follow_understanding import (
     ADDED,
     _Agents,
@@ -59,7 +59,6 @@ from ai_workforce_api.evidence_plans import (
     record_change,
     replan_for_new_attributes,
     request_attributes_run,
-    run_plan,
     waive,
 )
 from ai_workforce_api.models import (
@@ -632,7 +631,7 @@ def test_run_again_does_nothing_when_nothing_the_agents_read_has_changed(
     with connect(migrated.url) as connection:
         # Queued and waiting: there is nothing to start.
         assert not attributes_rerun_useful(connection, team["project"], UUID(control))
-        assert run_plan(connection, agents, plan_id) == "DONE"
+        assert run_plan_through(connection, agents, plan_id) == "DONE"
     handed, calls = list(scheduler.plans), list(agents.calls)
     before = _snapshot(migrated, control)
     assert before["plan"][0]["source"] == "MODEL"
@@ -675,7 +674,7 @@ def test_a_kept_plan_says_the_answer_could_not_be_used_only_while_something_wait
     _answer_required(migrated, team, control, client)
     plan_id = _plan_run(migrated, control)[0]
     with connect(migrated.url) as connection:
-        assert run_plan(connection, _Agents(migrated, team, control), plan_id) == "DONE"
+        assert run_plan_through(connection, _Agents(migrated, team, control), plan_id) == "DONE"
     assert _context(team, control, client)["attributes_rerun_useful"] is False
     # The understanding changes: the run is queued by the save, and this time the planner's
     # answer cannot be used.
@@ -685,7 +684,7 @@ def test_a_kept_plan_says_the_answer_could_not_be_used_only_while_something_wait
     failing = _Agents(migrated, team, control)
     failing.plan = _unusable
     with connect(migrated.url) as connection:
-        assert run_plan(connection, failing, plan_id) == "DONE"
+        assert run_plan_through(connection, failing, plan_id) == "DONE"
     assert failing.calls.count("planner") == 3 and failing.calls[-1] == "set-review"
     # The agent's plan stands exactly as it was; the run ended and says the plan was kept.
     after = _snapshot(migrated, control)
@@ -708,7 +707,7 @@ def test_a_kept_plan_says_the_answer_could_not_be_used_only_while_something_wait
     assert len(scheduler.plans) == handed + 1
     # This time the planner answers: nothing reads stopped, and nothing waits.
     with connect(migrated.url) as connection:
-        assert run_plan(connection, _Agents(migrated, team, control), plan_id) == "DONE"
+        assert run_plan_through(connection, _Agents(migrated, team, control), plan_id) == "DONE"
         assert attributes_run(connection, UUID(control)) == ("", "", "")
     body = _context(team, control, client)
     assert (body["attributes_run"], body["attributes_rerun_useful"]) == ("", False)
@@ -731,7 +730,7 @@ def _finished_run(migrated: Database, slug: str) -> tuple[dict[str, Any], str, A
     _answer_required(migrated, team, control, client)
     plan_id = _plan_run(migrated, control)[0]
     with connect(migrated.url) as connection:
-        assert run_plan(connection, _Agents(migrated, team, control), plan_id) == "DONE"
+        assert run_plan_through(connection, _Agents(migrated, team, control), plan_id) == "DONE"
     return team, control, scheduler, client, plan_id
 
 
@@ -754,7 +753,7 @@ def _forced_run(migrated: Database, team: dict[str, Any], control: str, agents: 
         plan_id = request_attributes_run(connection, team["project"], UUID(control), force=True)
         assert plan_id is not None
         connection.commit()
-        assert run_plan(connection, agents, plan_id) == "DONE"
+        assert run_plan_through(connection, agents, plan_id) == "DONE"
 
 
 def test_a_person_can_always_run_the_agents_on_purpose(migrated: Database) -> None:
@@ -779,7 +778,7 @@ def test_a_person_can_always_run_the_agents_on_purpose(migrated: Database) -> No
     assert _plan_run(migrated, control)[1:] == ("PENDING", "ATTRIBUTES")
     agents = _Agents(migrated, team, control)
     with connect(migrated.url) as connection:
-        assert run_plan(connection, agents, plan_id) == "DONE"
+        assert run_plan_through(connection, agents, plan_id) == "DONE"
     assert [who for who in agents.calls if who != "other"] == [
         "attributes",
         "planner",
@@ -851,7 +850,7 @@ def test_a_first_run_whose_reviewer_fails_leaves_the_rerun_useful(migrated: Data
     agents = _Agents(migrated, team, control)
     agents.review = lambda given: None
     with connect(migrated.url) as connection:
-        assert run_plan(connection, agents, plan_id) == "DONE"
+        assert run_plan_through(connection, agents, plan_id) == "DONE"
     # The planner succeeded, the reviewer did not: no finished run is on record.
     assert _generated(migrated, control)[0] == "MODEL"
     read, stamped, tried, _attempts = _run_marks(migrated, control)
@@ -879,7 +878,7 @@ def test_a_kept_replan_is_not_queued_again_on_every_save_and_the_missing_evidenc
         }
     ]  # fmt: skip
     with connect(migrated.url) as connection:
-        assert run_plan(connection, agents, plan_id) == "DONE"
+        assert run_plan_through(connection, agents, plan_id) == "DONE"
     added = _proposals(migrated, control)[0]
     rows = _rows(
         migrated,
@@ -902,7 +901,7 @@ def test_a_kept_replan_is_not_queued_again_on_every_save_and_the_missing_evidenc
     failing = _Agents(migrated, team, control)
     failing.plan = _unusable
     with connect(migrated.url) as connection:
-        assert run_plan(connection, failing, plan_id) == "DONE"
+        assert run_plan_through(connection, failing, plan_id) == "DONE"
     assert failing.calls.count("planner") == 3
     source, _generated_at, _version, status, run_note = _generated(migrated, control)
     assert (source, status) == ("MODEL", "IDLE") and str(run_note).startswith(KEPT_NOTE)
@@ -931,7 +930,7 @@ def test_a_kept_replan_is_not_queued_again_on_every_save_and_the_missing_evidenc
     _volume(team, control, client, "25 to 100")
     assert _plan_run(migrated, control)[1] == "PENDING"
     with connect(migrated.url) as connection:
-        assert run_plan(connection, _Agents(migrated, team, control), plan_id) == "DONE"
+        assert run_plan_through(connection, _Agents(migrated, team, control), plan_id) == "DONE"
         assert attributes_run(connection, UUID(control)) == ("", "", "")
         assert plan_body(connection, team["project"], UUID(control)).kept_note == ""
     assert _run_marks(migrated, control)[2] == ""

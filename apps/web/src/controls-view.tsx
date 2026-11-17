@@ -2231,6 +2231,7 @@ function ControlRecord({
                 review: context.questionReview ?? null,
                 reviewRequest: context.questionReviewRequest ?? null,
                 reviewNotRun: context.reviewNotRun ?? null,
+                reviewDue: context.reviewDue === true,
                 approved: context.approved,
               }
             : null

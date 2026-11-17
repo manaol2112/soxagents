@@ -75,7 +75,7 @@ from uuid import UUID
 
 import psycopg
 from psycopg.types.json import Json
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ai_workforce_api.actions import contains_secret
 from ai_workforce_api.control_context import ContextState, Issue, already_asked, line, matter_key
@@ -144,7 +144,13 @@ ALREADY_COMPLETE = "The understanding is already complete."
 SETTLED = "The question is already settled."
 ISSUE_CHANGED = "issue changed"
 HELD_BY_CONFLICT = "A conflict on this attribute is to be decided first."
-SET_HELD_BY_CONFLICT = "A conflict on the attributes as a whole is to be decided first."
+# The same words as the page's (apps/web control-context-model SET_CONFLICT_HOLDS), pinned on
+# both sides by the contract test (tests/contracts/control-understanding.json).
+SET_HELD_BY_CONFLICT = "A conflict on the attributes as a set is to be decided first."
+# A read due by the rules that nothing could start (follow_or_fail): ends FAILED, so the page
+# offers Run again and Proceed without it, never "Checking..." with nothing at work.
+NOT_STARTED_SENTENCE = "The review could not run: nothing could start it."
+NO_PLAN = "The review runs on the control's evidence plan, which is not drafted yet."
 NOT_KNOWN_ASSUMED = (
     "Not known yet: the attributes are tailored on the usual practice for a control of this "
     "kind until it is known."
@@ -228,13 +234,28 @@ class NotKnownBody(BaseModel):
 NotKnownSubject = Literal["WALKTHROUGH", "VALUE"]
 
 
+# The keys the table's CHECK allows (migration 0173, understanding_not_known_key): checked
+# here first, so a key it would refuse is a 422, never a database error.
+NOT_KNOWN_KEYS: dict[str, re.Pattern[str]] = {
+    "WALKTHROUGH": re.compile(r"^wt-[a-z0-9-]{2,60}$"),
+    "VALUE": re.compile(r"^[a-z][a-z0-9-]{1,40}$"),
+}
+
+
 class AnswerNotKnownBody(BaseModel):
     """Not known yet, proceed, on a walkthrough question (its key) or a client value of the
-    statement (its slot key): B1l point 1, every question in Control Understanding."""
+    statement (its slot key): B1l point 1, every question in Control Understanding. The key
+    must be one the table may hold for its subject (NOT_KNOWN_KEYS), else 422."""
 
     subject: NotKnownSubject
     key: str = Field(min_length=2, max_length=64)
     note: str = Field(default="", max_length=500)
+
+    @model_validator(mode="after")
+    def _key_of_subject(self) -> AnswerNotKnownBody:
+        if not NOT_KNOWN_KEYS[self.subject].match(self.key):
+            raise ValueError("the key is not one of this subject's")
+        return self
 
 
 class NotKnownItemBody(BaseModel):
@@ -868,9 +889,12 @@ def may_complete(state: Standing, reviewing: bool) -> bool:
 
 def pass_state(state: Standing) -> QuestionPass:
     """What Control Understanding says of the review (ContextBody.question_pass): DONE once
-    completed or read; CHECKING while a read waits or works; FAILED when the last read could
-    not be used or stopped (the page offers Run again and Proceed without it); WAITING while
-    the answers it reads are not in, or nothing is queued yet."""
+    completed or read; CHECKING while a read waits or works, or is due by the rules (it is
+    queued at once, or the page follows it up: review_due); FAILED when the last read could
+    not be used or stopped, or was due and nothing could start it (follow_or_fail records it
+    so; the page offers Run again and Proceed without it); WAITING while the answers it reads
+    are not in. Before the second fix round of B1k a read due and not queued read WAITING
+    (or DONE after the first read), with nothing to say why."""
     if state.completed:
         return "DONE"
     if state.latest == "FAILED" or state.stale:
@@ -879,6 +903,8 @@ def pass_state(state: Standing) -> QuestionPass:
         return "CHECKING"
     if state.waiting:
         return "WAITING"
+    if due_round(state) is not None:
+        return "CHECKING"
     return "DONE" if state.latest == "READY" else "WAITING"
 
 
@@ -1393,7 +1419,11 @@ def request_run(
             (stage, project_id, control_id),
         ).fetchone()
         if plan_row is None:
-            raise ContextState(AT_WORK)
+            planned = cursor.execute(
+                "SELECT 1 FROM evidence_plans WHERE project_id = %s AND engagement_control_id = %s",
+                (project_id, control_id),
+            ).fetchone()
+            raise ContextState(AT_WORK if planned is not None else NO_PLAN)
         end_pending(cursor, control_id, STOPPED_SENTENCE)
         queue(cursor, project_id, control_id, round_, cause, person)
         _audit(cursor, project_id, control_id, person, None, "understanding.review_requested",
@@ -1954,10 +1984,13 @@ def _apply(
                                 round_, item, call_id, marks, matters):  # fmt: skip
                 asked += 1
             else:
-                refused.append(item)
+                # Refused because its matter or key was asked before: still not established,
+                # so assumed although asked (B1l point 3), never dropped by record()'s
+                # matter-asked rule.
+                refused.append(replace(item, still_open=True))
         # A question refused at insert (its fingerprint, topic or key was asked before) is
-        # assumed with the rest, never dropped (B1l point 3); one whose matter was asked as a
-        # question is not assumed again unless the read still finds it not established.
+        # assumed with the rest, never dropped (B1l point 3): it is marked still open above,
+        # so record()'s matter-asked rule does not skip it; its key keeps it assumed once.
         assumed = attribute_assumptions.record(
             cursor, organization_id, project_id, control_id,
             [_assumption_of(item) for item in [*planned.assume, *refused]], AGENT, call_id,
@@ -2098,13 +2131,14 @@ def not_known(
 def not_known_keys(
     executor: psycopg.Cursor[Any] | psycopg.Connection[Any], control_id: UUID
 ) -> dict[tuple[str, str], str]:
-    """The walkthrough questions and values a person left as not known on the control, by
-    (subject, key), with the note."""
+    """The walkthrough questions and values a person left as not known on the control and
+    that still stand (an answer given since supersedes one), by (subject, key), with the
+    note."""
     return {
         (str(row[0]), str(row[1])): str(row[2])
         for row in executor.execute(
             "SELECT subject, subject_key, note FROM understanding_not_known "
-            "WHERE engagement_control_id = %s",
+            "WHERE engagement_control_id = %s AND superseded_at IS NULL",
             (control_id,),
         ).fetchall()
     }
@@ -2117,10 +2151,48 @@ def not_known_items(
         NotKnownItemBody(subject=row[0], key=str(row[1]), noted_at=row[2], note=str(row[3]))
         for row in connection.execute(
             "SELECT subject, subject_key, noted_at, note FROM understanding_not_known "
-            "WHERE engagement_control_id = %s ORDER BY noted_at, id",
+            "WHERE engagement_control_id = %s AND superseded_at IS NULL "
+            "ORDER BY noted_at, id",
             (control_id,),
         ).fetchall()
     ]
+
+
+def supersede_not_known(
+    cursor: psycopg.Cursor[Any], control_id: UUID, subject: NotKnownSubject, keys: Sequence[str]
+) -> int:
+    """An answer or a value given now for a question a person had left as not known: that
+    not-known is superseded (decided by the product owner after the review of B1k, 16
+    November 2026: a person's answer stands over it), so it is no longer read as closed, no
+    longer sent to the specialist, and its NOT_KNOWN assumption ends SUPERSEDED, by no person
+    (one accepted with its attribute keeps who had accepted it). Called in the transaction
+    that saves the answer (walkthrough_answers.save, control_design.set_values). Returns how
+    many were superseded."""
+    if not keys:
+        return 0
+    ended = [
+        row[0]
+        for row in cursor.execute(
+            "UPDATE understanding_not_known SET superseded_at = clock_timestamp() "
+            "WHERE engagement_control_id = %s AND subject = %s AND subject_key = ANY(%s) "
+            "AND superseded_at IS NULL RETURNING id",
+            (control_id, subject, list(keys)),
+        ).fetchall()
+    ]
+    if ended:
+        cursor.execute(
+            """
+            UPDATE attribute_assumptions
+            SET status = 'SUPERSEDED', decided_by = NULL, decided_at = clock_timestamp(),
+                accepted_by = CASE WHEN status = 'ACCEPTED_WITH_ATTRIBUTE' THEN decided_by END,
+                accepted_at = CASE WHEN status = 'ACCEPTED_WITH_ATTRIBUTE' THEN decided_at END,
+                version = version + 1
+            WHERE engagement_control_id = %s AND source_not_known_id = ANY(%s)
+              AND status IN ('OPEN', 'ACCEPTED_WITH_ATTRIBUTE')
+            """,
+            (control_id, ended),
+        )
+    return len(ended)
 
 
 def value_question(connection: psycopg.Connection[Any], control_id: UUID, key: str) -> str:
@@ -2245,7 +2317,9 @@ def follow(connection: psycopg.Connection[Any], project_id: UUID, control_id: UU
     while the control's plan run was busy, or one due before this release, is queued on the
     plan run (evidence_plans.queue_for_understanding, over an idle or failed run). A plan run
     already queued is returned to be handed to the worker again (its claim is atomic, so one
-    already taken is skipped). Nothing when no read is due and no run waits."""
+    already taken is skipped). When nothing could be queued or handed over and the read is
+    still due, it ends FAILED with its sentence (follow_or_fail), so the page offers Run
+    again and Proceed without it instead of "Checking..." with nothing at work."""
     from ai_workforce_api.evidence_plans import queue_for_understanding
 
     queued = queue_for_understanding(connection, project_id, control_id)
@@ -2257,7 +2331,51 @@ def follow(connection: psycopg.Connection[Any], project_id: UUID, control_id: UU
         "OR (run_status = 'WORKING' AND run_lease_until < clock_timestamp()))",
         (control_id,),
     ).fetchone()
-    return None if waiting is None else UUID(str(waiting[0]))
+    if waiting is not None:
+        return UUID(str(waiting[0]))
+    fail_if_unqueued(connection, project_id, control_id)
+    return None
+
+
+def follow_or_fail(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID, requeue: bool = True
+) -> UUID | None:
+    """After an agent run on the control ended (understanding_once.after_agents: a run's end,
+    a failed run, a narrative run): the read that fell due meanwhile is queued again on the
+    plan run without resetting its attempts (evidence_plans.queue_for_understanding with
+    requeue, so a run that keeps failing stays within PLAN_RUN_ATTEMPTS). When nothing could
+    be queued and the read is still due with nothing at work, it ends FAILED with its
+    sentence (B1l point 7: a failed review never blocks; Run again or Proceed without it).
+    `requeue` False (a narrative run's end, which is not the plan run's attempt) starts its
+    attempts again. Returns the plan run queued, for the worker to take as a new run."""
+    from ai_workforce_api.evidence_plans import queue_for_understanding
+
+    queued = queue_for_understanding(connection, project_id, control_id, requeue=requeue)
+    if queued is None:
+        fail_if_unqueued(connection, project_id, control_id)
+    return queued
+
+
+def fail_if_unqueued(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
+) -> bool:
+    """A read due by the rules that nothing queued, with no run at work on the control
+    (due_unqueued), is recorded and ended FAILED at once with NOT_STARTED_SENTENCE: the page
+    reads FAILED (pass_state), and proceed() accepts it. Returns whether one was recorded."""
+    from ai_workforce_api.db import transaction
+
+    state = standing(connection, project_id, control_id)
+    round_ = due_round(state)
+    if round_ is None or not due_unqueued(state):
+        return False
+    with transaction(connection) as cursor:
+        recorded = queue(cursor, project_id, control_id, round_, "UNDERSTANDING", None)
+        if recorded is None:
+            return False
+        end_pending(cursor, control_id, NOT_STARTED_SENTENCE)
+        _audit(cursor, project_id, control_id, None, None, "understanding.review_not_started",
+               {"round": round_})  # fmt: skip
+    return True
 
 
 # --- After completion: an answer changed re-tailors only what it informs ----------------
@@ -2277,10 +2395,12 @@ def informed_update(
     after the review of B1k, 16 November 2026: before, the answers were compared with when
     the plan was last generated, so the first run after a completion recorded in a request,
     "Proceed without it" among them, could be limited to a few attributes or to none): the
-    understanding is completed; the attribute agent has answered on the control since
-    (`followed`: its last successful call after the completion, so the whole set followed the
-    understanding once); and every change since that call is a walkthrough answer (a value,
-    an answer to a question or a changed assumption makes the whole set follow)."""
+    understanding is completed; the attribute agent has answered on the control since and its
+    answer was used (`followed`: its last call after the completion whose recorded outcome is
+    ACCEPTED, agent_answers.note_used; an answer rejected or not used never counts, so the
+    whole set followed the understanding once); and every change since that call is a
+    walkthrough answer (a value, an answer to a question or a changed assumption makes the
+    whole set follow)."""
     from ai_workforce_api import control_attributes
     from ai_workforce_api.criteria_history import cause_of
     from ai_workforce_api.walkthrough_questions import question
@@ -2290,9 +2410,11 @@ def informed_update(
         WITH followed AS (
             SELECT c.id, c.understanding_completed_at AS completed,
                    (SELECT max(m.created_at) FROM model_calls m
+                    JOIN model_call_outcomes o ON o.model_call_id = m.id
                     WHERE m.target_type = 'engagement_control' AND m.target_id = c.id
                       AND split_part(m.prompt_version, '/', 1) = %(agent)s
                       AND m.status = 'SUCCEEDED'
+                      AND o.outcome ->> 'validation' = 'ACCEPTED'
                       AND m.created_at > c.understanding_completed_at) AS at
             FROM engagement_controls c WHERE c.id = %(c)s
         )

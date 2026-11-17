@@ -355,29 +355,15 @@ def _open_one(
     )  # fmt: skip
 
 
-def _matter_words(text: str) -> set[str]:
-    return {word for word in matter_key(text).split() if len(word) > 3}
-
-
-def upheld(matter: str, facts: list[Any], limit: int = 6) -> list[dict[str, Any]]:
-    """The confirmed facts a person upholds by deciding a conflict "The confirmed
-    understanding stands": the PERSON facts of the understanding (understanding_authority.
-    facts, newest first) whose question or answer shares a word of the conflict's matter, at
-    most `limit`, by reference (kind, key, when confirmed), never their words. Pure."""
-    words = _matter_words(matter)
-    found: list[dict[str, Any]] = []
-    for fact in facts:
-        if fact.confirmed_by != "PERSON":
-            continue
-        if words & _matter_words(f"{fact.question} {fact.answer}"):
-            found.append(
-                {"ref": fact.ref, "kind": fact.kind, "key": fact.key,
-                 "confirmed_at": None if fact.confirmed_at is None
-                 else fact.confirmed_at.isoformat()}
-            )  # fmt: skip
-        if len(found) >= limit:
-            break
-    return found
+def upholds_of(opened: Opened) -> list[dict[str, Any]]:
+    """The confirmed facts a decision "The confirmed understanding stands" upholds, as the
+    audit record names them: only those the conflict row itself names. An assumption row
+    carries no reference to a fact (its matter and its one sentence are the agent's words),
+    so none: the record says what the person decided and never names a fact they did not
+    choose (decided by the product owner after the review of B1k, 16 November 2026; before,
+    any confirmed fact sharing a word with the matter was named). Pure."""
+    del opened
+    return []
 
 
 def confirm(
@@ -395,18 +381,15 @@ def confirm(
     For a CONFLICT the button reads "The confirmed understanding stands": the person decides
     the conflict, and confirms no agent text (B1l point 6; decided by the product owner
     after the review of B1k, 16 November 2026). The decision is kept on the row and in its
-    audit record, which references the confirmed facts it upholds (`upheld`); the agent's
-    statement of the conflict never becomes a fact (understanding_authority.facts leaves a
-    confirmed CONFLICT out)."""
+    audit record (CONFIRMED_UNDERSTANDING_STANDS, and the facts the conflict row itself
+    names: none, `upholds_of`); the agent's statement of the conflict never becomes a fact
+    (understanding_authority.facts leaves a confirmed CONFLICT out). A decided conflict no
+    longer holds the attributes' acceptance: where that leaves them accepted, what follows
+    an acceptance follows (control_attributes.close_questions_once_accepted)."""
     from ai_workforce_api.db import transaction
 
-    upholds: list[dict[str, Any]] = []
     with transaction(connection) as cursor:
         opened = _open_one(cursor, control_id, assumption_id, body.version)
-        if opened.kind == "CONFLICT":
-            from ai_workforce_api.understanding_authority import facts
-
-            upholds = upheld(opened.matter, list(facts(connection, control_id)))
         cursor.execute(
             f"UPDATE attribute_assumptions SET status = 'CONFIRMED', {_KEEP_ACCEPTANCE}, "
             "decided_by = %s, decided_at = clock_timestamp(), version = version + 1 "
@@ -416,9 +399,11 @@ def confirm(
         payload: dict[str, Any] = {"matter": opened.matter, "codes": opened.codes}
         if opened.kind == "CONFLICT":
             payload["decision"] = "CONFIRMED_UNDERSTANDING_STANDS"
-            payload["upholds"] = upholds
+            payload["upholds"] = upholds_of(opened)
         _audit(cursor, organization_id, project_id, actor, "attribute_assumption.confirmed",
                assumption_id, payload)  # fmt: skip
+        if opened.kind == "CONFLICT":
+            _after_conflict(cursor, organization_id, project_id, control_id, actor)
 
 
 def change(
@@ -452,9 +437,10 @@ def change(
         )
         named = approved_codes(cursor, control_id)
         kept = [code for code in codes if code in named]
-        # Accepted criteria never silently rest on an assumption a person changed: each
-        # named attribute whose criteria are accepted (or a person's) is opened for
-        # acceptance again by a proposed change (B1d style).
+        # Accepted criteria never silently rest on an assumption a person changed: the
+        # person's own change ends their acceptance (back to "To accept"), the accepted
+        # criteria kept as a version with who had accepted them; the one limited update the
+        # change starts then re-tailors them (evidence_plans.queue_assumption_update).
         reopened = reopen_accepted(
             cursor, organization_id, project_id, control_id, kept, actor, matter
         )
@@ -465,11 +451,34 @@ def change(
             {"matter": matter, "codes": codes, "length": len(answer),
              "reopened": [str(item) for item in reopened]},
         )  # fmt: skip
+        if opened.kind == "CONFLICT":
+            _after_conflict(cursor, organization_id, project_id, control_id, actor)
     return matter, kept
 
 
-# The note on the change proposed when an assumption the criteria rest on was changed.
-REOPENED_NOTE = "Its criteria rested on an assumption a person changed: accept them again."
+def _after_conflict(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    actor: UUID,
+) -> None:
+    """A person decided a conflict: where nothing else holds the attributes, they read as
+    accepted again, and what follows an acceptance follows (completion, the agents' open
+    questions closed), as after any decision that leaves them accepted."""
+    from ai_workforce_api.control_attributes import close_questions_once_accepted
+
+    close_questions_once_accepted(cursor, organization_id, project_id, control_id, actor)
+
+
+# The cause an ended acceptance carries in the criteria history: "Reopened: <matter>".
+REOPENED = "Reopened"
+
+
+def reopened_cause(matter: str) -> str:
+    """What the criteria history says of criteria whose acceptance a person's change of an
+    assumption ended. Pure."""
+    return line(f"{REOPENED}: {matter}", 300)
 
 
 def reopen_accepted(
@@ -483,42 +492,38 @@ def reopen_accepted(
 ) -> list[UUID]:
     """A person changed an assumption the named attributes' accepted criteria rest on
     (decided by the product owner after the review of B1k, 16 November 2026: the accepted
-    criteria never silently rest on a rejected assumption). For each named approved
-    attribute whose criteria are accepted, or a person's, and that has no change proposed
-    already, a change is proposed in its own wording with its criteria as they stand, to
-    accept again (B1d: nothing approved changes without a person; the attributes then read as
-    not accepted until it is decided). The update the change starts may propose its own
-    re-tailored change of the attribute in its place (control_attributes.generate). The
-    accepted row is never written over: its acceptance and criteria history stay. Returns the
-    proposals' ids."""
+    criteria never silently rest on a rejected assumption). The person's own change ends the
+    acceptance of each named approved attribute whose criteria were accepted: they read "To
+    accept" again, and the criteria as accepted are kept in attribute_criteria_versions with
+    who had accepted them (migration 0173's trigger), the current row's cause saying
+    "Reopened: <matter>" (`reopened_cause`). The criteria themselves are not touched here:
+    the one limited update the change starts re-tailors them (CRITERIA_WRITABLE_SQL now
+    allows it), and nothing approved changes otherwise. Criteria a person wrote are theirs and
+    stay as they are (B1b). Before, a change of the attribute in its own wording was proposed,
+    which the update could not re-tailor and which only asked the person to accept the same
+    criteria again. Returns the attributes reopened."""
     if not codes:
         return []
-    rows = cursor.execute(
-        """
-        INSERT INTO control_attributes (
-            organization_id, project_id, engagement_control_id, position, text, status,
-            basis, source_kind, note, proposal, replaces_id, created_by, definition_key,
-            objective, condition, pass_criteria, fail_criteria, judgment_required,
-            automatable, phases, criteria_origin
-        )
-        SELECT a.organization_id, a.project_id, a.engagement_control_id, 1000 + a.position,
-               a.text, 'PROPOSED', 'DOCUMENTED', 'MANUAL', %s, 'CHANGE', a.id, %s,
-               a.definition_key, a.objective, a.condition, a.pass_criteria, a.fail_criteria,
-               a.judgment_required, a.automatable, a.phases, a.criteria_origin
-        FROM control_attributes a
-        WHERE a.engagement_control_id = %s AND a.status = 'APPROVED' AND a.code = ANY(%s)
-          AND (a.criteria_accepted_at IS NOT NULL OR a.criteria_origin = 'PERSON')
-          AND NOT EXISTS (SELECT 1 FROM control_attributes p
-                          WHERE p.replaces_id = a.id AND p.status = 'PROPOSED')
-        RETURNING id
-        """,
-        (line(f"{REOPENED_NOTE} ({matter})", 300), actor, control_id, codes),
-    ).fetchall()
+    from ai_workforce_api.criteria_history import writing
+
+    with writing(cursor, cause=reopened_cause(matter)):
+        rows = cursor.execute(
+            """
+            UPDATE control_attributes
+            SET criteria_accepted_by = NULL, criteria_accepted_at = NULL,
+                version = version + 1, updated_at = clock_timestamp()
+            WHERE engagement_control_id = %s AND status = 'APPROVED' AND code = ANY(%s)
+              AND criteria_accepted_at IS NOT NULL
+            RETURNING id
+            """,
+            (control_id, codes),
+        ).fetchall()
     found = [UUID(str(row[0])) for row in rows]
     if found:
         _audit_control(
             cursor, organization_id, project_id, actor, "attribute.criteria_reopened",
-            control_id, {"matter": matter, "codes": codes, "proposals": [str(i) for i in found]},
+            control_id,
+            {"matter": matter, "codes": codes, "attributes": [str(i) for i in found]},
         )  # fmt: skip
     return found
 

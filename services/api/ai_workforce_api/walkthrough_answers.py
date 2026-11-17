@@ -311,7 +311,7 @@ def unanswered_required(
     left: dict[UUID, set[str]] = {}
     for cid, key in connection.execute(
         "SELECT engagement_control_id, subject_key FROM understanding_not_known "
-        "WHERE project_id = %(p)s AND subject = 'WALKTHROUGH'" + which,
+        "WHERE project_id = %(p)s AND subject = 'WALKTHROUGH' AND superseded_at IS NULL" + which,
         params,
     ).fetchall():
         left.setdefault(UUID(str(cid)), set()).add(str(key))
@@ -546,6 +546,14 @@ def save(
                 cursor, organization_id, project_id, actor, "control_walkthrough.answered",
                 control_id, payload,
             )  # fmt: skip
+        # An answer given now stands over the question's "Not known yet" (B1l point 1):
+        # that record is superseded and its assumption ends with it.
+        from ai_workforce_api.understanding_review import supersede_not_known
+
+        supersede_not_known(
+            cursor, control_id, "WALKTHROUGH",
+            [key for key in checked if key not in ignored],
+        )  # fmt: skip
     return SavedBody(saved=len(checked) - len(ignored), ignored=len(ignored))
 
 

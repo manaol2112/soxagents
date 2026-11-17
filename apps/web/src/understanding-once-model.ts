@@ -119,6 +119,9 @@ export type Once = {
   request?: ReviewRequest | null;
   /** Why no review could run (no model). */
   notRun?: ReviewNotRun | null;
+  /** The server says a read is due and none is queued (ContextBody.review_due): the page
+   * follows it up. */
+  reviewDue?: boolean;
   /** The approved attributes in the Attributes step's order, so the review names them by
    * letter. */
   approved?: readonly ApprovedRef[];
@@ -198,7 +201,7 @@ export const ACCEPTED_UNCONFIRMED =
 /** Said before a change to an assumption already accepted with its attribute: the accepted
  * criteria never silently rest on an assumption a person said is wrong. */
 export const CHANGE_REOPENS =
-  "The attribute's criteria were accepted with this assumption: changing it re-opens them for acceptance, re-tailored from your words.";
+  "The attribute's criteria were accepted with this assumption: changing it ends their acceptance, and the agents re-tailor them from your words for you to accept again.";
 
 /** The ones a person may still decide on the attribute: open, or accepted with the
  * attribute and not confirmed (the D&I point links here, B1l point 6). */
@@ -230,7 +233,7 @@ export function decidedLine(
   item: Pick<
     Assumption,
     "status" | "assumed" | "answer" | "decidedBy" | "decidedAt"
-  > & { kind?: Assumption["kind"]; upholds?: string },
+  > & { kind?: Assumption["kind"] },
   timeZone?: string,
 ): string | null {
   const who = item.decidedBy?.name.trim() || "a person";
@@ -242,10 +245,9 @@ export function decidedLine(
       // A conflict decided for the confirmed understanding (B1l): never worded as the
       // conflicting source being confirmed.
       if (item.kind === "CONFLICT") {
-        // The decision names the confirmed fact it upholds, in the record's words: never the
-        // agent's account of the conflict.
-        const upheld = (item.upholds ?? "").trim();
-        return `Decided by ${who}${day === "" ? "" : `, ${day}`}: the confirmed understanding stands${upheld === "" ? "." : ` (${upheld.replace(/[.\s]+$/, "")}).`}`;
+        // The decision as the person took it, naming no fact they did not choose (the
+        // record names only the decision; the product owner, after the review of B1k).
+        return `Decided by ${who}${day === "" ? "" : `, ${day}`}: the confirmed understanding stands.`;
       }
       return `Confirmed by ${who}${day === "" ? "" : `, ${day}`}: ${item.assumed}`;
     }
@@ -267,7 +269,16 @@ export function characterCount(value: string, most: number): string {
  * they did not. */
 export function updatedFromLine(matter: string | undefined): string | null {
   const said = (matter ?? "").trim();
-  return said === "" ? null : `Updated from your answer on ${said}`;
+  if (said === "") {
+    return null;
+  }
+  // A person's change of an assumption ended the criteria's acceptance (the server's cause
+  // "Reopened: <matter>", attribute_assumptions.reopened_cause): to accept again.
+  const reopened = /^Reopened:\s*(.+)$/.exec(said);
+  if (reopened !== null) {
+    return `Reopened for acceptance: you changed the assumption on ${reopened[1]}`;
+  }
+  return `Updated from your answer on ${said}`;
 }
 
 /** The fold over an attribute's earlier criteria; null when none is kept. */

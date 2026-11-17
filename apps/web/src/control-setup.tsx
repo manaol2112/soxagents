@@ -97,6 +97,8 @@ export type Conversation = {
    * approved attributes the review names by letter. */
   reviewRequest?: ReviewRequest | null;
   reviewNotRun?: ReviewNotRun | null;
+  /** The server says a read is due and none is queued: the page follows it up. */
+  reviewDue?: boolean;
   approved?: readonly ApprovedRef[];
 };
 
@@ -215,6 +217,7 @@ export function ControlSetup({
             review: conversation.review ?? null,
             request: conversation.reviewRequest ?? null,
             notRun: conversation.reviewNotRun ?? null,
+            reviewDue: conversation.reviewDue === true,
             approved: conversation.approved ?? [],
           }}
         />

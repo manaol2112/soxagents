@@ -342,7 +342,7 @@ def unanswered_values(connection: psycopg.Connection[Any], project_id: UUID) -> 
     # (B1l point 1; understanding_review.answer_not_known): never a value.
     for control_id, key in connection.execute(
         "SELECT engagement_control_id, subject_key FROM understanding_not_known "
-        "WHERE project_id = %s AND subject = 'VALUE'",
+        "WHERE project_id = %s AND subject = 'VALUE' AND superseded_at IS NULL",
         (project_id,),
     ).fetchall():
         filled.setdefault(UUID(str(control_id)), set()).add(str(key))
@@ -638,6 +638,11 @@ def set_values(
                     (organization_id, project_id, target, key, value,
                      actor if value else None, value),
                 )  # fmt: skip
+            # A value given now stands over the value's "Not known yet" (B1l point 1): that
+            # record is superseded and its assumption ends with it.
+            from ai_workforce_api.understanding_review import supersede_not_known
+
+            supersede_not_known(cursor, target, "VALUE", [k for k in keys if cleaned[k]])
             refresh_statement(cursor, target)
         cursor.execute(
             """

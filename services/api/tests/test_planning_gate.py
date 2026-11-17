@@ -10,7 +10,7 @@ from uuid import UUID
 
 import psycopg
 import pytest
-from support import Database, release_design, sign_off_design
+from support import Database, release_design, run_plan_through, sign_off_design
 from test_onboarding import _base, _complete_setup, _new_engagement
 from test_outbound import migrated
 
@@ -57,7 +57,7 @@ def _finish_runs(migrated: Database, team: dict[str, Any]) -> None:
     """The planner agent's background runs finish with no model: the rules' plans stand."""
     with connect(migrated.url) as connection:
         for plan_id in open_plan_runs(connection, team["project"]):
-            assert run_plan(connection, None, plan_id) == "DONE"
+            assert run_plan_through(connection, None, plan_id) == "DONE"
 
 
 def _rows(migrated: Database, query: str, *params: Any) -> list[tuple[Any, ...]]:
@@ -401,7 +401,7 @@ def test_the_planner_agent_refines_the_plan_in_the_background(migrated: Database
         waiting = open_plan_runs(connection, team["project"])
         assert {str(item) for item in waiting} == {str(row[0]) for row in runs}
         # With no model the run keeps the rules' plan, still waiting for a person.
-        assert run_plan(connection, None, UUID(str(runs[0][0]))) == "DONE"
+        assert run_plan_through(connection, None, UUID(str(runs[0][0]))) == "DONE"
         assert run_plan(connection, None, UUID(str(runs[0][0]))) == "SKIPPED"
         # A failed run leaves the rules' plan the same way.
         fail_plan_run(connection, UUID(str(runs[1][0])))

@@ -258,6 +258,7 @@ async def serve(
             policy,
             assess,
             redraft,
+            reviewing,
         ),
     )
     async with worker:
@@ -827,6 +828,7 @@ def activities_for(
     policy: Callable[[UUID], str] | None = None,
     assess: Callable[[UUID], str] | None = None,
     redraft: Callable[[UUID], str] | None = None,
+    reviewing: bool = False,
 ) -> list[Any]:
     @activity.defn(name="record_effect")
     async def record_effect(
@@ -1074,14 +1076,43 @@ def activities_for(
         return result
 
     @activity.defn(name="fail_evidence_plan_run")
-    async def fail_evidence_plan_run(plan_id: str) -> None:
-        from ai_workforce_api.evidence_plans import fail_plan_run
+    async def fail_evidence_plan_run(plan_id: str) -> str:
+        """The run failed: the rules' plan stands. Then, as the local worker does
+        (LocalDraftScheduler._follow_plan; after the review of B1k, 16 November 2026), the
+        understanding is followed: a read that fell due while the run was busy is queued
+        again on the same plan, keeping its attempts (REQUEUED: the workflow runs it as a new
+        activity), or ends FAILED when nothing could queue it. Only with a model."""
+        from ai_workforce_api.evidence_plans import REQUEUED, fail_plan_run
 
         def fail() -> None:
             with connect(database_url) as connection:
                 fail_plan_run(connection, UUID(plan_id))
 
+        def follow() -> str:
+            from ai_workforce_api.understanding_once import after_agents
+
+            with connect(database_url) as connection:
+                found = connection.execute(
+                    "SELECT project_id, engagement_control_id FROM evidence_plans WHERE id = %s",
+                    (UUID(plan_id),),
+                ).fetchone()
+                if found is None:
+                    return ""
+                planned = after_agents(
+                    connection, UUID(str(found[0])), UUID(str(found[1])), requeue=True
+                )
+            return REQUEUED if planned == UUID(plan_id) else ""
+
         await asyncio.to_thread(fail)
+        if not reviewing:
+            return ""
+        try:
+            return await asyncio.to_thread(follow)
+        except Exception:
+            # The failure is recorded; the worker's start (queue_due_reads) and the page's
+            # follow route still queue a due read.
+            logger.warning("the understanding of a failed plan run's control was not followed")
+            return ""
 
     @activity.defn(name="run_prior_year")
     async def run_prior_year(document_id: str) -> str:

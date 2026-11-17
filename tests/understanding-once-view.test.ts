@@ -83,9 +83,11 @@ describe("Control Understanding: one pass, complete once", () => {
     // review shown, the review that was not run says so, and the attributes not reviewed are
     // named by letter). Old: once ended at `review`. New: the same, then the request a person
     // made after completion, why no review ran, and the approved attributes.
+    // Rewritten again (the second fix round of B1k): old, `notRun` then `approved`; new, the
+    // server's review_due between them, which the page follows up (review/follow).
     assert.match(
       setup,
-      /once=\{\{\s*completedAt: conversation\.completedAt \?\? null,\s*questionPass: conversation\.questionPass \?\? null,\s*review: conversation\.review \?\? null,\s*request: conversation\.reviewRequest \?\? null,\s*notRun: conversation\.reviewNotRun \?\? null,\s*approved: conversation\.approved \?\? \[\],\s*\}\}/,
+      /once=\{\{\s*completedAt: conversation\.completedAt \?\? null,\s*questionPass: conversation\.questionPass \?\? null,\s*review: conversation\.review \?\? null,\s*request: conversation\.reviewRequest \?\? null,\s*notRun: conversation\.reviewNotRun \?\? null,\s*reviewDue: conversation\.reviewDue === true,\s*approved: conversation\.approved \?\? \[\],\s*\}\}/,
     );
     assert.match(
       controls,

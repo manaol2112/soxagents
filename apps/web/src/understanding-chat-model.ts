@@ -584,7 +584,9 @@ export type Review = {
 /** A question a person left as not known yet: what it asked, and their optional note. */
 export type NotKnownNeed = {
   key: string;
-  kind: "ANSWER" | "WALKTHROUGH";
+  /** A statement value (ANSWER, or the sign-in settings' AUTH) or a walkthrough question:
+   * the kinds the server reads a not-known for (understanding_chat.with_not_known). */
+  kind: "ANSWER" | "AUTH" | "WALKTHROUGH";
   question: string;
   note: string;
 };
@@ -771,7 +773,7 @@ export function parseReview(body: unknown): Review | null {
     // B1l point 1: left as not known yet. Never read as an answer: kept apart.
     if (
       need.status === "NOT_KNOWN" &&
-      (kind === "ANSWER" || kind === "WALKTHROUGH") &&
+      (kind === "ANSWER" || kind === "AUTH" || kind === "WALKTHROUGH") &&
       typeof need.key === "string" &&
       !notKnown.some((each) => each.key === need.key)
     ) {

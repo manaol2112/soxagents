@@ -417,7 +417,10 @@ def copy_out(
 # 2026; authentication_profile). WALKTHROUGH: a question of the walkthrough bank
 # (walkthrough_questions.py, 11 November 2026), answered through walkthrough_answers.
 NeedKind = Literal["RCM", "ANSWER", "DOCUMENT", "QUESTION", "PROCESS", "AUTH", "WALKTHROUGH"]
-NeedStatus = Literal["CONFIRMED", "PROPOSED", "MISSING"]
+# NOT_KNOWN (B1l point 1): a walkthrough question or a value a person left as "Not known yet,
+# proceed" (understanding_review.answer_not_known) that no answer has superseded since:
+# closed for the gates, never an answer (its value stays what it was, unconfirmed).
+NeedStatus = Literal["CONFIRMED", "PROPOSED", "MISSING", "NOT_KNOWN"]
 # SYSTEM: the answer most used for the same question on the engagement's other controls on
 # this system, proposed by default (product owner, 11 November 2026: "should be the same by
 # default but user can still update it"). OTHER_SYSTEM: the answer the same control holds on
@@ -478,6 +481,8 @@ class NeedBody(BaseModel):
     # new answer to its parent closes before saving (11 November 2026).
     when_key: str = ""
     when_value: str = ""
+    # NOT_KNOWN only: the person's optional note ("" otherwise).
+    not_known_note: str = ""
     # A statement question that takes more than one answer (kind ANSWER only;
     # slot_options.MULTIPLE_SLOTS, 12 November 2026), saved as one English list ("A and B")
     # through the same values save.
@@ -1068,6 +1073,11 @@ def understanding_review(
         walk_rows, walk_asked, started.walkthrough, started.detail
     )
     needs += walkthrough_needs
+    # What a person left as not known yet, and no answer superseded since, reads so (B1l
+    # point 1): the page leaves it out of the course and out of the count.
+    from ai_workforce_api.understanding_review import not_known_keys
+
+    needs = with_not_known(needs, not_known_keys(connection, control_id))
 
     approved, proposed = 0, 0
     for status, count in connection.execute(
@@ -1090,7 +1100,7 @@ def understanding_review(
                 # evidence waits for it whatever its answer drives (11 November 2026).
                 or (what == "EVIDENCE" and need.kind == "WALKTHROUGH")
             )
-            and need.status != "CONFIRMED"
+            and need.status not in ("CONFIRMED", "NOT_KNOWN")
             and need.required
         ]
 
@@ -1131,6 +1141,36 @@ def understanding_review(
         attributes_waiting=unsettled or "",
         questions_checking=checking,
     )
+
+
+# The needs a person may leave as not known yet, by the not-known record's subject.
+_NOT_KNOWN_KINDS: dict[str, tuple[str, ...]] = {
+    "WALKTHROUGH": ("WALKTHROUGH",),
+    "VALUE": ("ANSWER", "AUTH", "DOCUMENT"),
+}
+
+
+def with_not_known(
+    needs: Sequence[NeedBody], left: Mapping[tuple[str, str], str]
+) -> list[NeedBody]:
+    """The needs with what a person left as not known yet (`left`: by subject and key, the
+    note; understanding_review.not_known_keys) read as NOT_KNOWN with the note, unless a
+    person's answer stands now (CONFIRMED). Pure."""
+    shown: list[NeedBody] = []
+    for need in needs:
+        note = next(
+            (
+                said
+                for (subject, key), said in left.items()
+                if key == need.key and need.kind in _NOT_KNOWN_KINDS.get(subject, ())
+            ),
+            None,
+        )
+        if note is None or need.status == "CONFIRMED":
+            shown.append(need)
+        else:
+            shown.append(need.model_copy(update={"status": "NOT_KNOWN", "not_known_note": note}))
+    return shown
 
 
 _DRIVE_FOR: dict[str, NeededFor] = {

@@ -84,10 +84,14 @@ MAX_ATTRIBUTES = 12
 # assumptions on the attributes they bear on instead; and the one update a changed
 # assumption starts (only_attributes) may change only the attributes it names. Every rule
 # of /5 is kept word for word.
+# attributes/8 (16 November 2026, the second fix round of B1k): each issue names, in
+# attribute_codes, the approved attributes it bears on, so a conflict found before
+# completion holds those attributes only (a conflict naming none holds the whole set). Every
+# rule of /7 is kept word for word.
 # attributes/7 (16 November 2026, after the review of B1k): the one correction carries the
 # previous answer as escaped data, said to be data (agent_answers.correction_prompt). Every
 # rule of /6 is kept word for word.
-PROMPT_VERSION = "attributes/7"
+PROMPT_VERSION = "attributes/8"
 # attribute-review/2 (the same day): the reviewer of the drafts checks every ADD against the
 # approved attributes and the other drafts. /3 (B1e): it is given the confirmed understanding
 # with its dates and the precedence; every check it had stays. /4 (16 November 2026, after the
@@ -176,6 +180,10 @@ class AttributeBody(BaseModel):
     # acceptance (for a proposal, that of the attribute it changes or retires) until a person
     # decides it; "Accept all" leaves it out.
     held_by_conflict: bool = False
+    # The attribute's code ("A2"; migration 0079), as the agents, the review's verdicts and
+    # its not_reviewed name it; "" for a proposal not approved yet. The page maps those names
+    # to its letters with it and never shows it.
+    code: str = ""
 
 
 class AttributesBody(BaseModel):
@@ -309,6 +317,7 @@ def attributes(connection: psycopg.Connection[Any], control_id: UUID) -> Attribu
     for body, row in zip(bodies, rows, strict=True):
         body.criteria_updated_from = str(row[30] or "")
         body.criteria_versions = versions.get(body.id, 0)
+        body.code = str(row[29] or "")
         if body.status == "APPROVED" and row[29]:
             body.assumptions = by_code.get(str(row[29]), [])
             body.held_by_conflict = is_held(str(row[29]), held)
@@ -899,7 +908,8 @@ proposal_basis empty and give in suggestions one plain statement per side, each 
 sentence a person can pick as the answer (for example "The Active Directory change log holds \
 the grant date." and "The ServiceNow ticket history shows when access was granted."). Write \
 why as one sentence telling the auditor how the answer changes the test, naming no agent, \
-narrative or attribute code.
+narrative or attribute code. For every issue, give in attribute_codes the codes of the \
+approved attributes it bears on, or none when it bears on the set as a whole.
 - A document the sources cite but do not include (a policy, a list of roles, a standard) is \
 not an issue: the control's evidence requests obtain it. A client answer of "No formal \
 document" means the client has none and the control runs on established practice: test that \
@@ -949,6 +959,12 @@ def _with_statements(schema: dict[str, Any]) -> dict[str, Any]:
             "type": "array",
             "maxItems": 5,
             "items": {"type": "string", "maxLength": 8},
+        },
+        # The approved attributes the issue bears on, by code (attributes/8); not required.
+        "attribute_codes": {
+            "type": "array",
+            "maxItems": MAX_ATTRIBUTES,
+            "items": {"type": "string", "maxLength": 4},
         },
     }
     items["required"] = [
@@ -1353,17 +1369,6 @@ def generate(
                     held[1].add(standing_def)
                 kept += 1
                 continue
-            if item.action in ("CHANGE", "RETIRE"):
-                # The agent's own change of an attribute takes the place of the one proposed
-                # when an assumption its accepted criteria rested on was changed
-                # (attribute_assumptions.reopen_accepted): one proposal per attribute.
-                cursor.execute(
-                    "UPDATE control_attributes SET status = 'SUPERSEDED', version = version + 1, "
-                    "updated_at = clock_timestamp(), note = 'Replaced by the agent''s change.' "
-                    "WHERE engagement_control_id = %s AND replaces_id = %s "
-                    "AND status = 'PROPOSED' AND source_kind = 'MANUAL' AND note LIKE %s",
-                    (control_id, replaces, attribute_assumptions.REOPENED_NOTE + "%"),
-                )
             created = cursor.execute(
                 """
                 INSERT INTO control_attributes (
@@ -1488,8 +1493,13 @@ def generate(
                 ),
                 # Shaped as a question would have been (B1e rule 4: a conflict that quotes
                 # fewer than two sources reads as unclear), so a sourceless "conflict" never
-                # holds the set's acceptance (after the review of B1k, 16 November 2026).
-                *(attribute_assumptions.from_issue(issue) for issue in _issues(raisable, sources)),
+                # holds the set's acceptance (after the review of B1k, 16 November 2026), and
+                # on the attributes the finding names (its attribute_codes): only one naming
+                # none bears on, and for a conflict holds, the whole set.
+                *(
+                    attribute_assumptions.from_issue(issue, codes)
+                    for issue, codes in _issues_with_codes(raisable, sources)
+                ),
             ]  # fmt: skip
             raisable, late = [], []
         raised = _issues([item for item in raisable if item not in late], sources)
@@ -1751,6 +1761,16 @@ def _screened(
             item = item.model_copy(update={"kind": "AMBIGUOUS"})
         kept.append(item)
     return kept, left, named
+
+
+def _issues_with_codes(
+    raw: list[AnswerIssue], sources: list[Source]
+) -> list[tuple[Issue, tuple[str, ...]]]:
+    """The issues as _issues shapes them, each with the attribute codes its finding names
+    (AnswerIssue.attribute_codes), for the assumption it becomes."""
+    return [
+        (issue, tuple(item.attribute_codes)) for item in raw for issue in _issues([item], sources)
+    ]
 
 
 def _issues(raw: list[AnswerIssue], sources: list[Source]) -> list[Issue]:

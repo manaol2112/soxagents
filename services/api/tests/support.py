@@ -642,3 +642,23 @@ def unrestricted(cursor: object, organization_id: object) -> None:
         """,
         (organization_id,),
     )
+
+
+def run_plan_through(connection: Any, provider: Any, plan_id: Any) -> str:
+    """A control's plan run, and the runs its end queues (evidence_plans.REQUEUED), as the
+    workers take them one after the other: the result of the last.
+
+    Old (before the second fix round of B1k, 16 November 2026): run_plan made what fell due
+    while it worked inside the same call (up to two more runs), so one call did all of it.
+    New: its end queues the same plan again and returns REQUEUED, and the worker takes that as
+    a new run (a new job, a new durable activity). A test that reads the state after "the run"
+    takes the runs that follow too, through this. Bounded as the workers are: the plan's
+    attempts end the chain within PLAN_RUN_ATTEMPTS."""
+    from ai_workforce_api.evidence_plans import PLAN_RUN_ATTEMPTS, REQUEUED, run_plan
+
+    result = run_plan(connection, provider, plan_id)
+    for _turn in range(PLAN_RUN_ATTEMPTS):
+        if result != REQUEUED:
+            return result
+        result = run_plan(connection, provider, plan_id)
+    return result

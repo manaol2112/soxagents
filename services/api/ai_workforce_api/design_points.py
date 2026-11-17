@@ -11,11 +11,14 @@ each read from the same records (`points_of`, the open branches of the former ma
   (COMPLETENESS) and each follow-up of a check (FOLLOW_UP). Since 16 November 2026 (B1l
   point 6, migration 0173) also each assumption an agent stated that a person accepted with
   its attribute without confirming it (ASSUMPTION): confirmed there, changed there (That's
-  right, Change...), or considered with a reason.
+  right, Change...), or considered with a reason. An open conflict the agents stated is one
+  too, settled only by deciding it on its attribute, never by a consideration (after the
+  review of B1k, 16 November 2026: a consideration would leave the conflict open, still
+  holding the attributes' acceptance).
 - Each has a `key` (the first 32 hexadecimal characters of the SHA-256 of its kind and of
   the identity of what it is about), a `place` where the view shows it, the existing
-  actions that settle it (`settle`, CONSIDER always last) and the person's consideration
-  that stands for its key, if any.
+  actions that settle it (`settle`, CONSIDER last where it is offered) and the person's
+  consideration that stands for its key, if any.
 - A point is settled when its own action makes it go (it is then no longer assembled) or
   when a consideration stands for its key. A consideration whose point is no longer
   assembled is kept, and is neither shown nor counted.
@@ -103,6 +106,7 @@ NOT_MIGRATED = "D&I point considerations are not on record: migration 0169 is no
 
 # The refusals, each one sentence.
 POINT_CHANGED = "This point changed; read the workpaper again."
+NOT_CONSIDERED = "A conflict is settled by deciding it on its attribute, not by a consideration."
 PREPARED_ALREADY = "The design workpaper is prepared; reopen it to settle a point."
 # The gate's codes a person has nothing to do about: the file is left out by purpose.
 _LEFT_OUT_BY_PURPOSE = frozenset({"POPULATION"})
@@ -212,7 +216,9 @@ def assumption_points(
                 kind="ASSUMPTION",
                 text=_sentence(said),
                 place=PlaceBody(at="ATTRIBUTE", attribute_id=on.id),
-                settle=_settle("ASSUMPTION"),
+                # A conflict only by deciding it: a consideration would leave it open,
+                # still holding the attributes' acceptance.
+                settle=["ASSUMPTION"] if item.kind == "CONFLICT" else _settle("ASSUMPTION"),
             )
         )
     return found
@@ -517,8 +523,15 @@ def observations_of(
 def with_considerations(
     points: Sequence[PointBody], standing: Mapping[str, ConsideredBody]
 ) -> list[PointBody]:
-    """The points with the consideration that stands for each key, where one does."""
-    return [point.model_copy(update={"considered": standing.get(point.key)}) for point in points]
+    """The points with the consideration that stands for each key, where one does. A point
+    a consideration may not settle (no CONSIDER: an open conflict) is never read as
+    settled by one."""
+    return [
+        point.model_copy(
+            update={"considered": standing.get(point.key) if "CONSIDER" in point.settle else None}
+        )
+        for point in points
+    ]
 
 
 def unsettled(points: Sequence[PointBody]) -> list[PointBody]:
@@ -878,6 +891,8 @@ def consider(
         )  # fmt: skip
         if point is None or point.considered is not None:
             raise _state(POINT_CHANGED)
+        if "CONSIDER" not in point.settle:
+            raise _state(NOT_CONSIDERED)
         row = cursor.execute(
             """
             INSERT INTO design_point_considerations (

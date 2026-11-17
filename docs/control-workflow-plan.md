@@ -364,6 +364,8 @@ Also agreed:
 - **A live check before release.** The review is run on about five controls (among them ITGC-AC-01 and ITGC-CM-06) to count the questions asked, the repeats and the misses; the product owner is told its cost before it runs.
 - **Sequencing.** The question pass B1j builds on the attribute agent is replaced by the review of B1k before either is used: the attribute agent never asks before completion once B1k lands, and the two question sources never run together.
 
+Status of B1j, B1k and B1l (16 November 2026): built with the fixes of two reviews, migrations 0172 and 0173, awaiting the product owner's review. Optional follow-ups of the walkthrough bank are not waited for (B1c: only required questions hold Control Understanding); they are asked in the same course, and the specialist's review is given them with their answers or as not answered. The process-map agent asks nothing either: its gaps reach the review as matters to consider, and after completion they are assumptions on the attributes.
+
 ## The step panels (built 8 November 2026)
 
 The product owner: the panels "look like a traditional view which does not align with my new workflow and design". Decided: a decision-first layout for every panel, an agent strip in each panel, the agent proposes the conclusion and a person rates, and everything built at once.

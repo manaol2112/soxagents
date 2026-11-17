@@ -639,23 +639,27 @@ def test_a_decided_conflict_and_a_bare_not_known_are_never_a_persons_fact() -> N
     assert assumption_fact("MISSING", "CONFIRMED", "The CAB approves.", "") == "The CAB approves."
 
 
-def test_a_decided_conflict_references_the_confirmed_facts_it_upholds() -> None:
-    from ai_workforce_api.attribute_assumptions import upheld
-    from ai_workforce_api.understanding_authority import Fact
+def test_a_decided_conflict_records_the_decision_and_names_no_fact_the_person_did_not_choose() -> (
+    None
+):
+    # Rewritten in the second fix round of B1k (16 November 2026). Old: `upheld(matter,
+    # facts)` named every PERSON fact sharing a word of four or more letters with the
+    # conflict's matter (the test expected the walkthrough answer "Who approves each patch?"
+    # for the matter "Patch approver"), so the audit trail said the person's decision upheld
+    # facts the person never chose. New (decided for the fix round): only the decision is
+    # recorded, and the facts the conflict row itself names, which it never carries: none.
+    import inspect
 
-    at = datetime(2026, 11, 16, tzinfo=UTC)
-    facts = [
-        Fact(ref="U1", kind="WALKTHROUGH_ANSWER", key="wt-cm06-approver",
-             question="Who approves each patch?", answer="The change advisory board.",
-             confirmed_at=at, confirmed_by="PERSON"),
-        Fact(ref="U2", kind="CONTROL_VALUE", key="change-tool", question="Which patch tool?",
-             answer="ServiceNow", confirmed_at=at, confirmed_by="RECORDS"),
-    ]  # fmt: skip
-    found = upheld("Patch approver", facts)
-    assert found == [{"ref": "U1", "kind": "WALKTHROUGH_ANSWER", "key": "wt-cm06-approver",
-                      "confirmed_at": at.isoformat()}]  # fmt: skip
-    # References only, never the agent's or the person's words.
-    assert "The change advisory board." not in str(found)
+    from ai_workforce_api import attribute_assumptions
+    from ai_workforce_api.attribute_assumptions import Opened, upholds_of
+
+    opened = Opened("Patch approver", "The policy and the walkthrough differ.", ["A1"],
+                    "CONFLICT", "OPEN")  # fmt: skip
+    assert upholds_of(opened) == []
+    assert not hasattr(attribute_assumptions, "upheld")
+    source = inspect.getsource(attribute_assumptions.confirm)
+    assert '"CONFIRMED_UNDERSTANDING_STANDS"' in source and "upholds_of(opened)" in source
+    assert "facts(connection" not in source
 
 
 def test_an_assumption_open_on_an_accepted_attribute_and_an_open_conflict_are_points() -> None:
@@ -706,16 +710,38 @@ def test_a_due_read_is_queued_at_a_runs_end_its_failure_and_the_workers_start() 
     # Finding (loop, model; blocker): "A read that falls due while the control's plan run is
     # busy is never queued afterwards". Every run makes a due read, a run's end queues what
     # fell due meanwhile, a failed run is queued over, and the worker's start sweeps.
+    # Rewritten in the second fix round of B1k (16 November 2026). Old: the run's end called
+    # `return run_plan(connection, provider, again, _depth + 1)`, up to FOLLOW_DEPTH more runs
+    # inside one call (one Temporal activity, with its one time limit). New: the end queues
+    # the same plan again, keeping its attempts (follow_or_fail, requeue), and returns
+    # REQUEUED; the local worker takes it as a new job and the durable workflow as a new
+    # activity. A failed run is followed in both workers.
     plans = (ROOT / "evidence_plans.py").read_text(encoding="utf-8")
     assert "create=True," in plans
-    end = plans[plans.index("What fell due while the run was busy") :][:900]
-    assert "queue_for_understanding(connection, project_id, control_id)" in end
-    assert "return run_plan(connection, provider, again, _depth + 1)" in end
+    end = plans[plans.index("What fell due while the run was busy") :][:1400]
+    assert "follow_or_fail(connection, project_id, control_id) == plan_id" in end
+    assert "return REQUEUED" in end
+    body = plans[plans.index("def run_plan(") : plans.index("def _now(")]
+    assert body.count("run_plan(") == 1 and "_depth" not in body
     assert "p.run_status IN ('IDLE', 'FAILED') AND NOT" in plans
+    assert "AND (NOT %(requeue)s OR p.run_attempts < %(attempts)s)" in plans
+    assert "run_attempts = CASE WHEN %(requeue)s THEN p.run_attempts ELSE 0 END" in plans
     worker = (ROOT / "pbc_drafting.py").read_text(encoding="utf-8")
     assert "self._follow_plan(plan_id)" in worker and "queue_due_reads(connection)" in worker
+    assert "if result == REQUEUED:" in worker and "requeue=True" in worker
     durable = (ROOT / "durable.py").read_text(encoding="utf-8")
     assert "queue_due_reads(connection)" in durable
+    failed = durable[durable.index('@activity.defn(name="fail_evidence_plan_run")') :][:2200]
+    assert "fail_plan_run(connection, UUID(plan_id))" in failed
+    assert "after_agents(" in failed and "requeue=True" in failed
+    flow = (ROOT / "durable_workflow.py").read_text(encoding="utf-8")
+    plan_flow = flow[flow.index('@workflow.defn(name="evidence_plan_run")') :][:2400]
+    assert "for _turn in range(PLAN_FOLLOWS):" in plan_flow
+    assert "if followed != PLAN_REQUEUED:" in plan_flow
+    from ai_workforce_api.durable_workflow import PLAN_REQUEUED
+    from ai_workforce_api.evidence_plans import REQUEUED
+
+    assert PLAN_REQUEUED == REQUEUED
     # The page's own way out is an explicit POST, never a write in a read.
     routes = (ROOT / "context_routes.py").read_text(encoding="utf-8")
     assert '@app.post(f"{control}/understanding/review/follow")' in routes
@@ -741,3 +767,291 @@ def test_a_due_read_is_offered_to_the_page_only_with_nothing_queued() -> None:
     assert not review.due_unqueued(Standing(latest="PENDING"))
     assert not review.due_unqueued(Standing(waiting=True))
     assert not review.due_unqueued(Standing(completed=True))
+
+
+# The second fix round of B1k (16 November 2026): each finding the re-check left partly fixed,
+# and each new problem it found, pinned without a database (the database halves are in
+# test_understanding_review.py).
+
+
+@pytest.mark.parametrize(
+    ("subject", "key", "ok"),
+    [
+        ("WALKTHROUGH", "wt-cm06-approver", True),
+        ("WALKTHROUGH", "change-tool", False),
+        ("VALUE", "change-tool", True),
+        ("VALUE", "wt-cm06-approver", True),
+        ("VALUE", "Change_Tool", False),
+        ("VALUE", "x" * 42, False),
+        ("WALKTHROUGH", "wt-x", False),
+    ],
+)
+def test_a_not_known_key_the_table_refuses_is_refused_by_the_api(
+    subject: str, key: str, ok: bool
+) -> None:
+    # New problem: "AnswerNotKnownBody.key accepts 2-64 characters of any kind, but the
+    # table's CHECK requires ... A key that passes the API and fails the CHECK raises a
+    # CheckViolation". The body now checks the table's own patterns (422 by FastAPI).
+    from pydantic import ValidationError
+
+    if ok:
+        assert review.AnswerNotKnownBody(subject=subject, key=key).key == key  # type: ignore[arg-type]
+    else:
+        with pytest.raises(ValidationError):
+            review.AnswerNotKnownBody(subject=subject, key=key)  # type: ignore[arg-type]
+    sql = MIGRATION.read_text(encoding="utf-8")
+    assert "subject_key ~ '^wt-[a-z0-9-]{2,60}$'" in sql
+    assert "subject_key ~ '^[a-z][a-z0-9-]{1,40}$'" in sql
+    assert review.NOT_KNOWN_KEYS["WALKTHROUGH"].pattern == r"^wt-[a-z0-9-]{2,60}$"
+    assert review.NOT_KNOWN_KEYS["VALUE"].pattern == r"^[a-z][a-z0-9-]{1,40}$"
+
+
+def test_a_question_left_not_known_reads_not_known_until_it_is_answered() -> None:
+    # Contract mismatch: "The web expects needs with status NOT_KNOWN and not_known_note in
+    # GET {control}/understanding/review; understanding_chat ... never emits them."
+    from ai_workforce_api.understanding_chat import NeedBody, with_not_known
+
+    def need(key: str, kind: str, status: str) -> NeedBody:
+        return NeedBody(key=key, kind=kind, label=key, question=f"{key}?", value="",  # type: ignore[arg-type]
+                        options=[], why="", status=status, source="NONE",  # type: ignore[arg-type]
+                        needed_for=["EVIDENCE"])  # fmt: skip
+
+    needs = [
+        need("wt-cm06-approver", "WALKTHROUGH", "MISSING"),
+        need("change-tool", "ANSWER", "PROPOSED"),
+        need("auth-settings", "AUTH", "MISSING"),
+        need("wt-cm06-tester", "WALKTHROUGH", "CONFIRMED"),
+        need("change-tool-2", "ANSWER", "MISSING"),
+    ]
+    left = {
+        ("WALKTHROUGH", "wt-cm06-approver"): "Asked the CAB chair.",
+        ("VALUE", "change-tool"): "",
+        ("VALUE", "auth-settings"): "",
+        # Answered since: a person's answer stands, so it is not read as not known.
+        ("WALKTHROUGH", "wt-cm06-tester"): "",
+        # A walkthrough record never closes a value of the same key, nor the reverse.
+        ("WALKTHROUGH", "change-tool-2"): "",
+    }
+    shown = {item.key: item for item in with_not_known(needs, left)}
+    assert shown["wt-cm06-approver"].status == "NOT_KNOWN"
+    assert shown["wt-cm06-approver"].not_known_note == "Asked the CAB chair."
+    assert shown["change-tool"].status == "NOT_KNOWN"
+    assert shown["auth-settings"].status == "NOT_KNOWN"
+    assert shown["wt-cm06-tester"].status == "CONFIRMED"
+    assert shown["change-tool-2"].status == "MISSING"
+    import inspect
+
+    from ai_workforce_api import understanding_chat
+
+    source = inspect.getsource(understanding_chat.understanding_review)
+    assert "with_not_known(needs, not_known_keys(connection, control_id))" in source
+    assert 'need.status not in ("CONFIRMED", "NOT_KNOWN")' in source
+
+
+def test_a_not_known_is_superseded_once_answered_and_is_never_read_again() -> None:
+    # New problem: "understanding_not_known rows and their NOT_KNOWN assumptions are never
+    # superseded when an answer or value is given later."
+    import inspect
+
+    from ai_workforce_api import control_design, walkthrough_answers
+
+    source = inspect.getsource(review.supersede_not_known)
+    assert "SET superseded_at = clock_timestamp()" in source
+    assert "SET status = 'SUPERSEDED', decided_by = NULL" in source
+    assert "status IN ('OPEN', 'ACCEPTED_WITH_ATTRIBUTE')" in source
+    for reader in (review.not_known_keys, review.not_known_items):
+        assert "superseded_at IS NULL" in inspect.getsource(reader)
+    assert (
+        'supersede_not_known(\n            cursor, control_id, "WALKTHROUGH"'
+        in inspect.getsource(walkthrough_answers.save)
+    )
+    assert 'supersede_not_known(cursor, target, "VALUE"' in inspect.getsource(
+        control_design.set_values
+    )
+    sql = MIGRATION.read_text(encoding="utf-8")
+    table = sql[sql.index("CREATE TABLE understanding_not_known") :]
+    assert "superseded_at timestamptz," in table
+    assert "WHERE superseded_at IS NULL;" in table
+    assert "IF OLD.superseded_at IS NOT NULL OR NEW.superseded_at IS NULL" in table
+    assert "(NEW.status = 'SUPERSEDED' AND OLD.kind = 'NOT_KNOWN')" in sql
+    assert "OR (status = 'SUPERSEDED' AND kind = 'NOT_KNOWN'))" in sql
+
+
+def test_a_read_due_that_nothing_could_start_ends_failed_and_proceed_takes_it() -> None:
+    # Decided for the fix round: "pass_state reports FAILED (with a sentence) when a read is
+    # due and nothing is queued after the follow attempt, and proceed accepts that state".
+    import inspect
+
+    due = Standing()
+    assert due_round(due) == 1 and review.due_unqueued(due)
+    assert review.pass_state(due) == "CHECKING"
+    # Once follow_or_fail records it (a read queued and ended FAILED at once).
+    after = Standing(latest="FAILED")
+    assert review.pass_state(after) == "FAILED" and due_round(after) is None
+    assert not review.due_unqueued(after)
+    source = inspect.getsource(review.fail_if_unqueued)
+    assert "queue(cursor, project_id, control_id, round_" in source
+    assert "end_pending(cursor, control_id, NOT_STARTED_SENTENCE)" in source
+    assert review.NOT_STARTED_SENTENCE.endswith(".")
+    assert 'if not (state.latest == "FAILED" or state.stale):' in inspect.getsource(review.proceed)
+    assert "fail_if_unqueued(connection, project_id, control_id)" in inspect.getsource(
+        review.follow
+    )
+    assert "NO_PLAN" in inspect.getsource(review.request_run)
+
+
+def test_the_limited_update_counts_only_an_attribute_answer_that_was_used() -> None:
+    # New problem: "informed_update counts any SUCCEEDED attribute-agent model call after
+    # completion as 'the whole set followed', even when its answer was REJECTED or NOT_USED".
+    import inspect
+
+    source = inspect.getsource(review.informed_update)
+    assert "JOIN model_call_outcomes o ON o.model_call_id = m.id" in source
+    assert "o.outcome ->> 'validation' = 'ACCEPTED'" in source
+
+
+def test_a_question_refused_at_insert_is_assumed_never_dropped() -> None:
+    # Finding 10 (loop): "Items refused at insert still get dropped in the main case".
+    import inspect
+
+    from ai_workforce_api.attribute_assumptions import record
+
+    source = inspect.getsource(review._apply)
+    assert "refused.append(replace(item, still_open=True))" in source
+    item = Asked("A1", "PERFORMER", "Who applies patches", "Who applies patches?", "b",
+                 "The team applies them.", ("The team applies them.", "A vendor"))  # fmt: skip
+    draft = review._assumption_of(replace_item(item))
+    assert draft is not None and draft.after_asked
+    assert "not draft.after_asked" in inspect.getsource(record)
+
+
+def replace_item(item: Asked) -> Asked:
+    from dataclasses import replace
+
+    return replace(item, still_open=True)
+
+
+def test_an_open_conflict_holds_the_set_from_being_accepted() -> None:
+    # Decided for the fix round: "attributes_accepted ... is false while any OPEN CONFLICT
+    # stands; decide(REJECT) cannot leave the set accepted over an open conflict".
+    from ai_workforce_api.control_context import _ACCEPTED_SQL
+
+    assert "s.status = 'OPEN'" in _ACCEPTED_SQL and "s.kind = 'CONFLICT'" in _ACCEPTED_SQL
+    backfill = MIGRATION.read_text(encoding="utf-8")
+    backfill = backfill[backfill.index("-- 6. Controls already past this stage are complete") :]
+    assert "s.kind = 'CONFLICT'" in backfill
+
+
+def test_a_conflict_keeps_the_codes_its_finding_names() -> None:
+    # New problem: "Every agent conflict is now recorded without attribute codes (from_issue
+    # codes=()), so each one holds the whole set."
+    import inspect
+
+    from ai_workforce_api import control_attributes
+    from ai_workforce_api.attribute_assumptions import from_issue
+    from ai_workforce_api.control_context import AnswerIssue, Issue
+
+    found = AnswerIssue.model_validate(
+        {"kind": "CONFLICT", "topic": "Patch approver", "detail": "The two disagree.",
+         "attribute_codes": ["A2", "A2", "bad", "A10", 3]}
+    )  # fmt: skip
+    assert found.attribute_codes == ["A2", "A10"]
+    assert AnswerIssue(kind="MISSING", topic="x", detail="y").attribute_codes == []
+    issue = Issue(origin="ATTRIBUTES", kind="CONFLICT", topic="Patch approver",
+                  detail="The two disagree.", why="", resolve="")  # fmt: skip
+    draft = from_issue(issue, ("A2",))
+    assert draft is not None and draft.kind == "CONFLICT" and draft.codes == ("A2",)
+    source = inspect.getsource(control_attributes)
+    assert "from_issue(issue, codes)" in source and "_issues_with_codes(raisable" in source
+    items = control_attributes.ATTRIBUTES_SCHEMA["properties"]["issues"]["items"]
+    assert "attribute_codes" in items["properties"]
+    assert "attribute_codes" not in items["required"]
+    assert control_attributes.PROMPT_VERSION == "attributes/8"
+
+
+def test_a_conflict_point_is_settled_by_deciding_it_never_by_a_consideration() -> None:
+    # New problem: "An open CONFLICT on the D&I workpaper can be cleared by 'Considered' with
+    # a reason without being decided".
+    conflict = AssumedRecord(id=uuid4(), assumed="The policy and the walkthrough differ.",
+                             status="OPEN", kind="CONFLICT")  # fmt: skip
+    other = AssumedRecord(id=uuid4(), assumed="The ticket records the approval.",
+                          codes=("A2",), status="ACCEPTED_WITH_ATTRIBUTE")  # fmt: skip
+    first, second = assumption_points([conflict, other], ATTRIBUTES)
+    assert first.settle == ["ASSUMPTION"]
+    assert second.settle == ["ASSUMPTION", "CONSIDER"]
+    standing = {
+        first.key: ConsideredBody(
+            id=uuid4(), by=PersonBody(id=uuid4(), name="A"), at=datetime.now(UTC),
+            reason="Considered for the test reason.",
+        ),
+    }  # fmt: skip
+    kept = with_considerations([first], standing)
+    assert kept[0].considered is None and unsettled(kept) == kept
+    import inspect
+
+    from ai_workforce_api import design_points
+
+    assert 'if "CONSIDER" not in point.settle:' in inspect.getsource(design_points.consider)
+
+
+def test_changing_an_assumption_ends_the_criteria_acceptance_with_no_proposal() -> None:
+    # Decided for the fix round: "the person's own change ends that attribute's criteria
+    # acceptance ..., then the limited update re-tailors it; no no-op CHANGE proposal".
+    # Old: reopen_accepted inserted a PROPOSED CHANGE in the same wording (REOPENED_NOTE).
+    import inspect
+
+    from ai_workforce_api import attribute_assumptions
+
+    assert attribute_assumptions.reopened_cause("Patch approver") == "Reopened: Patch approver"
+    source = inspect.getsource(attribute_assumptions.reopen_accepted)
+    assert "SET criteria_accepted_by = NULL, criteria_accepted_at = NULL" in source
+    assert "INSERT INTO control_attributes" not in source
+    assert "writing(cursor, cause=reopened_cause(matter))" in source
+    assert not hasattr(attribute_assumptions, "REOPENED_NOTE")
+    sql = MIGRATION.read_text(encoding="utf-8")
+    trigger = sql[sql.index("-- 3b. An accepted attribute's criteria are kept") :]
+    trigger = trigger[: trigger.index("-- 4. ")]
+    assert (
+        "OR (OLD.criteria_accepted_at IS NOT NULL AND NEW.criteria_accepted_at IS NULL\n" in trigger
+    )
+    assert "OLD.criteria_accepted_by, OLD.criteria_accepted_at" in trigger
+    assert "IF NOT rewritten THEN" in trigger
+
+
+def test_the_process_map_agent_never_asks_its_gaps_are_assumptions() -> None:
+    # New problem: "POST {control}/review still runs _build, which raises unkeyed PROCESS
+    # questions before completion".
+    import inspect
+
+    from ai_workforce_api import process_understanding
+
+    source = inspect.getsource(process_understanding.build)
+    branch = source[source.index('elif built == "AGENT":') :][:1400]
+    assert "attribute_assumptions.record(" in branch
+    assert "from_issue(item) for item in found" in branch and "found = []" in branch
+
+
+def test_the_attribute_body_says_its_code_and_the_set_hold_is_on_the_attributes() -> None:
+    # Contract mismatch: "AttributeBody.code ... the server's AttributeBody has no `code`".
+    from ai_workforce_api.control_attributes import AttributeBody, AttributesBody
+
+    assert "code" in AttributeBody.model_fields
+    assert "set_held_by_conflict" in AttributesBody.model_fields
+    assert review.SET_HELD_BY_CONFLICT == (
+        "A conflict on the attributes as a set is to be decided first."
+    )
+
+
+def test_the_gates_read_only_a_standing_not_known_as_closed() -> None:
+    # A superseded not-known never closes a question again (one answered and later not
+    # standing is asked again).
+    import inspect
+
+    from ai_workforce_api import control_design, walkthrough_answers
+
+    assert "subject = 'VALUE' AND superseded_at IS NULL" in inspect.getsource(
+        control_design.unanswered_values
+    )
+    assert "subject = 'WALKTHROUGH' AND superseded_at IS NULL" in inspect.getsource(
+        walkthrough_answers.unanswered_required
+    )

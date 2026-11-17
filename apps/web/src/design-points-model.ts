@@ -127,21 +127,23 @@ function placeOf(value: unknown): PointPlace {
   };
 }
 
-/** The actions, each known one once, in the server's order, and CONSIDER always last
- * (it is always offered). */
+/** The actions, each known one once, in the server's order, and CONSIDER last where the
+ * server offers it. An open conflict is settled only by deciding it, so its point has no
+ * CONSIDER (after the review of B1k, 16 November 2026: before, CONSIDER was always added, and
+ * a consideration left the conflict open, still holding the attributes). A body with no
+ * known action at all reads as CONSIDER alone, as before. */
 function settleOf(value: unknown): SettleAction[] {
   const found: SettleAction[] = [];
+  let consider = false;
   for (const item of Array.isArray(value) ? value : []) {
     const action = SETTLE_ACTIONS.find((known) => known === item);
-    if (
-      action !== undefined &&
-      action !== "CONSIDER" &&
-      !found.includes(action)
-    ) {
+    if (action === "CONSIDER") {
+      consider = true;
+    } else if (action !== undefined && !found.includes(action)) {
       found.push(action);
     }
   }
-  return [...found, "CONSIDER"];
+  return consider || found.length === 0 ? [...found, "CONSIDER"] : found;
 }
 
 /** A standing consideration, or null. One that is not whole (no id, no person, no

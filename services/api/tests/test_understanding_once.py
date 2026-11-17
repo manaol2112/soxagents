@@ -19,7 +19,7 @@ from uuid import UUID
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
-from support import Database
+from support import Database, run_plan_through
 from test_attributes_follow_understanding import (
     _GRANT_RECORD,
     ADDED,
@@ -53,7 +53,7 @@ from ai_workforce_api.control_context import (
     raise_issues,
 )
 from ai_workforce_api.db import connect
-from ai_workforce_api.evidence_plans import ATTRIBUTES_UPDATING, _write_criteria, run_plan
+from ai_workforce_api.evidence_plans import ATTRIBUTES_UPDATING, _write_criteria
 from ai_workforce_api.models import ModelConfig, ModelRaw, ModelRequest
 from ai_workforce_api.pbc_drafting import load_context
 from ai_workforce_api.phase_release import attribute_waits, understanding_waits
@@ -228,7 +228,7 @@ def test_the_question_pass_asks_in_one_go_and_the_understanding_then_stays_compl
     agents.issues = [_GRANT_RECORD]
     agents.specialist = lambda given: _asking(given, _GRANT_RECORD["topic"])
     with connect(migrated.url) as connection:
-        assert run_plan(connection, agents, plan_id) == "DONE"
+        assert run_plan_through(connection, agents, plan_id) == "DONE"
     assert [who for who in agents.calls if who != "other"] == []
     assert len(agents.specialist_given) == 1
     assert all(row[2] is None for row in _approved(migrated, control)), "no criteria tailored"
@@ -274,7 +274,7 @@ def test_the_question_pass_asks_in_one_go_and_the_understanding_then_stays_compl
          "attribute_codes": [a1[1]]},
     ]  # fmt: skip
     with connect(migrated.url) as connection:
-        assert run_plan(connection, followed, plan_id) == "DONE"
+        assert run_plan_through(connection, followed, plan_id) == "DONE"
     # The follow-up read (round 2) finds everything established: the understanding is
     # completed, once, in the run, and the attributes follow it in the same run.
     [second] = followed.specialist_given
@@ -481,7 +481,7 @@ def test_thats_right_and_change_and_the_one_update_limited_to_the_named_attribut
         "findings": [],
     }  # fmt: skip
     with connect(migrated.url) as connection:
-        assert run_plan(connection, agents, plan_id) == "DONE"
+        assert run_plan_through(connection, agents, plan_id) == "DONE"
     told = _package_of(_attribute_prompts(agents)[0])
     assert told["only_attributes"] == [a1] and told["understanding_completed"] is True
     # Nothing for another attribute: no proposal, and its criteria as they were.

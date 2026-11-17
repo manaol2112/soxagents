@@ -37,6 +37,7 @@ from fastapi.testclient import TestClient
 from support import (
     Database,
     accept_design_requests,
+    run_plan_through,
     tailor_criteria,
     understand_and_settle_attributes,
 )
@@ -712,7 +713,7 @@ def test_the_background_planner_and_the_attribute_repair_respect_an_accepted_req
     plan_id = _run_status(migrated, control, "PENDING")
     with connect(migrated.url) as worker:
         output = _replanned(worker, project, UUID(control))
-        assert run_plan(worker, _Planner(output), plan_id) == "DONE"
+        assert run_plan_through(worker, _Planner(output), plan_id) == "DONE"
     held = next(i for i in _requests(team, control) if i["id"] == instance["id"])
     # The instance is not relinked under the person: the new attribute is in its pending
     # change, and stays uncovered until they accept it.
@@ -1176,7 +1177,7 @@ def test_a_run_that_changed_or_added_anything_releases_nothing(migrated: Databas
             depends_on=None,
         )
         design["requirements"].append(extra)
-        assert run_plan(worker, _Planner(output), plan_id) == "DONE"
+        assert run_plan_through(worker, _Planner(output), plan_id) == "DONE"
     assert _releases(migrated, control) == []
     assert _audit(migrated, "phase.released", control) == []
     waiting = [item for item in _requests(team, control) if item["to_accept"]]

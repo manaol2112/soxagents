@@ -25,6 +25,7 @@ import {
   type Attribute,
   attributeLetter,
   contextProblem,
+  type NotReviewedItem,
   type QuestionPass,
   type QuestionReview,
   type ReviewNotRun,
@@ -182,29 +183,28 @@ export function lastReady(
   return review?.status === "READY" ? review : held;
 }
 
-/** Whether the page asks the server to queue a review that is due (B1l point 1, no dead end):
- * the course reads as "Checking…" before completion with no read live (the pass is not
- * CHECKING and no read is PENDING). The request is explicit and idempotent, never a write in
- * the page's GET. */
-export function ensuresReview(
-  end: string,
-  pass: QuestionPass | null,
-  review: QuestionReview | null | undefined,
+/** Whether the page asks the server to follow up a review that is due (B1l point 1, no dead
+ * end): the server says so (ContextBody.review_due: a read is due by the rules and none is
+ * queued or at work, no agent run at work on the control), for someone who may act. The
+ * request (POST .../understanding/review/follow) is explicit and idempotent, never a write in
+ * the page's GET; the server queues the read, or ends it as one that could not run, so the
+ * page then offers Run again and Proceed without it. Rewritten after the second review of
+ * B1k: before, the page worked out its own condition, which also posted while a run was
+ * queued. */
+export function followsReview(
+  due: boolean | undefined,
+  completedAt: string | null,
   canAct: boolean,
 ): boolean {
-  return (
-    canAct &&
-    end === "checking" &&
-    pass !== "CHECKING" &&
-    review?.status !== "PENDING"
-  );
+  return canAct && completedAt === null && due === true;
 }
 
-/** How often, at most, the page asks again while it still reads as checking with nothing
- * live: once on arriving, then every 30 seconds. */
-export const ENSURE_EVERY_MS = 30000;
-/** Said when the server did not take that request: the review can still be asked for. */
-export const ENSURE_REFUSED = "The review has not started yet.";
+/** How often, at most, the page asks again while the server still says a read is due: once
+ * on arriving, then every 30 seconds. */
+export const FOLLOW_EVERY_MS = 30000;
+/** Said when the server did not take that request: the review can still be asked for, with
+ * "Run the review" (POST .../understanding/review/run). */
+export const FOLLOW_REFUSED = "The review has not started yet.";
 
 /** The narrative in parts, the marked matters marked: each marked part once, at its first
  * place in the text that does not overlap an earlier mark. Nothing is marked that the
@@ -286,8 +286,15 @@ function listed(items: readonly string[]): string {
 export function notReviewedLine(
   codes: readonly string[],
   approved: ReadonlyArray<Pick<Attribute, "id" | "code" | "definition">> = [],
+  items: ReadonlyArray<NotReviewedItem> = [],
 ): string | null {
-  const named = codes.map((code) => code.trim()).filter((code) => code !== "");
+  // The server's own naming first (ReviewBody.not_reviewed_items): an approved attribute by
+  // its id, so its letter is placed whatever its code; the unit key otherwise.
+  const byKey = new Map(items.map((item) => [item.key, item]));
+  const named = codes
+    .map((code) => code.trim())
+    .filter((code) => code !== "")
+    .map((code) => byKey.get(code)?.attributeId ?? code);
   if (named.length === 0) {
     return null;
   }
@@ -398,7 +405,7 @@ export type NotKnownTarget =
   | { kind: "value"; key: string };
 
 /** The kinds of course question a person may leave as not known yet. */
-const NOT_KNOWN_KINDS = ["QUESTION", "ANSWER", "WALKTHROUGH"] as const;
+const NOT_KNOWN_KINDS = ["QUESTION", "ANSWER", "AUTH", "WALKTHROUGH"] as const;
 
 /** What "Not known yet, proceed" on a course step closes, or null where it is not offered:
  * an OPEN question of the agents or the review; a statement value or a walkthrough question
@@ -419,7 +426,9 @@ export function notKnownTarget(
   if (need.status === "CONFIRMED") {
     return null;
   }
-  return need.kind === "ANSWER"
+  // The sign-in settings (AUTH) are one value of the statement, composed setting by
+  // setting: left as not known as that value.
+  return need.kind === "ANSWER" || need.kind === "AUTH"
     ? { kind: "value", key: need.key }
     : need.kind === "WALKTHROUGH"
       ? { kind: "walkthrough", key: need.key }
@@ -453,8 +462,9 @@ export function notKnownKeys(
 }
 
 /** A course's review without the questions left as not known: never an answer, so never on
- * record, never asked again in this visit. A question, a statement value or a walkthrough
- * question (B1l point 1); never a document, the process or the sign-in settings. */
+ * record, never asked again in this visit. A question, a statement value (the sign-in
+ * settings among them) or a walkthrough question (B1l point 1); never a document or the
+ * process. */
 export function withoutNotKnown<
   R extends { needs: ReadonlyArray<{ key: string; kind: string }> },
 >(review: R, keys: ReadonlySet<string>): R {
@@ -615,6 +625,8 @@ export function acceptAllNote(words: {
 
 /** A person's request of the review: run it (again), or proceed without a failed one. */
 export type ReviewIntent = "review-run" | "review-proceed";
+/** The page's own follow-up of a read due by the rules (followsReview). */
+export type FollowIntent = "review-follow";
 
 /** The write that leaves a target as not known yet, and its fields. */
 export function notKnownWrite(

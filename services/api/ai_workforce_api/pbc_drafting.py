@@ -1354,13 +1354,17 @@ class LocalDraftScheduler:
             self._pool.submit(self._attempt_plan, plan_id)
 
     def _attempt_plan(self, plan_id: UUID) -> None:
-        from ai_workforce_api.evidence_plans import PLAN_RUN_ATTEMPTS, fail_plan_run
+        from ai_workforce_api.evidence_plans import PLAN_RUN_ATTEMPTS, REQUEUED, fail_plan_run
 
         for _ in range(PLAN_RUN_ATTEMPTS):
             try:
-                self._plan(plan_id)
+                result = self._plan(plan_id)
                 self._draft_released(plan_id)
                 self._assess_planned(plan_id)
+                if result == REQUEUED:
+                    # The run's end queued what fell due while it worked: a new job, never
+                    # run inside this one (evidence_plans.run_plan).
+                    self.schedule_plan_runs([plan_id])
                 return
             except Exception:
                 logger.warning("planning a control's evidence failed; retrying")
@@ -1380,9 +1384,10 @@ class LocalDraftScheduler:
 
     def _follow_plan(self, plan_id: UUID) -> None:
         """A plan run that failed may have been busy when the specialist's read fell due (a
-        save it could not be queued over): it is queued now, over the failed run, and taken
-        here, so a due review is never left unqueued (after the review of B1k, 16 November
-        2026; understanding_once.after_agents). A run that ends normally does this itself
+        save it could not be queued over): it is queued now, over the failed run, keeping its
+        attempts, and taken here; one nothing could queue ends FAILED, so a due review is
+        never left unqueued (after the review of B1k, 16 November 2026;
+        understanding_once.after_agents). A run that ends normally does this itself
         (evidence_plans.run_plan). Only with a model, as context_routes.changed queues it."""
         if not live_model(self._settings):
             return
@@ -1397,7 +1402,9 @@ class LocalDraftScheduler:
                 planned = (
                     None
                     if found is None
-                    else after_agents(connection, UUID(str(found[0])), UUID(str(found[1])))
+                    else after_agents(
+                        connection, UUID(str(found[0])), UUID(str(found[1])), requeue=True
+                    )
                 )
         except psycopg.Error:
             logger.warning("the understanding of a failed plan run's control could not be followed")

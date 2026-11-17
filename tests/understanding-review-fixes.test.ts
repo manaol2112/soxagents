@@ -19,6 +19,7 @@ import {
 import {
   attributeAnchor,
   attributeFromHash,
+  pointsOf,
   settleHref,
 } from "../apps/web/src/design-points-model.ts";
 import { parseReview } from "../apps/web/src/understanding-chat-model.ts";
@@ -28,16 +29,18 @@ import {
   decidableAssumptions,
   decidedLine,
   settledAssumptions,
+  updatedFromLine,
 } from "../apps/web/src/understanding-once-model.ts";
 import {
   acceptAllNote,
   acceptAllWords,
-  ENSURE_EVERY_MS,
-  ensuresReview,
+  FOLLOW_EVERY_MS,
+  followsReview,
   lastReady,
   notKnownKeys,
   notKnownTarget,
   notKnownWrite,
+  notReviewedLine,
   notYetAccepted,
   offersReviewAgain,
   REVIEW_AGAIN,
@@ -209,24 +212,35 @@ describe("without a model, one quiet line says the review was not run", () => {
 });
 
 describe("a due review is never left unqueued by the page", () => {
-  it("asks the server, explicitly, only while the course checks with no read live", () => {
-    assert.equal(ensuresReview("checking", "WAITING", null, true), true);
-    assert.equal(ensuresReview("checking", "DONE", READY, true), true);
-    assert.equal(ensuresReview("checking", "CHECKING", null, true), false);
-    assert.equal(ensuresReview("checking", "WAITING", PENDING, true), false);
-    assert.equal(ensuresReview("complete", "DONE", null, true), false);
-    assert.equal(ensuresReview("checking", "WAITING", null, false), false);
-    assert.equal(ENSURE_EVERY_MS, 30000);
+  // Rewritten in the second fix round of B1k (16 November 2026). Old: ensuresReview(end,
+  // pass, review, canAct) worked out the page's own condition ("checking" with no read
+  // PENDING), which also posted while a plan run was queued, and the write went to
+  // .../understanding/review/ensure, which the API never had (every call a 404). New: the page
+  // follows the API's own review_due, and posts to the route the API implements,
+  // .../understanding/review/follow (pinned on both sides by control-understanding.json).
+  it("asks the server, explicitly, only while the server says a read is due", () => {
+    assert.equal(followsReview(true, null, true), true);
+    assert.equal(followsReview(false, null, true), false);
+    assert.equal(followsReview(undefined, null, true), false);
+    assert.equal(followsReview(true, DONE_AT, true), false);
+    assert.equal(followsReview(true, null, false), false);
+    assert.equal(FOLLOW_EVERY_MS, 30000);
+    assert.equal(
+      parseContext({ control_id: CONTROL, review_due: true })?.reviewDue,
+      true,
+    );
+    assert.equal(parseContext({ control_id: CONTROL })?.reviewDue, false);
   });
 
   it("is a POST to its own idempotent route, never a write in a GET", () => {
-    const write = contextWrite({ ...IDS, intent: "review-ensure" });
+    const write = contextWrite({ ...IDS, intent: "review-follow" });
     assert.ok(!("error" in write));
     assert.equal(!("error" in write) && write.method, "POST");
     assert.equal(
       !("error" in write) && write.path,
-      `${BASE}/understanding/review/ensure`,
+      `${BASE}/understanding/review/follow`,
     );
+    assert.ok("error" in contextWrite({ ...IDS, intent: "review-ensure" }));
     const route = readFileSync(
       new URL(
         "../apps/web/app/workspace/control-context/route.ts",
@@ -321,11 +335,16 @@ describe("Not known yet on walkthrough questions and statement values", () => {
     assert.equal(wt.intent, "walkthrough-not-known");
     const sent = contextWrite({ ...IDS, intent: wt.intent, ...wt.fields });
     assert.ok(!("error" in sent));
+    // Rewritten in the second fix round of B1k. Old: POST .../walkthrough-answers/{key}/
+    // not-known and .../values/{key}/not-known with {note}, routes the API never had. New:
+    // the API's one route, POST .../understanding/not-known with {subject, key, note}.
     assert.equal(
       !("error" in sent) && sent.path,
-      `${BASE}/walkthrough-answers/wt-ac07-removal-record/not-known`,
+      `${BASE}/understanding/not-known`,
     );
     assert.deepEqual(!("error" in sent) && sent.body, {
+      subject: "WALKTHROUGH",
+      key: "wt-ac07-removal-record",
       note: "Asked of the access team.",
     });
     const value = notKnownWrite({ kind: "value", key: "change-tool" }, "");
@@ -336,8 +355,13 @@ describe("Not known yet on walkthrough questions and statement values", () => {
     });
     assert.equal(
       !("error" in sentValue) && sentValue.path,
-      `${BASE}/values/change-tool/not-known`,
+      `${BASE}/understanding/not-known`,
     );
+    assert.deepEqual(!("error" in sentValue) && sentValue.body, {
+      subject: "VALUE",
+      key: "change-tool",
+      note: "",
+    });
     // The issue's write is as before, at the version read.
     assert.deepEqual(
       notKnownWrite({ kind: "issue", id: issue.id, version: 3 }, "n"),
@@ -453,7 +477,12 @@ describe("an assumption accepted with its attribute is confirmed or changed ther
       ACCEPTED_UNCONFIRMED,
       "Accepted with the attribute, not confirmed:",
     );
-    assert.match(CHANGE_REOPENS, /re-opens them for acceptance/);
+    // Rewritten in the second fix round of B1k (decided for it: the person's change ends the
+    // criteria's acceptance, and the limited update re-tailors them). Old: /re-opens them for
+    // acceptance/, by a proposed change the update could not re-tailor. New: the acceptance
+    // ends, and the agents re-tailor them for the person to accept again.
+    assert.match(CHANGE_REOPENS, /ends their acceptance/);
+    assert.match(CHANGE_REOPENS, /re-tailor them from your words/);
     const source = readFileSync(
       new URL("../apps/web/src/attribute-assumptions.tsx", import.meta.url),
       "utf8",
@@ -486,8 +515,12 @@ describe("an assumption accepted with its attribute is confirmed or changed ther
   });
 });
 
-describe("The confirmed understanding stands names the fact it upholds, never the agent's text", () => {
-  it("reads upholds on a decided conflict only, and words the decision with it", () => {
+describe("The confirmed understanding stands names no fact the person did not choose", () => {
+  // Rewritten in the second fix round of B1k (decided for it: the record names only the
+  // decision). Old: the page read AssumptionBody.upholds, a string the API never sent, and
+  // worded "the confirmed understanding stands (The IT manager approves each patch)." New:
+  // no upholds is read, and the line is the decision alone.
+  it("words the decision alone, never the agent's account of the conflict", () => {
     const decided = parseAssumption(
       assumption({
         kind: "CONFLICT",
@@ -500,17 +533,17 @@ describe("The confirmed understanding stands names the fact it upholds, never th
       }),
     );
     assert.ok(decided !== null);
-    assert.equal(decided.upholds, "The IT manager approves each patch.");
+    assert.ok(!("upholds" in decided));
     const line = decidedLine(decided, "UTC") ?? "";
     assert.equal(
       line,
-      "Decided by Dana Lee, Nov 16: the confirmed understanding stands (The IT manager approves each patch).",
+      "Decided by Dana Lee, Nov 16: the confirmed understanding stands.",
     );
-    assert.doesNotMatch(line, /CAB/);
+    assert.doesNotMatch(line, /CAB|IT manager/);
     const plain = parseAssumption(
       assumption({ upholds: "anything", status: "OPEN" }),
     );
-    assert.equal(plain?.upholds, "");
+    assert.ok(plain !== null && !("upholds" in plain));
   });
 });
 
@@ -615,12 +648,20 @@ describe("a conflict that names no attribute holds the whole set, and says so", 
   });
 
   it("is read from the server's flag too, and a decided conflict holds nothing", () => {
+    // Rewritten in the second fix round of B1k. Old: the flag was read at the top of the
+    // context (set_held_by_conflict), where the API never sends it. New: it is read where
+    // the API sends it, on the attributes (AttributesBody.set_held_by_conflict).
     const flagged = parseContext({
+      control_id: CONTROL,
+      attributes: { approved: [toAccept(ATTR_A)], set_held_by_conflict: true },
+    });
+    assert.equal(flagged?.approved[0]?.heldBySet, true);
+    const topLevel = parseContext({
       control_id: CONTROL,
       set_held_by_conflict: true,
       attributes: { approved: [toAccept(ATTR_A)] },
     });
-    assert.equal(flagged?.approved[0]?.heldBySet, true);
+    assert.equal(topLevel?.approved[0]?.heldBySet, undefined);
     const decided = parseContext({
       control_id: CONTROL,
       set_assumptions: [
@@ -636,5 +677,103 @@ describe("a conflict that names no attribute holds the whole set, and says so", 
     });
     assert.equal(decided?.setHeldByConflict, false);
     assert.equal(decided?.approved[0]?.heldByConflict, false);
+  });
+});
+
+describe("The second fix round of B1k, the web's part", () => {
+  it("names a not-reviewed attribute by the API's own item, its id", () => {
+    const approved = [
+      { id: ATTR_A, code: "", definition: null },
+      { id: ATTR_B, code: "", definition: null },
+    ];
+    // Old: mapped only by an AttributeBody.code the API did not send, so "A2" was unplaced.
+    assert.equal(
+      notReviewedLine(["A2"], approved),
+      "One attribute was not reviewed; the agent states its assumptions on it.",
+    );
+    assert.equal(
+      notReviewedLine(["A2"], approved, [
+        {
+          key: "A2",
+          kind: "ATTRIBUTE",
+          attributeId: ATTR_B,
+          code: "A2",
+          text: "Tested.",
+        },
+      ]),
+      "Attribute B was not reviewed; the agent states its assumptions on it.",
+    );
+  });
+
+  it("offers Not known yet on the sign-in settings, as their value", () => {
+    assert.deepEqual(
+      notKnownTarget(
+        { key: "auth-settings", kind: "AUTH", status: "MISSING" },
+        undefined,
+        true,
+      ),
+      { kind: "value", key: "auth-settings" },
+    );
+    const page = readFileSync(
+      new URL("../apps/web/src/understanding-review.tsx", import.meta.url),
+      "utf8",
+    );
+    const auth = page.slice(page.indexOf('if (need.kind === "AUTH") {'));
+    assert.match(auth.slice(0, 2400), /<NotKnownPanel/);
+  });
+
+  it("falls back to review/run when the follow-up is refused", () => {
+    const page = readFileSync(
+      new URL("../apps/web/src/understanding-review.tsx", import.meta.url),
+      "utf8",
+    );
+    const fallback = page.slice(page.indexOf("{FOLLOW_REFUSED}"));
+    assert.match(fallback.slice(0, 400), /onClick=\{\(\) => void runNow\(\)\}/);
+    assert.match(page, /const taken = await runReview\(ids\);/);
+    const write = contextWrite({ ...IDS, intent: "review-run" });
+    assert.equal(
+      !("error" in write) && write.path,
+      `${BASE}/understanding/review/run`,
+    );
+  });
+
+  it("says a reopened acceptance as the person's change, never as their answer", () => {
+    assert.equal(
+      updatedFromLine("Reopened: Patch approver"),
+      "Reopened for acceptance: you changed the assumption on Patch approver",
+    );
+    assert.equal(
+      updatedFromLine("Patch approver"),
+      "Updated from your answer on Patch approver",
+    );
+  });
+
+  it("offers no Considered on a conflict point: only deciding it settles it", () => {
+    const [conflict, other] = pointsOf(
+      [
+        {
+          key: "a".repeat(32),
+          kind: "ASSUMPTION",
+          text: "A conflict is not decided: the two disagree.",
+          place: { at: "ATTRIBUTE", attribute_id: ATTR_A },
+          settle: ["ASSUMPTION"],
+        },
+        {
+          key: "b".repeat(32),
+          kind: "ASSUMPTION",
+          text: "The agent assumed: the ticket records it.",
+          place: { at: "ATTRIBUTE", attribute_id: ATTR_A },
+          settle: ["ASSUMPTION", "CONSIDER"],
+        },
+      ],
+      new Set(),
+    );
+    assert.deepEqual(conflict?.settle, ["ASSUMPTION"]);
+    assert.deepEqual(other?.settle, ["ASSUMPTION", "CONSIDER"]);
+    const view = readFileSync(
+      new URL("../apps/web/src/design-points.tsx", import.meta.url),
+      "utf8",
+    );
+    assert.match(view, /point\.settle\.includes\("CONSIDER"\) \? \(/);
   });
 });

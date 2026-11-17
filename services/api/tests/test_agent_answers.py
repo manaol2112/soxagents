@@ -28,7 +28,7 @@ from typing import Any
 from uuid import UUID
 
 import pytest
-from support import Database, approve_control_plan
+from support import Database, approve_control_plan, run_plan_through
 from test_attributes_follow_understanding import (
     ADDED,
     _answer_required,
@@ -54,7 +54,6 @@ from ai_workforce_api.evidence_plans import (
     latest_plan_failure_note,
     load_facts,
     request_attributes_run,
-    run_plan,
 )
 from ai_workforce_api.models import (
     OUTPUT_TOOL,
@@ -499,7 +498,7 @@ def test_the_shapes_of_itgc_ac_01_are_read_and_a_quote_the_records_lack_is_never
     # The reviewer of the set, its answer inside a wrapper.
     script.answers["set-review"] = [{OUTPUT_TOOL: {"attributes": [], "findings": []}}]
     with connect(migrated.url) as connection:
-        assert run_plan(connection, script, plan_id) == "DONE"
+        assert run_plan_through(connection, script, plan_id) == "DONE"
     # Every shape was read; only the planner's misquote needed a correction (a quote the
     # records do not hold is corrected on every answer but the last: the reviewer's
     # decision on B1i, 13 November 2026).
@@ -598,7 +597,7 @@ def test_a_part_that_fails_is_corrected_once_then_said_in_plain_words_until_an_a
     script.answers["set-review"] = [{"attributes": [{"id": "x", "verdict": "FINE"}],
                                      "findings": []}]  # fmt: skip
     with connect(migrated.url) as connection:
-        assert run_plan(connection, script, plan_id) == "DONE"
+        assert run_plan_through(connection, script, plan_id) == "DONE"
     # One correction each (the planner keeps its own two), and no drafts to review.
     assert [who for who in script.calls if who != "other"] == [
         "attributes", "attributes", "planner", "planner", "planner", "set-review", "set-review",
@@ -655,7 +654,7 @@ def test_a_part_that_fails_is_corrected_once_then_said_in_plain_words_until_an_a
         again_id = request_attributes_run(connection, team["project"], UUID(control), True)
         connection.commit()
         assert again_id == plan_id
-        assert run_plan(connection, _Script(migrated, team, control), plan_id) == "DONE"
+        assert run_plan_through(connection, _Script(migrated, team, control), plan_id) == "DONE"
     context = _context(team, control)
     assert context["attributes_agent_notes"] == [] and context["attributes_failure_note"] == ""
 
@@ -760,7 +759,7 @@ def test_criteria_waiting_in_the_approved_plans_revision_are_named_on_the_attrib
     _answer_required(migrated, team, control, client)
     plan_id = _plan_run(migrated, control)[0]
     with connect(migrated.url) as connection:
-        assert run_plan(connection, _Script(migrated, team, control), plan_id) == "DONE"
+        assert run_plan_through(connection, _Script(migrated, team, control), plan_id) == "DONE"
     writable = _rows(
         migrated,
         "SELECT id, coalesce(code, '') FROM control_attributes WHERE engagement_control_id = %s "
@@ -912,7 +911,7 @@ def test_an_agent_that_does_not_lift_is_corrected_once_for_a_property_inside_ano
     # The drafter writes `issues` inside the text of `attributes`, twice.
     script.answers["attributes"] = [{"attributes": json.dumps([_proposal()]) + ',"issues":[]'}]
     with connect(migrated.url) as connection:
-        assert run_plan(connection, script, plan_id) == "DONE"
+        assert run_plan_through(connection, script, plan_id) == "DONE"
     # One correction in all (AgentCaller's), never a second from the caller's own check.
     assert script.calls.count("attributes") == 2
     assert "inside the text of another property" in script.prompts["attributes"][1]

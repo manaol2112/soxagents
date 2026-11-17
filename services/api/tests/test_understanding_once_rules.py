@@ -48,6 +48,10 @@ MIGRATION = ROOT.parent.parent.parent / "migrations" / "0172_understanding_once.
 # ai_workforce_api/control_attributes.py), by its SHA-256: every rule of it stands word for
 # word in /6, which adds two rules before the last one.
 PROMPT_5_SHA256 = "9e0b82c9e2a6542d77f3741956fb4caf34970e00ec2fe6dbf6f87a8a95c7a736"
+ADDED_IN_8 = (
+    " For every issue, give in attribute_codes the codes of the approved attributes it bears "
+    "on, or none when it bears on the set as a whole."
+)
 ADDED_IN_6 = (
     "- When the control context says understanding_completed, the team has finished Control "
     "Understanding: ask nothing, and return issues empty. Where you would raise a missing or "
@@ -97,8 +101,15 @@ DATA_RULE = (
         # A read that could not be used, or that stopped with no run at work on it.
         (review.Standing(latest="FAILED"), "FAILED"),
         (review.Standing(latest="PENDING", stale=True), "FAILED"),
-        # Nothing checks: no read yet.
-        (review.Standing(), "WAITING"),
+        # A read is due while an agent run is at work: it is made by that run or right after
+        # it, so it reads as checking.
+        (review.Standing(live=True), "CHECKING"),
+        # Rewritten in the second fix round of B1k (16 November 2026). Old: Standing() (no
+        # read yet, nothing queued) read "WAITING", so a read due and never queued said
+        # nothing of itself. New: a read due by the rules reads "CHECKING" (it is queued at
+        # once, or the page follows it up through review_due), and one nothing could start
+        # ends FAILED (follow_or_fail), which reads "FAILED" above.
+        (review.Standing(), "CHECKING"),
     ],
 )
 def test_the_question_pass_reads_waiting_checking_done_or_failed(
@@ -321,10 +332,13 @@ def test_the_attribute_agents_prompt_keeps_every_rule_of_5_word_for_word() -> No
     # attributes/7 (after the review of B1k, 16 November 2026): the system prompt is
     # unchanged; only the correction carries the previous answer as escaped data
     # (agent_answers.correction_prompt). Old: "attributes/6". New: "attributes/7".
+    # attributes/8 (the second fix round of B1k): one sentence asks each issue for the codes
+    # it bears on (ADDED_IN_8); every other word of /7 is kept. Old: "attributes/7". New:
+    # "attributes/8".
     prompt = control_attributes.SYSTEM_PROMPT
-    assert control_attributes.PROMPT_VERSION == "attributes/7"
-    assert prompt.count(ADDED_IN_6) == 1
-    without = prompt.replace(ADDED_IN_6, "")
+    assert control_attributes.PROMPT_VERSION == "attributes/8"
+    assert prompt.count(ADDED_IN_6) == 1 and prompt.count(ADDED_IN_8) == 1
+    without = prompt.replace(ADDED_IN_8, "").replace(ADDED_IN_6, "")
     assert hashlib.sha256(without.encode()).hexdigest() == PROMPT_5_SHA256
     assert PRECEDENCE in prompt
     assert "never invent thresholds, names, frequencies, or systems" in prompt

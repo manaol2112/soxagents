@@ -178,8 +178,13 @@ export type QuestionReview = {
   /** Exact parts of the narrative naming what is not yet established, in the narrative's
    * order; only those the narrative holds. */
   marked: string[];
-  /** The attributes the specialist skipped after one correction ("not reviewed"). */
+  /** The attributes the specialist skipped after one correction ("not reviewed"), as unit
+   * keys. */
   notReviewed: string[];
+  /** The same, named as the server names them (ReviewBody.not_reviewed_items): an approved
+   * attribute by its id and code, a library attribute by its wording, or a kind of fact for
+   * a control with no attributes. Empty on a body from before. */
+  notReviewedItems?: NotReviewedItem[];
   /** Its questions still waiting on a person. */
   openQuestions: number;
   reviewedAt: string | null;
@@ -196,9 +201,25 @@ export type ReviewRequest = {
   failure: string;
 };
 
-/** Why no review ran (ContextBody.review_not_run): NO_MODEL, none is configured (B1k
- * "Without a model": the review is not run and says so in one line). */
-export type ReviewNotRun = "NO_MODEL";
+/** One thing the specialist did not review (ReviewBody.not_reviewed_items). */
+export type NotReviewedItem = {
+  key: string;
+  kind: "ATTRIBUTE" | "FACT";
+  attributeId: string | null;
+  code: string | null;
+  text: string;
+};
+
+/** Why a completed understanding has no review (ContextBody.review_not_run): NO_MODEL, none
+ * is configured (B1k "Without a model": the review is not run and says so in one line);
+ * PROCEEDED, a person proceeded without a review that could not run; ACCEPTED, its
+ * attributes were accepted before the review existed (B1l point 2). */
+export type ReviewNotRun = "NO_MODEL" | "PROCEEDED" | "ACCEPTED";
+export const REVIEW_NOT_RUN_REASONS: readonly ReviewNotRun[] = [
+  "NO_MODEL",
+  "PROCEEDED",
+  "ACCEPTED",
+];
 
 /** The kind of fact a question asks for (B1l point 4: asked once, by key). */
 export type AskedFact =
@@ -270,12 +291,10 @@ export type Assumption = {
   /** The attributes it names, by code ("A", "C"); none for an assumption on the whole set. */
   attributeCodes: string[];
   version: number;
-  /** What it is (B1l); ASSUMPTION on a body from before B1l. */
+  /** What it is (B1l); ASSUMPTION on a body from before B1l. A CONFLICT decided "That's
+   * right" reads "The confirmed understanding stands", naming no fact: the record names only
+   * the decision (decided by the product owner after the review of B1k). */
   kind: AssumptionKind;
-  /** For a CONFLICT decided as "The confirmed understanding stands": the confirmed fact the
-   * person's decision upholds, in the record's words (a person's earlier answer, never the
-   * agent's text); "" or absent where the API does not say. */
-  upholds?: string;
 };
 
 /** One earlier version of an attribute's criteria, kept on every change (B1j). */
@@ -1877,6 +1896,9 @@ export type ControlContext = {
   questionReviewRequest?: ReviewRequest | null;
   /** Why no review ran; null when one could run. */
   reviewNotRun?: ReviewNotRun | null;
+  /** A read is due by the rules and none is queued or at work (ContextBody.review_due): the
+   * page asks the server to follow it up (POST .../understanding/review/follow). */
+  reviewDue?: boolean;
   /** An OPEN conflict that names no attribute holds the whole set's acceptance (B1l point
    * 6, product owner 16 November 2026): nothing is accepted until a person decides it. */
   setHeldByConflict?: boolean;
@@ -2242,10 +2264,6 @@ export function parseAssumption(value: unknown): Assumption | null {
     attributeCodes: strings(value.attribute_codes).slice(0, 12),
     version,
     kind: ASSUMPTION_KINDS.find((each) => each === value.kind) ?? "ASSUMPTION",
-    upholds:
-      status === "CONFIRMED" && value.kind === "CONFLICT"
-        ? plainLine(str(value.upholds), 1000)
-        : "",
   };
 }
 
@@ -2524,7 +2542,8 @@ export function parseContext(value: unknown): ControlContext | null {
       CLASSIFICATION_KEYS.some((key) => key === item),
     );
   const setAssumptions = assumptionsOf(value.set_assumptions, 20);
-  const heldSet = setHeld(value.set_held_by_conflict, setAssumptions);
+  // The server says it on the attributes (AttributesBody.set_held_by_conflict).
+  const heldSet = setHeld(attributes.set_held_by_conflict, setAssumptions);
   return {
     controlId: value.control_id,
     classifications: classes(value.classifications),
@@ -2696,7 +2715,10 @@ export function parseContext(value: unknown): ControlContext | null {
     setAssumptions,
     questionReview: parseQuestionReview(value.review),
     questionReviewRequest: parseReviewRequest(value.review_request),
-    reviewNotRun: value.review_not_run === "NO_MODEL" ? "NO_MODEL" : null,
+    reviewNotRun:
+      REVIEW_NOT_RUN_REASONS.find((each) => each === value.review_not_run) ??
+      null,
+    reviewDue: value.review_due === true,
     setHeldByConflict: heldSet,
     note: str(value.note),
   };
@@ -2793,6 +2815,25 @@ export function parseQuestionReview(value: unknown): QuestionReview | null {
     notReviewed: strings(value.not_reviewed)
       .filter((code) => /^[A-Za-z0-9._-]{1,80}$/.test(code))
       .slice(0, 26),
+    notReviewedItems: records(value.not_reviewed_items)
+      .flatMap((item): NotReviewedItem[] => {
+        const key = str(item.key);
+        if (!/^[A-Za-z0-9._-]{1,80}$/.test(key)) {
+          return [];
+        }
+        const id = str(item.attribute_id);
+        const code = str(item.code);
+        return [
+          {
+            key,
+            kind: item.kind === "FACT" ? "FACT" : "ATTRIBUTE",
+            attributeId: UUID.test(id) ? id : null,
+            code: /^[A-Za-z0-9._-]{1,80}$/.test(code) ? code : null,
+            text: plainLine(str(item.text), 300),
+          },
+        ];
+      })
+      .slice(0, 26),
     openQuestions:
       typeof open === "number" && Number.isInteger(open) && open > 0 ? open : 0,
     reviewedAt: timeOrNull(value.reviewed_at),
@@ -2849,7 +2890,7 @@ export type ContextIntent =
   | "value-not-known"
   | "review-run"
   | "review-proceed"
-  | "review-ensure";
+  | "review-follow";
 
 export type ContextWrite =
   | { error: "invalid" }
@@ -3251,34 +3292,41 @@ export function contextWrite(fields: Fields): ContextWrite {
     case "review-proceed":
       return ok("POST", `${control}/understanding/review/proceed`, {});
     // B1l point 1: a required walkthrough question or a statement value left as not known
-    // yet, with an optional note: the person's not-known record, never an answer.
+    // yet, with an optional note: the person's not-known record, never an answer. One route
+    // on the server for both (POST {control}/understanding/not-known with {subject, key,
+    // note}); the key checked here as the server and its table check it.
     case "walkthrough-not-known":
     case "value-not-known": {
       const key = text(fields, "key");
       const note = typeof fields.note === "string" ? fields.note.trim() : "";
-      const keyed =
-        intent === "walkthrough-not-known"
-          ? /^wt-[a-z0-9-]{2,60}$/.test(key)
-          : /^[a-z][a-z0-9-]{1,40}$/.test(key);
-      return keyed && notKnownNoteProblem(note) === null
-        ? ok(
-            "POST",
-            intent === "walkthrough-not-known"
-              ? `${control}/walkthrough-answers/${key}/not-known`
-              : `${control}/values/${key}/not-known`,
-            { note },
-          )
+      const subject =
+        intent === "walkthrough-not-known" ? "WALKTHROUGH" : "VALUE";
+      return NOT_KNOWN_KEY[subject].test(key) &&
+        notKnownNoteProblem(note) === null
+        ? ok("POST", `${control}/understanding/not-known`, {
+            subject,
+            key,
+            note,
+          })
         : { error: "invalid" };
     }
-    // The page's re-read while it shows "Checking…" before completion: an explicit,
-    // idempotent request that the server queue a review that is due (or record a completion
-    // that is due). Never a write in a GET; a second call changes nothing.
-    case "review-ensure":
-      return ok("POST", `${control}/understanding/review/ensure`, {});
+    // The page's request, when the context says review_due, that the server follow up a read
+    // due by the rules: queued on the plan run, or, when nothing can start it, ended as one
+    // that could not run (Run again, Proceed without it). Explicit and idempotent; never a
+    // write in a GET.
+    case "review-follow":
+      return ok("POST", `${control}/understanding/review/follow`, {});
     default:
       return { error: "invalid" };
   }
 }
+
+/** The keys a not-known may name, as the server and its table allow them
+ * (understanding_review.NOT_KNOWN_KEYS, migration 0173). */
+export const NOT_KNOWN_KEY: Record<"WALKTHROUGH" | "VALUE", RegExp> = {
+  WALKTHROUGH: /^wt-[a-z0-9-]{2,60}$/,
+  VALUE: /^[a-z][a-z0-9-]{1,40}$/,
+};
 
 export const MAX_UPLOAD = 5 * 1024 * 1024;
 

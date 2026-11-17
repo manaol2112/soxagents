@@ -1016,6 +1016,21 @@ def build(
                  for item in found],
             )  # fmt: skip
             found = []
+        elif built == "AGENT":
+            # The process-map agent never asks, before completion or after (after the review
+            # of B1k, 16 November 2026: the specialist's review is the one question pass, under
+            # its keys and its budget of seven). What it would have asked is its assumption on
+            # the attributes: before completion the specialist's next read takes it as a
+            # matter to consider (agents_assumed), after completion it is shown on the
+            # attributes, as the attribute agent's are.
+            from ai_workforce_api import attribute_assumptions
+
+            attribute_assumptions.record(
+                cursor, organization_id, project_id, control_id,
+                [attribute_assumptions.from_issue(item) for item in found],
+                "process-understanding", call_id,
+            )  # fmt: skip
+            found = []
         raise_issues(
             cursor, organization_id, project_id, control_id, found,
             "AGENT" if built == "AGENT" else "RULES", call_id,

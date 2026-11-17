@@ -1,0 +1,37 @@
+{
+  "about": "The Control Understanding contract between the web (apps/web/src/control-context-model.ts, understanding-chat-model.ts) and the API (context_routes.py and the bodies it returns), B1j/B1k/B1l. Read by services/api/tests/test_control_understanding_contract.py and tests/control-understanding-contract.test.ts: each side proves its half against this one list, so neither may pin a route or a field the other does not implement.",
+  "control": "/organizations/{organization_id}/projects/{project_id}/controls/{control_id}",
+  "routes": [
+    {"intent": "review-follow", "method": "POST", "path": "/understanding/review/follow", "fields": {}, "body": []},
+    {"intent": "review-run", "method": "POST", "path": "/understanding/review/run", "fields": {}, "body": []},
+    {"intent": "review-proceed", "method": "POST", "path": "/understanding/review/proceed", "fields": {}, "body": []},
+    {"intent": "walkthrough-not-known", "method": "POST", "path": "/understanding/not-known", "fields": {"key": "wt-cm06-approver", "note": "Asked the CAB chair."}, "body": ["key", "note", "subject"], "sent": {"subject": "WALKTHROUGH", "key": "wt-cm06-approver", "note": "Asked the CAB chair."}},
+    {"intent": "value-not-known", "method": "POST", "path": "/understanding/not-known", "fields": {"key": "change-tool", "note": ""}, "body": ["key", "note", "subject"], "sent": {"subject": "VALUE", "key": "change-tool", "note": ""}},
+    {"intent": "issue-not-known", "method": "POST", "path": "/issues/{issue_id}/not-known", "fields": {"issue_id": "018f0000-0000-7000-8000-0000000000aa", "version": 2, "note": ""}, "body": ["note", "version"]},
+    {"intent": "assumption-confirm", "method": "POST", "path": "/assumptions/{assumption_id}/confirm", "fields": {"assumption_id": "018f0000-0000-7000-8000-0000000000bb", "version": 1}, "body": ["version"]},
+    {"intent": "assumption-change", "method": "POST", "path": "/assumptions/{assumption_id}/change", "fields": {"assumption_id": "018f0000-0000-7000-8000-0000000000bb", "version": 1, "text": "The CAB chair approves each patch."}, "body": ["text", "version"]}
+  ],
+  "fields": {
+    "ContextBody": ["attributes", "question_pass", "review", "review_due", "review_not_run", "review_request", "set_assumptions", "understanding_completed_at"],
+    "AttributesBody": ["approved", "proposed", "set_held_by_conflict"],
+    "AttributeBody": ["code", "held_by_conflict", "assumptions", "criteria_updated_from", "criteria_versions"],
+    "ReviewBody": ["id", "status", "round", "narrative", "marked", "not_reviewed", "not_reviewed_items", "open_questions", "reviewed_at", "failure"],
+    "NotReviewedBody": ["key", "kind", "attribute_id", "code", "text"],
+    "ReviewRequestBody": ["status", "failure"],
+    "AssumptionBody": ["id", "matter", "assumed", "status", "answer", "decided_by", "decided_at", "attribute_codes", "version", "kind"],
+    "NeedBody": ["key", "kind", "status", "not_known_note"]
+  },
+  "absent": {
+    "AssumptionBody": ["upholds"],
+    "ContextBody": ["set_held_by_conflict"]
+  },
+  "values": {
+    "review_not_run": ["", "NO_MODEL", "PROCEEDED", "ACCEPTED"],
+    "need_status": ["CONFIRMED", "PROPOSED", "MISSING", "NOT_KNOWN"],
+    "question_pass": ["WAITING", "CHECKING", "DONE", "FAILED"],
+    "review_request_status": ["PENDING", "FAILED"],
+    "set_held_sentence": "A conflict on the attributes as a set is to be decided first.",
+    "held_sentence": "A conflict on this attribute is to be decided first.",
+    "reopened_cause_prefix": "Reopened: "
+  }
+}

@@ -92,7 +92,13 @@ describe("the specialist's review under the understanding", () => {
     assert.match(section, /\{REVIEW_CHECKING\}/);
     // Failed: one line here; the sentence and the two choices end the course.
     assert.match(section, /\{REVIEW_FAILED\}\.\s*<\/p>/);
-    assert.match(section, /notReviewedLine\(shown\.notReviewed, approved\)/);
+    // Rewritten in the second fix round of B1k: old, notReviewedLine(shown.notReviewed,
+    // approved) mapped by an AttributeBody.code the API did not send; new, the API's own
+    // not_reviewed_items are passed too, and place each attribute by its id.
+    assert.match(
+      section,
+      /notReviewedLine\(shown\.notReviewed, approved, shown\.notReviewedItems\)/,
+    );
     assert.match(
       setupCss,
       /\.ur-review-text \{[^}]*font-family: var\(--font-display\);/,

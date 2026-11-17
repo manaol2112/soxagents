@@ -845,8 +845,12 @@ def register_control_context(
 
         return run(request, work)
 
+    # Not named understanding_review: a route function of that name shadowed the module for
+    # every route defined in this function (the second fix round of B1k, 16 November 2026: the
+    # not-known routes then read their body as a query parameter, and the review routes
+    # called the route function instead of the module).
     @app.get(f"{control}/understanding/review")
-    def understanding_review(
+    def read_understanding_review(
         organization_id: UUID,
         project_id: UUID,
         control_id: UUID,

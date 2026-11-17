@@ -14,6 +14,7 @@ import {
 import { UiIcon } from "./ui-icon";
 import { characterCount } from "./understanding-once-model";
 import {
+  type FollowIntent,
   lastReady,
   markedParts,
   NOT_KNOWN_ACTION,
@@ -52,7 +53,7 @@ async function post(
   ids: Ids,
   intent:
     | ReviewIntent
-    | "review-ensure"
+    | FollowIntent
     | "issue-not-known"
     | "walkthrough-not-known"
     | "value-not-known",
@@ -186,7 +187,9 @@ export function QuestionReviewSection({
   const settled =
     view.state === "ready" ? view.settled : (shown?.openQuestions ?? 1) === 0;
   const notReviewed =
-    shown !== null ? notReviewedLine(shown.notReviewed, approved) : null;
+    shown !== null
+      ? notReviewedLine(shown.notReviewed, approved, shown.notReviewedItems)
+      : null;
   const failedAgain =
     view.state === "ready"
       ? view.againFailed
@@ -480,13 +483,22 @@ export function NotKnownPanel({
 }
 
 /**
- * The page's re-read while Control Understanding reads as "Checking…" before completion with
- * no read live (B1l point 1: no dead end): an explicit, idempotent request that the server
- * queue a review that is due, or record a completion that is due. Never a write in a GET; a
- * second request changes nothing. True when the server took it (200 or 202), so the caller
- * reads again.
+ * The page's follow-up while the server says a read is due and none is queued (B1l point 1:
+ * no dead end; ContextBody.review_due): an explicit, idempotent request (POST
+ * .../understanding/review/follow) that the server queue it, or end it as one that could not
+ * run. Never a write in a GET; a second request changes nothing. True when the server took
+ * it (200 or 202), so the caller reads again.
  */
-export async function ensureReview(ids: Ids): Promise<boolean> {
-  const answer = await post(ids, "review-ensure");
+export async function followReview(ids: Ids): Promise<boolean> {
+  const answer = await post(ids, "review-follow");
   return answer.status === 200 || answer.status === 202;
+}
+
+/**
+ * "Run the review", the way out when the follow-up was refused: a person's own request that
+ * the specialist read (POST .../understanding/review/run, 202). True when it was taken.
+ */
+export async function runReview(ids: Ids): Promise<boolean> {
+  const answer = await post(ids, "review-run");
+  return answer.status === 202 || answer.status === 200;
 }

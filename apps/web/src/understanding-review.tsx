@@ -113,18 +113,19 @@ import {
   understandingEnd,
 } from "./understanding-once-model";
 import {
-  ensureReview,
+  followReview,
   NotKnownButton,
   NotKnownPanel,
   QuestionReviewSection,
   ReviewFailed,
+  runReview,
 } from "./understanding-specialist";
 import {
   blocksLine,
   courseWithout,
-  ENSURE_EVERY_MS,
-  ENSURE_REFUSED,
-  ensuresReview,
+  FOLLOW_EVERY_MS,
+  FOLLOW_REFUSED,
+  followsReview,
   fromReview,
   heldByFailedReview,
   type NotKnownTarget,
@@ -362,32 +363,36 @@ export function UnderstandingReview({
     return () => window.clearInterval(timer);
   }, [passing, router, read]);
 
-  // B1l point 1 (no dead end): while the course reads as checking before completion with no
-  // read live, the page asks the server, explicitly and idempotently, to queue a review that
-  // is due (or record a completion that is due): once on arriving, then every 30 seconds.
-  // Never a write in a GET; a refusal is said quietly, with a way to ask again.
+  // B1l point 1 (no dead end): while the server says a read is due and none is queued
+  // (review_due), the page asks it, explicitly and idempotently, to follow it up: queued, or
+  // ended as one that could not run (then Run again and Proceed without it are offered):
+  // once on arriving, then every 30 seconds. Never a write in a GET; a refusal is said
+  // quietly, with "Run the review", which asks for the review itself (review/run).
   const [ensureProblem, setEnsureProblem] = useState(false);
   const ensuring =
-    review !== null &&
-    ensuresReview(
-      understandingEnd(once, gatesDone),
-      once.questionPass,
-      once.review,
-      canAct,
-    );
+    review !== null && followsReview(once.reviewDue, once.completedAt, canAct);
   const ensureNow = useCallback(async () => {
-    const taken = await ensureReview(ids);
+    const taken = await followReview(ids);
     setEnsureProblem(!taken);
     if (taken) {
       router.refresh();
+      void read();
     }
-  }, [ids, router]);
+  }, [ids, router, read]);
+  const runNow = useCallback(async () => {
+    const taken = await runReview(ids);
+    setEnsureProblem(!taken);
+    if (taken) {
+      router.refresh();
+      void read();
+    }
+  }, [ids, router, read]);
   useEffect(() => {
     if (!ensuring) {
       return;
     }
     void ensureNow();
-    const timer = window.setInterval(() => void ensureNow(), ENSURE_EVERY_MS);
+    const timer = window.setInterval(() => void ensureNow(), FOLLOW_EVERY_MS);
     return () => window.clearInterval(timer);
   }, [ensuring, ensureNow]);
 
@@ -1971,21 +1976,45 @@ export function UnderstandingReview({
     );
 
     if (need.kind === "AUTH") {
-      // The sign-in settings, one at a time, by how users sign in (10 November 2026).
+      // The sign-in settings, one at a time, by how users sign in (10 November 2026). Not
+      // known yet, proceed is offered here too (B1l point 1: every question in Control
+      // Understanding): the settings' value left as the person's not known, never an answer.
+      const authTarget = asked.target;
+      const authKey = authTarget === null ? null : targetKey(authTarget);
       return (
-        <AuthenticationPoint
-          key={need.key}
-          ids={ids}
-          canAct={canAct}
-          onChanged={async () => {
-            router.refresh();
-            setChecking(true);
-            await read();
-            setChecking(false);
-          }}
-          onDone={() => go(nextOpen(review, interview, at))}
-          onBack={() => go(Math.max(0, at - 1))}
-        />
+        <>
+          <AuthenticationPoint
+            key={need.key}
+            ids={ids}
+            canAct={canAct}
+            onChanged={async () => {
+              router.refresh();
+              setChecking(true);
+              await read();
+              setChecking(false);
+            }}
+            onDone={() => go(nextOpen(review, interview, at))}
+            onBack={() => go(Math.max(0, at - 1))}
+          />
+          {authTarget !== null && authKey !== null ? (
+            notKnownFor === authKey ? (
+              <NotKnownPanel
+                key={authKey}
+                ids={ids}
+                target={authTarget}
+                onCancel={() => setNotKnownFor(null)}
+                onDone={() => void leftNotKnown(need)}
+              />
+            ) : (
+              <p className="ur-foot-where">
+                <NotKnownButton
+                  disabled={busy}
+                  onOpen={() => setNotKnownFor(authKey)}
+                />
+              </p>
+            )
+          ) : null}
+        </>
       );
     }
     // A question the agents raised is answered here, from its own choices; the planner's
@@ -2710,14 +2739,14 @@ export function UnderstandingReview({
           they add joins this course, here.
         </p>
         {ensureProblem && ensuring ? (
-          // The server did not take the request to queue the review: said quietly, with a
-          // way to ask again; never a dead end (B1l point 1).
+          // The server did not take the follow-up: said quietly, with the person's own
+          // request for the review (review/run); never a dead end (B1l point 1).
           <p className="ur-hint" role="status">
-            {ENSURE_REFUSED}{" "}
+            {FOLLOW_REFUSED}{" "}
             <button
               type="button"
               className="cs-link"
-              onClick={() => void ensureNow()}
+              onClick={() => void runNow()}
             >
               {RUN_REVIEW}
             </button>

@@ -37,9 +37,10 @@
 --    question or a client value of the statement (B1l point 1: every question in Control
 --    Understanding offers it). Who, when and an optional note; never an answer and never a
 --    fact: no agent reads it as one. It closes the question for the gates (the review is due,
---    the understanding may complete) while no answer is given; an answer given later stands
---    over it. Written once, never changed or deleted; read-only once archived. One per
---    control and question.
+--    the understanding may complete) while no answer is given. An answer or a value given
+--    later supersedes it (superseded_at, set once: the only change it ever takes), and the
+--    question may be left as not known again only after that. Never deleted; read-only once
+--    archived. One standing per control and question.
 --
 -- 3. attribute_assumptions:
 --      kind NOT_KNOWN           what a question a person left as not known bears on;
@@ -48,10 +49,16 @@
 --      asks_code, asks_fact     the key of a question the specialist did not ask (beyond the
 --                               seven asked, or after its second read), so it is assumed once;
 --      accepted_by, accepted_at who had accepted it with its attribute, kept when a person
---                               then confirms or changes it (the D&I workpaper's point).
+--                               then confirms or changes it (the D&I workpaper's point), or
+--                               when a NOT_KNOWN one is superseded by the answer given since.
 --    One per matter (as before) for the agents' other assumptions, one per key, and one per
 --    question left as not known. An assumption accepted with its attribute may still be
---    confirmed or changed, once.
+--    confirmed or changed, once; a NOT_KNOWN one ends SUPERSEDED once its question is
+--    answered.
+--
+-- 3b. attribute_criteria_versions: an accepted attribute's criteria are kept as a version
+--    also when only their acceptance ends (a person changed an assumption they rested on),
+--    with who had accepted them; the current row keeps who wrote them and carries the cause.
 --
 -- 4. design_point_considerations: a point of kind ASSUMPTION (design-workpaper.md 3.9) may be
 --    considered.
@@ -66,8 +73,10 @@
 --    approved one's criteria accepted by a person or written by one) gets
 --    understanding_completed_at = the time of its last acceptance, with one audit record
 --    each (control.understanding_completed, by ATTRIBUTES_ACCEPTED, backfilled). Archived
---    engagements are left as they are (read-only). Once set it is never cleared (0172's
---    guard): a lapse of acceptance later never un-completes it.
+--    engagements are left as they are (read-only). A control with an OPEN conflict
+--    assumption does not count as accepted (B1l point 6: a conflict holds acceptance). Once
+--    set it is never cleared (0172's guard): a lapse of acceptance later never un-completes
+--    it.
 --
 -- Additive except where a CHECK constraint, the assumptions' matter index and their guard
 -- functions are replaced by wider ones, and the backfill of section 6 (which only sets a
@@ -87,6 +96,8 @@
 -- evidence_plans_run_stage as 0169 and 0148 have them; DROP TABLE understanding_not_known
 -- (after dropping attribute_assumptions.source_not_known_id) and its guard functions
 -- guard_understanding_not_known_update() and prevent_understanding_not_known_deletion();
+-- restore 0172's record_attribute_criteria_version() and its trigger's WHEN clause (section
+-- 3b);
 -- the backfill of section 6 is not undone (a completion is never cleared: 0172's guard), and
 -- its audit records say which were backfilled (payload backfilled true); delete the
 -- '0173_understanding_review' row from schema_migrations. A rollback loses the specialist's
@@ -367,6 +378,8 @@ CREATE TABLE understanding_not_known (
     noted_by uuid NOT NULL,
     noted_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     note text NOT NULL DEFAULT '',
+    -- When an answer or a value given later superseded it; null while it stands.
+    superseded_at timestamptz,
     CONSTRAINT understanding_not_known_subject CHECK (subject IN ('WALKTHROUGH', 'VALUE')),
     -- A walkthrough question's key (migration 0147) or a statement slot's (migration 0064).
     CONSTRAINT understanding_not_known_key CHECK (
@@ -374,7 +387,9 @@ CREATE TABLE understanding_not_known (
         OR (subject = 'VALUE' AND subject_key ~ '^[a-z][a-z0-9-]{1,40}$')
     ),
     CONSTRAINT understanding_not_known_note CHECK (char_length(note) <= 500),
-    CONSTRAINT understanding_not_known_once UNIQUE (engagement_control_id, subject, subject_key),
+    CONSTRAINT understanding_not_known_superseded CHECK (
+        superseded_at IS NULL OR superseded_at >= noted_at
+    ),
     CONSTRAINT understanding_not_known_project_fk
         FOREIGN KEY (project_id, organization_id) REFERENCES projects (id, organization_id)
         ON DELETE RESTRICT ON UPDATE RESTRICT,
@@ -387,16 +402,34 @@ CREATE TABLE understanding_not_known (
         ON DELETE RESTRICT ON UPDATE RESTRICT
 );
 
+-- One standing per control and question; a superseded one stays beside it.
+CREATE UNIQUE INDEX understanding_not_known_once
+    ON understanding_not_known (engagement_control_id, subject, subject_key)
+    WHERE superseded_at IS NULL;
 CREATE INDEX understanding_not_known_project_idx
     ON understanding_not_known (project_id, engagement_control_id);
 
+-- Kept as written: the only change is its superseding, once, by an answer given since.
 CREATE FUNCTION guard_understanding_not_known_update()
 RETURNS trigger
 LANGUAGE plpgsql
 SET search_path = pg_catalog
 AS $$
 BEGIN
-    RAISE EXCEPTION 'a person''s not known yet is kept as written';
+    IF OLD.superseded_at IS NOT NULL OR NEW.superseded_at IS NULL
+        OR NEW.id IS DISTINCT FROM OLD.id
+        OR NEW.organization_id IS DISTINCT FROM OLD.organization_id
+        OR NEW.project_id IS DISTINCT FROM OLD.project_id
+        OR NEW.engagement_control_id IS DISTINCT FROM OLD.engagement_control_id
+        OR NEW.subject IS DISTINCT FROM OLD.subject
+        OR NEW.subject_key IS DISTINCT FROM OLD.subject_key
+        OR NEW.noted_by IS DISTINCT FROM OLD.noted_by
+        OR NEW.noted_at IS DISTINCT FROM OLD.noted_at
+        OR NEW.note IS DISTINCT FROM OLD.note
+    THEN
+        RAISE EXCEPTION 'a person''s not known yet is kept as written';
+    END IF;
+    RETURN NEW;
 END;
 $$;
 
@@ -450,7 +483,8 @@ ALTER TABLE attribute_assumptions
     -- Who had accepted it with its attribute, once a person confirmed or changed it since.
     ADD CONSTRAINT attribute_assumptions_accepted CHECK (
         (accepted_at IS NULL) = (accepted_by IS NULL)
-        AND (accepted_at IS NULL OR status IN ('CONFIRMED', 'CHANGED'))
+        AND (accepted_at IS NULL OR status IN ('CONFIRMED', 'CHANGED')
+             OR (status = 'SUPERSEDED' AND kind = 'NOT_KNOWN'))
     );
 
 -- In place of 0172's one per matter: one per matter for the agents' other assumptions, one
@@ -489,7 +523,8 @@ $$;
 
 -- What an assumption records never changes; it is decided once (its version moved by one).
 -- One accepted with its attribute is still settled once more, by a person confirming or
--- changing it (the D&I workpaper's point, design-workpaper.md 3.9): who had accepted it,
+-- changing it (the D&I workpaper's point, design-workpaper.md 3.9), or, for a NOT_KNOWN one,
+-- by the answer to its question given since (SUPERSEDED, by no person): who had accepted it,
 -- and when, are kept beside the new decision. Any other decided one is never changed.
 CREATE OR REPLACE FUNCTION guard_attribute_assumption_update()
 RETURNS trigger
@@ -498,7 +533,8 @@ SET search_path = pg_catalog
 AS $$
 BEGIN
     IF OLD.status = 'ACCEPTED_WITH_ATTRIBUTE' THEN
-        IF NEW.status NOT IN ('CONFIRMED', 'CHANGED')
+        IF NOT (NEW.status IN ('CONFIRMED', 'CHANGED')
+                OR (NEW.status = 'SUPERSEDED' AND OLD.kind = 'NOT_KNOWN'))
             OR NEW.accepted_by IS DISTINCT FROM OLD.decided_by
             OR NEW.accepted_at IS DISTINCT FROM OLD.decided_at
         THEN
@@ -534,6 +570,83 @@ BEGIN
     RETURN NEW;
 END;
 $$;
+
+-- 3b. An accepted attribute's criteria are kept when only their acceptance ends
+
+-- As 0172's, and also when only the acceptance ends (a person changed an assumption the
+-- accepted criteria rested on; attribute_assumptions.change): the accepted criteria are kept
+-- as a version with who had accepted them. Nobody wrote new words then, so the current row
+-- keeps who wrote them and when, and takes only the cause ("Reopened: <matter>").
+CREATE OR REPLACE FUNCTION record_attribute_criteria_version()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog
+AS $$
+DECLARE
+    named text := coalesce(current_setting('app.criteria_only', true), '');
+    person text := coalesce(current_setting('app.criteria_by', true), '');
+    cause text := coalesce(current_setting('app.criteria_cause', true), '');
+    had boolean;
+    rewritten boolean;
+BEGIN
+    rewritten := (OLD.condition, OLD.pass_criteria, OLD.fail_criteria, OLD.judgment_required,
+                  OLD.criteria_origin)
+        IS DISTINCT FROM
+        (NEW.condition, NEW.pass_criteria, NEW.fail_criteria, NEW.judgment_required,
+         NEW.criteria_origin);
+    IF named <> '' AND NOT (coalesce(OLD.code, '') = ANY (string_to_array(named, ','))) THEN
+        RAISE EXCEPTION 'this update may change only the criteria of the attributes it names';
+    END IF;
+    had := OLD.condition <> '' OR OLD.pass_criteria <> '' OR OLD.fail_criteria <> ''
+        OR OLD.judgment_required IS TRUE;
+    IF had THEN
+        INSERT INTO public.attribute_criteria_versions (
+            organization_id, project_id, engagement_control_id, attribute_id, version,
+            condition, pass_criteria, fail_criteria, judgment_required, criteria_origin,
+            accepted_by, accepted_at, written_at, written_by, writer, cause
+        )
+        VALUES (
+            OLD.organization_id, OLD.project_id, OLD.engagement_control_id, OLD.id,
+            (SELECT coalesce(max(v.version), 0) + 1 FROM public.attribute_criteria_versions v
+             WHERE v.attribute_id = OLD.id),
+            OLD.condition, OLD.pass_criteria, OLD.fail_criteria, OLD.judgment_required,
+            OLD.criteria_origin, OLD.criteria_accepted_by, OLD.criteria_accepted_at,
+            coalesce(OLD.criteria_written_at, OLD.updated_at), OLD.criteria_written_by,
+            OLD.criteria_writer, OLD.criteria_cause
+        );
+    END IF;
+    IF NOT rewritten THEN
+        NEW.criteria_cause := CASE WHEN cause <> '' THEN left(cause, 300)
+                                   ELSE OLD.criteria_cause END;
+        RETURN NEW;
+    END IF;
+    NEW.criteria_written_at := clock_timestamp();
+    NEW.criteria_written_by := CASE
+        WHEN person ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+            THEN person::uuid
+    END;
+    NEW.criteria_writer := left(coalesce(current_setting('app.criteria_writer', true), ''), 60);
+    NEW.criteria_cause := left(cause, 300);
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER control_attributes_criteria_versions ON control_attributes;
+CREATE TRIGGER control_attributes_criteria_versions
+BEFORE UPDATE ON control_attributes
+FOR EACH ROW
+WHEN (
+    (OLD.condition, OLD.pass_criteria, OLD.fail_criteria, OLD.judgment_required,
+     OLD.criteria_origin)
+    IS DISTINCT FROM
+    (NEW.condition, NEW.pass_criteria, NEW.fail_criteria, NEW.judgment_required,
+     NEW.criteria_origin)
+    -- Only the acceptance ended, by itself (not by a change of the objective or of what is
+    -- automatable, which clears it too: migration 0122).
+    OR (OLD.criteria_accepted_at IS NOT NULL AND NEW.criteria_accepted_at IS NULL
+        AND (OLD.objective, OLD.automatable) IS NOT DISTINCT FROM (NEW.objective, NEW.automatable))
+)
+EXECUTE FUNCTION record_attribute_criteria_version();
 
 -- 4. An assumption accepted with its attribute is a point of the D&I workpaper
 
@@ -573,6 +686,9 @@ WITH accepted AS (
                       WHERE a.engagement_control_id = c.id AND a.status = 'APPROVED'
                         AND a.criteria_accepted_at IS NULL
                         AND a.criteria_origin IS DISTINCT FROM 'PERSON')
+      AND NOT EXISTS (SELECT 1 FROM attribute_assumptions s
+                      WHERE s.engagement_control_id = c.id AND s.status = 'OPEN'
+                        AND s.kind = 'CONFLICT')
 ),
 completed AS (
     UPDATE engagement_controls c

@@ -28,7 +28,7 @@ from uuid import UUID, uuid4
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
-from support import Database
+from support import Database, run_plan_through
 from test_attributes_follow_understanding import (
     _GRANT_RECORD,
     _accepted_by_owner,
@@ -62,7 +62,6 @@ from ai_workforce_api.context_routes import NO_NARRATIVE, generate_reviewed
 from ai_workforce_api.control_context import Issue, IssueKind, raise_issues
 from ai_workforce_api.db import connect
 from ai_workforce_api.design_points import points_now
-from ai_workforce_api.evidence_plans import run_plan
 from ai_workforce_api.phase_release import attribute_waits
 from ai_workforce_api.understanding_authority import facts
 from ai_workforce_api.walkthrough_answers import answers_of, questions_asked
@@ -76,7 +75,7 @@ APPLIED_BY = "Server administrators apply patches to production."
 
 def _run(migrated: Database, control: str, agents: _Agents) -> None:
     with connect(migrated.url) as connection:
-        assert run_plan(connection, agents, _plan_run(migrated, control)[0]) == "DONE"
+        assert run_plan_through(connection, agents, _plan_run(migrated, control)[0]) == "DONE"
 
 
 def _reviews(migrated: Database, control: str) -> list[tuple[Any, ...]]:
@@ -935,11 +934,15 @@ def test_a_conflict_naming_no_attribute_holds_the_whole_set_and_is_a_point(
                        json={"items": items}).status_code == 200  # fmt: skip
 
 
-def test_the_confirmed_understanding_stands_adds_no_fact_and_references_what_it_upholds(
+def test_the_confirmed_understanding_stands_adds_no_fact_and_names_no_fact_not_chosen(
     migrated: Database,
 ) -> None:
     # Finding (integrity): deciding a conflict recorded the agent's text as the person's
     # newest confirmed fact.
+    # Rewritten in the second fix round of B1k (16 November 2026). Old: the audit record's
+    # `upholds` listed references to every PERSON fact sharing a word with the matter. New
+    # (decided for the fix round): the decision alone, and the facts the conflict row names,
+    # which it never carries: `upholds` is [].
     team, control, _scheduler, client = _ready(migrated, "ur-upholds")
     _answer_required(migrated, team, control, client)
     _completed_now(migrated, control)
@@ -960,9 +963,7 @@ def test_the_confirmed_understanding_stands_adds_no_fact_and_references_what_it_
         conflict,
     )
     assert payload[0]["decision"] == "CONFIRMED_UNDERSTANDING_STANDS"
-    assert isinstance(payload[0]["upholds"], list)
-    assert all(set(item) == {"ref", "kind", "key", "confirmed_at"}
-               for item in payload[0]["upholds"])  # fmt: skip
+    assert payload[0]["upholds"] == []
 
 
 def test_review_again_on_an_accepted_control_keeps_the_last_review_and_its_findings_are_points(
@@ -1028,45 +1029,67 @@ def test_without_a_model_the_completed_understanding_says_the_review_did_not_run
     assert (body["review"], body["review_not_run"]) == (None, "NO_MODEL")
 
 
-def test_changing_an_assumption_the_accepted_criteria_rest_on_reopens_them_for_acceptance(
+def test_changing_an_assumption_the_accepted_criteria_rest_on_ends_their_acceptance(
     migrated: Database,
 ) -> None:
     # Finding (integrity): changing an assumption after its attribute was accepted cleared the
     # D&I point but left the accepted criteria resting on the rejected assumption.
-    from ai_workforce_api.attribute_assumptions import REOPENED_NOTE
+    # Rewritten in the second fix round of B1k (16 November 2026). Old: a PROPOSED CHANGE in
+    # the attribute's own wording (note REOPENED_NOTE) was inserted, which the limited update
+    # could not re-tailor, so the person was asked to accept the same criteria again. New
+    # (decided for the fix round): the person's change ends the criteria's acceptance (back
+    # to "To accept"), the accepted criteria are kept as a version with who had accepted them,
+    # the row's cause reads "Reopened: <matter>", no proposal is made, and the limited update
+    # may now write them (CRITERIA_WRITABLE_SQL).
     from ai_workforce_api.control_context import attributes_accepted
+    from ai_workforce_api.evidence_plans import CRITERIA_WRITABLE_SQL
 
     team, control, _scheduler, client = _ready(migrated, "ur-reopen-criteria")
     _completed_now(migrated, control)
     _agent_criteria(migrated, control)
-    a1_id, a1, a1_text = _codes(migrated, control)[0]
+    a1_id, a1, _a1_text = _codes(migrated, control)[0]
     assumed = _record(migrated, team, control, "MISSING", "Patch linkage", [a1])
     approved = _context(team, control, client)["attributes"]["approved"]
     items = [{"attribute_id": item["id"], "version": item["version"]} for item in approved]
     assert client.post(f"{_path(team, control)}/attributes/accept",
                        json={"items": items}).status_code == 200  # fmt: skip
+    [accepted_by] = _rows(
+        migrated, "SELECT criteria_accepted_by FROM control_attributes WHERE id = %s", a1_id
+    )
+    assert accepted_by[0] is not None
+    _plan_state(migrated, control, "IDLE")
     changed = client.post(
         f"{_path(team, control)}/assumptions/{assumed}/change",
         json={"text": "The CAB minutes link each patch to its change.", "version": 2},
     )
     assert changed.status_code == 200, changed.text
-    [proposal] = changed.json()["attributes"]["proposed"]
-    assert (proposal["proposal"], proposal["replaces_id"], proposal["text"]) == (
-        "CHANGE", str(a1_id), a1_text,
-    )  # fmt: skip
-    assert proposal["note"].startswith(REOPENED_NOTE)
+    assert changed.json()["attributes"]["proposed"] == []
+    reopened = next(
+        item for item in changed.json()["attributes"]["approved"] if item["id"] == str(a1_id)
+    )
+    assert reopened["criteria_accepted_at"] is None
+    assert reopened["criteria_updated_from"] == "Reopened: Patch linkage"
     with connect(migrated.url) as connection, connection.cursor() as cursor:
         assert not attributes_accepted(cursor, UUID(control))
-    # The accepted row is not written over: its acceptance and criteria stand until the
-    # change is decided.
-    assert next(row for row in _approved(migrated, control) if row[0] == a1_id)[7] is True
-    # Accepting it again: approved with the criteria it carries.
-    _plan_state(migrated, control, "IDLE")
-    reaccepted = client.post(f"{_path(team, control)}/attributes/accept", json={"items": [
-        {"attribute_id": proposal["id"], "version": proposal["version"]}]})  # fmt: skip
-    assert reaccepted.status_code == 200, reaccepted.text
-    with connect(migrated.url) as connection, connection.cursor() as cursor:
-        assert attributes_accepted(cursor, UUID(control))
+        writable = connection.execute(
+            f"SELECT {CRITERIA_WRITABLE_SQL} FROM control_attributes a WHERE a.id = %s",
+            (a1_id,),
+        ).fetchone()
+    assert writable is not None and writable[0] is True
+    [version] = _rows(
+        migrated,
+        "SELECT accepted_by, accepted_at IS NOT NULL FROM attribute_criteria_versions "
+        "WHERE attribute_id = %s ORDER BY version DESC LIMIT 1",
+        a1_id,
+    )
+    assert version == (accepted_by[0], True)
+    # Who wrote the criteria is unchanged: nobody wrote new words.
+    [writer] = _rows(
+        migrated,
+        "SELECT criteria_written_by FROM control_attributes WHERE id = %s",
+        a1_id,
+    )
+    assert writer[0] is None or writer[0] != team["owner_id"]
 
 
 def test_not_known_yet_on_a_walkthrough_question_and_a_value_closes_them_never_as_answers(
@@ -1292,3 +1315,138 @@ def test_not_known_on_the_last_narrative_point_asks_for_the_redraft(migrated: Da
         "SELECT mode, run_status FROM process_narrative_runs WHERE engagement_control_id = %s",
         UUID(cid),
     ) == [("DRAFT", "PENDING")]
+
+
+# The second fix round of B1k (16 November 2026): the database halves of what the re-check
+# found partly fixed or new. Synthetic data only.
+
+
+def test_a_not_known_is_read_by_the_course_and_superseded_once_answered(
+    migrated: Database,
+) -> None:
+    # New problems: "understanding_not_known rows and their NOT_KNOWN assumptions are never
+    # superseded", and "The web expects needs with status NOT_KNOWN and not_known_note".
+    from support import walkthrough_value
+
+    team, control, _scheduler, client = _ready(migrated, "ur-not-known-superseded")
+    with connect(migrated.url) as connection:
+        rows = answers_of(connection, UUID(control))
+        item = next(q for q in questions_asked(connection, UUID(control), rows)
+                    if q.required and q.key not in rows)  # fmt: skip
+    path = f"{_path(team, control)}/understanding/not-known"
+    # A key the table would refuse is a 422, never a database error.
+    assert client.post(path, json={"subject": "VALUE", "key": "Bad_Key"}).status_code == 422
+    assert (
+        client.post(path, json={"subject": "WALKTHROUGH", "key": "change-tool"}).status_code == 422
+    )
+    closed = client.post(path, json={"subject": "WALKTHROUGH", "key": item.key,
+                                     "note": "The owner is on leave."})  # fmt: skip
+    assert closed.status_code == 200, closed.text
+    course = client.get(f"{_control_path(team, control)}/understanding/review")
+    assert course.status_code == 200, course.text
+    [need] = [n for n in course.json()["needs"] if n["key"] == item.key]
+    assert (need["status"], need["not_known_note"]) == ("NOT_KNOWN", "The owner is on leave.")
+    # The answer given since stands over it.
+    saved = client.put(
+        f"{_path(team, control)}/walkthrough-answers",
+        json={"answers": {item.key: {"value": walkthrough_value(item)}}},
+    )
+    assert saved.status_code == 200, saved.text
+    assert _context(team, control, client)["not_known"] == []
+    [row] = _rows(
+        migrated,
+        "SELECT superseded_at IS NOT NULL FROM understanding_not_known "
+        "WHERE engagement_control_id = %s",
+        UUID(control),
+    )
+    assert row == (True,)
+    [assumed] = _rows(
+        migrated,
+        "SELECT status, decided_by FROM attribute_assumptions "
+        "WHERE engagement_control_id = %s AND kind = 'NOT_KNOWN'",
+        UUID(control),
+    )
+    assert assumed == ("SUPERSEDED", None)
+    again = client.get(f"{_control_path(team, control)}/understanding/review")
+    [need] = [n for n in again.json()["needs"] if n["key"] == item.key]
+    assert need["status"] == "CONFIRMED"
+    with connect(migrated.url) as connection:
+        inputs = review.inputs_for(connection, team["project"], UUID(control), 1)
+    assert {"question": item.text} not in inputs.data["left_not_known"]
+
+
+def test_a_due_read_nothing_could_start_ends_failed_and_may_be_proceeded_without(
+    migrated: Database,
+) -> None:
+    # Decided for the fix round: FAILED, with a sentence, when a read is due and nothing is
+    # queued after the follow attempt, and proceed accepts that state.
+    team, control, _scheduler, client = _ready(migrated, "ur-not-started")
+    _plan_state(migrated, control, "PENDING")
+    _answer_required(migrated, team, control, client)
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE evidence_plans SET run_status = 'FAILED', run_attempts = %s "
+            "WHERE engagement_control_id = %s",
+            (3, UUID(control)),
+        )
+        connection.commit()
+        # The end of a failed run: queued again only within its attempts, so not now.
+        assert review.follow_or_fail(connection, team["project"], UUID(control)) is None
+        connection.commit()
+    assert [row[:3] for row in _reviews(migrated, control)] == [(1, "UNDERSTANDING", "FAILED")]
+    body = _context(team, control, client)
+    assert body["question_pass"] == "FAILED" and body["review_due"] is False
+    assert body["review"]["failure"] == review.NOT_STARTED_SENTENCE
+    proceeded = client.post(f"{_path(team, control)}/understanding/review/proceed")
+    assert proceeded.status_code == 200, proceeded.text
+    assert proceeded.json()["understanding_completed_at"] is not None
+
+
+def test_a_run_whose_end_finds_a_read_due_queues_a_new_run(migrated: Database) -> None:
+    # Decided for the fix round: no recursion inside one activity; the attempts are kept.
+    from ai_workforce_api.evidence_plans import REQUEUED, run_plan
+
+    team, control, _scheduler, client = _ready(migrated, "ur-requeued")
+    _answer_required(migrated, team, control, client)
+    agents = _Agents(migrated, team, control)
+    agents.specialist = lambda given: _asking(given, WHO_APPLIES, "PERFORMER")
+    plan_id = _plan_run(migrated, control)[0]
+    with connect(migrated.url) as connection:
+        first = run_plan(connection, agents, plan_id)
+    assert first in ("DONE", REQUEUED)
+    [attempts] = _rows(
+        migrated,
+        "SELECT run_attempts, run_status FROM evidence_plans WHERE id = %s",
+        plan_id,
+    )
+    if first == REQUEUED:
+        # Queued again on the same plan, its attempts kept (never reset by a run's end).
+        assert attempts[1] == "PENDING" and attempts[0] >= 1
+
+
+def test_an_open_conflict_holds_the_set_from_being_accepted_on_the_database(
+    migrated: Database,
+) -> None:
+    # Decided for the fix round: attributes_accepted is false while an OPEN CONFLICT stands,
+    # so decide REJECT of the last proposal never leaves the set accepted over it.
+    from ai_workforce_api.control_context import attributes_accepted
+
+    team, control, _scheduler, client = _ready(migrated, "ur-conflict-accepted")
+    _completed_now(migrated, control)
+    _agent_criteria(migrated, control)
+    approved = _context(team, control, client)["attributes"]["approved"]
+    items = [{"attribute_id": item["id"], "version": item["version"]} for item in approved]
+    assert client.post(f"{_path(team, control)}/attributes/accept",
+                       json={"items": items}).status_code == 200  # fmt: skip
+    with connect(migrated.url) as connection, connection.cursor() as cursor:
+        assert attributes_accepted(cursor, UUID(control))
+    a1 = _codes(migrated, control)[0][1]
+    conflict = _record(migrated, team, control, "CONFLICT", "Grant date source", [a1])
+    with connect(migrated.url) as connection, connection.cursor() as cursor:
+        assert not attributes_accepted(cursor, UUID(control))
+    decided = client.post(
+        f"{_path(team, control)}/assumptions/{conflict}/confirm", json={"version": 1}
+    )
+    assert decided.status_code == 200, decided.text
+    with connect(migrated.url) as connection, connection.cursor() as cursor:
+        assert attributes_accepted(cursor, UUID(control))

@@ -2583,7 +2583,11 @@ def understanding_due(
 
 
 def queue_for_understanding(
-    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    control_id: UUID,
+    *,
+    requeue: bool = False,
 ) -> UUID | None:
     """Queue the control's plan run once its understanding is complete and the planner has
     not read it (understanding_due): the run proposes the attributes the understanding calls
@@ -2604,7 +2608,12 @@ def queue_for_understanding(
     control whose attributes are accepted (B1l point 2). Once completed, the run follows the
     understanding as before (understanding_due), except that an answer changed after
     completion re-tailors only the attributes its question informs
-    (understanding_review.informed_update, the one limited update of B1j)."""
+    (understanding_review.informed_update, the one limited update of B1j).
+
+    `requeue` (after the review of B1k, 16 November 2026): queued by the end of an agent run
+    on the control, not by a person's save (understanding_review.follow_or_fail): the run's
+    attempts are kept, and nothing is queued once they reach PLAN_RUN_ATTEMPTS, so runs that
+    keep queueing each other, or keep failing, always end."""
     from ai_workforce_api import understanding_review as review
     from ai_workforce_api.control_context import understanding_completed
 
@@ -2620,14 +2629,18 @@ def queue_for_understanding(
             row = cursor.execute(
                 f"""
                 UPDATE evidence_plans p
-                SET run_status = 'PENDING', run_attempts = 0, run_lease_until = NULL,
+                SET run_status = 'PENDING',
+                    run_attempts = CASE WHEN %(requeue)s THEN p.run_attempts ELSE 0 END,
+                    run_lease_until = NULL,
                     run_note = '', run_stage = 'ATTRIBUTES', run_codes = '{{}}', run_cause = ''
-                WHERE p.project_id = %s AND p.engagement_control_id = %s
+                WHERE p.project_id = %(project)s AND p.engagement_control_id = %(control)s
                   AND p.run_status IN ('IDLE', 'FAILED') AND NOT {_AGENTS_AT_WORK_SQL}
+                  AND (NOT %(requeue)s OR p.run_attempts < %(attempts)s)
                 RETURNING p.id
                 """,
-                (project_id, control_id),
-            ).fetchone()
+                {"requeue": requeue, "project": project_id, "control": control_id,
+                 "attempts": PLAN_RUN_ATTEMPTS},
+            ).fetchone()  # fmt: skip
             if row is not None:
                 review.queue_due(cursor, project_id, control_id, due)
         return None if row is None else UUID(str(row[0]))
@@ -2645,14 +2658,19 @@ def queue_for_understanding(
         row = cursor.execute(
             f"""
             UPDATE evidence_plans p
-            SET run_status = 'PENDING', run_attempts = 0, run_lease_until = NULL,
-                run_note = '', run_stage = 'ATTRIBUTES', run_codes = %s, run_cause = %s
-            WHERE p.project_id = %s AND p.engagement_control_id = %s
+            SET run_status = 'PENDING',
+                run_attempts = CASE WHEN %(requeue)s THEN p.run_attempts ELSE 0 END,
+                run_lease_until = NULL,
+                run_note = '', run_stage = 'ATTRIBUTES', run_codes = %(codes)s,
+                run_cause = %(cause)s
+            WHERE p.project_id = %(project)s AND p.engagement_control_id = %(control)s
               AND p.run_status = 'IDLE' AND NOT {_AGENTS_AT_WORK_SQL}
+              AND (NOT %(requeue)s OR p.run_attempts < %(attempts)s)
             RETURNING p.id
             """,
-            (codes, cause[:300], project_id, control_id),
-        ).fetchone()
+            {"requeue": requeue, "codes": codes, "cause": cause[:300], "project": project_id,
+             "control": control_id, "attempts": PLAN_RUN_ATTEMPTS},
+        ).fetchone()  # fmt: skip
     return None if row is None else UUID(str(row[0]))
 
 
@@ -2982,19 +3000,23 @@ def open_plan_runs(
     ]
 
 
-# How many times one run goes on with what fell due while it worked (run_plan).
-FOLLOW_DEPTH = 2
+# What run_plan returns when its end queued the same plan again (what fell due while it
+# worked): the caller takes it as a new run (the local worker a new job, the durable workflow
+# a new activity), never inside this one.
+REQUEUED = "REQUEUED"
 
 
 def run_plan(
     connection: psycopg.Connection[Any],
     provider: ModelProvider | None,
     plan_id: UUID,
-    _depth: int = 0,
 ) -> str:
     """The planner agent plans one control again, from its records, over the rules' plan.
     The plan stays proposed until a person approves it. A plan a person approved
     meanwhile is left as approved.
+
+    Returns DONE, SKIPPED (nothing to claim), or REQUEUED: what fell due while the run
+    worked was queued on the same plan at its end, for the caller to run as a new run.
 
     Each step commits on its own (db.independent_steps), as every background job's does: the
     claim and the stage are visible while the agents work, and no row of the control stays
@@ -3123,16 +3145,19 @@ def run_plan(
     # still to answer, and no run is left at work (B1j and B1k, understanding_once.complete);
     # without a model, by the rules.
     complete(connection, project_id, control_id, reviewing=provider is not None)
-    # What fell due while the run was busy is queued now and run in this same run, so it is
-    # never left unqueued and no worker has to be handed it (after the review of B1k, 16
-    # November 2026): the specialist's read whose last answer was saved meanwhile, or what
-    # the attributes follow once completed (a save the run did not read, which changed()
-    # could not queue over it). At most FOLLOW_DEPTH times, so a run always ends; the reads
-    # are bounded by their own budget (understanding_review.READS).
-    if provider is not None and _depth < FOLLOW_DEPTH:
-        again = queue_for_understanding(connection, project_id, control_id)
-        if again is not None:
-            return run_plan(connection, provider, again, _depth + 1)
+    # What fell due while the run was busy is queued now, so it is never left unqueued
+    # (after the review of B1k, 16 November 2026): the specialist's read whose last answer was
+    # saved meanwhile, or what the attributes follow once completed (a save the run did not
+    # read, which changed() could not queue over it). Queued as a new run the caller takes
+    # (REQUEUED), never run inside this one, so each run stays within its own time limit;
+    # the attempts are kept, so the runs that follow each other end within PLAN_RUN_ATTEMPTS,
+    # and a read still due that nothing could queue ends FAILED (follow_or_fail). The reads
+    # are bounded by their own budget too (understanding_review.READS).
+    if provider is not None:
+        from ai_workforce_api.understanding_review import follow_or_fail
+
+        if follow_or_fail(connection, project_id, control_id) == plan_id:
+            return REQUEUED
     return "DONE"
 
 

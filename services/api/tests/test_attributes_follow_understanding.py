@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 from support import (
     Database,
     approve_control_plan,
+    run_plan_through,
     settle_attributes,
     walkthrough_value,
 )
@@ -399,7 +400,7 @@ def test_the_run_proposes_tailors_and_reviews_and_one_decision_accepts_each_attr
 
     agents.review = review
     with connect(migrated.url) as connection:
-        assert run_plan(connection, agents, plan_id) == "DONE"
+        assert run_plan_through(connection, agents, plan_id) == "DONE"
     # The attribute agent, the reviewer of its drafts, the planner, then the reviewer of the
     # set, each under the stage the page shows.
     assert [who for who in agents.calls if who != "other"] == [
@@ -554,7 +555,7 @@ def test_a_review_that_does_not_finish_blocks_nothing_and_a_save_mid_run_is_read
     # A person answers another question while the planner works.
     agents.on_plan = lambda: _volume(team, control, client, "25 to 100")
     with connect(migrated.url) as connection:
-        assert run_plan(connection, agents, plan_id) == "DONE"
+        assert run_plan_through(connection, agents, plan_id) == "DONE"
     # The save was not queued (a run was working), so the run read it in a second pass, and
     # only one more.
     assert scheduler.plans == [plan_id]
@@ -613,7 +614,7 @@ def test_an_approved_plan_keeps_its_attributes_and_gets_the_tailoring_as_a_propo
         "findings": [],
     }  # fmt: skip
     with connect(migrated.url) as connection:
-        assert run_plan(connection, agents, plan_id) == "DONE"
+        assert run_plan_through(connection, agents, plan_id) == "DONE"
     assert "planner" in agents.calls and "set-review" in agents.calls
     # Nothing approved changed: the attributes have no agent criteria, and the planner's
     # tailoring waits on the plan as a change a person accepts.
@@ -647,7 +648,7 @@ def test_a_planner_answer_that_cannot_be_used_ends_the_run_and_a_person_runs_it_
     # An object where the schema asks for an array, and required parts missing.
     agents.plan = lambda: {"understanding": {}, "phases": {"DESIGN": []}}
     with connect(migrated.url) as connection:
-        assert run_plan(connection, agents, plan_id) == "DONE"
+        assert run_plan_through(connection, agents, plan_id) == "DONE"
     # The first answer and both corrections, then the rules; the reviewer still reviews.
     assert agents.calls.count("planner") == 3 and agents.calls[-1] == "set-review"
     assert _plan_run(migrated, control)[1:] == ("IDLE", "")
@@ -691,7 +692,7 @@ def test_a_planner_answer_that_cannot_be_used_ends_the_run_and_a_person_runs_it_
     # This time the planner answers: the criteria are tailored and nothing reads stopped.
     good = _Agents(migrated, team, control)
     with connect(migrated.url) as connection:
-        assert run_plan(connection, good, plan_id) == "DONE"
+        assert run_plan_through(connection, good, plan_id) == "DONE"
         assert attributes_run(connection, UUID(control)) == ("", "", "")
     assert [who for who in good.calls if who != "other"] == ["attributes", "planner", "set-review"]
     assert all(row[2] == "AGENT" for row in _approved(migrated, control))
@@ -761,7 +762,7 @@ def test_a_run_whose_process_died_reads_as_stopped_and_resumes_when_the_worker_s
     # Run for real, it starts again with the attributes, as the run it resumes did.
     agents = _Agents(migrated, team, control)
     with connect(migrated.url) as connection:
-        assert run_plan(connection, agents, plan_id) == "DONE"
+        assert run_plan_through(connection, agents, plan_id) == "DONE"
     assert [who for who in agents.calls if who != "other"] == [
         "attributes",
         "planner",
@@ -873,7 +874,7 @@ def test_a_duplicate_addition_only_makes_the_criteria_of_the_attribute_it_repeat
     agents.proposals = [_duplicate_addition()]
     agents.review = _as_duplicate_of(first[0])
     with connect(migrated.url) as connection:
-        assert run_plan(connection, agents, plan_id) == "DONE"
+        assert run_plan_through(connection, agents, plan_id) == "DONE"
     # The reviewer was shown the addition beside the attribute it repeats.
     given = agents.reviewed[0]
     assert [item["text"] for item in given["attributes"] if item["state"] == "AGENT_ADDS"] == [
@@ -950,7 +951,7 @@ def test_a_duplicate_of_an_attribute_a_person_owns_is_dropped_and_kept_as_a_conc
     agents.proposals = [_duplicate_addition()]
     agents.review = _as_duplicate_of(first[0])
     with connect(migrated.url) as connection:
-        assert run_plan(connection, agents, plan_id) == "DONE"
+        assert run_plan_through(connection, agents, plan_id) == "DONE"
     # The addition does not reach the person, and no change of their attribute is proposed.
     assert _proposals(migrated, control) == []
     kept = _approved(migrated, control)[0]
@@ -998,7 +999,7 @@ def test_a_duplicate_never_overwrites_the_criteria_of_a_change_proposed_for_the_
     agents.proposals = [change, _duplicate_addition()]
     agents.review = _as_duplicate_of(first[0])
     with connect(migrated.url) as connection:
-        assert run_plan(connection, agents, plan_id) == "DONE"
+        assert run_plan_through(connection, agents, plan_id) == "DONE"
     # One change of the attribute, in its own wording and with its own criteria: the
     # reviewer's criteria are the approved attribute's, and written over the change they
     # could contradict its wording. The duplicate goes; a person decides where the detail
@@ -1032,7 +1033,7 @@ def test_a_duplicate_never_overwrites_the_criteria_of_a_change_proposed_for_the_
             (plan_id,),
         )
         connection.commit()
-        assert run_plan(connection, again, plan_id) == "DONE"
+        assert run_plan_through(connection, again, plan_id) == "DONE"
     assert _proposals(migrated, control) == []
     assert _approved(migrated, control)[0][1] == first[1]
     assert "timely" not in str(_approved(migrated, control)[0][4])
@@ -1051,7 +1052,7 @@ def _auto_run(migrated: Database, team: dict[str, Any], control: str, client: Te
     """The run queued when Control Understanding becomes complete."""
     _answer_required(migrated, team, control, client)
     with connect(migrated.url) as connection:
-        assert run_plan(connection, agents, _plan_run(migrated, control)[0]) == "DONE"
+        assert run_plan_through(connection, agents, _plan_run(migrated, control)[0]) == "DONE"
 
 
 def _run_again(migrated: Database, team: dict[str, Any], control: str, client: TestClient,
@@ -1060,7 +1061,7 @@ def _run_again(migrated: Database, team: dict[str, Any], control: str, client: T
     asked = client.post(f"{_path(team, control)}/attributes/generate")
     assert asked.status_code == 200 and asked.json()["attributes_run"] == "PENDING"
     with connect(migrated.url) as connection:
-        assert run_plan(connection, agents, _plan_run(migrated, control)[0]) == "DONE"
+        assert run_plan_through(connection, agents, _plan_run(migrated, control)[0]) == "DONE"
 
 
 def _inline(migrated: Database, team: dict[str, Any], control: str, client: TestClient,
@@ -1254,8 +1255,10 @@ def test_a_duplicate_the_drafts_reviewer_returns_as_criteria_never_becomes_a_pro
     # Old "attributes/6" and "attribute-review/3"; new "attributes/7" and
     # "attribute-review/4" after the review of B1k (16 November 2026): the corrections
     # carry the previous answer as escaped data; nothing else changed.
+    # Old "attributes/7"; new "attributes/8" in the second fix round of B1k (16 November
+    # 2026): each issue names the attribute codes it bears on; nothing else changed.
     assert (control_attributes.PROMPT_VERSION, control_attributes.REVIEW_PROMPT_VERSION) == (
-        "attributes/7", "attribute-review/4",
+        "attributes/8", "attribute-review/4",
     )  # fmt: skip
 
 
@@ -1280,7 +1283,7 @@ def test_planning_the_evidence_of_an_accepted_attribute_is_not_shown_as_updating
         }
     ]  # fmt: skip
     with connect(migrated.url) as connection:
-        assert run_plan(connection, agents, plan_id) == "DONE"
+        assert run_plan_through(connection, agents, plan_id) == "DONE"
     rows = [*_approved(migrated, control)]
     added = _proposals(migrated, control)[0]
     accepted = client.post(
@@ -1307,7 +1310,7 @@ def test_planning_the_evidence_of_an_accepted_attribute_is_not_shown_as_updating
     # The run itself: the planner only, and the accepted criteria are as accepted.
     planner = _Agents(migrated, team, control)
     with connect(migrated.url) as connection:
-        assert run_plan(connection, planner, plan_id) == "DONE"
+        assert run_plan_through(connection, planner, plan_id) == "DONE"
         assert attributes_run(connection, UUID(control)) == ("", "", "")
     assert [who for who in planner.calls if who != "other"] == ["planner"]
     assert _approved(migrated, control) == before
@@ -1422,7 +1425,7 @@ def test_two_additions_named_as_each_others_duplicate_never_both_vanish(
 
     agents.review = review
     with connect(migrated.url) as connection:
-        assert run_plan(connection, agents, plan_id) == "DONE"
+        assert run_plan_through(connection, agents, plan_id) == "DONE"
     # One of the two is still proposed, carrying the criteria, so the condition is tested.
     proposals = _proposals(migrated, control)
     assert [(row[1], row[4]) for row in proposals] == [("ADD", MERGED["pass_criteria"])]
@@ -1462,7 +1465,7 @@ def test_an_addition_a_person_approved_during_the_review_is_not_merged_away(
 
     agents.review = review
     with connect(migrated.url) as connection:
-        assert run_plan(connection, agents, plan_id) == "DONE"
+        assert run_plan_through(connection, agents, plan_id) == "DONE"
     # The person's decision stands: the attribute is approved, nothing was superseded, the
     # approved attribute's criteria did not take its detail, and no merge is recorded.
     status = _rows(
@@ -1527,7 +1530,7 @@ def test_planning_evidence_for_an_accepted_attribute_never_inherits_a_failed_run
     plan_id = _plan_run(migrated, control)[0]
     with connect(migrated.url) as connection:
         # The run after the understanding has finished: nothing is due any more.
-        assert run_plan(connection, _Agents(migrated, team, control), plan_id) == "DONE"
+        assert run_plan_through(connection, _Agents(migrated, team, control), plan_id) == "DONE"
         assert not understanding_due(connection, team["project"], UUID(control))
     with connect(migrated.url) as connection:
         # A later run that followed the understanding ("Run again") failed in its planner
@@ -1550,7 +1553,7 @@ def test_planning_evidence_for_an_accepted_attribute_never_inherits_a_failed_run
     planner = _Agents(migrated, team, control)
     with connect(migrated.url) as connection:
         assert attributes_run(connection, UUID(control)) == ("", "", "")
-        assert run_plan(connection, planner, plan_id) == "DONE"
+        assert run_plan_through(connection, planner, plan_id) == "DONE"
     # The planner only: no attribute agent, so nothing a person has pending is replaced.
     assert [who for who in planner.calls if who != "other"] == ["planner"]
     # The launch's refinement clears a stage the same way.
@@ -1731,7 +1734,7 @@ def test_a_run_on_accepted_attributes_asks_no_follow_up_question(migrated: Datab
     agents = _Agents(migrated, team, control)
     agents.issues = [_GRANT_RECORD]
     with connect(migrated.url) as connection:
-        assert run_plan(connection, agents, plan_id) == "DONE"
+        assert run_plan_through(connection, agents, plan_id) == "DONE"
     assert "attributes" in agents.calls
     # Nothing asked, and nothing lost: the run's own record keeps what it would have asked.
     assert _open_questions(migrated, control) == []
@@ -1784,7 +1787,7 @@ def test_accepting_the_attributes_closes_the_questions_still_open(migrated: Data
 
     agents.specialist = asking
     with connect(migrated.url) as connection:
-        assert run_plan(connection, agents, plan_id) == "DONE"
+        assert run_plan_through(connection, agents, plan_id) == "DONE"
     # Asked while the attributes wait on a person.
     assert [row[:2] for row in _open_questions(migrated, control)] == [
         (_GRANT_RECORD["topic"], "OPEN")

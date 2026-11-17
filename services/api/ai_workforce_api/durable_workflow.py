@@ -296,6 +296,13 @@ class PlanRunRequest(TypedDict):
     plan_id: str
 
 
+# What run_evidence_plan and fail_evidence_plan_run return when the plan was queued again
+# (evidence_plans.REQUEUED; the workflow module imports nothing of the API's), and how many
+# runs one workflow makes at most: the plan's attempts (3) bound it first.
+PLAN_REQUEUED = "REQUEUED"
+PLAN_FOLLOWS = 4
+
+
 @workflow.defn(name="evidence_plan_run")
 class EvidencePlanRunWorkflow:
     """The planner agent plans a launched control, with retries; the rules' plan stands
@@ -303,21 +310,35 @@ class EvidencePlanRunWorkflow:
 
     @workflow.run
     async def run(self, payload: PlanRunRequest) -> str:
-        try:
-            result = await workflow.execute_activity(
-                "run_evidence_plan",
-                args=[payload["plan_id"]],
-                start_to_close_timeout=timedelta(minutes=10),
-                retry_policy=RetryPolicy(maximum_attempts=3),
-            )
-        except ActivityError:
-            await workflow.execute_activity(
-                "fail_evidence_plan_run",
-                args=[payload["plan_id"]],
-                start_to_close_timeout=timedelta(seconds=30),
-            )
-            return "FAILED"
-        return str(result)
+        """A run whose end queued the same plan again (REQUEUED: what fell due while it
+        worked), or whose failure was followed by queueing it again, is run as a new activity
+        with its own time limit, never inside the one before (after the review of B1k, 16
+        November 2026). The plan's attempts bound how often (evidence_plans.
+        PLAN_RUN_ATTEMPTS, kept on requeue); FOLLOWS bounds the workflow as well."""
+        result = "FAILED"
+        for _turn in range(PLAN_FOLLOWS):
+            try:
+                result = str(
+                    await workflow.execute_activity(
+                        "run_evidence_plan",
+                        args=[payload["plan_id"]],
+                        start_to_close_timeout=timedelta(minutes=10),
+                        retry_policy=RetryPolicy(maximum_attempts=3),
+                    )
+                )
+            except ActivityError:
+                followed = await workflow.execute_activity(
+                    "fail_evidence_plan_run",
+                    args=[payload["plan_id"]],
+                    start_to_close_timeout=timedelta(seconds=60),
+                )
+                result = "FAILED"
+                if followed != PLAN_REQUEUED:
+                    return result
+                continue
+            if result != PLAN_REQUEUED:
+                return result
+        return result
 
 
 class SystemReviewRequest(TypedDict):

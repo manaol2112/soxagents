@@ -468,6 +468,14 @@ _ACCEPTED_SQL = """
                WHERE a.engagement_control_id = %(control)s AND a.status = 'APPROVED'
                  AND a.criteria_accepted_at IS NULL
                  AND a.criteria_origin IS DISTINCT FROM 'PERSON')
+       -- An open conflict holds acceptance until a person decides it (B1l point 6; after the
+       -- review of B1k, 16 November 2026): the set is not accepted over it, so neither
+       -- completion by acceptance nor close_questions_once_accepted follows a decision taken
+       -- while one stands (decide REJECT of the last proposal included).
+       AND NOT EXISTS (
+               SELECT 1 FROM attribute_assumptions s
+               WHERE s.engagement_control_id = %(control)s AND s.status = 'OPEN'
+                 AND s.kind = 'CONFLICT')
 """
 
 # The agents' follow-up questions: on the attributes, their sources, and the process.
@@ -1092,6 +1100,22 @@ class AnswerIssue(BaseModel):
         if not isinstance(raw, list):
             return []
         return [item for item in raw if isinstance(item, str) and len(item) <= 8][:5]
+
+    # The approved attributes the finding bears on, by code (the attribute agent's
+    # attributes/8; none: the set as a whole). Only well-formed codes are kept; whether the
+    # control has them is checked where they are recorded (attribute_assumptions.shaped).
+    attribute_codes: list[str] = []
+
+    @field_validator("attribute_codes", mode="before")
+    @classmethod
+    def _codes_only(cls, raw: Any) -> list[str]:
+        if not isinstance(raw, list):
+            return []
+        found = [
+            item.strip() for item in raw
+            if isinstance(item, str) and re.fullmatch(r"A[0-9]{1,3}", item.strip())
+        ]  # fmt: skip
+        return list(dict.fromkeys(found))[:12]
 
 
 def checked_issues(

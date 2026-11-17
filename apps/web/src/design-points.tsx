@@ -304,21 +304,23 @@ export function PointRow({
               </Link>
             ) : null;
           })}
-          <button
-            ref={opener}
-            type="button"
-            className="btn-secondary btn-sm"
-            disabled={writes === null}
-            onClick={() => {
-              setAsking(true);
-              setRefusal("");
-              window.requestAnimationFrame(() =>
-                document.getElementById(`${uid}-why`)?.focus(),
-              );
-            }}
-          >
-            {CONSIDERED}
-          </button>
+          {point.settle.includes("CONSIDER") ? (
+            <button
+              ref={opener}
+              type="button"
+              className="btn-secondary btn-sm"
+              disabled={writes === null}
+              onClick={() => {
+                setAsking(true);
+                setRefusal("");
+                window.requestAnimationFrame(() =>
+                  document.getElementById(`${uid}-why`)?.focus(),
+                );
+              }}
+            >
+              {CONSIDERED}
+            </button>
+          ) : null}
         </p>
       ) : null}
       {asking && confirmed === null ? (
