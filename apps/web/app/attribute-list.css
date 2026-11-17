@@ -1418,6 +1418,16 @@ button.tar-head:focus-visible:not(:disabled) {
   text-transform: uppercase;
 }
 
+/* Accepted with the attribute, not confirmed (B1l point 6): still to settle, quieter than an
+   open one; its kicker carries no alarm. */
+.tas-open.is-accepted {
+  background: var(--surface);
+}
+
+.tas-open.is-accepted .tas-kicker {
+  color: var(--text-secondary);
+}
+
 /* Why Accept is off on an attribute a conflict holds. */
 .tc-held {
   margin: 0;

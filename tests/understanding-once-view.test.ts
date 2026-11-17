@@ -79,9 +79,13 @@ describe("Control Understanding: one pass, complete once", () => {
     // Rewritten (B1k, 16 November 2026: the specialist's review of the questions asked is
     // shown under the understanding). Old: `once={{ completedAt, questionPass }}`. New: the
     // same, and the latest review, `review: conversation.review ?? null`.
+    // Rewritten again (B1l review fixes, 16 November 2026: Review again keeps the last good
+    // review shown, the review that was not run says so, and the attributes not reviewed are
+    // named by letter). Old: once ended at `review`. New: the same, then the request a person
+    // made after completion, why no review ran, and the approved attributes.
     assert.match(
       setup,
-      /once=\{\{\s*completedAt: conversation\.completedAt \?\? null,\s*questionPass: conversation\.questionPass \?\? null,\s*review: conversation\.review \?\? null,\s*\}\}/,
+      /once=\{\{\s*completedAt: conversation\.completedAt \?\? null,\s*questionPass: conversation\.questionPass \?\? null,\s*review: conversation\.review \?\? null,\s*request: conversation\.reviewRequest \?\? null,\s*notRun: conversation\.reviewNotRun \?\? null,\s*approved: conversation\.approved \?\? \[\],\s*\}\}/,
     );
     assert.match(
       controls,

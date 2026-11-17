@@ -55,9 +55,12 @@ describe("the specialist's review under the understanding", () => {
     const section = pane.indexOf("<QuestionReviewSection");
     const ready = pane.indexOf("className={`ur-ready");
     assert.ok(narrative > 0 && narrative < section && section < ready);
+    // Rewritten (B1l review fixes, 16 November 2026). Old: the section was given the pass,
+    // the review and the completion only. New: also the read a person asked for after
+    // completion, why no review ran, and the approved attributes (named by letter).
     assert.match(
       pane,
-      /<QuestionReviewSection\s+ids=\{ids\}\s+canAct=\{canAct\}\s+pass=\{once\.questionPass\}\s+review=\{once\.review \?\? null\}\s+completedAt=\{once\.completedAt\}\s*\/>/,
+      /<QuestionReviewSection\s+ids=\{ids\}\s+canAct=\{canAct\}\s+pass=\{once\.questionPass\}\s+review=\{once\.review \?\? null\}\s+completedAt=\{once\.completedAt\}\s+request=\{once\.request \?\? null\}\s+notRun=\{once\.notRun \?\? null\}\s+approved=\{once\.approved \?\? \[\]\}\s*\/>/,
     );
   });
 
@@ -73,12 +76,23 @@ describe("the specialist's review under the understanding", () => {
     assert.match(section, /<p className="ur-review-text">/);
     assert.match(section, /<mark key=\{at\} className="ur-review-mark">/);
     // Settled: "Reviewed <when>: …", with nothing marked.
-    assert.match(section, /reviewedLead\(view\.review\.reviewedAt\)/);
-    assert.match(section, /view\.settled \? \[\] : view\.review\.marked/);
+    // Rewritten (B1l review fixes, 16 November 2026: "Review again" made the section vanish).
+    // Old: the paragraph was `view.review`'s, drawn only in the ready state. New: the
+    // paragraph shown is the ready review, or the last good one while a read runs, so it is
+    // never hidden; the attributes not reviewed are named by their letters.
+    assert.match(
+      section,
+      /const shown =\s*view\.state === "ready"\s*\? view\.review\s*: view\.state === "checking"\s*\? view\.last\s*: null;/,
+    );
+    assert.match(section, /reviewedLead\(shown\.reviewedAt\)/);
+    assert.match(
+      section,
+      /markedParts\(shown\.narrative, settled \? \[\] : shown\.marked\)/,
+    );
     assert.match(section, /\{REVIEW_CHECKING\}/);
     // Failed: one line here; the sentence and the two choices end the course.
     assert.match(section, /\{REVIEW_FAILED\}\.\s*<\/p>/);
-    assert.match(section, /notReviewedLine\(view\.review\.notReviewed\)/);
+    assert.match(section, /notReviewedLine\(shown\.notReviewed, approved\)/);
     assert.match(
       setupCss,
       /\.ur-review-text \{[^}]*font-family: var\(--font-display\);/,
@@ -88,11 +102,19 @@ describe("the specialist's review under the understanding", () => {
 
   it("offers Review again as a person's quiet request, done only once the server accepts it", () => {
     const section = component(specialist, "QuestionReviewSection");
-    assert.match(section, /offersReviewAgain\(completedAt, pass, canAct\)/);
+    // Rewritten (B1l review fixes, 16 November 2026: after a failed one it could not be
+    // asked again). Old: offersReviewAgain(completedAt, pass, canAct), drawn only when ready,
+    // worded REVIEW_AGAIN. New: offered from the view whatever it is (never while checking,
+    // never without a model), worded by it: Run again after a read that could not run.
     assert.match(
       section,
-      /className="ur-skip"[\s\S]{0,160}\{sending \? "Requesting…" : REVIEW_AGAIN\}/,
+      /offersReviewAgain\(completedAt, pass, canAct, view\)/,
     );
+    assert.match(
+      section,
+      /className="ur-skip"[\s\S]{0,160}\{sending \? "Requesting…" : reviewAgainWords\(view\)\}/,
+    );
+    assert.doesNotMatch(section, /again && view\.state === "ready"/);
     const send = section.slice(section.indexOf("async function reviewAgain"));
     assert.ok(
       send.indexOf('await post(ids, "review-run")') <
@@ -148,7 +170,17 @@ describe("Not known yet, proceed", () => {
       review.indexOf("const carriedStep = () =>"),
     );
     assert.ok(foot.indexOf("Skip for now") < foot.indexOf("<NotKnownButton"));
-    assert.match(foot, /offersNotKnown\(asked\.issue, canAct\)/);
+    // Rewritten (B1l review fixes, product owner 16 November 2026: "Not known yet, proceed"
+    // covers required walkthrough questions and statement values as well). Old: the foot
+    // offered it from `offersNotKnown(asked.issue, canAct)`, an OPEN issue only. New: from
+    // the step's target, which notKnownTarget gives for an OPEN question of the agents or
+    // the review, and for a statement value or a walkthrough question not on record.
+    assert.match(foot, /const target = asked\?\.target \?\? null;/);
+    assert.match(foot, /target=\{target\}/);
+    assert.match(
+      review,
+      /const asked = \{ need, target: notKnownTarget\(need, raised, canAct\) \};/,
+    );
     assert.match(foot, /onDone=\{\(\) => void leftNotKnown\(asked\.need\)\}/);
     // Both ways a question is asked carry it.
     assert.match(
@@ -156,6 +188,33 @@ describe("Not known yet, proceed", () => {
       /foot=\{\(primary\) => foot\(primary, true, asked\)\}/,
     );
     assert.match(review, /\{foot\(act, true, asked\)\}/);
+    // A statement value's own step carries it too (B1l review fixes).
+    assert.match(review, /!onFile,\s*asked,\s*\)\}/);
+  });
+
+  it("is offered on each walkthrough question not on record, its note in place", () => {
+    const item = review.slice(
+      review.indexOf("const walkthroughQuestion = (need: Need) =>"),
+      review.indexOf("const topicStepView ="),
+    );
+    assert.match(
+      item,
+      /const notKnown = notKnownTarget\(need, undefined, canAct\);/,
+    );
+    assert.match(item, /onOpen=\{\(\) => setNotKnownFor\(need\.key\)\}/);
+    assert.match(
+      item,
+      /<NotKnownPanel[\s\S]{0,160}target=\{notKnown\}[\s\S]{0,120}onDone=\{\(\) => void leftNotKnown\(need\)\}/,
+    );
+    // A walkthrough question leaves its topic's step, which stays where it is.
+    const left = inner(review, "leftNotKnown");
+    assert.match(
+      left,
+      /if \(need\.kind === "WALKTHROUGH"\) \{\s*clearWalkthrough\(\[need\.key\]\);\s*\} else \{\s*go\(nextOpen\(now, interview, at\)\);\s*\}/,
+    );
+    // What a person left as not known stays on record as theirs, never as an answer.
+    assert.match(review, /Left as not known yet/);
+    assert.match(review, /<strong>Not known yet<\/strong>/);
   });
 
   it("takes an optional note of up to 500 characters, and moves on only once the server records it", () => {
@@ -166,8 +225,15 @@ describe("Not known yet, proceed", () => {
     const record = panelSource.slice(
       panelSource.indexOf("async function record"),
     );
+    // Rewritten (B1l review fixes). Old: the panel always posted "issue-not-known". New:
+    // the write is its target's (an issue at its version, a walkthrough question or a value
+    // by key, notKnownWrite), still before onDone.
     assert.ok(
-      record.indexOf('await post(ids, "issue-not-known"') <
+      record.indexOf("const write = notKnownWrite(target, note.trim());") <
+        record.indexOf("await post(ids, write.intent, write.fields)"),
+    );
+    assert.ok(
+      record.indexOf("await post(ids, write.intent, write.fields)") <
         record.indexOf("onDone();"),
     );
     assert.match(
@@ -235,10 +301,15 @@ describe("a review that could not run", () => {
 describe("the Attributes step", () => {
   it("leaves a held attribute out of Accept all and says what goes with it", () => {
     assert.match(panel, /const allRows = acceptAllRows\(rows\);/);
+    // Rewritten (B1l review fixes: "Accept all N" miscounted). Old: acceptAllWords(allRows,
+    // heldOut). New: the same, with the set's assumptions and every row not yet accepted, so
+    // each unconfirmed assumption is counted once and the set's are counted when the
+    // acceptance leaves nothing else to accept; and whether a conflict holds the set.
     assert.match(
       panel,
-      /acceptAllWords\(allRows, toAccept\.length - allRows\.length\)/,
+      /acceptAllWords\(allRows, toAccept\.length - allRows\.length, \{\s*assumptions: context\.setAssumptions \?\? \[\],\s*remaining: notYetAccepted\(rows\),\s*held: setHeldNow,\s*\}\)/,
     );
+    assert.match(panel, /\{canAct && showAllNote \? \(/);
     assert.match(panel, /onClick=\{\(\) => onAccept\(allRows\)\}/);
     assert.match(
       panel,
@@ -260,16 +331,19 @@ describe("the Attributes step", () => {
       panel,
       /disabled=\{locked \|\| held\}\s*onClick=\{\(\) => onAccept\(\[each\]\)\}/,
     );
+    // Rewritten (B1l review fixes: a conflict that names no attribute holds the whole set,
+    // and says so). Old: the reason was always CONFLICT_HOLDS. New: holdWords(item), the
+    // attribute's own conflict or the set's.
     assert.match(
       panel,
-      /\{canAct && held \? \(\s*<p className="tc-held">\{CONFLICT_HOLDS\}<\/p>\s*\) : null\}/,
+      /\{canAct && held \? \(\s*<p className="tc-held">\{holdWords\(item\)\}<\/p>\s*\) : null\}/,
     );
     assert.match(criteria, /const held = item\.heldByConflict === true;/);
     assert.equal(
       criteria.match(/disabled=\{action\.pending \|\| held\}/g)?.length,
       2,
     );
-    assert.match(panel, /unavailable: held \? CONFLICT_HOLDS : null,/);
+    assert.match(panel, /unavailable: held \? holdWords\(item\) : null,/);
   });
 
   it("reads a conflict as a decision with its two choices, and a not-known as such", () => {
@@ -285,7 +359,18 @@ describe("the Attributes step", () => {
 
 describe("the D&I workpaper's ASSUMPTION point", () => {
   it("links to the Attributes step, and keeps Considered… as for other points", () => {
-    assert.match(points, /const href = settleHref\(action, links\);/);
+    // Rewritten (B1l review fixes: the point's link must lead to where the assumption is
+    // decided). Old: settleHref(action, links), the Attributes step. New: with the point's
+    // place, so the link opens the attribute's own row (#attribute-<id>).
+    assert.match(
+      points,
+      /const href = settleHref\(action, links, point\.place\);/,
+    );
+    assert.match(panel, /id=\{attributeAnchor\(item\.id\)\}/);
+    assert.match(
+      panel,
+      /const target = attributeFromHash\(window\.location\.hash\);/,
+    );
     assert.match(points, /attributesHref: writes\?\.attributesHref \?\? null,/);
     assert.match(points, /\{CONSIDERED\}/);
     assert.match(points, /<b>\{YOUR_DECISION\}<\/b>/);

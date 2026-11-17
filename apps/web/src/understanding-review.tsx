@@ -113,6 +113,7 @@ import {
   understandingEnd,
 } from "./understanding-once-model";
 import {
+  ensureReview,
   NotKnownButton,
   NotKnownPanel,
   QuestionReviewSection,
@@ -121,11 +122,17 @@ import {
 import {
   blocksLine,
   courseWithout,
+  ENSURE_EVERY_MS,
+  ENSURE_REFUSED,
+  ensuresReview,
   fromReview,
   heldByFailedReview,
+  type NotKnownTarget,
   notKnownKeys,
-  offersNotKnown,
+  notKnownTarget,
+  RUN_REVIEW,
   reviewView,
+  targetKey,
   withoutNotKnown,
 } from "./understanding-specialist-model";
 
@@ -259,7 +266,7 @@ export function UnderstandingReview({
   const [notKnownFor, setNotKnownFor] = useState<string | null>(null);
   const [closed, setClosed] = useState<ReadonlySet<string>>(new Set());
   const closedRef = useRef<ReadonlySet<string>>(new Set());
-  closedRef.current = notKnownKeys(issues, closed);
+  closedRef.current = notKnownKeys(issues, closed, review?.notKnown ?? []);
 
   const read = useCallback(async (): Promise<Review | null> => {
     reads.current += 1;
@@ -354,6 +361,35 @@ export function UnderstandingReview({
     }, 3000);
     return () => window.clearInterval(timer);
   }, [passing, router, read]);
+
+  // B1l point 1 (no dead end): while the course reads as checking before completion with no
+  // read live, the page asks the server, explicitly and idempotently, to queue a review that
+  // is due (or record a completion that is due): once on arriving, then every 30 seconds.
+  // Never a write in a GET; a refusal is said quietly, with a way to ask again.
+  const [ensureProblem, setEnsureProblem] = useState(false);
+  const ensuring =
+    review !== null &&
+    ensuresReview(
+      understandingEnd(once, gatesDone),
+      once.questionPass,
+      once.review,
+      canAct,
+    );
+  const ensureNow = useCallback(async () => {
+    const taken = await ensureReview(ids);
+    setEnsureProblem(!taken);
+    if (taken) {
+      router.refresh();
+    }
+  }, [ids, router]);
+  useEffect(() => {
+    if (!ensuring) {
+      return;
+    }
+    void ensureNow();
+    const timer = window.setInterval(() => void ensureNow(), ENSURE_EVERY_MS);
+    return () => window.clearInterval(timer);
+  }, [ensuring, ensureNow]);
 
   // A new question the reviewer agent is still checking appears once checked: read again
   // shortly while any is (14 November 2026; the draft wording is never shown).
@@ -735,12 +771,20 @@ export function UnderstandingReview({
     const keys = new Set(closed);
     keys.add(need.key);
     setClosed(keys);
-    closedRef.current = notKnownKeys(issues, keys);
+    closedRef.current = notKnownKeys(issues, keys, review.notKnown ?? []);
     setNotKnownFor(null);
     const now = withoutNotKnown(review, keys);
     setReview(now);
-    go(nextOpen(now, interview, at));
-    await settle(`${need.label || "The question"}: left as not known yet.`);
+    // A walkthrough question leaves its topic's step, which stays open on the questions
+    // still there; any other question moves the course on.
+    if (need.kind === "WALKTHROUGH") {
+      clearWalkthrough([need.key]);
+    } else {
+      go(nextOpen(now, interview, at));
+    }
+    await settle(
+      `Left as not known yet: ${(need.question || need.label || "the question").replace(/[?.]$/, "")}.`,
+    );
   }
 
   /** The carried step: the ticked answers confirmed together, the rest asked on their own. */
@@ -1107,9 +1151,13 @@ export function UnderstandingReview({
   const onRecord = [...groups.confirmed, ...groups.rcm];
   // The walkthrough answers on record, by topic.
   const wtRecord = walkthroughRecord(review);
+  // B1l point 1: what a person left as not known yet stays on record as theirs, never as
+  // an answer.
+  const leftNotKnownList = review.notKnown ?? [];
   const recordCount =
     onRecord.length +
-    wtRecord.reduce((sum, group) => sum + group.needs.length, 0);
+    wtRecord.reduce((sum, group) => sum + group.needs.length, 0) +
+    leftNotKnownList.length;
   const wtSteps = plan.filter((item) => stepTopic(item) !== null);
   const reopened = Object.keys(wtReopened).filter(
     (key) => wtReopened[key] === true,
@@ -1528,6 +1576,9 @@ export function UnderstandingReview({
         pass={once.questionPass}
         review={once.review ?? null}
         completedAt={once.completedAt}
+        request={once.request ?? null}
+        notRun={once.notRun ?? null}
+        approved={once.approved ?? []}
       />
 
       <ul
@@ -1683,6 +1734,27 @@ export function UnderstandingReview({
               </ul>
             </section>
           ))}
+          {leftNotKnownList.length > 0 ? (
+            <section
+              className="ur-record-topic"
+              aria-labelledby={`ur-record-not-known-${ids.controlId}`}
+            >
+              <h4 id={`ur-record-not-known-${ids.controlId}`}>
+                Left as not known yet
+              </h4>
+              <ul>
+                {leftNotKnownList.map((item) => (
+                  <li key={item.key}>
+                    <span className="ur-record-q">{item.question}</span>
+                    <span className="ur-record-a">
+                      <strong>Not known yet</strong>
+                      {item.note !== "" ? <small>{item.note}</small> : null}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
         </details>
       ) : null}
     </>
@@ -1694,12 +1766,12 @@ export function UnderstandingReview({
   const foot = (
     primary: ReactNode,
     skip: boolean,
-    asked: { need: Need; issue: SetupIssue | undefined } | null = null,
+    asked: { need: Need; target: NotKnownTarget | null } | null = null,
   ) => {
-    const notKnown =
-      asked !== null && offersNotKnown(asked.issue, canAct)
-        ? asked.issue
-        : undefined;
+    // Every question a person is asked (B1l point 1): an agent's or the review's, and a
+    // statement value not yet on record.
+    const target = asked?.target ?? null;
+    const notKnown = target === null ? undefined : { id: targetKey(target) };
     return (
       <>
         <div className="ur-foot">
@@ -1735,12 +1807,13 @@ export function UnderstandingReview({
           </div>
         </div>
         {notKnown !== undefined &&
+        target !== null &&
         asked !== null &&
         notKnownFor === notKnown.id ? (
           <NotKnownPanel
             key={notKnown.id}
             ids={ids}
-            issue={notKnown}
+            target={target}
             onCancel={() => setNotKnownFor(null)}
             onDone={() => void leftNotKnown(asked.need)}
           />
@@ -1861,7 +1934,7 @@ export function UnderstandingReview({
     const forLine = forAttributes ? "" : neededForLine(need);
     // B1l point 5: a question from the review names what cannot be written without the fact.
     const blocks = blocksLine(raised);
-    const asked = need.kind === "QUESTION" ? { need, issue: raised } : null;
+    const asked = { need, target: notKnownTarget(need, raised, canAct) };
     const chips = (
       <div className="ur-kicker">
         {need.kind === "QUESTION" ? (
@@ -2094,6 +2167,7 @@ export function UnderstandingReview({
             <UiIcon name="arrow" size={14} />
           </button>,
           !onFile,
+          asked,
         )}
       </form>
     );
@@ -2141,6 +2215,10 @@ export function UnderstandingReview({
     const whyOpen = wtShown[`${need.key}:why`] === true;
     const quoteOpen = wtShown[`${need.key}:quote`] === true;
     const locked = !canAct || busy;
+    // B1l point 1: a walkthrough question not yet on record may be left as not known yet,
+    // with an optional note: the person's record, never an answer.
+    const notKnown = notKnownTarget(need, undefined, canAct);
+    const leaving = notKnown !== null && notKnownFor === need.key;
     const multi = wt.answerKind === "MULTI";
     // The question's Other answer (11 November 2026): its words when chosen, null otherwise.
     const other = wt.allowsOther ? otherText(pick) : null;
@@ -2343,7 +2421,7 @@ export function UnderstandingReview({
         ) : null}
         {control}
         {otherField}
-        {proposal || (!need.required && !onFile) ? (
+        {proposal || (!need.required && !onFile) || notKnown !== null ? (
           <div className="ur-wt-foot">
             {proposal && !mark.agent ? (
               <span className="ai-mark is-rules">{mark.text}</span>
@@ -2374,7 +2452,24 @@ export function UnderstandingReview({
                 {saving === need.key ? "Saving…" : "Mark not applicable"}
               </button>
             ) : null}
+            {notKnown !== null && !leaving ? (
+              <span className="ur-wt-na">
+                <NotKnownButton
+                  disabled={locked}
+                  onOpen={() => setNotKnownFor(need.key)}
+                />
+              </span>
+            ) : null}
           </div>
+        ) : null}
+        {notKnown !== null && leaving ? (
+          <NotKnownPanel
+            key={need.key}
+            ids={ids}
+            target={notKnown}
+            onCancel={() => setNotKnownFor(null)}
+            onDone={() => void leftNotKnown(need)}
+          />
         ) : null}
         {proposal && wt.quote !== "" ? (
           <blockquote
@@ -2614,6 +2709,20 @@ export function UnderstandingReview({
           checking the answers for anything else the attributes need. A question
           they add joins this course, here.
         </p>
+        {ensureProblem && ensuring ? (
+          // The server did not take the request to queue the review: said quietly, with a
+          // way to ask again; never a dead end (B1l point 1).
+          <p className="ur-hint" role="status">
+            {ENSURE_REFUSED}{" "}
+            <button
+              type="button"
+              className="cs-link"
+              onClick={() => void ensureNow()}
+            >
+              {RUN_REVIEW}
+            </button>
+          </p>
+        ) : null}
         <div className="ur-foot-actions">
           {plan.length > 0 ? (
             <button

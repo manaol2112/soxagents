@@ -2229,6 +2229,9 @@ function ControlRecord({
                 completedAt: context.understandingCompletedAt ?? null,
                 questionPass: context.questionPass ?? null,
                 review: context.questionReview ?? null,
+                reviewRequest: context.questionReviewRequest ?? null,
+                reviewNotRun: context.reviewNotRun ?? null,
+                approved: context.approved,
               }
             : null
         }

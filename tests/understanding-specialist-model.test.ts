@@ -318,13 +318,19 @@ describe("the review's place in Control Understanding", () => {
   });
 
   it("is checking while the specialist reads, failed when its answer could not be used", () => {
-    assert.deepEqual(reviewView("CHECKING", review), { state: "checking" });
+    // Rewritten (B1l review fixes, 16 November 2026: the last good review is kept shown
+    // while a read runs). Old: { state: "checking" }. New: the same, with `last`, the READY
+    // review still shown (null where there is none).
+    assert.deepEqual(reviewView("CHECKING", review), {
+      state: "checking",
+      last: review,
+    });
     assert.deepEqual(
       reviewView(
         "WAITING",
         parseQuestionReview({ ...ready, status: "PENDING" }),
       ),
-      { state: "checking" },
+      { state: "checking", last: null },
     );
     assert.deepEqual(
       reviewView(
@@ -379,14 +385,44 @@ describe("the review's place in Control Understanding", () => {
   });
 
   it("names the attributes not reviewed in one quiet line", () => {
-    assert.equal(notReviewedLine([]), null);
+    // Rewritten (B1l review fixes, 16 November 2026: the line named attributes by a key the
+    // page does not use, "Attribute A2" or "Attribute cm06-approved"). Old: the codes were
+    // shown as given (["B"] read "Attribute B ..."). New: each code, library definition key
+    // or id is read back to the letter the Attributes step shows; one the page cannot place
+    // is counted, never shown as a code.
+    const approved = [
+      { id: "a-1", code: "A1", definition: null },
+      { id: "a-2", code: "A2", definition: null },
+      { id: "a-3", code: "", definition: { key: "cm06-approved" } as never },
+      { id: "a-4", code: "A4", definition: null },
+      { id: "a-5", code: "A5", definition: null },
+    ];
+    assert.equal(notReviewedLine([], approved), null);
     assert.equal(
-      notReviewedLine(["B"]),
+      notReviewedLine(["A2"], approved),
       "Attribute B was not reviewed; the agent states its assumptions on it.",
     );
     assert.equal(
-      notReviewedLine(["B", "C", "E"]),
+      notReviewedLine(["A2", "cm06-approved", "A5"], approved),
       "Attributes B, C and E were not reviewed; the agent states its assumptions on them.",
+    );
+    assert.equal(
+      notReviewedLine(["A9"], approved),
+      "One attribute was not reviewed; the agent states its assumptions on it.",
+    );
+    assert.equal(
+      notReviewedLine(["A1", "A9", "zz"], approved),
+      "Attribute A was not reviewed; the agent states its assumptions on it. 2 more attributes were not reviewed; the agent states its assumptions on them.",
+    );
+    // A control with no attributes yet: the review's units are kinds of fact.
+    assert.equal(
+      notReviewedLine(["PERFORMER", "APPROVER"]),
+      "Not reviewed: who performs it and who approves it; the agent states its assumptions on the attributes.",
+    );
+    // Never a code on screen.
+    assert.doesNotMatch(
+      notReviewedLine(["A2", "cm06-approved", "A9"], approved) ?? "",
+      /A2|A9|cm06/,
     );
   });
 
@@ -509,15 +545,20 @@ describe("Not known yet, proceed", () => {
         { key: "q-1", kind: "QUESTION" },
         { key: "q-2", kind: "QUESTION" },
         { key: "q-3", kind: "QUESTION" },
-        // Only a question is ever closed so: a value keyed the same is kept.
+        // Rewritten (B1l review fixes, product owner 16 November 2026: "Not known yet,
+        // proceed" covers required walkthrough questions and statement values as well).
+        // Old: only a question was ever closed so, and a value keyed the same was kept.
+        // New: a value or a walkthrough question closed so leaves too; a document, the
+        // process or the sign-in settings are never closed so.
         { key: "q-3", kind: "ANSWER" },
+        { key: "q-3", kind: "DOCUMENT" },
       ],
       controlRef: "ITGC-CM-06",
     };
     const left = withoutNotKnown(review, keys);
     assert.deepEqual(left.needs, [
       { key: "q-2", kind: "QUESTION" },
-      { key: "q-3", kind: "ANSWER" },
+      { key: "q-3", kind: "DOCUMENT" },
     ]);
     assert.equal(left.controlRef, "ITGC-CM-06");
     assert.equal(withoutNotKnown(review, new Set()), review);

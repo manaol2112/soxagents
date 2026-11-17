@@ -3,32 +3,41 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState, useTransition } from "react";
 import {
+  type Attribute,
   NOT_KNOWN_NOTE_MAX,
   notKnownNoteProblem,
   type QuestionPass,
   type QuestionReview,
+  type ReviewNotRun,
+  type ReviewRequest,
 } from "./control-context-model";
 import { UiIcon } from "./ui-icon";
 import { characterCount } from "./understanding-once-model";
 import {
+  lastReady,
   markedParts,
   NOT_KNOWN_ACTION,
   NOT_KNOWN_HINT,
   NOT_KNOWN_LABEL,
   NOT_KNOWN_RECORD,
+  type NotKnownTarget,
   notKnownProblem,
+  notKnownWrite,
   notReviewedLine,
   offersReviewAgain,
   PROCEED_SENT,
   PROCEED_WITHOUT,
-  REVIEW_AGAIN,
+  REVIEW_AGAIN_FAILED,
   REVIEW_AGAIN_SENT,
   REVIEW_BY,
   REVIEW_CHECKING,
   REVIEW_FAILED,
+  REVIEW_NONE,
+  REVIEW_NOT_RUN,
   REVIEW_TITLE,
   type ReviewIntent,
   RUN_AGAIN,
+  reviewAgainWords,
   reviewedLead,
   reviewProblem,
   reviewView,
@@ -41,7 +50,12 @@ type Ids = { organizationId: string; projectId: string; controlId: string };
  * a review it accepted to run). */
 async function post(
   ids: Ids,
-  intent: ReviewIntent | "issue-not-known",
+  intent:
+    | ReviewIntent
+    | "review-ensure"
+    | "issue-not-known"
+    | "walkthrough-not-known"
+    | "value-not-known",
   fields: Record<string, unknown> = {},
 ): Promise<{ status: number; detail: string }> {
   try {
@@ -74,9 +88,11 @@ async function post(
  * approved prototype brief-proto/ureview2.png): the review's paragraph in the narrative's own
  * serif, the matters it does not yet establish marked quietly; once it has nothing left to
  * ask, "Reviewed <when>: …". While the specialist reads: "Checking what else the agents
- * need…". A review that could not run is one line here; its two choices are on the course's
- * last screen. Once complete, "Review again" is a person's quiet request, whose findings
- * become assumptions on the attributes, never questions here.
+ * need…", the last good review still shown. A review that could not run before completion
+ * is one line here; its two choices are on the course's last screen. Once complete, "Review
+ * again" is a person's quiet request, whose findings become assumptions on the attributes,
+ * never questions here; a request that could not run is said under the last good review,
+ * with Run again. Without a model, one quiet line says the review was not run.
  */
 export function QuestionReviewSection({
   ids,
@@ -84,18 +100,40 @@ export function QuestionReviewSection({
   pass,
   review,
   completedAt,
+  request = null,
+  notRun = null,
+  approved = [],
 }: {
   ids: Ids;
   canAct: boolean;
   pass: QuestionPass | null;
   review: QuestionReview | null | undefined;
   completedAt: string | null;
+  /** A read a person asked for after completion, while it runs or once it could not run. */
+  request?: ReviewRequest | null;
+  notRun?: ReviewNotRun | null;
+  /** The approved attributes, in the Attributes step's order: the "not reviewed" line names
+   * them by their letters. */
+  approved?: ReadonlyArray<Pick<Attribute, "id" | "code" | "definition">>;
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
   const [sending, setSending] = useState(false);
   const [said, setSaid] = useState<{ ok: boolean; text: string } | null>(null);
-  const view = reviewView(pass, review, completedAt !== null);
+  // The last READY review this visit saw: a body that carries only a newer read in flight
+  // or failed never hides it.
+  const [last, setLast] = useState<QuestionReview | null>(null);
+  const kept = lastReady(last, review);
+  useEffect(() => {
+    if (kept !== last) {
+      setLast(kept);
+    }
+  }, [kept, last]);
+  const view = reviewView(pass, review, completedAt !== null, {
+    request,
+    notRun,
+    last: kept,
+  });
   // A review a person asked for after completion runs in the background: the page is read
   // again every 3 seconds in place until it lands (before completion, the course reads again
   // on its own). Each read replaces the page's data whole; an older one never lands after.
@@ -107,10 +145,17 @@ export function QuestionReviewSection({
     const timer = window.setInterval(() => router.refresh(), 3000);
     return () => window.clearInterval(timer);
   }, [polling, router]);
+  // A request's own line ("Review requested…") gives way once the read it asked for lands.
+  useEffect(() => {
+    if (!polling && said?.ok === true && view.state !== "checking") {
+      const timer = window.setTimeout(() => setSaid(null), 6000);
+      return () => window.clearTimeout(timer);
+    }
+  }, [polling, said, view.state]);
   if (view.state === "none") {
     return null;
   }
-  const again = offersReviewAgain(completedAt, pass, canAct);
+  const again = offersReviewAgain(completedAt, pass, canAct, view);
 
   async function reviewAgain() {
     if (sending) {
@@ -131,8 +176,23 @@ export function QuestionReviewSection({
     }
   }
 
+  // The paragraph shown: the ready one, or the last good one while a read runs.
+  const shown =
+    view.state === "ready"
+      ? view.review
+      : view.state === "checking"
+        ? view.last
+        : null;
+  const settled =
+    view.state === "ready" ? view.settled : (shown?.openQuestions ?? 1) === 0;
   const notReviewed =
-    view.state === "ready" ? notReviewedLine(view.review.notReviewed) : null;
+    shown !== null ? notReviewedLine(shown.notReviewed, approved) : null;
+  const failedAgain =
+    view.state === "ready"
+      ? view.againFailed
+      : view.state === "unreviewed"
+        ? view.failure
+        : null;
   return (
     <section
       className="ur-review"
@@ -147,6 +207,27 @@ export function QuestionReviewSection({
           {REVIEW_TITLE} <span className="ur-review-by">· {REVIEW_BY}</span>
         </p>
       </div>
+      {shown !== null ? (
+        <p className="ur-review-text">
+          {settled ? (
+            <span className="ur-review-when" suppressHydrationWarning>
+              {reviewedLead(shown.reviewedAt)}
+            </span>
+          ) : null}
+          {markedParts(shown.narrative, settled ? [] : shown.marked).map(
+            (part, at) =>
+              part.marked ? (
+                // biome-ignore lint/suspicious/noArrayIndexKey: the paragraph's parts in order
+                <mark key={at} className="ur-review-mark">
+                  {part.text}
+                </mark>
+              ) : (
+                // biome-ignore lint/suspicious/noArrayIndexKey: the paragraph's parts in order
+                <span key={at}>{part.text}</span>
+              ),
+          )}
+        </p>
+      ) : null}
       {view.state === "checking" ? (
         <p className="ur-review-quiet" role="status">
           <span className="spinner small" aria-hidden="true" />{" "}
@@ -157,33 +238,20 @@ export function QuestionReviewSection({
         <p className="ur-review-quiet" role="status">
           {REVIEW_FAILED}.
         </p>
-      ) : (
-        <p className="ur-review-text">
-          {view.settled ? (
-            <span className="ur-review-when" suppressHydrationWarning>
-              {reviewedLead(view.review.reviewedAt)}
-            </span>
-          ) : null}
-          {markedParts(
-            view.review.narrative,
-            view.settled ? [] : view.review.marked,
-          ).map((part, at) =>
-            part.marked ? (
-              // biome-ignore lint/suspicious/noArrayIndexKey: the paragraph's parts in order
-              <mark key={at} className="ur-review-mark">
-                {part.text}
-              </mark>
-            ) : (
-              // biome-ignore lint/suspicious/noArrayIndexKey: the paragraph's parts in order
-              <span key={at}>{part.text}</span>
-            ),
-          )}
-        </p>
-      )}
+      ) : view.state === "notRun" ? (
+        <p className="ur-review-quiet">{REVIEW_NOT_RUN}</p>
+      ) : view.state === "unreviewed" && failedAgain === null ? (
+        <p className="ur-review-quiet">{REVIEW_NONE}</p>
+      ) : null}
       {notReviewed !== null ? (
         <p className="ur-review-quiet">{notReviewed}</p>
       ) : null}
-      {again && view.state === "ready" ? (
+      {failedAgain !== null ? (
+        <p className="ur-review-quiet" role="status">
+          {REVIEW_AGAIN_FAILED}. {failedAgain}
+        </p>
+      ) : null}
+      {again ? (
         <p className="ur-review-quiet">
           <button
             type="button"
@@ -191,7 +259,7 @@ export function QuestionReviewSection({
             disabled={sending}
             onClick={() => void reviewAgain()}
           >
-            {sending ? "Requesting…" : REVIEW_AGAIN}
+            {sending ? "Requesting…" : reviewAgainWords(view)}
           </button>
         </p>
       ) : null}
@@ -311,19 +379,20 @@ export function NotKnownButton({
 }
 
 /**
- * A person leaves a question as not known yet (B1l point 1), with an optional note of up to
- * 500 characters. Inside the question's own form, so it is not a form: its buttons are plain
+ * A person leaves a question as not known yet (B1l point 1: an agent's or the review's
+ * question, a walkthrough question or a statement value), with an optional note of up to 500
+ * characters. Inside the question's own form, so it is not a form: its buttons are plain
  * buttons. The question is closed only once the server has recorded it; the caller then
  * moves on in the course, and it is never shown as an answer.
  */
 export function NotKnownPanel({
   ids,
-  issue,
+  target,
   onCancel,
   onDone,
 }: {
   ids: Ids;
-  issue: { id: string; version: number };
+  target: NotKnownTarget;
   onCancel: () => void;
   onDone: () => void;
 }) {
@@ -343,11 +412,8 @@ export function NotKnownPanel({
     }
     setSending(true);
     setProblem(null);
-    const answer = await post(ids, "issue-not-known", {
-      issue_id: issue.id,
-      version: issue.version,
-      note: note.trim(),
-    });
+    const write = notKnownWrite(target, note.trim());
+    const answer = await post(ids, write.intent, write.fields);
     setSending(false);
     const refused = notKnownProblem(answer.status, answer.detail);
     if (refused !== null) {
@@ -411,4 +477,16 @@ export function NotKnownPanel({
       ) : null}
     </div>
   );
+}
+
+/**
+ * The page's re-read while Control Understanding reads as "Checking…" before completion with
+ * no read live (B1l point 1: no dead end): an explicit, idempotent request that the server
+ * queue a review that is due, or record a completion that is due. Never a write in a GET; a
+ * second request changes nothing. True when the server took it (200 or 202), so the caller
+ * reads again.
+ */
+export async function ensureReview(ids: Ids): Promise<boolean> {
+  const answer = await post(ids, "review-ensure");
+  return answer.status === 200 || answer.status === 202;
 }
