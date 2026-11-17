@@ -436,7 +436,9 @@ describe("the counts and their words", () => {
   it("words a considered point as one quiet line", () => {
     assert.equal(
       consideredLine(CONSIDERATION),
-      "Considered by Dana Lee, 16 Nov: Access was removed on time, so the later check did not apply.",
+      // Old: "16 Nov" (en-GB); new: "Nov 16", the date style of the sign-off on the same
+      // page (screenshot check of 3.9, 16 November 2026).
+      "Considered by Dana Lee, Nov 16: Access was removed on time, so the later check did not apply.",
     );
     assert.equal(
       consideredLine({ ...CONSIDERATION, at: "" }),

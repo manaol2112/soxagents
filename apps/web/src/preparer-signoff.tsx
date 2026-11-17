@@ -2,7 +2,11 @@
 
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 
-import { CLEAR_DRAFT, DRAFTED_LABEL } from "./design-points-model";
+import {
+  CLEAR_DRAFT,
+  DRAFTED_LABEL,
+  decisionsWords,
+} from "./design-points-model";
 import {
   ATTESTATION,
   NOTE_LABEL,
@@ -208,6 +212,14 @@ export function PreparerSignOff({
       ? [offered.length === 0 ? NO_REVIEWER : NEEDS_REVIEWER]
       : []),
   ];
+  // The decisions' count leads their own list (screenshot check of 3.9): it is not said
+  // again among the other needs.
+  const needs =
+    decisions.length > 0
+      ? problems.filter(
+          (problem) => problem !== decisionsWords(decisions.length),
+        )
+      : problems;
 
   // The workpaper read again shows another status: what was said before it (a refusal,
   // a confirmed press) no longer holds.
@@ -450,7 +462,12 @@ export function PreparerSignOff({
               className="dw-ink btn-sm"
               aria-disabled={!ready || sending || confirmed !== null}
               aria-describedby={
-                problems.length > 0 ? `${uid}-needs` : undefined
+                [
+                  decisions.length > 0 ? `${uid}-decisions` : "",
+                  needs.length > 0 ? `${uid}-needs` : "",
+                ]
+                  .filter((id) => id !== "")
+                  .join(" ") || undefined
               }
             >
               {sending
@@ -470,7 +487,12 @@ export function PreparerSignOff({
         </div>
         {reading}
         {decisions.length > 0 ? (
-          <ul className="ps-decisions" aria-label="Decisions before you sign">
+          <p className="ps-decisions-head" id={`${uid}-decisions`}>
+            {decisionsWords(decisions.length)}
+          </p>
+        ) : null}
+        {decisions.length > 0 ? (
+          <ul className="ps-decisions" aria-labelledby={`${uid}-decisions`}>
             {decisions.map((item) => (
               <li key={item.key}>
                 <span>{item.words}</span>
@@ -486,9 +508,9 @@ export function PreparerSignOff({
             ))}
           </ul>
         ) : null}
-        {problems.length > 0 ? (
+        {needs.length > 0 ? (
           <ul className="ps-needs" id={`${uid}-needs`}>
-            {problems.map((problem) => (
+            {needs.map((problem) => (
               <li key={problem}>{problem}</li>
             ))}
           </ul>
@@ -521,12 +543,7 @@ export function PreparerSignOff({
               />
               {again ? null : (
                 <div className="ps-note">
-                  <div className="ps-draft-head">
-                    <label htmlFor={`${uid}-n`}>{MESSAGE_LABEL}</label>
-                    {drafted && message !== "" ? (
-                      <small id={`${uid}-drafted`}>{DRAFTED_LABEL}</small>
-                    ) : null}
-                  </div>
+                  <label htmlFor={`${uid}-n`}>{MESSAGE_LABEL}</label>
                   <textarea
                     id={`${uid}-n`}
                     rows={drafted && message !== "" ? 4 : 2}
@@ -542,7 +559,8 @@ export function PreparerSignOff({
                     }}
                   />
                   {drafted && message !== "" ? (
-                    <p className="ps-add-note">
+                    <p className="ps-add-note ps-drafted">
+                      <small id={`${uid}-drafted`}>{DRAFTED_LABEL}</small>
                       <button
                         type="button"
                         className="dw-link"

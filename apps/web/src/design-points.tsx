@@ -229,7 +229,9 @@ export function PointRow({
           ) : null}
           {mayWithdraw && confirmed === null ? (
             <>
-              {" "}
+              <span className="dw-point-sep" aria-hidden="true">
+                {" · "}
+              </span>
               <button
                 type="button"
                 className="dw-link"
@@ -283,7 +285,11 @@ export function PointRow({
             ? own.map((action) => (
                 // Done in the D&I Evidence step, where the request's check, its files
                 // and its findings are: none of these actions is on the workpaper's page.
-                <Link key={action} className="btn-secondary btn-sm" href={href}>
+                <Link
+                  key={action}
+                  className="btn btn-secondary btn-sm"
+                  href={href}
+                >
                   {SETTLE_WORDS[action]}
                   <span className="sr-only"> {SETTLE_WHERE}</span>
                 </Link>

@@ -890,9 +890,12 @@ describe("the points at their place (docs/design-workpaper.md, section 3.9)", ()
     assert.match(row, /<b>\{YOUR_DECISION\}<\/b> \{point\.text\}/);
     assert.match(row, /<b>\{RAISED_SINCE\}<\/b> \{point\.text\}/);
     // The existing actions are done in D&I Evidence: a link there, never a new write.
+    // Rewritten after the screenshot check of 3.9 (16 November 2026). Old: the links
+    // were "btn-secondary btn-sm", which the global styles do not draw as a button on a
+    // link; new: "btn btn-secondary btn-sm", the bordered button beside "Considered…".
     assert.match(
       row,
-      /<Link key=\{action\} className="btn-secondary btn-sm" href=\{href\}>/,
+      /<Link\s+key=\{action\}\s+className="btn btn-secondary btn-sm"\s+href=\{href\}\s*>/,
     );
     assert.match(row, /\{SETTLE_WORDS\[action\]\}/);
     assert.match(row, /\{CONSIDERED\}/);
@@ -961,10 +964,21 @@ describe("the points at their place (docs/design-workpaper.md, section 3.9)", ()
     const reviewer = read("apps/web/src/review-signoff.tsx");
     const row = component(preparer, "PreparerSignOff");
     // Each point not settled, with the way to its place; the button waits (the model's
-    // "N decisions before you sign" is one of its problems).
+    // "N decisions before you sign" is one of its problems). Rewritten after the
+    // screenshot check of 3.9 (16 November 2026). Old: the list was labelled "Decisions
+    // before you sign" and the count followed it as a bullet among the other needs; new:
+    // the count leads the list as its label and is not repeated among the needs.
     assert.match(
       row,
-      /<ul className="ps-decisions" aria-label="Decisions before you sign">/,
+      /<p className="ps-decisions-head" id=\{`\$\{uid\}-decisions`\}>\s*\{decisionsWords\(decisions\.length\)\}/,
+    );
+    assert.match(
+      row,
+      /<ul className="ps-decisions" aria-labelledby=\{`\$\{uid\}-decisions`\}>/,
+    );
+    assert.match(
+      row,
+      /problems\.filter\(\s*\(problem\) => problem !== decisionsWords\(decisions\.length\),?\s*\)/,
     );
     assert.match(row, /onClick=\{item\.onGo\}/);
     assert.match(

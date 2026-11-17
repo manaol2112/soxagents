@@ -654,6 +654,16 @@ button.dw-edit:focus-visible:not(:disabled) {
   position: relative;
   margin-top: 0.75rem;
   overflow-x: auto;
+  /* A point under a row (section 3.9) is as wide as the window onto the table. */
+  container-type: inline-size;
+}
+
+/* A point in a row that spans the table stays in view while a narrow table scrolls
+   sideways, as wide as the window onto it (screenshot check of 3.9 at 390 px). */
+.dw-table-wrap .dw-point-tr > td > .dw-points {
+  position: sticky;
+  left: 0.75rem;
+  max-width: calc(100cqi - 1.5rem);
 }
 
 .dw-table {
@@ -3399,15 +3409,27 @@ button.rp-trigger:hover {
   justify-content: space-between;
 }
 
-.ps-draft-head {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  align-items: baseline;
-  justify-content: space-between;
+
+
+.dw-point-sep {
+  color: var(--text-tertiary);
 }
 
-.ps-draft-head small {
+.ps-decisions-head {
+  margin: 0.75rem 0 0.25rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.ps-add-note.ps-drafted {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.25rem 0.75rem;
+}
+
+.ps-add-note.ps-drafted small {
   color: var(--text-tertiary);
-  font-size: var(--fs-xs);
 }

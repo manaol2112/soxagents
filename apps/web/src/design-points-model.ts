@@ -405,9 +405,9 @@ export function shortWords(text: string, most = 90): string {
   return `${(space > most / 2 ? cut.slice(0, space) : cut).replace(/[\s,.;:]+$/, "")}…`;
 }
 
-const DAY = new Intl.DateTimeFormat("en-GB", {
-  day: "numeric",
+const DAY = new Intl.DateTimeFormat("en-US", {
   month: "short",
+  day: "numeric",
 });
 
 /** "16 Nov", in the viewer's own time; as sent where it is not a date. */
@@ -416,7 +416,7 @@ export function dayMonth(value: string): string {
   return Number.isNaN(time) ? value : DAY.format(time);
 }
 
-/** "Considered by Dana Lee, 16 Nov: <reason>". */
+/** "Considered by Dana Lee, Nov 16: <reason>" (the sign-off's own date style). */
 export function consideredLine(considered: Consideration): string {
   const when = considered.at === "" ? "" : `, ${dayMonth(considered.at)}`;
   return `Considered by ${considered.by.name}${when}: ${considered.reason}`;
