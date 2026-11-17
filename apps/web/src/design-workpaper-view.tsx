@@ -39,6 +39,7 @@ import {
   type ConclusionView,
   choiceFactsOf,
   conclusionOf,
+  DW_SECTION,
   deficiencyWanted,
   designWorkpaperQuery,
   type EditableSection,
@@ -235,10 +236,10 @@ type Actions = {
    * whether a write waits for a read, where the existing actions are done (the
    * evidence step), and what the page does once the server answered. */
   points: PointWrites | null;
-  /** The Matrix's and the Evidence view's link to the document's section 6, where the
+  /** The Matrix's and the Evidence view's link to the document's section 7, where the
    * conclusion is (docs/design-workpaper.md, sections 3.5 and 3.9). */
   onConclusion: (() => void) | null;
-  /** Section 6's choice of the conclusion (section 3.6): the ids it is recorded for,
+  /** Section 7's choice of the conclusion (section 3.6): the ids it is recorded for,
    * and what the page does once the server confirmed or refused it. */
   choice: {
     scope: WorkpaperScope;
@@ -248,7 +249,7 @@ type Actions = {
   /** Where a design deficiency is logged (the deficiency log's form for this control);
    * null where the page has no link to it. */
   deficiencyHref: string | null;
-  /** Section 6's Sign-off (sections 3.7 and 3.8): the control's ids, what the page knows
+  /** Section 7's Sign-off (sections 3.7 and 3.8): the control's ids, what the page knows
    * that the preparer's sign-off needs, the D&I conclusion's body (the review request,
    * the reviewers, the reviewer's sign-off), who is reading, the review notes' counts,
    * and what it does once confirmed. */
@@ -273,7 +274,7 @@ type CardProps = Omit<
   ComponentProps<typeof WorkpapersTab>,
   "stage" | "compact"
 > & {
-  /** The control's D&I conclusion, as the page read it: section 6's sign-off reads the
+  /** The control's D&I conclusion, as the page read it: section 7's sign-off reads the
    * review request and the reviewer's sign-off from it (docs/design-workpaper.md,
    * section 3.8). Null where it could not be read. */
   conclusion?: DesignConclusion | null;
@@ -295,7 +296,7 @@ export function DesignWorkpaperStep({
   ...props
 }: CardProps) {
   const { ids, papers, notice, viewing } = props;
-  // Section 6 links to where a design deficiency is logged: the deficiency log's form for
+  // Section 7 links to where a design deficiency is logged: the deficiency log's form for
   // this control (Reports, Deficiencies; docs/design-workpaper.md, section 3.5).
   const deficiencyHref = destinationHref(
     "reports",
@@ -488,10 +489,10 @@ export function DesignWorkpaper({
   /** Told whether the page's records are behind the views (by the content's version or
    * the record's): the fold's Prepare waits while they are. */
   onBehind?: (behind: boolean) => void;
-  /** The viewer may act on the engagement's work (the card's `canAct`): section 6's
+  /** The viewer may act on the engagement's work (the card's `canAct`): section 7's
    * "Reopen to change" is offered only then, as the fold's Reopen is. */
   canAct?: boolean;
-  /** The control's D&I conclusion, for section 6's Sign-off (section 3.8). */
+  /** The control's D&I conclusion, for section 7's Sign-off (section 3.8). */
   conclusion?: DesignConclusion | null;
   /** The control's D&I Evidence step, where a point's own action is done (section 3.9). */
   evidenceHref?: string | null;
@@ -516,7 +517,7 @@ export function DesignWorkpaper({
   const [printing, setPrinting] = useState(false);
   // A point at its place (section 3.9): from the sign-off's list or the Evidence view.
   const [seeking, setSeeking] = useState<string | null>(null);
-  // Section 6, the conclusion: from the Matrix, the Evidence view, or a link to it.
+  // Section 7, the conclusion: from the Matrix, the Evidence view, or a link to it.
   const [seekingConclusion, setSeekingConclusion] = useState(false);
   const linkedOnce = useRef(false);
   const tabs = useRef(new Map<ViewKey, HTMLButtonElement>());
@@ -674,7 +675,7 @@ export function DesignWorkpaper({
     place?.focus({ preventScroll: true });
   }, [seeking, view]);
 
-  // Section 6, once the document is the view shown; and once on arrival where the page
+  // Section 7, once the document is the view shown; and once on arrival where the page
   // was opened at it (`#di-conclusion`: from Home's "Waiting for your review", or a link
   // to the removed "D&I Conclusion and Review" step, section 3.8).
   const arrived = state.paper !== null && state.paper.workpaper !== null;
@@ -1370,8 +1371,8 @@ export function DesignWorkpaper({
               ? ` (${paper.evidence.length} ${paper.evidence.length === 1 ? "file" : "files"} so far)`
               : ""}
             , and the document, the matrix and the evidence view appear here for
-            you to edit. The preparer signs at the end of section 6, the
-            conclusion.
+            you to edit. The preparer signs at the end of section{" "}
+            {DW_SECTION.conclusion}, the conclusion.
           </p>
           {onDraft !== undefined ? (
             <button
@@ -1856,7 +1857,7 @@ function Verdict({
   );
 }
 
-/** Section 6's head (product owner, 16 November 2026: section 6 lighter, option A): the
+/** Section 7's head (product owner, 16 November 2026: section 7 lighter, option A): the
  * conclusion in the display serif, or "No conclusion recorded yet" in quiet text, and
  * under it one quiet line: who recorded it and whether the agent proposed the same (or,
  * before any choice, what the agent proposes), signed or out of date where the server
@@ -2013,7 +2014,7 @@ function Results({ paper, why }: { paper: Paper; why: boolean }) {
   );
 }
 
-/** Section 6's Sign-off (sections 3.7 and 3.8): the preparer's row, then the
+/** Section 7's Sign-off (sections 3.7 and 3.8): the preparer's row, then the
  * reviewer's; on paper, the signature lines under the sheet say it. */
 function SignOffOf({
   paper,
@@ -2086,7 +2087,7 @@ function SignOffOf({
   );
 }
 
-/** Section 6's top: the head, the results (`children`), and the choice where the
+/** Section 7's top: the head, the results (`children`), and the choice where the
  * preparer may record it (the editable draft: the server's `can_edit`, the same rule as
  * its `can_choose`): "Change" in the head's line, the form in place under the results.
  * On paper, and for anyone else, the head and the results only. The way to a design
@@ -2158,7 +2159,7 @@ function ConclusionChoiceOf({
   );
 }
 
-/** "Edit conclusion": the same in-place editor as the link on section 6's heading, as a
+/** "Edit conclusion": the same in-place editor as the link on section 7's heading, as a
  * quiet text link under the text (section 3.5; option A). Off while another editor is
  * open, while the page's records are behind a save, and while the working copies are
  * read. */
@@ -2193,11 +2194,11 @@ function EditConclusion({
   );
 }
 
-/** "Open section 6": the document's conclusion, from the Matrix and the Evidence view. */
+/** "Open section 7": the document's conclusion, from the Matrix and the Evidence view. */
 function ToConclusion({ onOpen }: { onOpen: () => void }) {
   return (
     <button type="button" className="dw-edit dw-to-concl" onClick={onOpen}>
-      Open section 6
+      Open section {DW_SECTION.conclusion}
       <span className="sr-only">, the conclusion, in the document</span>
     </button>
   );
@@ -2277,13 +2278,18 @@ function NotesFrame({
 function Section({
   number,
   title,
+  subtitle,
   edit,
   said,
   anchor,
   children,
 }: {
+  /** The section's number: DW_SECTION's, never a literal. None for "Tickmarks and
+   * evidence". */
   number?: number;
   title: string;
+  /** A quiet line beside the title, in the heading row (section 3.10). */
+  subtitle?: string;
   edit?: ReactNode;
   /** What the section says once a save of it is confirmed; "" until then. The line is
    * there from the start, so the words are announced when they arrive. */
@@ -2299,6 +2305,9 @@ function Section({
           {number !== undefined ? <span>{number}</span> : null}
           {title}
         </h5>
+        {subtitle !== undefined ? (
+          <p className="dw-sec-sub">{subtitle}</p>
+        ) : null}
         {edit}
       </header>
       {said !== undefined ? (
@@ -2399,20 +2408,15 @@ function DocumentSheet({
         </dl>
       </header>
 
+      {/* The order (docs/design-workpaper.md, section 3.10; product owner, 16 November
+          2026: "Should the procedure be first then the narrative will be the result of
+          the procedure?"): the control as management describes it, the procedures
+          performed, then the understanding they led to, then the walkthrough, the
+          attributes, the information produced by the entity and the conclusion. The
+          numbers are DW_SECTION's. */}
       <Section
-        number={1}
+        number={DW_SECTION.objective}
         title="Objective, risk and control"
-        said={saidOf("understanding")}
-        edit={
-          understanding.length > 0 ? (
-            <EditLink
-              section="understanding"
-              what="the understanding of the control"
-              actions={actions}
-              editable={editable.has("understanding")}
-            />
-          ) : null
-        }
       >
         <div className="dw-two">
           <div>
@@ -2456,22 +2460,9 @@ function DocumentSheet({
             )}
           </dl>
         ) : null}
-        {understood !== null ? (
-          <SectionEditorPanel
-            {...understood}
-            heading="Understanding of the control"
-          />
-        ) : understanding.length > 0 ? (
-          <div className="dw-prose">
-            <h6>Understanding of the control</h6>
-            <NoteField field={UNDERSTANDING} text={understanding} rich>
-              <RichText text={understanding} />
-            </NoteField>
-          </div>
-        ) : null}
       </Section>
 
-      <Section number={2} title="Procedures performed">
+      <Section number={DW_SECTION.procedures} title="Procedures performed">
         {paper.procedures.length === 0 ? (
           <p className="dw-none">
             No procedure is on record yet. They are listed here as the evidence
@@ -2495,7 +2486,38 @@ function DocumentSheet({
       </Section>
 
       <Section
-        number={3}
+        number={DW_SECTION.understanding}
+        title="Understanding of the control"
+        subtitle={`The result of the procedures in section ${DW_SECTION.procedures}`}
+        said={saidOf("understanding")}
+        edit={
+          understanding.length > 0 ? (
+            <EditLink
+              section="understanding"
+              what="the understanding of the control"
+              actions={actions}
+              editable={editable.has("understanding")}
+            />
+          ) : null
+        }
+      >
+        {understood !== null ? (
+          <SectionEditorPanel {...understood} />
+        ) : understanding.length > 0 ? (
+          <div className="dw-prose">
+            <NoteField field={UNDERSTANDING} text={understanding} rich>
+              <RichText text={understanding} />
+            </NoteField>
+          </div>
+        ) : (
+          <p className="dw-none">
+            No understanding of the control is written in this workpaper.
+          </p>
+        )}
+      </Section>
+
+      <Section
+        number={DW_SECTION.walkthrough}
         title="Implementation: walkthrough of one instance"
         said={saidOf("walkthrough")}
         edit={
@@ -2592,7 +2614,7 @@ function DocumentSheet({
       </Section>
 
       <Section
-        number={4}
+        number={DW_SECTION.attributes}
         title="Attributes tested"
         said={saidOf("attributes")}
         edit={
@@ -2754,7 +2776,7 @@ function DocumentSheet({
       </Section>
 
       <Section
-        number={5}
+        number={DW_SECTION.ipe}
         title="Information produced by the entity"
         said={saidOf("reports")}
         edit={
@@ -2847,7 +2869,7 @@ function DocumentSheet({
       </Section>
 
       <Section
-        number={6}
+        number={DW_SECTION.conclusion}
         title="Conclusion"
         said={saidOf("conclusion")}
         // Where Home's "Waiting for your review" links to (section 3.8); not on the
@@ -2863,7 +2885,7 @@ function DocumentSheet({
         }
       >
         {/* On the plain sheet, top to bottom (docs/design-workpaper.md, sections 3.5 to
-            3.7; product owner, 16 November 2026: section 6 lighter, option A): the
+            3.7; product owner, 16 November 2026: section 7 lighter, option A): the
             conclusion and its one quiet line, the two results, the choice in place
             after "Change", the way to a design deficiency, then the text with its one
             editor, and the sign-off. */}
@@ -2943,7 +2965,7 @@ function DocumentSheet({
                           {notReliedOnLine(entry)}
                         </small>
                       ) : null}
-                      {/* Where no section 5 row names the file, its reliability
+                      {/* Where no section 6 row names the file, its reliability
                         established on review is said here (section 3.9). */}
                       {establishedLine(entry) !== "" &&
                       !paper.reports.some(
@@ -3128,7 +3150,7 @@ function MatrixBoard({
             <small>{tile.label}</small>
             <strong>{tile.value}</strong>
             <p title={tile.note}>{tile.note}</p>
-            {/* The conclusion is read and chosen in the document's section 6 (section
+            {/* The conclusion is read and chosen in the document's section 7 (section
                 3.5): a short line here, and the way there. */}
             {tile.key === "conclusion" && actions.onConclusion !== null ? (
               <ToConclusion onOpen={actions.onConclusion} />

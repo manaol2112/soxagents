@@ -63,7 +63,11 @@ describe("section 7 is where the preparer concludes", () => {
       sheet,
       // Renumbered (docs/design-workpaper.md, section 3.9). Old: number={7}. New: the
       // matters section is gone and the Conclusion is section 6.
-      /number=\{6\}\s+title="Conclusion"[\s\S]{0,400}<EditLink\s+section="conclusion"/,
+      // Renumbered again (docs/design-workpaper.md, section 3.10; product owner, 16
+      // November 2026: procedures first, the understanding as their result, a section of
+      // its own). Old: number={6}. New: number={DW_SECTION.conclusion}, section 7, the
+      // number read from the one constant.
+      /number=\{DW_SECTION\.conclusion\}\s+title="Conclusion"[\s\S]{0,400}<EditLink\s+section="conclusion"/,
     );
     assert.match(sheet, /<EditConclusion\s+actions=\{actions\}/);
     // Nothing else edits the conclusion: the step has no editor and no box.
@@ -111,10 +115,13 @@ describe("section 7 is where the preparer concludes", () => {
     const results = component(view, "Results");
     assert.match(results, /keyed\(reasons, \(reason\) => reason\)/);
     assert.match(results, /resultBoxes\(paper\)/);
-    // Section 3 says which part is the implementation; section 4 how each is shown.
+    // Section 4 says which part is the implementation; section 5 how each is shown.
+    // Renumbered (docs/design-workpaper.md, section 3.10; product owner, 16 November 2026:
+    // procedures first, the understanding as their result). Old: number={3}. New:
+    // number={DW_SECTION.walkthrough}, section 4, after the understanding's section 3.
     assert.match(
       sheet,
-      /number=\{3\}\s+title="Implementation: walkthrough of one instance"/,
+      /number=\{DW_SECTION\.walkthrough\}\s+title="Implementation: walkthrough of one instance"/,
     );
     assert.match(
       sheet,

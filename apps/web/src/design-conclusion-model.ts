@@ -6,6 +6,7 @@
  * writes.
  */
 
+import { DW_SECTION } from "./design-workpaper-sections.ts";
 import {
   defaultReviewerOf,
   type LastReturn,
@@ -518,7 +519,7 @@ export function namedConclusion(
 }
 
 /** The server's fragment where no conclusion stands (design_conclusions.NO_CHOICE). The
- * step's card says it itself, with the way to section 6, wherever none is recorded. */
+ * step's card says it itself, with the way to section 7, wherever none is recorded. */
 const NO_CHOICE = "the preparer has not recorded a conclusion";
 
 /** What the server says of the workpaper and of a standing sign-off as fragments
@@ -797,7 +798,7 @@ const KIND_EFFECTS: Readonly<
 
 /** What holds the sign-off, under the card: every sentence of signHolds that the card
  * does not already give, as the exception's reason or (where no conclusion is recorded)
- * as its own sentence with the way to section 6. Nothing else the server sends is left
+ * as its own sentence with the way to section 7. Nothing else the server sends is left
  * out. */
 export function holdsBelow(conclusion: DesignConclusion): string[] {
   const said = exceptionHolds(conclusion);
@@ -826,7 +827,7 @@ export function outOfDateNext(conclusion: DesignConclusion): string {
   }
   // A conclusion is recorded on the draft: a prepared workpaper is reopened first.
   const reopen = conclusion.workpaper?.status === "PREPARED";
-  return `What to do: ${reopen ? "reopen the design workpaper, record" : "record"} a conclusion in section 6 of D&I Assessment, and prepare the workpaper${reopen ? " again" : ""}. OE waits until a reviewer signs that conclusion off.`;
+  return `What to do: ${reopen ? "reopen the design workpaper, record" : "record"} a conclusion in section ${DW_SECTION.conclusion} of D&I Assessment, and prepare the workpaper${reopen ? " again" : ""}. OE waits until a reviewer signs that conclusion off.`;
 }
 
 /** "Attribute B · Dana Lee on Nov 15, 2026": who recorded an exception, and when. The

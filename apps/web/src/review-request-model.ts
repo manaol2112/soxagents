@@ -804,7 +804,7 @@ export function waitingCountLabel(count: number): string {
   return `${count} waiting for your review`;
 }
 
-/** The control's D&I Assessment at section 6, where the reviewer signs. */
+/** The control's D&I Assessment at section 7, where the reviewer signs. */
 export function waitingHref(
   item: WaitingReview,
   organizationId: string,

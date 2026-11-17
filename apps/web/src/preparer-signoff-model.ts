@@ -1,4 +1,4 @@
-// The preparer's sign-off of the design workpaper, at the end of section 6
+// The preparer's sign-off of the design workpaper, at the end of section 7
 // (docs/design-workpaper.md, sections 3.7 and 3.9). Pure: what the sign-off needs before the
 // press, the words, and the write the route validates. The server is the authority:
 // its prepare refuses what this page has not seen, and its sentence is shown.

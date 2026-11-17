@@ -35,7 +35,10 @@ import {
   withdrawRequest,
   YOUR_DECISION,
 } from "../apps/web/src/design-points-model.ts";
-import { parseDesignWorkpaper } from "../apps/web/src/design-workpaper-model.ts";
+import {
+  DW_SECTION,
+  parseDesignWorkpaper,
+} from "../apps/web/src/design-workpaper-model.ts";
 import { signOffProblems } from "../apps/web/src/preparer-signoff-model.ts";
 
 // The points of the D&I workpaper (docs/design-workpaper.md, section 3.9; product owner,
@@ -46,8 +49,9 @@ import { signOffProblems } from "../apps/web/src/preparer-signoff-model.ts";
 // the preparer only, and settled there; a considered point is part of the workpaper; the
 // agent's observations become the draft of the message to the reviewer. What must hold:
 // the body is read strictly, a point is never lost (an unknown place is the head of
-// section 4), an unsettled point is never shown to others or on paper except as raised
-// after the preparer signed, and the draft stays within the message's 1,000 characters.
+// section 5, Attributes tested), an unsettled point is never shown to others or on paper
+// except as raised after the preparer signed, and the draft stays within the message's
+// 1,000 characters.
 // Synthetic data only.
 
 const uuid = (n: number) =>
@@ -285,36 +289,55 @@ describe("reading the points", () => {
 });
 
 describe("where a point is shown", () => {
-  it("puts each at its place: attribute row, report row, file line, head of section 4", () => {
+  // Renamed (docs/design-workpaper.md, section 3.10). Old: "… head of section 4". New:
+  // "… head of the attributes' section": Attributes tested is now section 5.
+  it("puts each at its place: attribute row, report row, file line, head of the attributes' section", () => {
     const [a, b, c, d] = points();
     assert.ok(a && b && c && d);
     assert.deepEqual(shownAt(a, PLACES), {
       where: "attribute",
       attributeId: ATTR,
     });
-    // A file a section 5 row names: under that row.
+    // A file a section 6 row (the information produced by the entity) names: under that
+    // row.
     assert.deepEqual(shownAt(b, PLACES), { where: "report", index: 0 });
     // A file no row names: under its line in "Tickmarks and evidence".
     assert.deepEqual(shownAt(c, PLACES), { where: "evidence", ref: "E3" });
     assert.deepEqual(shownAt(d, PLACES), { where: "head" });
-    // A row this read does not have: the head of section 4, never nowhere.
+    // A row this read does not have: the head of section 5, never nowhere.
     assert.deepEqual(shownAt(a, { ...PLACES, attributes: [] }), {
       where: "head",
     });
     assert.deepEqual(shownAt(b, { ...PLACES, evidence: [] }), {
       where: "head",
     });
+    // Renumbered (docs/design-workpaper.md, section 3.10; product owner, 16 November
+    // 2026: procedures first, the understanding as their result, a section of its own).
+    // Old: "Section 4"/4 for an attribute (and a REQUEST point at the head), "Section
+    // 5"/5 for a report, 7 for "Tickmarks and evidence". New: "Section 5"/5 (Attributes
+    // tested), "Section 6"/6 (Information produced by the entity), 8 (after the
+    // Conclusion, now 7): each section moved one on when the understanding became 3.
     assert.deepEqual(
       [placeName(shownAt(a, PLACES)), placeSection(shownAt(a, PLACES))],
-      ["Section 4", 4],
-    );
-    assert.deepEqual(
-      [placeName(shownAt(b, PLACES)), placeSection(shownAt(b, PLACES))],
       ["Section 5", 5],
     );
     assert.deepEqual(
+      [placeName(shownAt(b, PLACES)), placeSection(shownAt(b, PLACES))],
+      ["Section 6", 6],
+    );
+    assert.deepEqual(
       [placeName(shownAt(c, PLACES)), placeSection(shownAt(c, PLACES))],
-      ["Tickmarks and evidence", 7],
+      ["Tickmarks and evidence", 8],
+    );
+    // The REQUEST point at the head stays with the attributes (section 3.9, "at the head
+    // of section 4", now section 5).
+    assert.deepEqual(
+      [placeName(shownAt(d, PLACES)), placeSection(shownAt(d, PLACES))],
+      ["Section 5", 5],
+    );
+    assert.deepEqual(
+      [placeSection({ where: "attribute", attributeId: ATTR })],
+      [DW_SECTION.attributes],
     );
     assert.deepEqual(
       pointsAt(points(), PLACES, { where: "head" }).map((item) => item.key),
@@ -382,10 +405,14 @@ describe("the counts and their words", () => {
         item.place,
         item.anchor,
       ]),
+      // Renumbered (docs/design-workpaper.md, section 3.10; product owner, 16 November
+      // 2026: procedures first, the understanding as their result). Old: "Section 4",
+      // "Section 5", "Section 4". New: "Section 5" (Attributes tested, with the REQUEST
+      // point at its head), "Section 6" (Information produced by the entity), "Section 5".
       [
-        [KEY_A, "Section 4", pointAnchor(KEY_A)],
-        [KEY_B, "Section 5", pointAnchor(KEY_B)],
-        [KEY_D, "Section 4", pointAnchor(KEY_D)],
+        [KEY_A, "Section 5", pointAnchor(KEY_A)],
+        [KEY_B, "Section 6", pointAnchor(KEY_B)],
+        [KEY_D, "Section 5", pointAnchor(KEY_D)],
       ],
     );
     // Short words: cut at a word, with an ellipsis where cut.

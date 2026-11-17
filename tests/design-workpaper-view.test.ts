@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
+import { DW_SECTION } from "../apps/web/src/design-workpaper-model.ts";
+
 // The D&I workpaper in three views (docs/design-workpaper.md, sections 1 and 3.1), read
 // from the screen's own files. What must hold whatever the views look like: there are
 // three of them under one switcher; today's workpaper card, with every existing action,
@@ -23,6 +25,7 @@ const viewer = read("apps/web/src/evidence-annotations.tsx");
 // evidence-opener.tsx (AnnotatedDialog), the old viewer retired.
 const preview = read("apps/web/src/evidence-opener.tsx");
 const points = read("apps/web/src/design-points.tsx");
+const sections = read("apps/web/src/design-workpaper-sections.ts");
 
 /** A function's source: from its declaration to the next top-level one. */
 const component = (source: string, name: string) => {
@@ -141,7 +144,7 @@ describe("the existing workpaper card, kept once per mount", () => {
     assert.equal(count(step, /<DesignWorkpaper\n/g), 1);
     // It takes the card's own props, and opens by the model's rule. Rewritten. Old:
     // `type CardProps = Omit<…, "stage" | "compact">;`. New: the same, and the D&I
-    // conclusion's body, which section 6's Sign-off reads and the card never gets
+    // conclusion's body, which section 7's Sign-off reads and the card never gets
     // (product owner, 16 November 2026, docs/design-workpaper.md section 3.8). Rewritten
     // again (section 3.9). Old: the conclusion alone beside the card's props. New: also
     // the control's evidence step, where a point's own action is done; the card itself
@@ -178,7 +181,7 @@ describe("the existing workpaper card, kept once per mount", () => {
 
   it("is mounted at the two D&I places, and nowhere is the card mounted twice", () => {
     // Rewritten. Old: `<DesignWorkpaperStep {...workpaperProps} />` twice. New: the same
-    // props and the control's D&I conclusion, for section 6's Sign-off
+    // props and the control's D&I conclusion, for section 7's Sign-off
     // (product owner, 16 November 2026, docs/design-workpaper.md section 3.8). Rewritten
     // again (section 3.9). Old: `conclusion={openConclusion} />`. New: also
     // `evidenceHref={stepHrefsWf.designevidence}`, where a point's own action is done.
@@ -370,26 +373,35 @@ describe("print or save as PDF", () => {
       /createPortal\(\s*<div className="dw-print-root">\s*<DocumentSheet paper=\{paper\} actions=\{null\} \/>\s*<\/div>,\s*document\.body,\s*\)/,
     );
     const sheet = component(view, "DocumentSheet");
+    // Rewritten (docs/design-workpaper.md, section 3.10; product owner, 16 November 2026:
+    // "Should the procedure be first then the narrative will be the result of the
+    // procedure?"). Old: literal numbers, number={1} to number={6}, the understanding
+    // inside section 1. New: each number is DW_SECTION's, and "Understanding of the
+    // control" is section 3 of its own, after the procedures; the order itself is
+    // asserted in "the Document view's order" below.
     for (const section of [
-      'number={1}\n        title="Objective, risk and control"',
-      'number={2} title="Procedures performed"',
+      'number={DW_SECTION.objective}\n        title="Objective, risk and control"',
+      'number={DW_SECTION.procedures} title="Procedures performed"',
+      'number={DW_SECTION.understanding}\n        title="Understanding of the control"',
       // Rewritten 15 November 2026. Old: section 3 "Walkthrough of one instance". New:
       // "Implementation: walkthrough of one instance", saying which part of the D&I
       // assessment is the implementation (product owner, 15 November 2026,
       // docs/design-workpaper.md section 3.5/3.6).
-      'number={3}\n        title="Implementation: walkthrough of one instance"',
-      'number={4}\n        title="Attributes tested"',
-      'number={5}\n        title="Information produced by the entity"',
+      'number={DW_SECTION.walkthrough}\n        title="Implementation: walkthrough of one instance"',
+      'number={DW_SECTION.attributes}\n        title="Attributes tested"',
+      'number={DW_SECTION.ipe}\n        title="Information produced by the entity"',
       // Rewritten (docs/design-workpaper.md, section 3.9). Old: section 6 "Matters for
       // the reviewer" and section 7 "Conclusion". New: there is no matters section; the
-      // Conclusion is section 6.
-      'number={6}\n        title="Conclusion"',
+      // Conclusion is section 6 (section 7 since 3.10).
+      'number={DW_SECTION.conclusion}\n        title="Conclusion"',
       'title="Tickmarks and evidence"',
     ]) {
       assert.ok(sheet.includes(section), section);
     }
     assert.ok(!view.includes("Matters for the reviewer"));
-    assert.ok(!/number=\{7\}/.test(sheet));
+    // Rewritten (section 3.10). Old: no number={7} (there were six sections). New: no
+    // literal number at all: every section's number is read from DW_SECTION.
+    assert.ok(!/number=\{\d+\}/.test(sheet));
   });
 
   it("has a print stylesheet: the app is taken off the paper, on a light page", () => {
@@ -850,12 +862,14 @@ describe("the points at their place (docs/design-workpaper.md, section 3.9)", ()
   const row = component(points, "PointRow");
   const here = component(view, "PointsHere");
 
-  it("puts each point at its place: section 4's head, an attribute's row, a report's row, a file's line", () => {
+  // Renamed (section 3.10). Old: "section 4's head". New: the attributes' head, now
+  // section 5.
+  it("puts each point at its place: the attributes' head, an attribute's row, a report's row, a file's line", () => {
     assert.match(
       sheet,
       /<PointsHere paper=\{paper\} actions=\{actions\} at=\{\{ where: "head" \}\} \/>/,
     );
-    // The head of section 4 comes before its table.
+    // The head of Attributes tested (section 5 since 3.10) comes before its table.
     const head = sheet.indexOf('at={{ where: "head" }}');
     assert.ok(
       sheet.indexOf('title="Attributes tested"') < head &&
@@ -1073,6 +1087,122 @@ describe("the independent review of 16 November 2026, in the screen's own files"
     const body = component(view, "DesignWorkpaper");
     assert.doesNotMatch(body, /for you to edit and prepare/);
     // Renumbered (section 3.9): the Conclusion is section 6.
-    assert.match(body, /The preparer signs at the end of section 6/);
+    // Renumbered again (docs/design-workpaper.md, section 3.10; product owner, 16 November
+    // 2026: procedures first, the understanding as their result). Old: "section 6", a
+    // literal. New: "section {DW_SECTION.conclusion}", section 7, from the one constant.
+    assert.match(
+      body,
+      /The preparer signs at the end of section\{" "\}\s*\{DW_SECTION\.conclusion\}, the conclusion\./,
+    );
+    assert.doesNotMatch(body, /end of section 6/);
+  });
+});
+
+// Added (docs/design-workpaper.md, section 3.10; product owner, 16 November 2026: "why is
+// the understanding showing up before the procedure? Should the procedure be first then
+// the narrative will be the result of the procedure?"). The Document view, and its print,
+// which draws the same sheet: 1 Objective, risk and control (the control as management
+// describes it, without the understanding), 2 Procedures performed, 3 Understanding of
+// the control (the result of the procedures), 4 the walkthrough, 5 Attributes tested, 6
+// Information produced by the entity, 7 Conclusion, then "Tickmarks and evidence".
+describe("the Document view's order (docs/design-workpaper.md, section 3.10)", () => {
+  const sheet = component(view, "DocumentSheet");
+  const ORDER = [
+    ["objective", "Objective, risk and control"],
+    ["procedures", "Procedures performed"],
+    ["understanding", "Understanding of the control"],
+    ["walkthrough", "Implementation: walkthrough of one instance"],
+    ["attributes", "Attributes tested"],
+    ["ipe", "Information produced by the entity"],
+    ["conclusion", "Conclusion"],
+  ] as const;
+  const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const startOf = (key: (typeof ORDER)[number][0]) => {
+    const title = ORDER.find(([name]) => name === key)?.[1] ?? "";
+    return sheet.search(
+      new RegExp(
+        `<Section\\s+number=\\{DW_SECTION\\.${key}\\}\\s+title="${escaped(title)}"`,
+      ),
+    );
+  };
+  /** A section's source: from its opening tag to the next section's. */
+  const bodyOf = (key: (typeof ORDER)[number][0]) => {
+    const from = startOf(key);
+    assert.ok(from >= 0, key);
+    const next = sheet.slice(from + 1).search(/<Section\b/);
+    return sheet.slice(from, next < 0 ? undefined : from + 1 + next);
+  };
+
+  it("numbers the sections 1 to 7 from the one constant", () => {
+    assert.deepEqual(
+      ORDER.map(([key]) => DW_SECTION[key]),
+      [1, 2, 3, 4, 5, 6, 7],
+    );
+    assert.deepEqual(
+      Object.keys(DW_SECTION),
+      ORDER.map(([key]) => key),
+    );
+    // Defined once, in a module of its own, and re-exported by the model, never
+    // defined again.
+    assert.equal(count(sections, /export const DW_SECTION = \{/g), 1);
+    assert.match(model, /export \{\s*DW_SECTION,/);
+    assert.doesNotMatch(model, /const DW_SECTION\b/);
+  });
+
+  it("draws the sections in the approved order, then Tickmarks and evidence", () => {
+    const at = ORDER.map(([key]) => startOf(key));
+    at.forEach((found, index) => {
+      assert.ok(found >= 0, ORDER[index]?.[0]);
+      if (index > 0) {
+        assert.ok((at[index - 1] ?? -1) < found, ORDER[index]?.[0]);
+      }
+    });
+    const tickmarks = sheet.indexOf('<Section title="Tickmarks and evidence">');
+    assert.ok((at.at(-1) ?? Number.MAX_SAFE_INTEGER) < tickmarks);
+    // Those eight, and no other.
+    assert.equal(count(sheet, /<Section\b/g), ORDER.length + 1);
+  });
+
+  it("keeps the understanding out of section 1, and gives it a section of its own after the procedures", () => {
+    const objective = bodyOf("objective");
+    assert.doesNotMatch(objective, /understand/i);
+    assert.doesNotMatch(objective, /edit=|said=/);
+    // Section 1 is the control as management describes it.
+    assert.match(objective, /field=\{controlKey\("risk"\)\}/);
+    assert.match(objective, /field=\{controlKey\("activity"\)\}/);
+    assert.match(objective, /paper\.facts/);
+    const procedures = bodyOf("procedures");
+    assert.doesNotMatch(procedures, /understand/i);
+    const understanding = bodyOf("understanding");
+    assert.match(
+      understanding,
+      /subtitle=\{`The result of the procedures in section \$\{DW_SECTION\.procedures\}`\}/,
+    );
+    assert.match(understanding, /said=\{saidOf\("understanding"\)\}/);
+    assert.match(
+      understanding,
+      /understanding\.length > 0 \? \(\s*<EditLink\s+section="understanding"\s+what="the understanding of the control"\s+actions=\{actions\}\s+editable=\{editable\.has\("understanding"\)\}/,
+    );
+    assert.match(understanding, /<SectionEditorPanel \{\.\.\.understood\} \/>/);
+    assert.match(
+      understanding,
+      /<NoteField field=\{UNDERSTANDING\} text=\{understanding\} rich>\s*<RichText text=\{understanding\} \/>/,
+    );
+    // The understanding is drawn there and nowhere else on the sheet.
+    assert.equal(count(sheet, /\{\.\.\.understood\}/g), 1);
+    assert.equal(count(sheet, /field=\{UNDERSTANDING\}/g), 1);
+    assert.equal(count(sheet, /<EditLink\s+section="understanding"/g), 1);
+  });
+
+  it("says the subtitle quietly in the heading row, the Edit link still at its right", () => {
+    const section = component(view, "Section");
+    assert.match(
+      section,
+      /<\/h5>\s*\{subtitle !== undefined \? \(\s*<p className="dw-sec-sub">\{subtitle\}<\/p>\s*\) : null\}\s*\{edit\}/,
+    );
+    assert.match(
+      css,
+      /\.dw-sec-sub \{[^}]*margin-right: auto;[^}]*color: var\(--text-tertiary\);/,
+    );
   });
 });

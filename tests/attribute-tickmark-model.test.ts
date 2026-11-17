@@ -1172,7 +1172,9 @@ describe("the workpaper (docs/evidence-assurance.md, section 10.13)", () => {
   // no matters. A person's exception stays in section 4 as its own state (the conclusion
   // evaluates it), and a tickmark that does not change the attribute's state is said on
   // its row, in the server's sentence.
-  it("keeps a person's exception in section 4, and says a tickmark the state stands over on its row", () => {
+  // Renamed (docs/design-workpaper.md, section 3.10). Old: "in section 4". New: "in
+  // section 5", Attributes tested's number since the understanding became section 3.
+  it("keeps a person's exception in section 5, and says a tickmark the state stands over on its row", () => {
     const raw = sample();
     const attributes = raw.attributes as RawAttribute[];
     raw.attributes = attributes.map((item, at) =>

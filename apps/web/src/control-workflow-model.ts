@@ -126,7 +126,7 @@ export const STEPS: ReadonlyArray<{
   },
   {
     // One D&I step (product owner, 16 November 2026; docs/design-workpaper.md, section
-    // 3.8): the preparer concludes and signs in section 6, sends it for review, and the
+    // 3.8): the preparer concludes and signs in section 7, sends it for review, and the
     // reviewer signs off there. "D&I Conclusion and Review" (`designconclusion`) is gone;
     // a step that waits on the reviewer's sign-off still waits on the D&I conclusion.
     key: "designassessment",
@@ -476,7 +476,7 @@ function evidenceState(
 
 /**
  * D&I Assessment, the one D&I step (docs/design-workpaper.md, section 3.8): the workpaper
- * drafted and prepared, then its review in section 6. Draft · Prepared, in review with
+ * drafted and prepared, then its review in section 7. Draft · Prepared, in review with
  * <name> · Returned to the preparer · Signed off: <conclusion> · Sign-off out of date. A
  * workpaper prepared with no request standing (a body from before 3.8, or prepared by the
  * existing prepare) reads as the reviewer's sign-off did before.
@@ -988,7 +988,7 @@ const LEGACY: Record<string, Opened> = {
   risk: "setup",
   design: "designassessment",
   // "D&I Conclusion and Review" is part of D&I Assessment (section 3.8): an old link
-  // opens it, at section 6 (design-workpaper-view, openedAtConclusion).
+  // opens it, at section 7 (design-workpaper-view, openedAtConclusion).
   designconclusion: "designassessment",
   plan: "testdesign",
   approval: "testdesign",

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-
+import { DW_SECTION } from "../apps/web/src/design-workpaper-model.ts";
 import {
   anchorOf,
   attributeKey,
@@ -188,8 +188,8 @@ const PAPER_FIELDS: PaperFields = {
   ],
   // Rewritten (docs/design-workpaper.md, section 3.9). Old: `matters: [{ text }]`, noted
   // by position as matters.<n>. New: the points, each at its place (an attribute's row, a
-  // report's row naming the file, the head of section 4), and the evidence that places a
-  // file's point.
+  // report's row naming the file, the head of section 5 since 3.10), and the evidence
+  // that places a file's point.
   points: [
     {
       key: POINT_C,
@@ -380,23 +380,29 @@ describe("reading the notes", () => {
 
 describe("the field keys (section 3)", () => {
   it("names each place and its section", () => {
+    // Renumbered (docs/design-workpaper.md, section 3.10; product owner, 16 November
+    // 2026: procedures first, the understanding as their result, a section of its own).
+    // Old: understanding 1 (inside Objective, risk and control), walkthrough 3, the
+    // attributes 4, the reports 5, the Conclusion 6. New: the understanding is section 3
+    // of its own, the walkthrough 4, the attributes 5, the reports 6, the Conclusion 7.
+    // The control's risk and activity stay in 1, the procedures in 2.
     const keys: Array<[string, number | null]> = [
-      [UNDERSTANDING, 1],
+      [UNDERSTANDING, 3],
       ["control.risk", 1],
       ["control.activity", 1],
       ["procedures.2", 2],
-      [walkthroughKey(2, 4), 3],
-      [attributeKey(ATTR_C, "result"), 4],
-      [attributeKey(ATTR_C, "basis"), 4],
-      [attributeKey(ATTR_C, "note"), 4],
-      [reportKey(1, 2), 5],
+      [walkthroughKey(2, 4), 4],
+      [attributeKey(ATTR_C, "result"), 5],
+      [attributeKey(ATTR_C, "basis"), 5],
+      [attributeKey(ATTR_C, "note"), 5],
+      [reportKey(1, 2), 6],
       // Rewritten (docs/design-workpaper.md, section 3.9). Old: ["matters.1", 6],
       // [CONCLUSION, 7], ["conclusion.choice", 7]. New: the matters section is gone, so a
       // note on it is in no section (it is listed as "On an item no longer listed"), and
-      // the Conclusion is section 6.
+      // the Conclusion is section 6 (section 7 since 3.10, above).
       ["matters.1", null],
-      [CONCLUSION, 6],
-      ["conclusion.choice", 6],
+      [CONCLUSION, 7],
+      ["conclusion.choice", 7],
       ["something.else", null],
       ["walkthrough.0.1", null],
     ];
@@ -413,9 +419,11 @@ describe("the field keys (section 3)", () => {
     const context = contextOf(PAPER_FIELDS);
     const pointSection = (field: string) =>
       sectionOf({ anchorKind: "FIELD", field }, context);
-    assert.equal(pointSection(pointKey(POINT_C)), 4);
-    assert.equal(pointSection(pointKey(POINT_FILE)), 5);
-    assert.equal(pointSection(pointKey(POINT_REQUEST)), 4);
+    // Renumbered (section 3.10). Old: 4, 5, 4. New: 5 (an attribute's point), 6 (a
+    // report's), 5 (a REQUEST point at the head of Attributes tested).
+    assert.equal(pointSection(pointKey(POINT_C)), 5);
+    assert.equal(pointSection(pointKey(POINT_FILE)), 6);
+    assert.equal(pointSection(pointKey(POINT_REQUEST)), 5);
     assert.equal(pointSection(pointKey("a".repeat(32))), null);
     assert.equal(pointSection("points.ABC"), null);
     assert.equal(
@@ -427,19 +435,39 @@ describe("the field keys (section 3)", () => {
       key: POINT_C,
     });
     assert.ok(FIELD_KEY.test(pointKey(POINT_C)));
-    // The sections as the document numbers them: the Conclusion is 6, and there is no
-    // "Matters for the reviewer".
+    // The sections as the document numbers them, and there is no "Matters for the
+    // reviewer". Rewritten (docs/design-workpaper.md, section 3.10; product owner, 16
+    // November 2026: procedures first, the understanding as their result). Old: 1
+    // Objective, risk and control, 2 Procedures performed, 3 Walkthrough, 4 Attributes
+    // tested, 5 Information produced by the entity, 6 Conclusion. New: 3 Understanding of
+    // the control after the procedures, then 4 to 7, and "Tickmarks and evidence" after.
     assert.deepEqual(
       SECTIONS.map((item) => item.name),
       [
         "The workpaper as a whole",
         "1 Objective, risk and control",
         "2 Procedures performed",
-        "3 Walkthrough",
-        "4 Attributes tested",
-        "5 Information produced by the entity",
-        "6 Conclusion",
+        "3 Understanding of the control",
+        "4 Walkthrough",
+        "5 Attributes tested",
+        "6 Information produced by the entity",
+        "7 Conclusion",
         "Tickmarks and evidence",
+      ],
+    );
+    // The numbers are the one constant's, in the document's order.
+    assert.deepEqual(
+      SECTIONS.map((item) => item.n),
+      [
+        0,
+        DW_SECTION.objective,
+        DW_SECTION.procedures,
+        DW_SECTION.understanding,
+        DW_SECTION.walkthrough,
+        DW_SECTION.attributes,
+        DW_SECTION.ipe,
+        DW_SECTION.conclusion,
+        8,
       ],
     );
     assert.deepEqual(placeOf(walkthroughKey(12, 3)), {
@@ -453,33 +481,42 @@ describe("the field keys (section 3)", () => {
     const context = contextOf(PAPER_FIELDS);
     const where = (field: string) =>
       whereWords({ anchorKind: "FIELD", field }, context);
+    // Renumbered (docs/design-workpaper.md, section 3.10; product owner, 16 November
+    // 2026: procedures first, the understanding as their result). Old: "4 Attributes",
+    // "1 Understanding of the control", "3 Walkthrough", "5 Reports", "6 Conclusion".
+    // New: "5 Attributes", "3 Understanding of the control", "4 Walkthrough", "6
+    // Reports", "7 Conclusion"; the control's facts stay "1", the procedures "2".
     assert.equal(
       where(attributeKey(ATTR_C, "result")),
-      "4 Attributes · C, result",
+      "5 Attributes · C, result",
     );
     assert.equal(
       where(attributeKey(ATTR_D, "basis")),
-      "4 Attributes · D, what the evidence shows",
+      "5 Attributes · D, what the evidence shows",
     );
     assert.equal(
       where(attributeKey(ATTR_D, "note")),
-      "4 Attributes · D, preparer's note",
+      "5 Attributes · D, preparer's note",
     );
-    assert.equal(where(UNDERSTANDING), "1 Understanding of the control");
-    assert.equal(where(walkthroughKey(2, 4)), "3 Walkthrough · step 2, result");
-    assert.equal(where(reportKey(1, 2)), "5 Reports · E7, source");
-    assert.equal(where(reportKey(3, 1)), "5 Reports · row 3, report");
+    assert.equal(where(UNDERSTANDING), "3 Understanding of the control");
+    assert.equal(where("control.risk"), "1 Risk addressed");
+    assert.equal(where("control.activity"), "1 Control activity");
+    assert.equal(where("procedures.2"), "2 Procedures · 2");
+    assert.equal(where(walkthroughKey(2, 4)), "4 Walkthrough · step 2, result");
+    assert.equal(where(reportKey(1, 2)), "6 Reports · E7, source");
+    assert.equal(where(reportKey(3, 1)), "6 Reports · row 3, report");
     // Rewritten (section 3.9). Old: "7 Conclusion". New: the Conclusion is section 6.
-    assert.equal(where(CONCLUSION), "6 Conclusion");
-    assert.equal(where("conclusion.choice"), "6 Conclusion · the choice");
+    // Rewritten again (section 3.10). Old: "6 Conclusion". New: "7 Conclusion".
+    assert.equal(where(CONCLUSION), "7 Conclusion");
+    assert.equal(where("conclusion.choice"), "7 Conclusion · the choice");
     // A considered point: "Considered point" and its first words, in its place's section.
     assert.equal(
       where(pointKey(POINT_C)),
-      "4 Attributes · Considered point: Attribute C is shown only on files not relied…",
+      "5 Attributes · Considered point: Attribute C is shown only on files not relied…",
     );
     assert.equal(
       where(pointKey(POINT_FILE)),
-      "5 Reports · Considered point: The sign-on report does not show its parameters.",
+      "6 Reports · Considered point: The sign-on report does not show its parameters.",
     );
     assert.equal(where(pointKey("a".repeat(32))), "Considered point");
     // A note on the removed matters keeps its words, said as on an item no longer listed.
@@ -495,9 +532,14 @@ describe("the field keys (section 3)", () => {
 
   it("gives a considered point its one line, and orders it at its place (section 3.9)", () => {
     const texts = fieldTextsOf(PAPER_FIELDS);
+    // Rewritten (found failing before this change, at fd25ecc, while the sections were
+    // renumbered for docs/design-workpaper.md section 3.10). Old: "16 Nov" (en-GB). New:
+    // "Nov 16", the date style consideredLine adopted at the screenshot check of 3.9 (16
+    // November 2026; design-points-model.test.ts records the same change); this test was
+    // not updated with it.
     assert.equal(
       texts.get(pointKey(POINT_C)),
-      "Considered by Dana Lee, 16 Nov: The ticket itself shows the approval.",
+      "Considered by Dana Lee, Nov 16: The ticket itself shows the approval.",
     );
     // Only a considered point is a field of the sheet.
     assert.equal(texts.has(pointKey(POINT_FILE)), false);
@@ -517,10 +559,11 @@ describe("the field keys (section 3)", () => {
     // an item no longer listed last.
     assert.deepEqual(order, [5, 3, 4, 6, 1, 2]);
     // The filters read the point's section from the same context.
+    // Renumbered (section 3.10). Old: section 4. New: section 5, Attributes tested.
     assert.deepEqual(
       filterNotes(
         [note(3, { field: pointKey(POINT_C) }), note(1)],
-        { ...NO_FILTERS, section: 4 },
+        { ...NO_FILTERS, section: 5 },
         context,
       ).map((item) => item.number),
       [3],
@@ -530,7 +573,7 @@ describe("the field keys (section 3)", () => {
         [note(3, { field: pointKey(POINT_C) })],
         { ...RAIL_START, section: true },
         null,
-        4,
+        5,
         context,
       ).length,
       1,
@@ -780,11 +823,17 @@ describe("the order of the document", () => {
       }),
       note(9, { field: UNDERSTANDING }),
       note(10, { field: "control.risk" }),
+      note(11, { field: "procedures.1" }),
     ];
     const ordered = documentOrder(notes, context, positionsOf(notes, texts));
+    // Rewritten (docs/design-workpaper.md, section 3.10; product owner, 16 November 2026:
+    // procedures first, the understanding as their result). Old: no note on a procedure,
+    // and the understanding ranked inside section 1, after the control's facts. New: a
+    // note on procedure 1 (11) comes after the control's risk (10) and before every note
+    // on the understanding (9, 5, 4, 8), which is section 3, then the walkthrough (7).
     assert.deepEqual(
       ordered.map((item) => item.number),
-      [6, 10, 9, 5, 4, 8, 7, 3, 2, 1],
+      [6, 10, 11, 9, 5, 4, 8, 7, 3, 2, 1],
     );
   });
 });
@@ -835,12 +884,19 @@ describe("filters", () => {
     assert.deepEqual(numbers({ criticalities: ["NORMAL"] }), [2, 4]);
     assert.deepEqual(numbers({ owner: SAM }), [2]);
     assert.deepEqual(numbers({ raisedBy: DANA }), [4]);
-    assert.deepEqual(numbers({ section: 4 }), [3]);
+    // Renumbered (docs/design-workpaper.md, section 3.10; product owner, 16 November
+    // 2026: procedures first, the understanding as their result). Old: { section: 4 }
+    // found the attribute's note. New: Attributes tested is section 5.
+    assert.deepEqual(numbers({ section: 5 }), [3]);
     // Rewritten (docs/design-workpaper.md, section 3.9). Old: { section: 7 } found the
     // note on the conclusion. New: the Conclusion is section 6, and 7 is the unnumbered
     // "Tickmarks and evidence", where no note of these is.
-    assert.deepEqual(numbers({ section: 6 }), [4]);
-    assert.deepEqual(numbers({ section: 7 }), []);
+    // Rewritten again (section 3.10). Old: { section: 6 } the conclusion's note, 7
+    // "Tickmarks and evidence". New: the Conclusion is 7 and "Tickmarks and evidence" 8;
+    // section 6 (the reports) has none of these notes.
+    assert.deepEqual(numbers({ section: 7 }), [4]);
+    assert.deepEqual(numbers({ section: 8 }), []);
+    assert.deepEqual(numbers({ section: 6 }), []);
     // The search reads the note's text, its replies and its highlighted words.
     assert.deepEqual(numbers({ search: "  removed   TIMELY " }), [4]);
     assert.deepEqual(numbers({ search: "10:28" }), [5]);
@@ -861,7 +917,14 @@ describe("filters", () => {
     const criticalities = choiceCounts(notes, filters, "criticalities");
     assert.equal(criticalities.get("URGENT"), 1);
     assert.equal(criticalities.get("NORMAL"), 2);
-    assert.equal(choiceCounts(notes, NO_FILTERS, "section").get("1"), 3);
+    // Renumbered (section 3.10). Old: .get("1") was 3, the notes on the understanding
+    // being in section 1. New: they are in section 3, the understanding's own, and none
+    // is in 1.
+    assert.equal(choiceCounts(notes, NO_FILTERS, "section").get("3"), 3);
+    assert.equal(
+      choiceCounts(notes, NO_FILTERS, "section").get("1"),
+      undefined,
+    );
   });
 
   it("keeps the session's filters, reading back only what it knows", () => {
@@ -938,11 +1001,12 @@ describe("filters", () => {
     );
     assert.deepEqual(
       numbers(
+        // Renumbered (section 3.10). Old: 4. New: 5, the attribute's section now.
         railNotes(
           notes,
           { ...RAIL_START, tab: "resolved", section: true },
           viewer,
-          4,
+          5,
         ),
       ),
       [3],

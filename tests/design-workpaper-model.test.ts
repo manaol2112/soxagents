@@ -1514,7 +1514,8 @@ describe("what the page holds even when an answer disagrees with itself", () => 
       assert.equal(conclusion.headline, "Not concluded yet", key);
       assert.equal(conclusion.standing.includes(key), false, key);
       // Rewritten (section 3.9). Old: a matter's kind in words was "". New: a point's kind
-      // this page does not know is OTHER, its place the head of section 4, and only the
+      // this page does not know is OTHER, its place the head of section 4 (Attributes
+      // tested, section 5 since 3.10), and only the
       // known actions are offered.
       assert.equal(point.kind, "OTHER", key);
       assert.equal(point.place.at, "REQUEST", key);
@@ -2639,7 +2640,8 @@ describe("the conclusion the preparer records, and the agent's proposal", () => 
   });
 
   // Renamed (section 3.9): the Conclusion is section 6 now; the anchor is the same.
-  it("links to section 6 by its anchor", () => {
+  // Renamed again (section 3.10): the Conclusion is section 7; the anchor is the same.
+  it("links to section 7 by its anchor", () => {
     assert.equal(CONCLUSION_ANCHOR, "di-conclusion");
     assert.equal(
       conclusionHref("/?organization=o&step=designassessment"),

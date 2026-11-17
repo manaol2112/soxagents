@@ -4,7 +4,7 @@
  * with reason"). There is no "Matters for the reviewer" section any more: each item that
  * waits on a person is a point the server assembles on each read, shown at its place in
  * the document (an attribute's row, a report's row or a file's line, or the head of
- * section 4), to the preparer only, and settled there: by its own action (it is then no
+ * section 5), to the preparer only, and settled there: by its own action (it is then no
  * longer assembled) or by a consideration with a reason. A considered point is part of
  * the workpaper and everyone sees it. The agent's observations become the draft of the
  * message sent with the review request, never part of the workpaper.
@@ -15,6 +15,7 @@
  * match the point it read.
  */
 
+import { DW_SECTION, DW_TICKMARKS_ORDER } from "./design-workpaper-sections.ts";
 import { CREDENTIAL } from "./workpaper-model.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -104,7 +105,7 @@ function refsOf(value: unknown, known: ReadonlySet<string>): string[] {
 }
 
 /** Where the server says a point is. A place this page cannot read is the head of
- * section 4: an unsettled point is never left where nobody sees it. */
+ * section 5: an unsettled point is never left where nobody sees it. */
 function placeOf(value: unknown): PointPlace {
   const place = isRaw(value) ? value : {};
   const attributeId = line(place.attribute_id, 80);
@@ -272,10 +273,10 @@ export type Shown =
   | { where: "head" };
 
 /**
- * Where the document shows a point: an `ATTRIBUTE` point under its row in section 4; a
- * `FILE` point under the first section 5 row naming the file, else under its line in
- * "Tickmarks and evidence"; a `REQUEST` point at the head of section 4. A row this read
- * does not have puts it at the head of section 4, so it is never lost.
+ * Where the document shows a point: an `ATTRIBUTE` point under its row in section 5; a
+ * `FILE` point under the first section 6 row naming the file, else under its line in
+ * "Tickmarks and evidence"; a `REQUEST` point at the head of section 5. A row this read
+ * does not have puts it at the head of section 5, so it is never lost.
  */
 export function shownAt(point: Pick<Point, "place">, paper: PlaceFacts): Shown {
   const { place } = point;
@@ -323,20 +324,24 @@ export function pointsAt(
   });
 }
 
-/** The name of the place, for the sign-off's list: "Section 4", "Section 5", or
- * "Tickmarks and evidence". */
+/** The name of the place, for the sign-off's list: "Section 5" (the attributes),
+ * "Section 6" (the information produced by the entity), or "Tickmarks and evidence"
+ * (numbers from DW_SECTION, docs/design-workpaper.md section 3.10). */
 export function placeName(shown: Shown): string {
-  return shown.where === "report"
-    ? "Section 5"
-    : shown.where === "evidence"
-      ? "Tickmarks and evidence"
-      : "Section 4";
+  return shown.where === "evidence"
+    ? "Tickmarks and evidence"
+    : `Section ${placeSection(shown)}`;
 }
 
-/** The review notes' section of the place (docs/workpaper-review.md, section 3): 4, 5,
- * or 7 for the unnumbered "Tickmarks and evidence" after the Conclusion. */
+/** The review notes' section of the place (docs/workpaper-review.md, section 3): the
+ * attributes' or the reports' number, or DW_TICKMARKS_ORDER for the unnumbered
+ * "Tickmarks and evidence" after the Conclusion. */
 export function placeSection(shown: Shown): number {
-  return shown.where === "report" ? 5 : shown.where === "evidence" ? 7 : 4;
+  return shown.where === "report"
+    ? DW_SECTION.ipe
+    : shown.where === "evidence"
+      ? DW_TICKMARKS_ORDER
+      : DW_SECTION.attributes;
 }
 
 /** The page's anchor of a point at its place. */

@@ -35,7 +35,7 @@ import { NoteField } from "./review-notes";
 /**
  * A point of the D&I workpaper at its place (docs/design-workpaper.md, section 3.9): the
  * row the document draws under an attribute, a report, a file's line or the head of
- * section 4, with its one form ("Considered…", a reason in place) and its two writes
+ * section 5, with its one form ("Considered…", a reason in place) and its two writes
  * (consider, withdraw) through the page's own routes. The document view only places it;
  * the form and the writes are here, as the sign-off's are in preparer-signoff.tsx.
  */

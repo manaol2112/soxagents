@@ -604,6 +604,15 @@ button.dw-edit:focus-visible:not(:disabled) {
   font-weight: 600;
 }
 
+/* A section's quiet subtitle in its heading row, after the title (section 3.10: "The
+   result of the procedures in section 2"); the Edit link stays at the right. */
+.dw-sec-sub {
+  min-width: 0;
+  margin-right: auto;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
 .dw-two {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -745,7 +754,7 @@ button.dw-edit:focus-visible:not(:disabled) {
 }
 
 /* Section 6 on the plain sheet, top to bottom (docs/design-workpaper.md, sections 3.5 to
-   3.7; product owner, 16 November 2026: section 6 lighter, option A): the conclusion and
+   3.7; product owner, 16 November 2026: section 7 lighter, option A): the conclusion and
    one quiet line, the two results on one line, the choice in place after "Change", then
    a thin rule, the text, a thin rule and the sign-off. No card, no tinted block, no
    coloured bar, no pill: ink, greys and one thin rule between the parts. */
@@ -1159,7 +1168,7 @@ button.dw-why-toggle:hover {
   color: var(--text-secondary);
 }
 
-/* The way to the document's section 6, from the Matrix and the Evidence view. */
+/* The way to the document's section 7, from the Matrix and the Evidence view. */
 button.dw-to-concl {
   justify-self: start;
   margin-top: 0.25rem;
@@ -2821,7 +2830,7 @@ button.se-tool:focus-visible:not(:disabled) {
   }
 }
 
-/* The preparer's sign-off at the end of section 6 (docs/design-workpaper.md, 3.7; option
+/* The preparer's sign-off at the end of section 7 (docs/design-workpaper.md, 3.7; option
    A): one row under a thin rule, the heading and what is attested on the left, the dark
    button or a quiet link on the right. */
 
@@ -3312,6 +3321,22 @@ button.rp-trigger:hover {
 
   .so-review-go {
     justify-items: start;
+  }
+
+  /* On a phone the subtitle takes a line of its own under the title and the Edit link,
+     which stay side by side on the first. */
+  .dw-sec-head:has(.dw-sec-sub) {
+    flex-wrap: wrap;
+  }
+
+  .dw-sec-head:has(.dw-sec-sub) h5 {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .dw-sec-sub {
+    flex-basis: 100%;
+    order: 3;
   }
 }
 

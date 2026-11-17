@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 import { apiBaseUrl, sessionToken } from "../../../../src/load-workspace";
 import { signOffWrite } from "../../../../src/preparer-signoff-model";
 
-/** The preparer's sign-off of a workpaper, and its reopening, from section 6
+/** The preparer's sign-off of a workpaper, and its reopening, from section 7
  * (docs/design-workpaper.md, section 3.7): the existing prepare and reopen of the API,
  * called in the background. It answers as JSON with the API's status (any 2xx said as
  * 200; 0 where it could not be reached) and the API's own sentence for a refusal, and

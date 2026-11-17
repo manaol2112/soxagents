@@ -18,6 +18,7 @@ import {
   pointField,
   shownAt,
 } from "./design-points-model.ts";
+import { DW_SECTION, DW_TICKMARKS_ORDER } from "./design-workpaper-sections.ts";
 import { parseRich } from "./rich-text-model.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -652,19 +653,34 @@ export function placeOf(key: string): FieldPlace | null {
   return null;
 }
 
-/** The workpaper's sections as the document numbers them (0: the workpaper as a whole). */
+const S = DW_SECTION;
+/** After everything on the page: a key this page does not know, a retired matter. */
+const NOT_ON_PAGE = DW_TICKMARKS_ORDER + 1;
+
+/** The workpaper's sections as the document numbers them (0: the workpaper as a whole),
+ * in the document's order; the numbers are DW_SECTION's. */
 export const SECTIONS: ReadonlyArray<{ n: number; name: string }> = [
   { n: 0, name: WHOLE_WORKPAPER },
-  { n: 1, name: "1 Objective, risk and control" },
-  { n: 2, name: "2 Procedures performed" },
-  { n: 3, name: "3 Walkthrough" },
-  { n: 4, name: "4 Attributes tested" },
-  { n: 5, name: "5 Information produced by the entity" },
+  { n: S.objective, name: `${S.objective} Objective, risk and control` },
+  { n: S.procedures, name: `${S.procedures} Procedures performed` },
   // Rewritten (docs/design-workpaper.md, section 3.9). Old: 6 Matters for the reviewer,
   // 7 Conclusion. New: there is no matters section; the Conclusion is 6, and the
   // unnumbered "Tickmarks and evidence" after it holds the points placed on a file's line.
-  { n: 6, name: "6 Conclusion" },
-  { n: 7, name: "Tickmarks and evidence" },
+  // Rewritten again (section 3.10; product owner, 16 November 2026: procedures first, the
+  // understanding as their result). Old: the understanding inside 1, then 3 Walkthrough,
+  // 4 Attributes tested, 5 Information produced by the entity, 6 Conclusion, Tickmarks
+  // and evidence as 7. New: 3 Understanding of the control, a section of its own, then 4
+  // Walkthrough, 5 Attributes tested, 6 Information produced by the entity, 7 Conclusion,
+  // Tickmarks and evidence as 8.
+  {
+    n: S.understanding,
+    name: `${S.understanding} Understanding of the control`,
+  },
+  { n: S.walkthrough, name: `${S.walkthrough} Walkthrough` },
+  { n: S.attributes, name: `${S.attributes} Attributes tested` },
+  { n: S.ipe, name: `${S.ipe} Information produced by the entity` },
+  { n: S.conclusion, name: `${S.conclusion} Conclusion` },
+  { n: DW_TICKMARKS_ORDER, name: "Tickmarks and evidence" },
 ];
 
 /** The section a note's field is in (0 for the workpaper as a whole); null for a key this
@@ -682,17 +698,18 @@ export function sectionOf(
     return null;
   }
   switch (place.kind) {
-    case "understanding":
     case "control":
-      return 1;
+      return S.objective;
     case "procedure":
-      return 2;
+      return S.procedures;
+    case "understanding":
+      return S.understanding;
     case "walkthrough":
-      return 3;
+      return S.walkthrough;
     case "attribute":
-      return 4;
+      return S.attributes;
     case "report":
-      return 5;
+      return S.ipe;
     case "matter":
       return null;
     case "point":
@@ -701,7 +718,7 @@ export function sectionOf(
           ?.section ?? null
       );
     default:
-      return 6;
+      return S.conclusion;
   }
 }
 
@@ -735,9 +752,9 @@ export const RETIRED_FIELD = "On an item no longer listed";
 export const CONSIDERED_POINT = "Considered point";
 
 const SECTION_LEADS: Readonly<Record<number, string>> = {
-  4: "4 Attributes",
-  5: "5 Reports",
-  7: "Tickmarks and evidence",
+  [S.attributes]: `${S.attributes} Attributes`,
+  [S.ipe]: `${S.ipe} Reports`,
+  [DW_TICKMARKS_ORDER]: "Tickmarks and evidence",
 };
 
 const REPORT_COLUMNS = [
@@ -758,8 +775,8 @@ const inLabel = (name: string): string =>
     ? `${name.charAt(0).toLowerCase()}${name.slice(1)}`
     : name;
 
-/** Where a note is, in words: "4 Attributes · C, result", "1 Understanding of the
- * control", "The workpaper as a whole". */
+/** Where a note is, in words: "5 Attributes · C, result", "3 Understanding of the
+ * control", "The workpaper as a whole" (the numbers are DW_SECTION's). */
 export function whereWords(
   note: Pick<ReviewNote, "anchorKind" | "field">,
   context: FieldContext = NO_CONTEXT,
@@ -773,27 +790,27 @@ export function whereWords(
   }
   switch (place.kind) {
     case "understanding":
-      return "1 Understanding of the control";
+      return `${S.understanding} Understanding of the control`;
     case "control":
-      return place.fact === "risk" ? "1 Risk addressed" : "1 Control activity";
+      return `${S.objective} ${place.fact === "risk" ? "Risk addressed" : "Control activity"}`;
     case "procedure":
-      return `2 Procedures · ${place.n}`;
+      return `${S.procedures} Procedures · ${place.n}`;
     case "walkthrough": {
       const name =
         context.walkthroughColumns[place.column - 1]?.trim() ||
         WALK_NAMES[place.column - 1] ||
         `column ${place.column}`;
-      return `3 Walkthrough · step ${place.row}, ${inLabel(name)}`;
+      return `${S.walkthrough} Walkthrough · step ${place.row}, ${inLabel(name)}`;
     }
     case "attribute": {
       const code =
         context.attributes.find((item) => item.id === place.id)?.code ?? "";
-      return `4 Attributes · ${code === "" ? "an attribute" : code}, ${PART_WORDS[place.part]}`;
+      return `${S.attributes} Attributes · ${code === "" ? "an attribute" : code}, ${PART_WORDS[place.part]}`;
     }
     case "report": {
       const ref = context.reportRefs[place.row - 1]?.trim() ?? "";
       const name = REPORT_COLUMNS[place.column - 1] ?? `column ${place.column}`;
-      return `5 Reports · ${ref === "" ? `row ${place.row}` : ref}, ${name}`;
+      return `${S.ipe} Reports · ${ref === "" ? `row ${place.row}` : ref}, ${name}`;
     }
     case "matter":
       return RETIRED_FIELD;
@@ -808,9 +825,9 @@ export function whereWords(
       return `${lead === undefined ? "" : `${lead} · `}${CONSIDERED_POINT}: ${firstWords(point.text, 48)}`;
     }
     case "choice":
-      return "6 Conclusion · the choice";
+      return `${S.conclusion} Conclusion · the choice`;
     default:
-      return "6 Conclusion";
+      return `${S.conclusion} Conclusion`;
   }
 }
 
@@ -827,37 +844,37 @@ export function anchorWords(note: Pick<ReviewNote, "anchorKind">): string {
 function rankOf(key: string, context: FieldContext): number[] {
   const place = placeOf(key);
   if (place === null) {
-    return [8];
+    return [NOT_ON_PAGE];
   }
   switch (place.kind) {
     case "control":
-      return [1, place.fact === "risk" ? 0 : 1];
-    case "understanding":
-      return [1, 2];
+      return [S.objective, place.fact === "risk" ? 0 : 1];
     case "procedure":
-      return [2, place.n];
+      return [S.procedures, place.n];
+    case "understanding":
+      return [S.understanding, 0];
     case "walkthrough":
-      return [3, place.row, place.column];
+      return [S.walkthrough, place.row, place.column];
     case "attribute": {
       const at = context.attributes.findIndex((item) => item.id === place.id);
       const part = place.part === "basis" ? 0 : place.part === "note" ? 1 : 2;
-      return [4, at < 0 ? 100_000 : at, part];
+      return [S.attributes, at < 0 ? 100_000 : at, part];
     }
     case "report":
-      return [5, place.row, place.column];
+      return [S.ipe, place.row, place.column];
     case "matter":
       // No longer on the page: after everything that is.
-      return [8, place.n];
+      return [NOT_ON_PAGE, place.n];
     case "point":
       return (
         (context.points ?? []).find((item) => item.key === place.key)?.rank ?? [
-          8,
+          NOT_ON_PAGE,
         ]
       );
     case "choice":
-      return [6, 0];
+      return [S.conclusion, 0];
     default:
-      return [6, 1];
+      return [S.conclusion, 1];
   }
 }
 
@@ -1002,11 +1019,11 @@ export function contextOf(paper: PaperFields): FieldContext {
     points: paper.points.map((point, at) => {
       const shown = shownAt(point, paper);
       // In the document's order: under its attribute's row (after the row's own fields),
-      // under its report's row, on its file's line, or at the head of section 4.
+      // under its report's row, on its file's line, or at the head of section 5.
       const rank =
         shown.where === "attribute"
           ? [
-              4,
+              S.attributes,
               paper.attributes.findIndex(
                 (item) => item.id === shown.attributeId,
               ),
@@ -1014,14 +1031,14 @@ export function contextOf(paper: PaperFields): FieldContext {
               at,
             ]
           : shown.where === "report"
-            ? [5, shown.index + 1, 4, at]
+            ? [S.ipe, shown.index + 1, 4, at]
             : shown.where === "evidence"
               ? [
-                  7,
+                  DW_TICKMARKS_ORDER,
                   paper.evidence.findIndex((item) => item.ref === shown.ref),
                   at,
                 ]
-              : [4, -1, at];
+              : [S.attributes, -1, at];
       return {
         key: point.key,
         text: point.text,
@@ -1609,8 +1626,11 @@ export function parseFilters(value: unknown): NoteFilters | null {
   };
 }
 
+/** The tab's remembered filters. "v2" since the sections were renumbered
+ * (docs/design-workpaper.md, section 3.10): a section remembered by its old number is not
+ * read as the section that now has it. */
 export const filtersKey = (workpaperId: string): string =>
-  `aw.review-notes.filters.${workpaperId}`;
+  `aw.review-notes.filters.v2.${workpaperId}`;
 
 /* The rail (product owner, 16 November 2026: notes rail, inbox (option 3)) ------------- */
 

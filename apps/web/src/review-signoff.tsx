@@ -69,7 +69,7 @@ import {
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
 
-/** What section 6 knows of the review notes: how many are open, how many urgent. */
+/** What section 7 knows of the review notes: how many are open, how many urgent. */
 export type NotesCount = { open: number; urgent: number };
 
 const REOPENED_FROM: Record<

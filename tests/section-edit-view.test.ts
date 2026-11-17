@@ -110,9 +110,15 @@ describe("Edit opens the section's editor where the document shows it", () => {
     // The understanding, the walkthrough, the reports and the conclusion: the text or
     // the grid, in the place of what it edits.
     assert.equal(count(sheet, /<SectionEditorPanel\b/g), 4);
+    // Rewritten (docs/design-workpaper.md, section 3.10; product owner, 16 November 2026:
+    // procedures first, the understanding as their result). Old: the panel was given
+    // heading="Understanding of the control", the words over the box where the section's
+    // own heading (then section 1's) was not right above it. New: the understanding is
+    // section 3 of its own, its heading right above the box, so no heading is passed;
+    // the same panel, in the same place of what it edits.
     assert.match(
       sheet,
-      /\{understood !== null \? \(\s*<SectionEditorPanel\s+\{\.\.\.understood\}\s+heading="Understanding of the control"\s*\/>\s*\) : understanding\.length > 0 \? \(\s*<div className="dw-prose">/,
+      /\{understood !== null \? \(\s*<SectionEditorPanel \{\.\.\.understood\} \/>\s*\) : understanding\.length > 0 \? \(\s*<div className="dw-prose">/,
     );
     assert.match(
       sheet,

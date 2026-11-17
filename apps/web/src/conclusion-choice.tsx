@@ -36,7 +36,7 @@ import { CONCLUSION_ANCHOR } from "./design-workpaper-model";
 import { useRecordsRefresh } from "./section-editor";
 
 /**
- * The preparer records the D&I conclusion in section 6 of the workpaper
+ * The preparer records the D&I conclusion in section 7 of the workpaper
  * (docs/design-workpaper.md, section 3.6): the five conclusions as a radio group, the
  * basis of "Not effective", the reason where one is needed, and "Record conclusion". What
  * is missing, and which conclusions are not offered now and why, is the model's
@@ -58,14 +58,14 @@ import { useRecordsRefresh } from "./section-editor";
  *   the focus: a conclusion not offered stays focusable and says why, and after an
  *   answer the focus goes to the refusal or to "Change".
  *
- * Lighter (product owner, 16 November 2026: section 6, option A): the form is drawn only
+ * Lighter (product owner, 16 November 2026: section 7, option A): the form is drawn only
  * after "Change" (or "Record conclusion" where none is recorded), in place, with Cancel.
  * "Change" is a text link in the head's quiet line (the caller's `head`, given it), what
  * the page says after an answer is a status beside it, and a refusal stays shown under
  * where the form was, so closing the form never takes it away.
  */
 
-/** Whether the page was opened at section 6 (`#di-conclusion`, the link from D&I
+/** Whether the page was opened at section 7 (`#di-conclusion`, the link from D&I
  * Conclusion and Review). It only reads the address; nothing changes it. */
 export function openedAtConclusion(): boolean {
   return (
@@ -141,7 +141,7 @@ export function ConclusionChoicePanel({
   onRefused: () => void;
   /** Where a design deficiency is logged; null where the page has no link to it. */
   deficiencyHref?: string | null;
-  /** Section 6's head, given "Change" (or "Record conclusion") and the status beside it
+  /** Section 7's head, given "Change" (or "Record conclusion") and the status beside it
    * to draw in its quiet line. */
   head: (change: ReactNode) => ReactNode;
   /** What stands between the head and the form (the results). */

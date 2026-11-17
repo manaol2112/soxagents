@@ -26,6 +26,15 @@ import {
 import { fileQuery } from "./evidence-preview-model.ts";
 import { formatDate } from "./format.ts";
 
+/* The section numbers of the Document view (docs/design-workpaper.md, section 3.10): the
+ * one source of truth, kept in a module without imports so the models this one imports
+ * read it too without an import cycle. */
+export {
+  DW_SECTION,
+  DW_TICKMARKS_ORDER,
+  type DwSection,
+} from "./design-workpaper-sections.ts";
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** An evidence reference: E1, E2, … in the order of the evidence index. */
 const REF = /^E[1-9]\d{0,2}$/;
@@ -185,8 +194,8 @@ export type EvidenceEntry = {
    * Absent where it sends none. */
   notReliedOn?: string;
   /** Where a person's decision that the file's reliability is established on review
-   * stands (section 3.9): the server's sentence, the same words section 5 uses, so a file
-   * no section 5 row names still says it on its line. Absent where it sends none. */
+   * stands (section 3.9): the server's sentence, the same words section 6 uses, so a file
+   * no section 6 row names still says it on its line. Absent where it sends none. */
   established?: string;
 };
 
@@ -1063,16 +1072,16 @@ export const PROPOSED_BY_AGENT = "Proposed by the agent, not signed";
 /** What stands in the verdict's place until the records propose one. */
 export const NOT_CONCLUDED = "Not concluded yet";
 
-/** Where a link from another step lands: section 6 of the document, the conclusion
+/** Where a link from another step lands: section 7 of the document, the conclusion
  * (docs/design-workpaper.md, section 3.5). */
 export const CONCLUSION_ANCHOR = "di-conclusion";
 
-/** "/?…#di-conclusion": D&I Assessment, at section 6. */
+/** "/?…#di-conclusion": D&I Assessment, at section 7. */
 export function conclusionHref(assessmentHref: string): string {
   return `${assessmentHref.split("#")[0] ?? assessmentHref}#${CONCLUSION_ANCHOR}`;
 }
 
-/** The pill of the agent's proposal in section 6 until the preparer records a
+/** The pill of the agent's proposal in section 7 until the preparer records a
  * conclusion (docs/design-workpaper.md, sections 3.5 and 3.6). */
 export const PROPOSED_REVIEW = "Proposed by the agent · review it";
 
@@ -1335,7 +1344,7 @@ export function choiceFactsOf(
   };
 }
 
-/** Whether section 6 offers "Log a design deficiency": while an exception stands (a
+/** Whether section 7 offers "Log a design deficiency": while an exception stands (a
  * deficiency is one way to answer it), or where the conclusion is "Not effective" and no
  * design deficiency is logged yet (its sign-off needs one). */
 export function deficiencyWanted(

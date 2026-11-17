@@ -32,7 +32,7 @@ type Read =
  * Home's "Waiting for your review" (docs/design-workpaper.md, section 3.8): one line per
  * D&I workpaper sent to the viewer for review, with who sent it, when, and the conclusion
  * (or the urgent notes that hold it), each opening the control's D&I Assessment at
- * section 6, where it is signed off or returned. One read through the page's JSON route,
+ * section 7, where it is signed off or returned. One read through the page's JSON route,
  * stopped if the page goes; nothing here acts. Quiet when nothing waits: the card is not
  * drawn at all, so a person who reviews nothing never sees it.
  */

@@ -528,8 +528,11 @@ describe("the D&I conclusion's strip says the conclusion that stands", () => {
     });
     // Renumbered (docs/design-workpaper.md, section 3.9). Old: "section 7". New: the
     // matters section is gone and the Conclusion is section 6.
+    // Renumbered again (docs/design-workpaper.md, section 3.10; product owner, 16 November
+    // 2026: procedures first, the understanding as their result, a section of its own).
+    // Old: "section 6". New: "section 7" (DW_SECTION.conclusion).
     assert.deepEqual(lines, [
-      "No conclusion recorded yet: the preparer records it in section 6 of D&I Assessment.",
+      "No conclusion recorded yet: the preparer records it in section 7 of D&I Assessment.",
       "Proposed by the agent: Not concluded.",
     ]);
   });

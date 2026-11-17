@@ -347,7 +347,7 @@ export type RaiseTarget = {
   anchorKind: AnchorKind;
   field: string;
   anchor: (TextAnchor & { start: number; end: number }) | null;
-  /** What the form shows: "4 Attributes · C, result". */
+  /** What the form shows: "5 Attributes · C, result". */
   where: string;
   /** What had the focus when the form opened: it gets it back. */
   opener: HTMLElement | null;

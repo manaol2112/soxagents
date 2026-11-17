@@ -6,7 +6,7 @@ import { apiBaseUrl, sessionToken } from "../../../../src/load-workspace";
 
 /**
  * The preparer records the D&I conclusion (docs/design-workpaper.md, section 3.6): the
- * API's choice route, called in the background from section 6 of the D&I workpaper with
+ * API's choice route, called in the background from section 7 of the D&I workpaper with
  * the person's own session. It answers as JSON, never a redirect: the API's status (any
  * 2xx said as 200; 0 where the API could not be reached), its own sentence for a refusal,
  * and on 200 the D&I conclusion's body it answered with. choiceWrite refuses here what is

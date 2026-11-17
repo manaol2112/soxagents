@@ -425,10 +425,16 @@ describe("where a text section is read", () => {
     // review notes' field (`understanding`), which draws it as it is while the notes are
     // off (and on the printed sheet), and with its highlighted words while they are on;
     // the text is still shown formatted, by the same reader.
+    // Rewritten (docs/design-workpaper.md, section 3.10; product owner, 16 November 2026:
+    // procedures first, the understanding as their result). Old: the block opened with
+    // its own <h6>Understanding of the control</h6>, inside section 1. New: the
+    // understanding is section 3 of its own, whose heading says "Understanding of the
+    // control", so the block has no sub-heading; the same NoteField and RichText.
     assert.match(
       sheet,
-      /<div className="dw-prose">\s*<h6>Understanding of the control<\/h6>\s*<NoteField field=\{UNDERSTANDING\} text=\{understanding\} rich>\s*<RichText text=\{understanding\} \/>\s*<\/NoteField>\s*<\/div>/,
+      /title="Understanding of the control"[\s\S]*?<div className="dw-prose">\s*<NoteField field=\{UNDERSTANDING\} text=\{understanding\} rich>\s*<RichText text=\{understanding\} \/>\s*<\/NoteField>\s*<\/div>/,
     );
+    assert.doesNotMatch(sheet, /<h6>Understanding of the control<\/h6>/);
     assert.match(sheet, /const \{ understanding \} = paper;/);
     // Rewritten 15 November 2026. Old: the conclusion's RichText directly before
     // <OutOfDate>, and the Evidence view repeating the text under "Read the conclusion"
