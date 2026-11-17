@@ -146,8 +146,18 @@ def test_each_control_asks_only_a_reasonable_number_of_questions() -> None:
     # reasonable." Asked by default (follow-ups excluded), universal questions included.
     for key in CORE:
         assert 8 <= len(_default(key)) <= 12, (key, len(_default(key)))
+    # Rewritten 16 November 2026 (B1k, docs/control-workflow-plan.md). Old: every control
+    # outside CORE was asked 6 to 9 questions by default. New: ITGC-CM-06 (change-patching)
+    # also asks the three facts its attributes needed after the walkthrough (who applies
+    # patches to production, how a patch is linked to its change record, how a patch applied
+    # without prior approval is approved afterwards), which the plan names, so it is asked as
+    # many as a core control (8 to 12); every other control keeps 6 to 9. Justification: the
+    # bound stands for B1c's "only ask the questions that are detailed but also reasonable",
+    # and the product owner decided these three are needed to test the attributes.
     for key in OTHERS:
-        assert 6 <= len(_default(key)) <= 9, (key, len(_default(key)))
+        low, high = (8, 12) if key == "change-patching" else (6, 9)
+        assert low <= len(_default(key)) <= high, (key, len(_default(key)))
+    assert len(_default("change-patching")) == 12
 
 
 def test_an_unknown_or_empty_key_gets_the_universal_questions_only() -> None:
@@ -665,6 +675,9 @@ SINGLE = (
     "wt-ac07-transition-length",
     "wt-ac11-instances",
     "wt-cm03-exception-term",
+    # Added 16 November 2026 (B1k): a patch applied without prior approval is approved
+    # afterwards in one way, or not at all, or is not allowed.
+    "wt-cm06-unapproved",
 )
 
 
