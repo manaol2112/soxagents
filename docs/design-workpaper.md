@@ -707,6 +707,13 @@ One stands per workpaper and point key.
   workpaper is refused while a point is not settled: "Settle the points first (N): <the
   first one's words>." The 3.7 refusals come first. Demo seeding stays held to the rules it
   had (as for 3.6).
+- **The conclusion is checked again at the preparer's sign-off.** Until now the rules of
+  3.6 were applied when the conclusion was recorded, so an exception, or a file not relied
+  on, recorded after an Effective choice did not stop the preparer signing (found when
+  this section was checked against the code). Prepare now refuses where the standing
+  choice would be refused on the records as they are now, with that rule's own sentence
+  after "The conclusion no longer fits the records: record it again." This is what lets
+  the conclusion stand for the evaluation of each exception.
 - **The reviewer's sign-off** is refused while a point is not settled. A point can appear
   after the preparer signed, when the evidence or a check changes: "N points were raised
   since the preparer signed: return it to the preparer." A standing sign-off whose rule
