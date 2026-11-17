@@ -15,6 +15,7 @@ import {
   designWorkpaperQuery,
   EXCEPTIONS_NOTED,
   editableSections,
+  establishedLine,
   evidenceLine,
   evidenceTitle,
   foldStartsOpen,
@@ -25,9 +26,8 @@ import {
   loadProblem,
   MARK_WORDS,
   matrixOf,
-  matterWords,
+  moreFilesLine,
   NO_EXCEPTIONS_NOTED,
-  openMatters,
   PROPOSED_BY_AGENT,
   PROPOSED_REVIEW,
   paragraphs,
@@ -171,7 +171,14 @@ describe("reading the server's answer", () => {
       E6: "IDENTIFIES",
     });
     assert.equal(paper.reports.length, 1);
-    assert.equal(paper.matters.length, 3);
+    // Rewritten (docs/design-workpaper.md, section 3.9). Old: three matters (an open
+    // follow-up, a noted attribute and the "Operating effectiveness is tested separately"
+    // note). New: no matters; two points (one considered), the agent's observations, and
+    // whether the viewer may settle a point now.
+    assert.equal(paper.points.length, 2);
+    assert.equal(paper.observations.length, 2);
+    assert.equal(paper.canSettle, false);
+    assert.equal(paper.evidenceMore, 0);
     assert.equal(paper.tickmarks.length, 4);
     assert.equal(paper.conclusion.signed, false);
     assert.equal(paper.canEdit, true);
@@ -220,18 +227,23 @@ describe("reading the server's answer", () => {
         paper.walkthrough.columns,
         paper.attributes,
         paper.reports,
-        paper.matters,
+        paper.points,
+        paper.observations,
         paper.tickmarks,
         paper.review.outOfDate,
       ],
-      [[], [], [], [], [], [], [], [], [], []],
+      [[], [], [], [], [], [], [], [], [], [], []],
     );
+    assert.equal(paper.canSettle, false);
+    assert.equal(paper.evidenceMore, 0);
     assert.equal(paper.risk, "");
     assert.equal(paper.conclusion.signed, false);
     assert.equal(paper.canEdit, false);
     // And each view's model still builds from it.
     assert.equal(matrixOf(paper).rows.length, 0);
-    assert.equal(tilesOf(paper).length, 5);
+    // Rewritten (section 3.9). Old: five tiles, one "Matters for the reviewer". New: four;
+    // there is no matters tile.
+    assert.equal(tilesOf(paper).length, 4);
     assert.deepEqual(timelineOf(paper.walkthrough), []);
     assert.equal(conclusionOf(paper).headline, "Not concluded yet");
     assert.equal(startingSelection(paper), null);
@@ -297,11 +309,11 @@ describe("reading the server's answer", () => {
         "E6",
         null,
       ],
-      matters: [
-        { state: "OPEN", kind: "FINDING", text: "", refs: ["E1"] },
+      points: [
+        { key: "a".repeat(32), kind: "FINDING", text: "", refs: ["E1"] },
         {
-          state: "WAITING",
-          kind: "FINDING",
+          key: "b".repeat(32),
+          kind: "WAITING",
           text: "Kept.",
           refs: ["E1", "E2"],
         },
@@ -331,11 +343,14 @@ describe("reading the server's answer", () => {
       E5: "SHOWS",
       E1: "IDENTIFIES",
     });
-    // A matter with no words goes; a state this page does not know waits on a person
-    // (only an exact NOTED is noted).
-    assert.deepEqual(paper.matters, [
-      { state: "OPEN", kind: "FINDING", text: "Kept.", refs: ["E1"] },
-    ]);
+    // Rewritten (section 3.9). Old: a matter with no words goes, and a state this page
+    // does not know waits on a person. New: the same for a point: one with no words goes,
+    // a kind this page does not know is kept as OTHER (never dropped, so it is still
+    // settled at its place), and a reference to a file not in the index goes.
+    assert.deepEqual(
+      paper.points.map((point) => [point.kind, point.text, point.refs]),
+      [["OTHER", "Kept.", ["E1"]]],
+    );
     assert.deepEqual(paper.reports, [
       { ref: "", report: "Sign-ons", source: "", procedure: "" },
     ]);
@@ -422,7 +437,16 @@ describe("the server's own answer (the second fixture)", () => {
       E2: "EXCEPTION",
     });
     assert.deepEqual(read.reports, []);
-    assert.equal(read.matters.length, 3);
+    // Rewritten (section 3.9). Old: three matters. New: two points (a finding on a file,
+    // a follow-up on the request), no observations; the preparer may settle them.
+    assert.deepEqual(
+      read.points.map((point) => [point.kind, point.place.at]),
+      [
+        ["FINDING", "FILE"],
+        ["FOLLOW_UP", "REQUEST"],
+      ],
+    );
+    assert.equal(read.canSettle, true);
     assert.equal(read.canEdit, true);
   });
 
@@ -447,7 +471,8 @@ describe("the server's own answer (the second fixture)", () => {
         ],
         ["attributes", "4 of 5 shown", "The rest are exceptions"],
         ["exceptions", "1 exception", "Attribute B"],
-        ["matters", "2 open", read.matters[0]?.text],
+        // Rewritten (section 3.9). Old: ["matters", "2 open", the first matter]. New: no
+        // matters tile; the points are at their place in the document.
         ["files", "2 files", "0 of 3 annotations reviewed"],
       ],
     );
@@ -522,11 +547,19 @@ describe("the server's own answer (the second fixture)", () => {
         label: `Fact ${index + 1}`,
         value: "As stored",
       })),
-      matters: Array.from({ length: 12 }, (_, index) => ({
-        state: "OPEN",
+      // Rewritten (section 3.9). Old: 12 matters. New: 40 points and 20 observations.
+      points: Array.from({ length: 40 }, (_, index) => ({
+        key: index.toString(16).padStart(32, "0"),
         kind: "FINDING",
-        text: `Matter ${index + 1}`,
+        text: `Point ${index + 1}`,
         refs: ["E60"],
+        place: { at: "REQUEST", requirement_id: null },
+        settle: ["FINDING", "CONSIDER"],
+        considered: null,
+      })),
+      observations: Array.from({ length: 20 }, (_, index) => ({
+        text: `Observation ${index + 1}`,
+        refs: [],
       })),
       procedures: Array.from(
         { length: 8 },
@@ -539,10 +572,11 @@ describe("the server's own answer (the second fixture)", () => {
         read.evidence.length,
         read.walkthrough.steps.length,
         read.facts.length,
-        read.matters.length,
+        read.points.length,
+        read.observations.length,
         read.procedures.length,
       ],
-      [60, 300, 60, 12, 8],
+      [60, 300, 60, 40, 20, 8],
     );
     assert.equal(matrixOf(read).columns.length, 60);
     assert.ok(matrixOf(read).rows.every((row) => row.cells.length === 60));
@@ -558,7 +592,7 @@ describe("the server's own answer (the second fixture)", () => {
     assert.deepEqual(stops[299]?.refs, ["E60"]);
     // And the page's own ceilings sit above the server's.
     assert.ok(LIMITS.evidence >= 60 && LIMITS.steps >= 300);
-    assert.ok(LIMITS.facts >= 60 && LIMITS.matters >= 12);
+    assert.ok(LIMITS.facts >= 60);
     assert.ok(LIMITS.procedures >= 8);
     assert.ok(TIMELINE_ACROSS_MOST < 300);
   });
@@ -1304,50 +1338,45 @@ describe("what the page holds even when an answer disagrees with itself", () => 
     assert.equal(tickmarkLegend(paper).length, 3);
   });
 
-  it("treats a matter as open unless the server says exactly NOTED", () => {
-    const states = (state: unknown) =>
-      parsed({ matters: [{ state, kind: "FINDING", text: "A matter." }] })
-        .matters[0]?.state;
-    assert.equal(states("NOTED"), "NOTED");
-    for (const state of [
-      "OPEN",
-      "noted",
-      "Noted",
-      "CLOSED",
-      "RESOLVED",
-      "",
+  // Rewritten (section 3.9). Old: "treats a matter as open unless the server says exactly
+  // NOTED", with matterWords and openMatters ("1 matter open for the reviewer"). New: there
+  // are no matters. A point is settled only where a whole consideration stands for it
+  // (design-points-model.test.ts holds the rest); one that is not whole is never read as
+  // settled.
+  it("treats a point as settled only where a whole consideration stands", () => {
+    const considered = (value: unknown) =>
+      parsed({
+        points: [
+          {
+            key: "c".repeat(32),
+            kind: "FINDING",
+            text: "A point.",
+            place: { at: "REQUEST" },
+            considered: value,
+          },
+        ],
+      }).points[0]?.considered ?? null;
+    assert.notEqual(
+      considered({
+        id: uuid(301),
+        by: { id: uuid(31), name: "Dana Lee" },
+        at: "2026-11-16T12:00:00Z",
+        reason: "Settled on review of the ticket.",
+      }),
+      null,
+    );
+    for (const value of [
       null,
       undefined,
-      0,
+      true,
+      "CONSIDERED",
+      {},
+      { id: uuid(301), reason: "No person." },
+      { id: "x", by: { id: uuid(31) }, reason: "Bad id." },
+      { id: uuid(301), by: { id: uuid(31) }, reason: "" },
     ]) {
-      assert.equal(states(state), "OPEN", String(state));
+      assert.equal(considered(value), null, JSON.stringify(value));
     }
-    assert.deepEqual(matterWords({ state: "OPEN", kind: "COMPLETENESS" }), {
-      state: "Open",
-      tone: "warning",
-      kind: "Completeness or reliability",
-    });
-    // The line under a verdict counts what is open.
-    assert.deepEqual(openMatters(parsed()), {
-      count: 1,
-      words: "1 matter open for the reviewer",
-    });
-    assert.equal(
-      openMatters(
-        parsed({
-          matters: [
-            { state: "OPEN", kind: "FINDING", text: "One." },
-            { state: "SOMETHING", kind: "FILE", text: "Two." },
-            { state: "NOTED", kind: "NOTE", text: "Three." },
-          ],
-        }),
-      ).words,
-      "2 matters open for the reviewer",
-    );
-    assert.deepEqual(openMatters(parsed({ matters: [] })), {
-      count: 0,
-      words: "No matter is open",
-    });
   });
 
   it("keeps an attribute and an exception the answer names badly", () => {
@@ -1432,7 +1461,16 @@ describe("what the page holds even when an answer disagrees with itself", () => 
           signed: false,
         },
         review: { status: key, proposed: key, signed_verdict: key },
-        matters: [{ state: key, kind: key, text: "A matter.", refs: [key] }],
+        points: [
+          {
+            key: "d".repeat(32),
+            kind: key,
+            text: "A point.",
+            refs: [key],
+            place: { at: key },
+            settle: [key, "CONSIDER"],
+          },
+        ],
         attributes: [
           {
             ...first,
@@ -1447,15 +1485,16 @@ describe("what the page holds even when an answer disagrees with itself", () => 
         tickmarks: [{ mark: key, symbol: "✓", meaning: "Hostile." }],
       });
       const conclusion = conclusionOf(paper);
-      const matter = paper.matters[0];
-      assert.ok(matter !== undefined);
+      const point = paper.points[0];
+      assert.ok(point !== undefined);
       const shown = [
         conclusion.headline,
         conclusion.standing,
         conclusion.verdict,
         statusOf(paper).words,
-        matterWords(matter).kind,
-        matterWords(matter).state,
+        point.kind,
+        point.place.at,
+        ...point.settle,
         stateOf(paper.attributes[0] ?? { state: "OTHER", stateWords: "" })
           .words,
         tickmarkOf(paper, key).symbol,
@@ -1474,7 +1513,12 @@ describe("what the page holds even when an answer disagrees with itself", () => 
       // A code that is no verdict proposes nothing.
       assert.equal(conclusion.headline, "Not concluded yet", key);
       assert.equal(conclusion.standing.includes(key), false, key);
-      assert.equal(matterWords(matter).kind, "", key);
+      // Rewritten (section 3.9). Old: a matter's kind in words was "". New: a point's kind
+      // this page does not know is OTHER, its place the head of section 4, and only the
+      // known actions are offered.
+      assert.equal(point.kind, "OTHER", key);
+      assert.equal(point.place.at, "REQUEST", key);
+      assert.deepEqual(point.settle, ["CONSIDER"], key);
       assert.equal(tickmarkOf(paper, key).symbol, "", key);
       assert.equal(paper.attributes[0]?.tickmark, "NONE", key);
       assert.deepEqual(paper.attributes[0]?.marks, { E3: "OTHER" }, key);
@@ -1487,7 +1531,6 @@ describe("what the page holds even when an answer disagrees with itself", () => 
     for (const table of [
       "VERDICT_WORDS",
       "SOURCE_WORDS",
-      "MATTER_KINDS",
       "TICKMARK_FALLBACK",
     ]) {
       assert.ok(!model.includes(`${table}[`), table);
@@ -1618,7 +1661,10 @@ describe("the tiles", () => {
     return found;
   };
 
-  it("counts what the server sent: the conclusion, attributes, exceptions, matters, files", () => {
+  // Rewritten (docs/design-workpaper.md, section 3.9). Old: five tiles, with "Matters for
+  // the reviewer" ("1 open", the first matter's words, in the warning tone). New: four;
+  // nothing reads as open for the reviewer, and the points are at their place.
+  it("counts what the server sent: the conclusion, attributes, exceptions, files", () => {
     const paper = parsed();
     assert.deepEqual(
       tilesOf(paper).map((item) => [item.key, item.value, item.note]),
@@ -1630,16 +1676,14 @@ describe("the tiles", () => {
         ],
         ["attributes", "3 of 4 shown", "1 not concluded"],
         ["exceptions", "None shown", "No current check shows one"],
-        [
-          "matters",
-          "1 open",
-          raw<Array<{ text: string }>>(sample().matters)[0]?.text,
-        ],
         ["files", "7 files", "2 of 19 annotations reviewed"],
       ],
     );
     assert.equal(tile(paper, "conclusion").tone, "ai");
-    assert.equal(tile(paper, "matters").tone, "warning");
+    assert.equal(
+      tilesOf(paper).some((item) => item.label === "Matters for the reviewer"),
+      false,
+    );
     // A draft: the tile reads naturally, with no verdict.
     assert.deepEqual(
       [
@@ -1674,7 +1718,6 @@ describe("the tiles", () => {
         { ...c, state: "EXCEPTION", state_words: "Exception shown" },
         { ...d, state: "NOT_TESTED", state_words: "Not tested yet" },
       ],
-      matters: [{ state: "NOTED", kind: "NOTE", text: "Noted only." }],
       evidence: evidence.map((entry, index) =>
         index === 1
           ? {
@@ -1695,10 +1738,6 @@ describe("the tiles", () => {
       ["1 of 4 shown", "1 not tested yet"],
     );
     assert.deepEqual(
-      [tile(paper, "matters").value, tile(paper, "matters").note],
-      ["None open", "1 noted"],
-    );
-    assert.deepEqual(
       [tile(paper, "files").value, tile(paper, "files").note],
       ["7 files", "No annotations yet, 1 left out of the check"],
     );
@@ -1706,10 +1745,9 @@ describe("the tiles", () => {
   });
 
   it("says so where there are no attributes and no files", () => {
-    const bare = parsed({ attributes: [], evidence: [], matters: [] });
+    const bare = parsed({ attributes: [], evidence: [], points: [] });
     assert.equal(tile(bare, "attributes").value, "None approved");
     assert.equal(tile(bare, "files").value, "No files yet");
-    assert.equal(tile(bare, "matters").note, "Nothing waits on a person");
     const one = parsed({
       evidence: [raw<unknown[]>(sample().evidence)[0]],
     });
@@ -1793,7 +1831,7 @@ describe("the walkthrough as a timeline", () => {
   });
 });
 
-describe("references, tickmarks and matters in words", () => {
+describe("references, tickmarks and noted items in words", () => {
   it("writes a reference as a chip, with the annotations it names", () => {
     const paper = parsed();
     const reference = paper.attributes[2]?.refs[1];
@@ -1859,20 +1897,51 @@ describe("references, tickmarks and matters in words", () => {
     assert.match(tickmarkOf(bare, "COMPARED").meaning, /compared in code/);
   });
 
-  it("words a matter: open waits on a person, the rest is noted", () => {
-    assert.deepEqual(matterWords({ state: "OPEN", kind: "FOLLOW_UP" }), {
-      state: "Open",
-      tone: "warning",
-      kind: "Follow-up",
+  // Rewritten (docs/design-workpaper.md, section 3.9). Old: "words a matter: open waits
+  // on a person, the rest is noted" (matterWords). New: the noted items are said at their
+  // place: a person's tickmark that does not change the state on its attribute's row, a
+  // reliability established on review on the file's line, and the files not listed under
+  // the evidence index.
+  it("says the noted items at their place, and the files not listed", () => {
+    const [a, ...rest] = attributesOf();
+    const evidence = raw<Array<Record<string, unknown>>>(sample().evidence);
+    const paper = parsed({
+      attributes: [
+        {
+          ...a,
+          tickmark_note:
+            "Tickmark: “Shown, on my review”, by Dana Lee, 16 Nov 2026. Reason: The ticket shows it.",
+        },
+        ...rest,
+      ],
+      evidence: evidence.map((entry, index) =>
+        index === 0
+          ? {
+              ...entry,
+              established:
+                "Established on review, by Dana Lee. Relied on: the report's parameters.",
+            }
+          : entry,
+      ),
+      evidence_more: 3,
     });
-    assert.deepEqual(matterWords({ state: "NOTED", kind: "NOTE" }), {
-      state: "Noted",
-      tone: "neutral",
-      kind: "Note",
-    });
-    assert.equal(matterWords({ state: "NOTED", kind: "NEW_KIND" }).kind, "");
-    for (const kind of ["FINDING", "CONSIDERATION", "UNSETTLED", "FILE"]) {
-      assert.ok(matterWords({ state: "OPEN", kind }).kind !== "");
+    assert.equal(
+      paper.attributes[0]?.tickmarkNote,
+      "Tickmark: “Shown, on my review”, by Dana Lee, 16 Nov 2026. Reason: The ticket shows it.",
+    );
+    assert.equal(paper.attributes[1]?.tickmarkNote, undefined);
+    assert.equal(
+      establishedLine(paper.evidence[0] ?? {}),
+      "Established on review, by Dana Lee. Relied on: the report's parameters.",
+    );
+    assert.equal(establishedLine(paper.evidence[1] ?? {}), "");
+    assert.equal(paper.evidenceMore, 3);
+    assert.equal(moreFilesLine(3), "3 more files are not listed.");
+    assert.equal(moreFilesLine(1), "1 more file is not listed.");
+    assert.equal(moreFilesLine(0), "");
+    // A count that is not a whole number is none.
+    for (const value of [-2, 1.5, "4", null]) {
+      assert.equal(parsed({ evidence_more: value }).evidenceMore, 0);
     }
   });
 
@@ -2569,7 +2638,8 @@ describe("the conclusion the preparer records, and the agent's proposal", () => 
     assert.equal(deficiencyWanted(deficient, "NOT_EFFECTIVE"), false);
   });
 
-  it("links to section 7 by its anchor", () => {
+  // Renamed (section 3.9): the Conclusion is section 6 now; the anchor is the same.
+  it("links to section 6 by its anchor", () => {
     assert.equal(CONCLUSION_ANCHOR, "di-conclusion");
     assert.equal(
       conclusionHref("/?organization=o&step=designassessment"),

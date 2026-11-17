@@ -2,6 +2,7 @@
 
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 
+import { CLEAR_DRAFT, DRAFTED_LABEL } from "./design-points-model";
 import {
   ATTESTATION,
   NOTE_LABEL,
@@ -73,11 +74,24 @@ export type SendFor = {
    * the button reads "Sign and send again". */
   returned: LastReturn | null;
   viewerId: string | null;
+  /** The message drafted from the agent's observations (section 3.9): the box starts
+   * with it, marked as drafted, until the person types or clears it; "" for none. */
+  draft?: string;
+};
+
+/** A point not settled yet, in the sign-off's list (section 3.9): its short words, the
+ * name of its place, and the way there (null where the page cannot go to it). */
+export type Decision = {
+  key: string;
+  words: string;
+  place: string;
+  onGo: (() => void) | null;
 };
 
 /**
- * The preparer's row of section 7's Sign-off (docs/design-workpaper.md, sections 3.7 and
- * 3.8): what it attests, what it still needs, and "Sign and send for review" with the
+ * The preparer's row of section 6's Sign-off (docs/design-workpaper.md, sections 3.7 to
+ * 3.9): what it attests, each point not settled yet with the way to its place (the button
+ * waits while any), what it still needs, and "Sign and send for review" with the
  * reviewer chosen in "Send for review to" and an optional message; once signed, who,
  * when and which version, and "Reopen to change" with its reason. Where the body is from
  * before 3.8 (`sendFor` null) the press is the existing "Sign as preparer", with its note.
@@ -106,6 +120,7 @@ export function PreparerSignOff({
   sendFor = null,
   unread = false,
   below = null,
+  decisions = [],
 }: {
   ids: Ids;
   workpaperId: string;
@@ -124,9 +139,25 @@ export function PreparerSignOff({
   unread?: boolean;
   /** Under the prepared line: the preparer's message, where the reviewer reads it. */
   below?: ReactNode;
+  /** The points not settled yet, for the preparer's list (section 3.9). */
+  decisions?: readonly Decision[];
 }) {
   const uid = useId();
   const [text, setText] = useState("");
+  // The message sent with the review request (section 3.8). It starts with the draft
+  // from the agent's observations (section 3.9) and follows a newer draft until the
+  // person types or clears it; what they typed is never written over.
+  const draft = sendFor?.draft ?? "";
+  const [message, setMessage] = useState(draft);
+  const [drafted, setDrafted] = useState(draft !== "");
+  const typed = useRef(false);
+  useEffect(() => {
+    if (typed.current) {
+      return;
+    }
+    setMessage(draft);
+    setDrafted(draft !== "");
+  }, [draft]);
   const [reopening, setReopening] = useState(false);
   // The optional note's box, drawn once asked for (before 3.8).
   const [noting, setNoting] = useState(false);
@@ -215,7 +246,7 @@ export function PreparerSignOff({
       intent === "send"
         ? await send(
             REVIEW_ROUTES.send,
-            sendRequest(ids, version, chosen?.id ?? "", text.trim()),
+            sendRequest(ids, version, chosen?.id ?? "", message.trim()),
           )
         : await send(
             "/workspace/workpapers/prepare",
@@ -244,6 +275,12 @@ export function PreparerSignOff({
     if (intent === "reopen") {
       // Its form goes: the focus goes to the heading, and the status says it.
       window.requestAnimationFrame(() => heading.current?.focus());
+    }
+    if (intent === "send") {
+      // Sent: the message went with the request; nothing is drafted into it again.
+      typed.current = true;
+      setMessage("");
+      setDrafted(false);
     }
   };
 
@@ -432,6 +469,23 @@ export function PreparerSignOff({
           </div>
         </div>
         {reading}
+        {decisions.length > 0 ? (
+          <ul className="ps-decisions" aria-label="Decisions before you sign">
+            {decisions.map((item) => (
+              <li key={item.key}>
+                <span>{item.words}</span>
+                {item.onGo !== null ? (
+                  <button type="button" className="dw-link" onClick={item.onGo}>
+                    {item.place}
+                    <span className="sr-only">: go to the point</span>
+                  </button>
+                ) : (
+                  <span className="ps-who">{item.place}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        ) : null}
         {problems.length > 0 ? (
           <ul className="ps-needs" id={`${uid}-needs`}>
             {problems.map((problem) => (
@@ -467,15 +521,45 @@ export function PreparerSignOff({
               />
               {again ? null : (
                 <div className="ps-note">
-                  <label htmlFor={`${uid}-n`}>{MESSAGE_LABEL}</label>
+                  <div className="ps-draft-head">
+                    <label htmlFor={`${uid}-n`}>{MESSAGE_LABEL}</label>
+                    {drafted && message !== "" ? (
+                      <small id={`${uid}-drafted`}>{DRAFTED_LABEL}</small>
+                    ) : null}
+                  </div>
                   <textarea
                     id={`${uid}-n`}
-                    rows={2}
+                    rows={drafted && message !== "" ? 4 : 2}
                     maxLength={MESSAGE_MAX}
-                    value={text}
+                    value={message}
                     disabled={sending || confirmed !== null}
-                    onChange={(event) => setText(event.currentTarget.value)}
+                    aria-describedby={
+                      drafted && message !== "" ? `${uid}-drafted` : undefined
+                    }
+                    onChange={(event) => {
+                      typed.current = true;
+                      setMessage(event.currentTarget.value);
+                    }}
                   />
+                  {drafted && message !== "" ? (
+                    <p className="ps-add-note">
+                      <button
+                        type="button"
+                        className="dw-link"
+                        disabled={sending || confirmed !== null}
+                        onClick={() => {
+                          typed.current = true;
+                          setMessage("");
+                          setDrafted(false);
+                          window.requestAnimationFrame(() =>
+                            document.getElementById(`${uid}-n`)?.focus(),
+                          );
+                        }}
+                      >
+                        {CLEAR_DRAFT}
+                      </button>
+                    </p>
+                  ) : null}
                 </div>
               )}
             </div>

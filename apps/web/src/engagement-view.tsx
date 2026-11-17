@@ -509,7 +509,7 @@ export function EngagementDashboard({
         <div className="home-layout">
           <div className="home-main">
             {/* Section 3.8 of docs/design-workpaper.md: the D&I workpapers sent to the
-                viewer for review, each opening its section 7. Not drawn when none wait. */}
+                viewer for review, each opening its section 6. Not drawn when none wait. */}
             {closed ? null : (
               <ReviewWaiting
                 organizationId={ids.organizationId}

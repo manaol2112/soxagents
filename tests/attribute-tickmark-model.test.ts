@@ -29,7 +29,6 @@ import {
 import { lettersSpan } from "../apps/web/src/design-evidence-model.ts";
 import {
   matrixOf,
-  matterWords,
   parseDesignWorkpaper,
   stateOf,
   tickmarkLegend,
@@ -58,7 +57,7 @@ import {
 // green; a person's exception keeps its item and says so; the verdict says each count
 // apart; "Nothing needs your attention." is never said while an exception stands or
 // while a tickmark stands in for evidence; only what the server takes is offered; and
-// the workpaper words the new states, its tickmark and its matters. Every input goes
+// the workpaper words the new states, its tickmark and the tickmark's note. Every input goes
 // through the real parser and requestCheck, as the screen's does. Synthetic data only.
 
 const uuid = (n: number) =>
@@ -1168,17 +1167,42 @@ describe("the workpaper (docs/evidence-assurance.md, section 10.13)", () => {
     assert.equal(tile?.tone, "neutral");
   });
 
-  it("words a disposition as a matter for the reviewer; a person's exception is open", () => {
-    assert.deepEqual(matterWords({ state: "NOTED", kind: "DISPOSITION" }), {
-      state: "Noted",
-      tone: "neutral",
-      kind: "Tickmark",
-    });
-    assert.deepEqual(matterWords({ state: "OPEN", kind: "DISPOSITION" }), {
-      state: "Open",
-      tone: "warning",
-      kind: "Tickmark",
-    });
+  // Rewritten (docs/design-workpaper.md, section 3.9). Old: a disposition was worded as a
+  // matter for the reviewer ("Tickmark", noted; a person's exception open). New: there are
+  // no matters. A person's exception stays in section 4 as its own state (the conclusion
+  // evaluates it), and a tickmark that does not change the attribute's state is said on
+  // its row, in the server's sentence.
+  it("keeps a person's exception in section 4, and says a tickmark the state stands over on its row", () => {
+    const raw = sample();
+    const attributes = raw.attributes as RawAttribute[];
+    raw.attributes = attributes.map((item, at) =>
+      at === 0
+        ? {
+            ...item,
+            state: "EXCEPTION_RECORDED",
+            state_words: "Exception recorded by the auditor",
+            tickmark: "NONE",
+          }
+        : at === 3
+          ? {
+              ...item,
+              tickmark_note:
+                "Tickmark: “Not applicable”, by Dana Lee, 16 Nov 2026. Reason: No later sign-on.",
+            }
+          : item,
+    );
+    const paper = parseDesignWorkpaper(raw);
+    assert.ok(paper !== null);
+    assert.equal(paper.attributes[0]?.state, "EXCEPTION_RECORDED");
+    assert.equal(
+      stateOf(paper.attributes[0] ?? { state: "OTHER", stateWords: "" }).words,
+      "Exceptions noted",
+    );
+    assert.equal(paper.attributes[3]?.state, "NOT_CONCLUDED");
+    assert.equal(
+      paper.attributes[3]?.tickmarkNote,
+      "Tickmark: “Not applicable”, by Dana Lee, 16 Nov 2026. Reason: No later sign-on.",
+    );
   });
 });
 

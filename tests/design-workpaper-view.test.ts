@@ -22,6 +22,7 @@ const viewer = read("apps/web/src/evidence-annotations.tsx");
 // in evidence-preview.tsx (EvidencePreview). New: the one viewer's dialog in
 // evidence-opener.tsx (AnnotatedDialog), the old viewer retired.
 const preview = read("apps/web/src/evidence-opener.tsx");
+const points = read("apps/web/src/design-points.tsx");
 
 /** A function's source: from its declaration to the next top-level one. */
 const component = (source: string, name: string) => {
@@ -140,15 +141,18 @@ describe("the existing workpaper card, kept once per mount", () => {
     assert.equal(count(step, /<DesignWorkpaper\n/g), 1);
     // It takes the card's own props, and opens by the model's rule. Rewritten. Old:
     // `type CardProps = Omit<…, "stage" | "compact">;`. New: the same, and the D&I
-    // conclusion's body, which section 7's Sign-off reads and the card never gets
-    // (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
+    // conclusion's body, which section 6's Sign-off reads and the card never gets
+    // (product owner, 16 November 2026, docs/design-workpaper.md section 3.8). Rewritten
+    // again (section 3.9). Old: the conclusion alone beside the card's props. New: also
+    // the control's evidence step, where a point's own action is done; the card itself
+    // gets neither.
     assert.match(
       view,
-      /type CardProps = Omit<\s*ComponentProps<typeof WorkpapersTab>,\s*"stage" \| "compact"\s*> & \{\s*(\/\*\*[\s\S]*?\*\/\s*)?conclusion\?: DesignConclusion \| null;\s*\};/,
+      /type CardProps = Omit<\s*ComponentProps<typeof WorkpapersTab>,\s*"stage" \| "compact"\s*> & \{\s*(\/\*\*[\s\S]*?\*\/\s*)?conclusion\?: DesignConclusion \| null;\s*(\/\*\*[\s\S]*?\*\/\s*)?evidenceHref\?: string \| null;\s*\};/,
     );
     assert.match(
       step,
-      /export function DesignWorkpaperStep\(\{\s*conclusion = null,\s*\.\.\.props\s*\}: CardProps\)/,
+      /export function DesignWorkpaperStep\(\{\s*conclusion = null,\s*evidenceHref = null,\s*\.\.\.props\s*\}: CardProps\)/,
     );
     assert.match(
       step,
@@ -174,12 +178,14 @@ describe("the existing workpaper card, kept once per mount", () => {
 
   it("is mounted at the two D&I places, and nowhere is the card mounted twice", () => {
     // Rewritten. Old: `<DesignWorkpaperStep {...workpaperProps} />` twice. New: the same
-    // props and the control's D&I conclusion, for section 7's Sign-off
-    // (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
+    // props and the control's D&I conclusion, for section 6's Sign-off
+    // (product owner, 16 November 2026, docs/design-workpaper.md section 3.8). Rewritten
+    // again (section 3.9). Old: `conclusion={openConclusion} />`. New: also
+    // `evidenceHref={stepHrefsWf.designevidence}`, where a point's own action is done.
     assert.equal(
       count(
         controls,
-        /<DesignWorkpaperStep\s+\{\.\.\.workpaperProps\}\s+conclusion=\{openConclusion\}\s*\/>/g,
+        /<DesignWorkpaperStep\s+\{\.\.\.workpaperProps\}\s+conclusion=\{openConclusion\}\s+evidenceHref=\{stepHrefsWf\.designevidence\}\s*\/>/g,
       ),
       2,
     );
@@ -198,11 +204,11 @@ describe("the existing workpaper card, kept once per mount", () => {
     // docs/design-workpaper.md section 3.8).
     assert.match(
       controls,
-      /<h4 className="stp-subhead">Design and implementation<\/h4>\s*<DesignWorkpaperStep\s+\{\.\.\.workpaperProps\}\s+conclusion=\{openConclusion\}\s*\/>\s*<h4 className="stp-subhead">Operating effectiveness<\/h4>\s*<WorkpapersTab compact \{\.\.\.workpaperProps\} stage="EFFECTIVENESS" \/>/,
+      /<h4 className="stp-subhead">Design and implementation<\/h4>\s*<DesignWorkpaperStep\s+\{\.\.\.workpaperProps\}\s+conclusion=\{openConclusion\}\s+evidenceHref=\{stepHrefsWf\.designevidence\}\s*\/>\s*<h4 className="stp-subhead">Operating effectiveness<\/h4>\s*<WorkpapersTab compact \{\.\.\.workpaperProps\} stage="EFFECTIVENESS" \/>/,
     );
     assert.match(
       controls,
-      /title="Walkthrough and design workpaper"[\s\S]{0,260}<DesignWorkpaperStep\s+\{\.\.\.workpaperProps\}\s+conclusion=\{openConclusion\}\s*\/>\s*<\/PhaseStep>/,
+      /title="Walkthrough and design workpaper"[\s\S]{0,260}<DesignWorkpaperStep\s+\{\.\.\.workpaperProps\}\s+conclusion=\{openConclusion\}\s+evidenceHref=\{stepHrefsWf\.designevidence\}\s*\/>\s*<\/PhaseStep>/,
     );
   });
 
@@ -374,12 +380,16 @@ describe("print or save as PDF", () => {
       'number={3}\n        title="Implementation: walkthrough of one instance"',
       'number={4}\n        title="Attributes tested"',
       'number={5}\n        title="Information produced by the entity"',
-      'number={6} title="Matters for the reviewer" anchor={mattersId}',
-      'number={7}\n        title="Conclusion"',
+      // Rewritten (docs/design-workpaper.md, section 3.9). Old: section 6 "Matters for
+      // the reviewer" and section 7 "Conclusion". New: there is no matters section; the
+      // Conclusion is section 6.
+      'number={6}\n        title="Conclusion"',
       'title="Tickmarks and evidence"',
     ]) {
       assert.ok(sheet.includes(section), section);
     }
+    assert.ok(!view.includes("Matters for the reviewer"));
+    assert.ok(!/number=\{7\}/.test(sheet));
   });
 
   it("has a print stylesheet: the app is taken off the paper, on a light page", () => {
@@ -779,10 +789,15 @@ describe("the review's fixes, in the screen's own files", () => {
     assert.ok(!/attribute\.code !== ""/.test(view));
   });
 
-  it("shows a matter's kind in the matrix as in the document, and an exception with no file", () => {
-    const kind = /\{words\.kind !== "" \? <b>\{words\.kind\}\. <\/b> : null\}/g;
-    assert.equal(count(component(view, "DocumentSheet"), kind), 1);
-    assert.equal(count(component(view, "MatrixBoard"), kind), 1);
+  // Rewritten (docs/design-workpaper.md, section 3.9). Old: "shows a matter's kind in the
+  // matrix as in the document" (the Matrix's "Matters for the reviewer" card and the
+  // document's section 6, each with the kind in bold). New: there are no matters in any
+  // view; an exception with no file is still said on its row, in words.
+  it("shows no matters in any view, and an exception with no file on its row", () => {
+    for (const name of ["DocumentSheet", "MatrixBoard", "EvidenceSplit"]) {
+      const body = component(view, name);
+      assert.doesNotMatch(body, /paper\.matters|matterWords|openMatters/, name);
+    }
     for (const name of ["DocumentSheet", "EvidenceSplit"]) {
       assert.match(
         component(view, name),
@@ -797,27 +812,186 @@ describe("the review's fixes, in the screen's own files", () => {
     assert.match(css, /\.dw-stray \{[^}]*color: var\(--danger\);/);
   });
 
-  it("never shows a verdict beside the evidence without the open matters", () => {
+  // Rewritten (section 3.9). Old: "never shows a verdict beside the evidence without the
+  // open matters" ("N matters open for the reviewer", for everyone, leading to section 6).
+  // New: nothing reads as open for the reviewer; the preparer alone reads "N decisions
+  // before you sign", which leads to the first point at its place.
+  it("says the decisions before signing beside the verdict to the preparer only", () => {
     const split = component(view, "EvidenceSplit");
-    assert.match(split, /const matters = openMatters\(paper\);/);
     assert.match(
       split,
-      /<Verdict[\s\S]{0,120}\/>\s*\{\/\* [^\n]*\*\/\}\s*<p className="dw-open">/,
+      /const left = paper\.canSettle \? unsettled\(paper\.points\) : \[\];/,
     );
-    assert.match(split, /onClick=\{actions\.onMatters\}/);
-    // The count leads to the document's section 6.
+    assert.match(split, /const decisions = decisionsWords\(left\.length\);/);
+    assert.match(
+      split,
+      /onClick=\{\(\) => actions\.onPoint\?\.\(first\.key\)\}/,
+    );
+    const body = component(view, "DesignWorkpaper");
     assert.match(
       body,
-      /onMatters: \(\) => \{\s*choose\("document"\);\s*setSeeking\(true\);/,
+      /onPoint: \(key\) => \{\s*choose\("document"\);\s*setSeeking\(key\);/,
     );
-    assert.match(body, /getElementById\(`\$\{uid\}-matters`\)/);
-    assert.match(body, /mattersId=\{`\$\{uid\}-matters`\}/);
-    assert.match(
-      component(view, "Section"),
-      /<section className="dw-sec" id=\{anchor\}>/,
-    );
-    // The printed copy is a second sheet: it does not repeat the id.
+    assert.match(body, /document\.getElementById\(pointAnchor\(seeking\)\)/);
+    // The printed copy is a second sheet: it does not repeat the anchors.
     assert.match(body, /<DocumentSheet paper=\{paper\} actions=\{null\} \/>/);
+    assert.match(
+      component(points, "PointRow"),
+      /const anchor = printed \? undefined : pointAnchor\(point\.key\);/,
+    );
+    assert.match(component(view, "PointsHere"), /printed=\{actions === null\}/);
+  });
+});
+
+describe("the points at their place (docs/design-workpaper.md, section 3.9)", () => {
+  const sheet = component(view, "DocumentSheet");
+  // The row, its one form and its two writes are design-points.tsx's: the view only
+  // places it, and still defines no form and no write.
+  const row = component(points, "PointRow");
+  const here = component(view, "PointsHere");
+
+  it("puts each point at its place: section 4's head, an attribute's row, a report's row, a file's line", () => {
+    assert.match(
+      sheet,
+      /<PointsHere paper=\{paper\} actions=\{actions\} at=\{\{ where: "head" \}\} \/>/,
+    );
+    // The head of section 4 comes before its table.
+    const head = sheet.indexOf('at={{ where: "head" }}');
+    assert.ok(
+      sheet.indexOf('title="Attributes tested"') < head &&
+        head < sheet.indexOf("What the evidence shows</th>"),
+    );
+    assert.match(sheet, /where: "attribute",\s*attributeId: attribute\.id,/);
+    assert.match(sheet, /<tr className="dw-point-tr">\s*<td colSpan=\{5\}>/);
+    assert.match(sheet, /<tr className="dw-point-tr">\s*<td colSpan=\{3\}>/);
+    assert.match(sheet, /at=\{\{ where: "report", index \}\}/);
+    assert.match(sheet, /at=\{\{ where: "evidence", ref: entry\.ref \}\}/);
+    // Each at most once per place.
+    assert.equal((sheet.match(/<PointsHere/g) ?? []).length, 4);
+  });
+
+  it("shows on paper only the considered points, and to others only those raised since signing", () => {
+    assert.match(
+      here,
+      /pointShown\(point, facts, actions === null\) !== "hidden"/,
+    );
+    assert.match(
+      here,
+      /canSettle: paper\.canSettle,\s*status: paper\.workpaper\?\.status \?\? null,/,
+    );
+    // The print portal draws the sheet with no actions.
+    assert.match(
+      component(view, "DesignWorkpaper"),
+      /<div className="dw-print-root">\s*<DocumentSheet paper=\{paper\} actions=\{null\} \/>/,
+    );
+  });
+
+  it("offers the preparer each point's own actions, and Considered with a reason in place", () => {
+    assert.match(row, /<b>\{YOUR_DECISION\}<\/b> \{point\.text\}/);
+    assert.match(row, /<b>\{RAISED_SINCE\}<\/b> \{point\.text\}/);
+    // The existing actions are done in D&I Evidence: a link there, never a new write.
+    assert.match(
+      row,
+      /<Link key=\{action\} className="btn-secondary btn-sm" href=\{href\}>/,
+    );
+    assert.match(row, /\{SETTLE_WORDS\[action\]\}/);
+    assert.match(row, /\{CONSIDERED\}/);
+    assert.match(row, /maxLength=\{REASON_MAX\}/);
+    assert.match(row, /<Count\s+id=\{`\$\{uid\}-count`\}/);
+    // Shown as recorded only once the server confirmed it; then the workpaper is read
+    // again (and the page's records, whose version the write moved).
+    assert.match(
+      row,
+      /const said = pointRefusal\(intent, answer\.status, answer\.detail\);\s*if \(said !== ""\) \{[\s\S]*?return;\s*\}\s*\/\/ [^\n]*\n\s*setConfirmed\(intent\);\s*writes\.onSettled\(\);/,
+    );
+    assert.match(
+      component(view, "DesignWorkpaper"),
+      /onSettled: \(\) => \{\s*setRereading\(true\);\s*setAttempt\(\(n\) => n \+ 1\);\s*refreshRecords\(\);/,
+    );
+    // Nothing is posted while the views are behind the version.
+    assert.match(row, /writes === null \|\| writes\.held/);
+  });
+
+  it("draws a considered point as one quiet line, open to review notes, with Withdraw for the preparer", () => {
+    assert.match(
+      row,
+      /<NoteField\s+field=\{pointField\(point\.key\)\}\s+text=\{consideredLine\(considered\)\}\s+inline\s*\/>/,
+    );
+    assert.match(row, /const mayWithdraw = writes !== null && canSettle;/);
+    assert.match(row, /\{THE_POINT\}/);
+    assert.match(row, /aria-expanded=\{told\}/);
+    // The point's own words on paper, under the line.
+    assert.match(row, /\{told \|\| printed \? \(/);
+  });
+
+  it("says a tickmark the state stands over, an established file, and the files not listed", () => {
+    assert.match(
+      sheet,
+      /<p className="dw-tm-note">\s*\{attribute\.tickmarkNote\}\s*<\/p>/,
+    );
+    assert.match(sheet, /\{establishedLine\(entry\)\}/);
+    assert.match(sheet, /\{moreFilesLine\(paper\.evidenceMore\)\}/);
+  });
+
+  it("never says 'open' for a point", () => {
+    assert.doesNotMatch(row, />[^<{]*\bopen\b[^<{]*</i);
+  });
+
+  it("hands the sign-off the decisions, the points raised since signing and the drafted message", () => {
+    const sign = component(view, "SignOffOf");
+    assert.match(
+      sign,
+      /points:\s*workpaper\.status === "DRAFT" \? unsettled\(paper\.points\)\.length : 0,/,
+    );
+    assert.match(
+      sign,
+      /paper\.canSettle\s*\? decisionsList\(paper\.points, paper\)/,
+    );
+    assert.match(
+      sign,
+      /raised=\{raisedSinceSigned\(paper\.points, workpaper\.status\)\}/,
+    );
+    assert.match(sign, /draft=\{draftMessage\(paper\.observations\)\}/);
+    // The D&I Evidence step is where the points' own actions are done.
+    assert.match(controls, /evidenceHref=\{stepHrefsWf\.designevidence\}/);
+  });
+
+  it("lists the decisions in the preparer's sign-off, drafts the message, and holds the reviewer", () => {
+    const preparer = read("apps/web/src/preparer-signoff.tsx");
+    const reviewer = read("apps/web/src/review-signoff.tsx");
+    const row = component(preparer, "PreparerSignOff");
+    // Each point not settled, with the way to its place; the button waits (the model's
+    // "N decisions before you sign" is one of its problems).
+    assert.match(
+      row,
+      /<ul className="ps-decisions" aria-label="Decisions before you sign">/,
+    );
+    assert.match(row, /onClick=\{item\.onGo\}/);
+    assert.match(
+      row,
+      /aria-disabled=\{!ready \|\| sending \|\| confirmed !== null\}/,
+    );
+    // The message starts with the agent's observations, marked as drafted, follows a
+    // newer draft until the person types, and can be cleared; what was typed is kept.
+    assert.match(row, /const \[message, setMessage\] = useState\(draft\);/);
+    assert.match(
+      row,
+      /if \(typed\.current\) \{\s*return;\s*\}\s*setMessage\(draft\);/,
+    );
+    assert.match(
+      row,
+      /typed\.current = true;\s*setMessage\(event\.currentTarget\.value\);/,
+    );
+    assert.match(row, /\{DRAFTED_LABEL\}/);
+    assert.match(row, /\{CLEAR_DRAFT\}/);
+    assert.match(
+      row,
+      /sendRequest\(ids, version, chosen\?\.id \?\? "", message\.trim\(\)\)/,
+    );
+    // The reviewer: a point raised since the preparer signed holds the sign-off.
+    assert.match(reviewer, /const raisedSaid = raisedWords\(raised\);/);
+    assert.match(reviewer, /raised === 0 &&/);
+    assert.match(reviewer, /draft,\s*\}\s*: null;/);
   });
 });
 
@@ -884,6 +1058,7 @@ describe("the independent review of 16 November 2026, in the screen's own files"
     );
     const body = component(view, "DesignWorkpaper");
     assert.doesNotMatch(body, /for you to edit and prepare/);
-    assert.match(body, /The preparer signs at the end of section 7/);
+    // Renumbered (section 3.9): the Conclusion is section 6.
+    assert.match(body, /The preparer signs at the end of section 6/);
   });
 });

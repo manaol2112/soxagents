@@ -2,6 +2,7 @@
 
 import {
   type ComponentProps,
+  Fragment,
   type KeyboardEvent,
   type ReactNode,
   type RefObject,
@@ -21,6 +22,18 @@ import {
   type ConclusionChoice,
   type DesignConclusion,
 } from "./design-conclusion-model";
+import { PointRow, type PointWrites } from "./design-points";
+import {
+  decisionsList,
+  decisionsWords,
+  draftMessage,
+  pointAnchor,
+  pointShown,
+  pointsAt,
+  raisedSinceSigned,
+  type Shown,
+  unsettled,
+} from "./design-points-model";
 import {
   CONCLUSION_ANCHOR,
   type ConclusionView,
@@ -31,6 +44,7 @@ import {
   type EditableSection,
   type EvidenceEntry,
   editableSections,
+  establishedLine,
   evidenceLine,
   evidenceTitle,
   foldStartsOpen,
@@ -38,10 +52,9 @@ import {
   keyed,
   loadProblem,
   matrixOf,
-  matterWords,
+  moreFilesLine,
   NOT_RELIED_ON,
   notReliedOnLine,
-  openMatters,
   type DesignWorkpaper as Paper,
   PROPOSED_BY_AGENT,
   parseDesignWorkpaper,
@@ -107,7 +120,6 @@ import {
   CONCLUSION_CHOICE,
   controlKey,
   isOpen,
-  matterKey,
   procedureKey,
   reportKey,
   UNDERSTANDING,
@@ -216,12 +228,17 @@ type Actions = {
   /** The working copies are being read: "Edit" waits, so no editor opens without an
    * earlier copy that is there (independent review, 15 November 2026). */
   checking: boolean;
-  /** The count of open matters under a verdict: goes to the document's section 6. */
-  onMatters: (() => void) | null;
-  /** The Matrix's and the Evidence view's link to the document's section 7, where the
-   * conclusion is (docs/design-workpaper.md, section 3.5). */
+  /** Goes to a point at its place in the document (docs/design-workpaper.md, section
+   * 3.9): from the preparer's sign-off's list, and the Evidence view's line. */
+  onPoint: ((key: string) => void) | null;
+  /** The points' writes (section 3.9): the ids, the workpaper version the views read,
+   * whether a write waits for a read, where the existing actions are done (the
+   * evidence step), and what the page does once the server answered. */
+  points: PointWrites | null;
+  /** The Matrix's and the Evidence view's link to the document's section 6, where the
+   * conclusion is (docs/design-workpaper.md, sections 3.5 and 3.9). */
   onConclusion: (() => void) | null;
-  /** Section 7's choice of the conclusion (section 3.6): the ids it is recorded for,
+  /** Section 6's choice of the conclusion (section 3.6): the ids it is recorded for,
    * and what the page does once the server confirmed or refused it. */
   choice: {
     scope: WorkpaperScope;
@@ -231,7 +248,7 @@ type Actions = {
   /** Where a design deficiency is logged (the deficiency log's form for this control);
    * null where the page has no link to it. */
   deficiencyHref: string | null;
-  /** Section 7's Sign-off (sections 3.7 and 3.8): the control's ids, what the page knows
+  /** Section 6's Sign-off (sections 3.7 and 3.8): the control's ids, what the page knows
    * that the preparer's sign-off needs, the D&I conclusion's body (the review request,
    * the reviewers, the reviewer's sign-off), who is reading, the review notes' counts,
    * and what it does once confirmed. */
@@ -256,25 +273,29 @@ type CardProps = Omit<
   ComponentProps<typeof WorkpapersTab>,
   "stage" | "compact"
 > & {
-  /** The control's D&I conclusion, as the page read it: section 7's sign-off reads the
+  /** The control's D&I conclusion, as the page read it: section 6's sign-off reads the
    * review request and the reviewer's sign-off from it (docs/design-workpaper.md,
    * section 3.8). Null where it could not be read. */
   conclusion?: DesignConclusion | null;
+  /** The control's D&I Evidence step: where a point's own action is done (a file's
+   * reliability, a tickmark, checking a request again, a finding; section 3.9). */
+  evidenceHref?: string | null;
 };
 
 /**
  * Where the D&I workpaper is shown (docs/design-workpaper.md, section 3.1): the three
  * views first, and under them one fold holding today's workpaper card unchanged, with the
  * section editor, Draft again, Reopen, the versions and the Excel export (the preparer
- * signs at the end of section 7, section 3.7: the fold shows no Prepare for it). It
+ * signs at the end of section 6, section 3.7: the fold shows no Prepare for it). It
  * takes the card's own props.
  */
 export function DesignWorkpaperStep({
   conclusion = null,
+  evidenceHref = null,
   ...props
 }: CardProps) {
   const { ids, papers, notice, viewing } = props;
-  // Section 7 links to where a design deficiency is logged: the deficiency log's form for
+  // Section 6 links to where a design deficiency is logged: the deficiency log's form for
   // this control (Reports, Deficiencies; docs/design-workpaper.md, section 3.5).
   const deficiencyHref = destinationHref(
     "reports",
@@ -371,6 +392,7 @@ export function DesignWorkpaperStep({
         onBehind={setBehind}
         canAct={props.canAct}
         conclusion={conclusion}
+        evidenceHref={evidenceHref}
       />
       <details
         ref={fold}
@@ -449,6 +471,7 @@ export function DesignWorkpaper({
   onBehind,
   canAct = false,
   conclusion = null,
+  evidenceHref = null,
 }: {
   scope: WorkpaperScope;
   /** Changes when the workpaper record does: the views then read again. */
@@ -465,11 +488,13 @@ export function DesignWorkpaper({
   /** Told whether the page's records are behind the views (by the content's version or
    * the record's): the fold's Prepare waits while they are. */
   onBehind?: (behind: boolean) => void;
-  /** The viewer may act on the engagement's work (the card's `canAct`): section 7's
+  /** The viewer may act on the engagement's work (the card's `canAct`): section 6's
    * "Reopen to change" is offered only then, as the fold's Reopen is. */
   canAct?: boolean;
-  /** The control's D&I conclusion, for section 7's Sign-off (section 3.8). */
+  /** The control's D&I conclusion, for section 6's Sign-off (section 3.8). */
   conclusion?: DesignConclusion | null;
+  /** The control's D&I Evidence step, where a point's own action is done (section 3.9). */
+  evidenceHref?: string | null;
 }) {
   const uid = useId();
   const query = designWorkpaperQuery(scope);
@@ -489,9 +514,9 @@ export function DesignWorkpaper({
     (Selection & { from: string }) | null
   >(null);
   const [printing, setPrinting] = useState(false);
-  // "N matters open": the document's section 6 is where they are read.
-  const [seeking, setSeeking] = useState(false);
-  // Section 7, the conclusion: from the Matrix, the Evidence view, or a link to it.
+  // A point at its place (section 3.9): from the sign-off's list or the Evidence view.
+  const [seeking, setSeeking] = useState<string | null>(null);
+  // Section 6, the conclusion: from the Matrix, the Evidence view, or a link to it.
   const [seekingConclusion, setSeekingConclusion] = useState(false);
   const linkedOnce = useRef(false);
   const tabs = useRef(new Map<ViewKey, HTMLButtonElement>());
@@ -635,23 +660,21 @@ export function DesignWorkpaper({
     }
   }, [settled, view]);
 
-  // The document's section 6, once the document is the view shown.
+  // A point at its place, once the document is the view shown.
   useEffect(() => {
-    if (!seeking || view !== "document") {
+    if (seeking === null || view !== "document") {
       return;
     }
-    setSeeking(false);
-    const heading = document
-      .getElementById(`${uid}-matters`)
-      ?.querySelector<HTMLElement>("h5");
-    heading?.scrollIntoView({
-      block: "start",
+    setSeeking(null);
+    const place = document.getElementById(pointAnchor(seeking));
+    place?.scrollIntoView({
+      block: "center",
       behavior: calm() ? "auto" : "smooth",
     });
-    heading?.focus({ preventScroll: true });
-  }, [seeking, view, uid]);
+    place?.focus({ preventScroll: true });
+  }, [seeking, view]);
 
-  // Section 7, once the document is the view shown; and once on arrival where the page
+  // Section 6, once the document is the view shown; and once on arrival where the page
   // was opened at it (`#di-conclusion`: from Home's "Waiting for your review", or a link
   // to the removed "D&I Conclusion and Review" step, section 3.8).
   const arrived = state.paper !== null && state.paper.workpaper !== null;
@@ -1241,10 +1264,28 @@ export function DesignWorkpaper({
     copied,
     checking: source !== null && gate === "wait",
     behind,
-    onMatters: () => {
+    onPoint: (key) => {
       choose("document");
-      setSeeking(true);
+      setSeeking(key);
     },
+    points:
+      paper === null || paper.workpaper === null
+        ? null
+        : {
+            scope,
+            version: paper.workpaper.version,
+            // A consideration moves the workpaper's version: the next write waits for
+            // the read that shows it, so it never posts the version before.
+            held: held || rereading,
+            evidenceHref,
+            // Confirmed (or in doubt): the views are read again, and the page's records,
+            // whose version the write moved (as after a recorded conclusion, 3.6).
+            onSettled: () => {
+              setRereading(true);
+              setAttempt((n) => n + 1);
+              refreshRecords();
+            },
+          },
     onConclusion: () => {
       choose("document");
       setSeekingConclusion(true);
@@ -1329,7 +1370,7 @@ export function DesignWorkpaper({
               ? ` (${paper.evidence.length} ${paper.evidence.length === 1 ? "file" : "files"} so far)`
               : ""}
             , and the document, the matrix and the evidence view appear here for
-            you to edit. The preparer signs at the end of section 7, the
+            you to edit. The preparer signs at the end of section 6, the
             conclusion.
           </p>
           {onDraft !== undefined ? (
@@ -1349,11 +1390,7 @@ export function DesignWorkpaper({
           ref={sheetRef}
           className={`rn-sheet${notesShown ? " is-noting" : ""}`}
         >
-          <DocumentSheet
-            paper={paper}
-            actions={actions}
-            mattersId={`${uid}-matters`}
-          />
+          <DocumentSheet paper={paper} actions={actions} />
           {/* The margin: the markers and "Add review note" (docs/workpaper-review.md,
               section 6). */}
           <NotesMargin />
@@ -1819,7 +1856,7 @@ function Verdict({
   );
 }
 
-/** Section 7's head (product owner, 16 November 2026: section 7 lighter, option A): the
+/** Section 6's head (product owner, 16 November 2026: section 6 lighter, option A): the
  * conclusion in the display serif, or "No conclusion recorded yet" in quiet text, and
  * under it one quiet line: who recorded it and whether the agent proposed the same (or,
  * before any choice, what the agent proposes), signed or out of date where the server
@@ -1976,7 +2013,7 @@ function Results({ paper, why }: { paper: Paper; why: boolean }) {
   );
 }
 
-/** Section 7's Sign-off (sections 3.7 and 3.8): the preparer's row, then the
+/** Section 6's Sign-off (sections 3.7 and 3.8): the preparer's row, then the
  * reviewer's; on paper, the signature lines under the sheet say it. */
 function SignOffOf({
   paper,
@@ -2012,7 +2049,27 @@ function SignOffOf({
         choice: paper.conclusion.choice,
         unsaved: sign.unsaved,
         behind: sign.behind,
+        // Section 3.9: the button waits while a point is not settled.
+        points:
+          workpaper.status === "DRAFT" ? unsettled(paper.points).length : 0,
       }}
+      // The preparer's list of what is left, each with the way to its place; nobody else
+      // sees it (section 3.9).
+      decisions={
+        paper.canSettle
+          ? decisionsList(paper.points, paper).map((item) => ({
+              ...item,
+              onGo:
+                actions?.onPoint === null || actions?.onPoint === undefined
+                  ? null
+                  : () => actions.onPoint?.(item.key),
+            }))
+          : []
+      }
+      // The reviewer's sign-off waits while points were raised since the preparer signed.
+      raised={raisedSinceSigned(paper.points, workpaper.status)}
+      // The message to the reviewer starts with the agent's observations, one per line.
+      draft={draftMessage(paper.observations)}
       prepared={{
         by: head.prepared.by,
         on: head.prepared.on,
@@ -2029,7 +2086,7 @@ function SignOffOf({
   );
 }
 
-/** Section 7's top: the head, the results (`children`), and the choice where the
+/** Section 6's top: the head, the results (`children`), and the choice where the
  * preparer may record it (the editable draft: the server's `can_edit`, the same rule as
  * its `can_choose`): "Change" in the head's line, the form in place under the results.
  * On paper, and for anyone else, the head and the results only. The way to a design
@@ -2101,7 +2158,7 @@ function ConclusionChoiceOf({
   );
 }
 
-/** "Edit conclusion": the same in-place editor as the link on section 7's heading, as a
+/** "Edit conclusion": the same in-place editor as the link on section 6's heading, as a
  * quiet text link under the text (section 3.5; option A). Off while another editor is
  * open, while the page's records are behind a save, and while the working copies are
  * read. */
@@ -2136,11 +2193,11 @@ function EditConclusion({
   );
 }
 
-/** "Open section 7": the document's conclusion, from the Matrix and the Evidence view. */
+/** "Open section 6": the document's conclusion, from the Matrix and the Evidence view. */
 function ToConclusion({ onOpen }: { onOpen: () => void }) {
   return (
     <button type="button" className="dw-edit dw-to-concl" onClick={onOpen}>
-      Open section 7
+      Open section 6
       <span className="sr-only">, the conclusion, in the document</span>
     </button>
   );
@@ -2156,6 +2213,46 @@ function OutOfDate({ reasons }: { reasons: readonly string[] }) {
         <li key={key}>{item}</li>
       ))}
     </ul>
+  );
+}
+
+/* The points, at their place (docs/design-workpaper.md, section 3.9) ------------------ */
+
+/** The points shown at one place, each as its viewer sees it; nothing where none is. On
+ * the printed copy (no actions), only the considered ones. */
+function PointsHere({
+  paper,
+  actions,
+  at,
+}: {
+  paper: Paper;
+  actions: Actions | null;
+  at: Shown;
+}) {
+  const facts = {
+    canSettle: paper.canSettle,
+    status: paper.workpaper?.status ?? null,
+  };
+  const here = pointsAt(paper.points, paper, at).filter(
+    (point) => pointShown(point, facts, actions === null) !== "hidden",
+  );
+  if (here.length === 0) {
+    return null;
+  }
+  return (
+    <div className="dw-points">
+      {here.map((point) => (
+        <PointRow
+          key={point.key}
+          point={point}
+          shown={pointShown(point, facts, actions === null)}
+          canSettle={paper.canSettle}
+          writes={actions?.points ?? null}
+          printed={actions === null}
+          refs={<Refs refs={point.refs} paper={paper} actions={actions} />}
+        />
+      ))}
+    </div>
   );
 }
 
@@ -2217,13 +2314,11 @@ function Section({
 function DocumentSheet({
   paper,
   actions,
-  mattersId,
 }: {
   paper: Paper;
-  /** Null on the printed sheet: references are text, and nothing is offered. */
+  /** Null on the printed sheet: references are text, nothing is offered, and only the
+   * considered points are shown (section 3.9). */
   actions: Actions | null;
-  /** The id of section 6 on the page (not on the printed copy, which is a second one). */
-  mattersId?: string;
 }) {
   const head = headerOf(paper);
   const editable = editableSections(paper);
@@ -2234,6 +2329,16 @@ function DocumentSheet({
   // docs/workpaper-review.md).
   const stored = walkthroughColumnsOf(paper.walkthrough.columns);
   const legend = tickmarkLegend(paper);
+  // Whether a place has a point this viewer sees (section 3.9): only then is a row of
+  // its own drawn under the attribute or the report.
+  const pointFacts = {
+    canSettle: paper.canSettle,
+    status: paper.workpaper?.status ?? null,
+  };
+  const pointed = (at: Shown) =>
+    pointsAt(paper.points, paper, at).some(
+      (point) => pointShown(point, pointFacts, actions === null) !== "hidden",
+    );
   const { understanding } = paper;
   const { workpaper } = paper;
   // The section open in its editor, if one is (never on the printed sheet).
@@ -2499,6 +2604,8 @@ function DocumentSheet({
           />
         }
       >
+        {/* A point about a request, or a row this read does not have (section 3.9). */}
+        <PointsHere paper={paper} actions={actions} at={{ where: "head" }} />
         {paper.attributes.length === 0 && noting === null ? (
           <p className="dw-none">
             No approved attribute yet. They are listed here once the test plan
@@ -2536,83 +2643,107 @@ function DocumentSheet({
                     const item =
                       notes?.items.find((entry) => entry.id === attribute.id) ??
                       null;
+                    const at: Shown = {
+                      where: "attribute",
+                      attributeId: attribute.id,
+                    };
                     return (
-                      <tr key={attribute.id}>
-                        <th scope="row" className="is-attr">
-                          <b>{attribute.code}. </b>
-                          {attribute.text}
-                        </th>
-                        <td>
-                          {attribute.basis !== "" ? (
-                            <NoteField
-                              field={attributeKey(attribute.id, "basis")}
-                              text={attribute.basis}
-                            />
-                          ) : (
-                            <span className="dw-quiet">
-                              Nothing on record for it yet.
-                            </span>
-                          )}
-                          {strayLine(attribute) !== "" ? (
-                            <p className="dw-stray">{strayLine(attribute)}</p>
-                          ) : null}
-                          {attribute.checks.length > 0 ? (
-                            <ul className="dw-checks">
-                              {keyed(attribute.checks, (item) => item).map(
-                                ({ key, item }) => (
-                                  <li key={key}>{item}</li>
-                                ),
-                              )}
-                            </ul>
-                          ) : null}
-                          {notes !== null && item !== null ? (
-                            <NoteBox
-                              item={item}
-                              notes={notes.typed}
-                              phase={notes.phase}
-                              onChange={notes.onChange}
-                            />
-                          ) : attribute.notes !== "" ? (
-                            <p className="dw-note">
-                              <b>Preparer's note.</b>{" "}
+                      <Fragment key={attribute.id}>
+                        <tr>
+                          <th scope="row" className="is-attr">
+                            <b>{attribute.code}. </b>
+                            {attribute.text}
+                          </th>
+                          <td>
+                            {attribute.basis !== "" ? (
                               <NoteField
-                                field={attributeKey(attribute.id, "note")}
-                                text={attribute.notes}
-                                inline
+                                field={attributeKey(attribute.id, "basis")}
+                                text={attribute.basis}
                               />
-                            </p>
-                          ) : null}
-                        </td>
-                        <td className="is-refs">
-                          <Refs
-                            refs={attribute.refs}
-                            paper={paper}
-                            actions={actions}
-                          />
-                        </td>
-                        <td className="is-state">
-                          <NoteField
-                            field={attributeKey(attribute.id, "result")}
-                          >
-                            <StatePill {...stateOf(attribute)} />
-                            {attribute.shownBy !== null ? (
-                              <small className="dw-shown-by">
-                                {SHOWN_BY_WORDS[attribute.shownBy]}
-                              </small>
+                            ) : (
+                              <span className="dw-quiet">
+                                Nothing on record for it yet.
+                              </span>
+                            )}
+                            {strayLine(attribute) !== "" ? (
+                              <p className="dw-stray">{strayLine(attribute)}</p>
                             ) : null}
-                          </NoteField>
-                        </td>
-                        <td className="is-tm">
-                          {mark.symbol !== "" ? (
-                            <span className="dw-tm" title={mark.meaning}>
-                              <span aria-hidden="true">{mark.symbol}</span>
-                              <span className="sr-only">{mark.meaning}</span>
-                            </span>
-                          ) : (
-                            <span className="sr-only">No tickmark</span>
-                          )}
-                        </td>
-                      </tr>
+                            {attribute.checks.length > 0 ? (
+                              <ul className="dw-checks">
+                                {keyed(attribute.checks, (item) => item).map(
+                                  ({ key, item }) => (
+                                    <li key={key}>{item}</li>
+                                  ),
+                                )}
+                              </ul>
+                            ) : null}
+                            {/* A person's tickmark that does not change the state
+                              (section 3.9): said on its row, with who, when and why. */}
+                            {attribute.tickmarkNote !== undefined ? (
+                              <p className="dw-tm-note">
+                                {attribute.tickmarkNote}
+                              </p>
+                            ) : null}
+                            {notes !== null && item !== null ? (
+                              <NoteBox
+                                item={item}
+                                notes={notes.typed}
+                                phase={notes.phase}
+                                onChange={notes.onChange}
+                              />
+                            ) : attribute.notes !== "" ? (
+                              <p className="dw-note">
+                                <b>Preparer's note.</b>{" "}
+                                <NoteField
+                                  field={attributeKey(attribute.id, "note")}
+                                  text={attribute.notes}
+                                  inline
+                                />
+                              </p>
+                            ) : null}
+                          </td>
+                          <td className="is-refs">
+                            <Refs
+                              refs={attribute.refs}
+                              paper={paper}
+                              actions={actions}
+                            />
+                          </td>
+                          <td className="is-state">
+                            <NoteField
+                              field={attributeKey(attribute.id, "result")}
+                            >
+                              <StatePill {...stateOf(attribute)} />
+                              {attribute.shownBy !== null ? (
+                                <small className="dw-shown-by">
+                                  {SHOWN_BY_WORDS[attribute.shownBy]}
+                                </small>
+                              ) : null}
+                            </NoteField>
+                          </td>
+                          <td className="is-tm">
+                            {mark.symbol !== "" ? (
+                              <span className="dw-tm" title={mark.meaning}>
+                                <span aria-hidden="true">{mark.symbol}</span>
+                                <span className="sr-only">{mark.meaning}</span>
+                              </span>
+                            ) : (
+                              <span className="sr-only">No tickmark</span>
+                            )}
+                          </td>
+                        </tr>
+                        {pointed(at) ? (
+                          <tr className="dw-point-tr">
+                            <td colSpan={5}>
+                              <PointsHere
+                                paper={paper}
+                                actions={actions}
+                                at={at}
+                              />
+                            </td>
+                          </tr>
+                        ) : null}
+                      </Fragment>
                     );
                   })}
                 </tbody>
@@ -2656,45 +2787,58 @@ function DocumentSheet({
                   paper.reports,
                   (item) => `${item.ref} ${item.report}`,
                 ).map(({ key, item: report }, index) => (
-                  <tr key={key}>
-                    <th scope="row" className="is-attr">
-                      {report.ref !== "" ? (
-                        <Refs
-                          refs={[report.ref]}
-                          paper={paper}
-                          actions={actions}
-                        />
-                      ) : null}{" "}
-                      <NoteField
-                        field={reportKey(index + 1, 1)}
-                        text={report.report}
-                        inline
-                      />
-                    </th>
-                    <td>
-                      {report.source !== "" ? (
+                  <Fragment key={key}>
+                    <tr>
+                      <th scope="row" className="is-attr">
+                        {report.ref !== "" ? (
+                          <Refs
+                            refs={[report.ref]}
+                            paper={paper}
+                            actions={actions}
+                          />
+                        ) : null}{" "}
                         <NoteField
-                          field={reportKey(index + 1, 2)}
-                          text={report.source}
+                          field={reportKey(index + 1, 1)}
+                          text={report.report}
+                          inline
                         />
-                      ) : (
-                        "Not stated"
-                      )}
-                    </td>
-                    <td>
-                      {report.procedure !== "" ? (
-                        <NoteField
-                          field={reportKey(index + 1, 3)}
-                          text={report.procedure}
-                        />
-                      ) : reportInspected(paper, report) === null ? (
-                        <span className="dw-quiet">
-                          No procedure on record yet.
-                        </span>
-                      ) : null}
-                      <Inspected paper={paper} report={report} />
-                    </td>
-                  </tr>
+                      </th>
+                      <td>
+                        {report.source !== "" ? (
+                          <NoteField
+                            field={reportKey(index + 1, 2)}
+                            text={report.source}
+                          />
+                        ) : (
+                          "Not stated"
+                        )}
+                      </td>
+                      <td>
+                        {report.procedure !== "" ? (
+                          <NoteField
+                            field={reportKey(index + 1, 3)}
+                            text={report.procedure}
+                          />
+                        ) : reportInspected(paper, report) === null ? (
+                          <span className="dw-quiet">
+                            No procedure on record yet.
+                          </span>
+                        ) : null}
+                        <Inspected paper={paper} report={report} />
+                      </td>
+                    </tr>
+                    {pointed({ where: "report", index }) ? (
+                      <tr className="dw-point-tr">
+                        <td colSpan={3}>
+                          <PointsHere
+                            paper={paper}
+                            actions={actions}
+                            at={{ where: "report", index }}
+                          />
+                        </td>
+                      </tr>
+                    ) : null}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
@@ -2702,56 +2846,8 @@ function DocumentSheet({
         )}
       </Section>
 
-      <Section number={6} title="Matters for the reviewer" anchor={mattersId}>
-        {paper.matters.length === 0 ? (
-          <p className="dw-none">Nothing for the reviewer on record.</p>
-        ) : (
-          <div className="dw-table-wrap">
-            <table className="dw-table is-matters">
-              <thead className="sr-only">
-                <tr>
-                  <th scope="col">State</th>
-                  <th scope="col">Matter</th>
-                  <th scope="col">Evidence</th>
-                </tr>
-              </thead>
-              <tbody>
-                {keyed(
-                  paper.matters,
-                  (item) => `${item.kind} ${item.text}`,
-                ).map(({ key, item: matter }, index) => {
-                  const words = matterWords(matter);
-                  return (
-                    <tr key={key}>
-                      <td className="is-state">
-                        <StatePill words={words.state} tone={words.tone} />
-                      </td>
-                      <td>
-                        {words.kind !== "" ? <b>{words.kind}. </b> : null}
-                        <NoteField
-                          field={matterKey(index + 1)}
-                          text={matter.text}
-                          inline
-                        />
-                      </td>
-                      <td className="is-refs">
-                        <Refs
-                          refs={matter.refs}
-                          paper={paper}
-                          actions={actions}
-                        />
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Section>
-
       <Section
-        number={7}
+        number={6}
         title="Conclusion"
         said={saidOf("conclusion")}
         // Where Home's "Waiting for your review" links to (section 3.8); not on the
@@ -2767,7 +2863,7 @@ function DocumentSheet({
         }
       >
         {/* On the plain sheet, top to bottom (docs/design-workpaper.md, sections 3.5 to
-            3.7; product owner, 16 November 2026: section 7 lighter, option A): the
+            3.7; product owner, 16 November 2026: section 6 lighter, option A): the
             conclusion and its one quiet line, the two results, the choice in place
             after "Change", the way to a design deficiency, then the text with its one
             editor, and the sign-off. */}
@@ -2819,38 +2915,63 @@ function DocumentSheet({
               ))
             )}
           </ul>
-          <ul aria-label="Evidence index">
-            {paper.evidence.length === 0 ? (
-              <li className="dw-quiet">
-                No evidence is in force yet. Files are listed here as the design
-                and implementation requests receive them.
-              </li>
-            ) : (
-              paper.evidence.map((entry) => (
-                <li key={entry.ref}>
-                  <Refs refs={[entry.ref]} paper={paper} actions={actions} />
-                  <span>
-                    {evidenceTitle(entry)}
-                    {entry.kindWords !== "" ? (
-                      <small> · {entry.kindWords}</small>
-                    ) : null}
-                    {entry.leftOut !== null ? (
-                      <small className="dw-left-out">
-                        {" "}
-                        Left out of the check: {entry.leftOut}
-                      </small>
-                    ) : null}
-                    {notReliedOnLine(entry) !== "" ? (
-                      <small className="dw-not-relied">
-                        {" "}
-                        {notReliedOnLine(entry)}
-                      </small>
-                    ) : null}
-                  </span>
+          <div>
+            <ul aria-label="Evidence index">
+              {paper.evidence.length === 0 ? (
+                <li className="dw-quiet">
+                  No evidence is in force yet. Files are listed here as the
+                  design and implementation requests receive them.
                 </li>
-              ))
-            )}
-          </ul>
+              ) : (
+                paper.evidence.map((entry) => (
+                  <li key={entry.ref}>
+                    <Refs refs={[entry.ref]} paper={paper} actions={actions} />
+                    <span>
+                      {evidenceTitle(entry)}
+                      {entry.kindWords !== "" ? (
+                        <small> · {entry.kindWords}</small>
+                      ) : null}
+                      {entry.leftOut !== null ? (
+                        <small className="dw-left-out">
+                          {" "}
+                          Left out of the check: {entry.leftOut}
+                        </small>
+                      ) : null}
+                      {notReliedOnLine(entry) !== "" ? (
+                        <small className="dw-not-relied">
+                          {" "}
+                          {notReliedOnLine(entry)}
+                        </small>
+                      ) : null}
+                      {/* Where no section 5 row names the file, its reliability
+                        established on review is said here (section 3.9). */}
+                      {establishedLine(entry) !== "" &&
+                      !paper.reports.some(
+                        (report) =>
+                          report.ref === entry.ref &&
+                          report.inspected !== undefined,
+                      ) ? (
+                        <small className="dw-not-relied">
+                          {" "}
+                          {establishedLine(entry)}
+                        </small>
+                      ) : null}
+                      <PointsHere
+                        paper={paper}
+                        actions={actions}
+                        at={{ where: "evidence", ref: entry.ref }}
+                      />
+                    </span>
+                  </li>
+                ))
+              )}
+            </ul>
+            {moreFilesLine(paper.evidenceMore) !== "" ? (
+              <p className="dw-quiet dw-more-files">
+                {moreFilesLine(paper.evidenceMore)}
+              </p>
+            ) : null}
+          </div>
         </div>
       </Section>
 
@@ -3007,7 +3128,7 @@ function MatrixBoard({
             <small>{tile.label}</small>
             <strong>{tile.value}</strong>
             <p title={tile.note}>{tile.note}</p>
-            {/* The conclusion is read and chosen in the document's section 7 (section
+            {/* The conclusion is read and chosen in the document's section 6 (section
                 3.5): a short line here, and the way there. */}
             {tile.key === "conclusion" && actions.onConclusion !== null ? (
               <ToConclusion onOpen={actions.onConclusion} />
@@ -3173,74 +3294,38 @@ function MatrixBoard({
         </div>
       </section>
 
-      <div className="dw-halves">
-        <section className="card dw-card">
-          <header className="dw-card-head">
-            <h5>Matters for the reviewer</h5>
-          </header>
-          {paper.matters.length === 0 ? (
-            <p className="dw-none">Nothing for the reviewer on record.</p>
-          ) : (
-            <ul className="dw-list">
-              {keyed(paper.matters, (item) => `${item.kind} ${item.text}`).map(
-                ({ key, item: matter }) => {
-                  const words = matterWords(matter);
-                  return (
-                    <li key={key}>
-                      <StatePill words={words.state} tone={words.tone} />
-                      <span>
-                        {words.kind !== "" ? <b>{words.kind}. </b> : null}
-                        {matter.text}{" "}
-                        <Refs
-                          refs={matter.refs}
-                          paper={paper}
-                          actions={actions}
-                        />
-                      </span>
-                    </li>
-                  );
-                },
-              )}
-            </ul>
-          )}
-        </section>
-        <section className="card dw-card">
-          <header className="dw-card-head">
-            <h5>Information produced by the entity</h5>
-            <EditLink
-              section="reports"
-              what="the reports relied on"
-              actions={actions}
-              editable={editable.has("reports")}
-            />
-          </header>
-          {paper.reports.length === 0 ? (
-            <p className="dw-none">No report is listed in this workpaper.</p>
-          ) : (
-            <ul className="dw-list">
-              {keyed(paper.reports, (item) => `${item.ref} ${item.report}`).map(
-                ({ key, item: report }) => (
-                  <li key={key}>
-                    {report.ref !== "" ? (
-                      <Refs
-                        refs={[report.ref]}
-                        paper={paper}
-                        actions={actions}
-                      />
-                    ) : null}
-                    <span>
-                      <b>{report.report}</b>
-                      {report.source !== "" ? `, ${report.source}` : ""}.{" "}
-                      {report.procedure}
-                      <Inspected paper={paper} report={report} />
-                    </span>
-                  </li>
-                ),
-              )}
-            </ul>
-          )}
-        </section>
-      </div>
+      <section className="card dw-card">
+        <header className="dw-card-head">
+          <h5>Information produced by the entity</h5>
+          <EditLink
+            section="reports"
+            what="the reports relied on"
+            actions={actions}
+            editable={editable.has("reports")}
+          />
+        </header>
+        {paper.reports.length === 0 ? (
+          <p className="dw-none">No report is listed in this workpaper.</p>
+        ) : (
+          <ul className="dw-list">
+            {keyed(paper.reports, (item) => `${item.ref} ${item.report}`).map(
+              ({ key, item: report }) => (
+                <li key={key}>
+                  {report.ref !== "" ? (
+                    <Refs refs={[report.ref]} paper={paper} actions={actions} />
+                  ) : null}
+                  <span>
+                    <b>{report.report}</b>
+                    {report.source !== "" ? `, ${report.source}` : ""}.{" "}
+                    {report.procedure}
+                    <Inspected paper={paper} report={report} />
+                  </span>
+                </li>
+              ),
+            )}
+          </ul>
+        )}
+      </section>
 
       <section className="card dw-card">
         <header className="dw-card-head">
@@ -3337,7 +3422,9 @@ function EvidenceSplit({
       : (paper.evidence.find((item) => item.ref === selection.ref) ?? null);
   const current: Current | undefined =
     entry === null ? undefined : { ref: entry.ref, from };
-  const matters = openMatters(paper);
+  const left = paper.canSettle ? unsettled(paper.points) : [];
+  const decisions = decisionsWords(left.length);
+  const first = left[0] ?? null;
   return (
     <div className="card dw-evi">
       <ViewHead paper={paper} />
@@ -3365,22 +3452,23 @@ function EvidenceSplit({
               conclusion={conclusion}
               label="Design and implementation"
             />
-            {/* A verdict is never read without what still waits on a person. */}
-            <p className="dw-open">
-              {matters.count === 0 || actions.onMatters === null ? (
-                matters.words
-              ) : (
+            {/* To the preparer only, what is left before they sign, with the way to
+                the first at its place (section 3.9); nothing to others. */}
+            {decisions !== "" && first !== null && actions.onPoint !== null ? (
+              <p className="dw-open">
                 <button
                   type="button"
                   className="dw-edit"
-                  onClick={actions.onMatters}
+                  onClick={() => actions.onPoint?.(first.key)}
                 >
-                  {matters.words}
-                  <span className="sr-only">: read them in the document</span>
+                  {decisions}
+                  <span className="sr-only">
+                    : go to the first in the document
+                  </span>
                 </button>
-              )}
-            </p>
-            {/* The text and the choice are the document's section 7 (section 3.5):
+              </p>
+            ) : null}
+            {/* The text and the choice are the document's section 6 (section 3.5):
                 the way there, never the text again. */}
             {actions.onConclusion !== null ? (
               <ToConclusion onOpen={actions.onConclusion} />

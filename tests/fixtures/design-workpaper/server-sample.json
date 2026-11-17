@@ -259,31 +259,50 @@
   }
  ],
  "reports": [],
- "matters": [
+ "points": [
   {
-   "state": "OPEN",
+   "key": "5adee556b8a8a0a64d278aa0b86384bd",
    "kind": "FINDING",
    "text": "Attribute B not shown: the 2 files on the request",
    "refs": [
     "E2"
-   ]
+   ],
+   "place": {
+    "at": "FILE",
+    "attribute_id": null,
+    "file_id": "af36d2cf-3a7c-48e6-b3e9-4c7139af7744",
+    "requirement_id": null
+   },
+   "settle": [
+    "FINDING",
+    "CONSIDER"
+   ],
+   "considered": null
   },
   {
-   "state": "OPEN",
+   "key": "ef42954f02c4455c646ef9daee36e4b7",
    "kind": "FOLLOW_UP",
    "text": "The records show this is not met: The request was approved by the user's manager and, where the access management policy requires it, by the application owner. Explain it, or provide the record that corrects it.",
    "refs": [
     "E1",
     "E2"
-   ]
-  },
-  {
-   "state": "NOTED",
-   "kind": "NOTE",
-   "text": "Operating effectiveness is tested separately; this workpaper covers design and implementation only.",
-   "refs": []
+   ],
+   "place": {
+    "at": "REQUEST",
+    "attribute_id": null,
+    "file_id": null,
+    "requirement_id": "01a1dc1a-9896-7063-877d-c30b5bb8ce10"
+   },
+   "settle": [
+    "TICKMARK",
+    "CONSIDER"
+   ],
+   "considered": null
   }
  ],
+ "observations": [],
+ "can_settle": true,
+ "evidence_more": 0,
  "conclusion": {
   "text": "The walkthrough supports the design; the timing of the grant needs a second look.",
   "source": "AGENT",

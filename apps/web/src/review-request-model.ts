@@ -1,6 +1,6 @@
 /**
  * One D&I step: the preparer sends the design workpaper for review, the reviewer signs in
- * section 7 (docs/design-workpaper.md, section 3.8; product owner, 16 November 2026). Pure:
+ * section 6 (docs/design-workpaper.md, section 3.8; product owner, 16 November 2026). Pure:
  * how the D&I conclusion's body names the review request, the last return, the reviewers
  * who may be chosen, and the viewer's list for Home; where the sign-off stands; the words
  * of each line; and the writes the page's routes validate before the API sees them. The
@@ -211,7 +211,7 @@ export function reviewSide(facts: {
   return facts.viewerIsReviewer ? "other_reviewer" : "reader";
 }
 
-/** What the preparer's press is in section 7: "send" (section 3.8, a reviewer is chosen),
+/** What the preparer's press is in section 6: "send" (section 3.8, a reviewer is chosen),
  * "prepare" (the existing prepare, for a body that was read and is from before 3.8), or
  * "unread" where the D&I conclusion could not be read: nothing is prepared then, since a
  * prepare without a request would skip "a reviewer must be chosen to sign". */
@@ -804,7 +804,7 @@ export function waitingCountLabel(count: number): string {
   return `${count} waiting for your review`;
 }
 
-/** The control's D&I Assessment at section 7, where the reviewer signs. */
+/** The control's D&I Assessment at section 6, where the reviewer signs. */
 export function waitingHref(
   item: WaitingReview,
   organizationId: string,

@@ -19,8 +19,14 @@ import {
   standingWords,
   VERDICT_LABELS,
 } from "./design-conclusion-model";
+import { raisedWords } from "./design-points-model";
 import { formatDate } from "./format";
-import { PreparerSignOff, type SendFor, shortDay } from "./preparer-signoff";
+import {
+  type Decision,
+  PreparerSignOff,
+  type SendFor,
+  shortDay,
+} from "./preparer-signoff";
 import type { SignOffFacts } from "./preparer-signoff-model";
 import { ReviewerPicker } from "./review-picker";
 import {
@@ -63,7 +69,7 @@ import {
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
 
-/** What section 7 knows of the review notes: how many are open, how many urgent. */
+/** What section 6 knows of the review notes: how many are open, how many urgent. */
 export type NotesCount = { open: number; urgent: number };
 
 const REOPENED_FROM: Record<
@@ -160,7 +166,8 @@ const READING: Readonly<Record<Kind, string>> = {
 };
 
 /**
- * Section 7's Sign-off (docs/design-workpaper.md, section 3.8; the approved prototype):
+ * Section 6's Sign-off (docs/design-workpaper.md, sections 3.8 and 3.9; the approved
+ * prototypes):
  * two numbered rows, the preparer's and the reviewer's. The preparer signs and sends the
  * workpaper for review to a reviewer chosen in "Send for review to"; the reviewer the
  * request names reads the message and one line of what the sign-off rests on, and signs
@@ -190,6 +197,9 @@ export function SignOffBlock({
   notes,
   onNotes,
   onDone,
+  decisions = [],
+  raised = 0,
+  draft = "",
 }: {
   ids: Ids;
   workpaperId: string;
@@ -204,6 +214,13 @@ export function SignOffBlock({
   notes: NotesCount | null;
   onNotes: (() => void) | null;
   onDone: () => void;
+  /** The points not settled yet, for the preparer's list (section 3.9). */
+  decisions?: readonly Decision[];
+  /** The points not settled on a prepared workpaper: raised since the preparer signed,
+   * they hold the reviewer's sign-off (section 3.9). */
+  raised?: number;
+  /** The message drafted from the agent's observations (section 3.9). */
+  draft?: string;
 }) {
   const uid = useId();
   // Section 3.8's "Sign and send for review" where the body names the review; the
@@ -249,6 +266,7 @@ export function SignOffBlock({
             ),
           returned: stage === "returned" ? lastReturn : null,
           viewerId: viewer,
+          draft,
         }
       : null;
   const preparedDone = facts.status === "PREPARED" || signedOff;
@@ -286,6 +304,7 @@ export function SignOffBlock({
             sendFor={sendFor}
             unread={press === "unread"}
             below={side === "reviewer" ? message : null}
+            decisions={decisions}
           />
         </li>
         <li
@@ -315,6 +334,7 @@ export function SignOffBlock({
               onNotes={onNotes}
               onDone={onDone}
               paperStatus={facts.status}
+              raised={raised}
             />
           )}
         </li>
@@ -355,6 +375,7 @@ function ReviewRow({
   onNotes,
   onDone,
   paperStatus,
+  raised,
 }: {
   ids: Ids;
   conclusion: DesignConclusion;
@@ -368,6 +389,7 @@ function ReviewRow({
   onNotes: (() => void) | null;
   onDone: () => void;
   paperStatus: SignOffFacts["status"];
+  raised: number;
 }) {
   const uid = useId();
   const [open, setOpen] = useState<"return" | "reviewer" | "reopen" | null>(
@@ -517,6 +539,9 @@ function ReviewRow({
   // What the card says of an exception that holds the sign-off (its reasons, what the
   // preparer does next), and everything else that holds it, each sentence whole, once.
   const head = conclusionHead(conclusion);
+  // Section 3.9: a point raised since the preparer signed holds the sign-off; the
+  // reviewer returns it to the preparer, who settles it at its place.
+  const raisedSaid = raisedWords(raised);
   const holds = holdsBelow(conclusion);
   const standing = standingKind(conclusion);
   const choice = conclusion.choice;
@@ -524,6 +549,7 @@ function ReviewRow({
   const preparedVersion = conclusion.workpaper?.preparedVersion ?? null;
   const signs =
     conclusion.canSign &&
+    raised === 0 &&
     choice !== null &&
     signable !== null &&
     preparedVersion !== null;
@@ -738,6 +764,9 @@ function ReviewRow({
         ) : null}
         {urgent > 0 && !urgentSaid ? (
           <p className="so-line so-held">{URGENT_HOLD}</p>
+        ) : null}
+        {raisedSaid !== "" ? (
+          <p className="so-line so-held">{raisedSaid}</p>
         ) : null}
         {excepted}
         {holds.length > 0 ? (

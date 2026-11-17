@@ -1,9 +1,10 @@
-// The preparer's sign-off of the design workpaper, at the end of section 7
-// (docs/design-workpaper.md, section 3.7). Pure: what the sign-off needs before the
+// The preparer's sign-off of the design workpaper, at the end of section 6
+// (docs/design-workpaper.md, sections 3.7 and 3.9). Pure: what the sign-off needs before the
 // press, the words, and the write the route validates. The server is the authority:
 // its prepare refuses what this page has not seen, and its sentence is shown.
 
 import type { ConclusionChoice } from "./design-conclusion-model.ts";
+import { decisionsWords } from "./design-points-model.ts";
 import { reviewRefusal } from "./review-request-model.ts";
 import { workpaperWrite } from "./workpaper-model.ts";
 
@@ -40,6 +41,8 @@ export type SignOffFacts = {
   /** The page's records are a version behind the views (a choice or a save was just
    * confirmed): a press now would be refused as stale. */
   behind: boolean;
+  /** The points not settled yet (section 3.9): the button waits while any. */
+  points?: number;
 };
 
 /** Why the preparer cannot sign yet, each in one line, in the order to do them; empty
@@ -62,6 +65,10 @@ export function signOffProblems(facts: SignOffFacts): string[] {
   }
   if (facts.unsaved) {
     problems.push(NEEDS_SAVED);
+  }
+  // Section 3.9: every point settled at its place (the 3.7 needs come first).
+  if ((facts.points ?? 0) > 0) {
+    problems.push(decisionsWords(facts.points ?? 0));
   }
   if (facts.behind && problems.length === 0) {
     problems.push(NEEDS_READ);

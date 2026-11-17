@@ -7,7 +7,7 @@ import { type ReviewIntent, reviewWrite } from "./review-request-model";
 /**
  * One write of the D&I review (docs/design-workpaper.md, section 3.8: send for review,
  * change the reviewer, remind, return to the preparer), called in the background from
- * section 7 with the person's own session. It answers as JSON, never a redirect: the API's
+ * section 6 with the person's own session. It answers as JSON, never a redirect: the API's
  * status (any 2xx said as 200; 0 where the API could not be reached), its own sentence for
  * a refusal, and on 200 the body it answered with. reviewWrite refuses here what is not
  * three ids and the contract's own fields; the API decides who may do it and whether the

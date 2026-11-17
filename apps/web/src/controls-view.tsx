@@ -1721,7 +1721,7 @@ function ControlRecord({
         ? "active"
         : "todo";
   };
-  // The control's D&I conclusion, for section 7's Sign-off (docs/design-workpaper.md,
+  // The control's D&I conclusion, for section 6's Sign-off (docs/design-workpaper.md,
   // section 3.8): the review request, the reviewers and the reviewer's sign-off.
   const openConclusion =
     engagement.designConclusion?.controlId === control.id
@@ -2589,6 +2589,7 @@ function ControlRecord({
           <DesignWorkpaperStep
             {...workpaperProps}
             conclusion={openConclusion}
+            evidenceHref={stepHrefsWf.designevidence}
           />
           <h4 className="stp-subhead">Operating effectiveness</h4>
           <WorkpapersTab compact {...workpaperProps} stage="EFFECTIVENESS" />
@@ -2727,6 +2728,7 @@ function ControlRecord({
                         <DesignWorkpaperStep
                           {...workpaperProps}
                           conclusion={openConclusion}
+                          evidenceHref={stepHrefsWf.designevidence}
                         />
                       </PhaseStep>
                     </PhasePanel>

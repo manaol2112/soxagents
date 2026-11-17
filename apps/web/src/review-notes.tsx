@@ -45,6 +45,7 @@ import {
   historyOf,
   isClosed,
   isFiltered,
+  isRetiredField,
   memberWords,
   NO_CONTEXT,
   NOTES_ANCHOR,
@@ -69,6 +70,7 @@ import {
   RAIL_START,
   RAIL_TABS,
   type RailView,
+  RETIRED_FIELD,
   type ReviewNote,
   type ReviewNotes,
   railFiltered,
@@ -486,14 +488,20 @@ export function ReviewNotesProvider({
   // it is (as the document draws it), so a note just cleared or dismissed from its card
   // stays there, and the focus with it (independent review, 16 November 2026).
   const listed = useMemo(() => {
-    const chosen = railNotes(ordered, railView, set?.viewerId ?? null, section);
+    const chosen = railNotes(
+      ordered,
+      railView,
+      set?.viewerId ?? null,
+      section,
+      context,
+    );
     return selected === null || chosen.some((note) => note.id === selected)
       ? chosen
       : ordered.filter(
           (note) =>
             note.id === selected || chosen.some((item) => item.id === note.id),
         );
-  }, [ordered, railView, set, section, selected]);
+  }, [ordered, railView, set, section, selected, context]);
   const drawn = useMemo(
     () =>
       ordered.filter(
@@ -1776,6 +1784,21 @@ function Passage({ ui, note }: { ui: NotesUi; note: ReviewNote }) {
   if (note.anchorKind === "WORKPAPER") {
     return <p className="rn-passage is-quiet">On the workpaper as a whole.</p>;
   }
+  // On the removed "Matters for the reviewer" (docs/design-workpaper.md, section 3.9):
+  // its kept words, and no marker on the page.
+  if (isRetiredField(note.field)) {
+    return (
+      <p className="rn-passage is-quiet">
+        {RETIRED_FIELD}.
+        {note.quote !== "" ? (
+          <>
+            {" "}
+            As raised: <q className="rn-quote">{note.quote}</q>
+          </>
+        ) : null}
+      </p>
+    );
+  }
   if (note.anchorKind === "FIELD") {
     const text = ui.texts.get(note.field) ?? "";
     return (
@@ -2371,17 +2394,23 @@ function CritWord({ criticality }: { criticality: ReviewNote["criticality"] }) {
 
 /** The section in view: that of the last field of the sheet whose top is above a third
  * of the window (the first field where none is). */
-function sectionInView(root: HTMLElement | null): number | null {
+function sectionInView(
+  root: HTMLElement | null,
+  context: FieldContext,
+): number | null {
   if (root === null) {
     return null;
   }
   let found: number | null = null;
   let first: number | null = null;
   for (const node of root.querySelectorAll<HTMLElement>("[data-rn-field]")) {
-    const n = sectionOf({
-      anchorKind: "FIELD",
-      field: node.dataset.rnField ?? "",
-    });
+    const n = sectionOf(
+      {
+        anchorKind: "FIELD",
+        field: node.dataset.rnField ?? "",
+      },
+      context,
+    );
     if (n === null) {
       continue;
     }
@@ -2431,7 +2460,7 @@ function RailFilter({ ui }: { ui: NotesUi }) {
   ].sort((a, b) => a[1].localeCompare(b[1]));
   const change = (next: Partial<RailView>) => {
     if (next.section === true) {
-      ui.setSection(sectionInView(ui.rootRef.current));
+      ui.setSection(sectionInView(ui.rootRef.current, ui.context));
     }
     ui.setRailView((current) => ({ ...current, ...next }));
   };
@@ -2629,6 +2658,7 @@ function RailHead({ ui }: { ui: NotesUi }) {
                     { ...view, tab: tab.key },
                     viewer,
                     ui.section,
+                    ui.context,
                   ).some((note) => note.id === ui.selected)
                 ) {
                   ui.select(null, "rail");
@@ -2638,7 +2668,14 @@ function RailHead({ ui }: { ui: NotesUi }) {
             >
               {tab.label}
               <span className="rn-tab-count">
-                {tabCount(ui.ordered, view, tab.key, viewer, ui.section)}
+                {tabCount(
+                  ui.ordered,
+                  view,
+                  tab.key,
+                  viewer,
+                  ui.section,
+                  ui.context,
+                )}
               </span>
             </button>
           ),
@@ -2756,6 +2793,7 @@ export function NotesRail({ id }: { id?: string }) {
   const sectionOn = ui?.railView.section === true;
   const setSection = ui?.setSection;
   const root = ui?.rootRef;
+  const context = ui?.context ?? NO_CONTEXT;
   // "This section" follows the section in view while it is on.
   useEffect(() => {
     if (!sectionOn || setSection === undefined || root === undefined) {
@@ -2765,7 +2803,7 @@ export function NotesRail({ id }: { id?: string }) {
     const follow = () => {
       window.cancelAnimationFrame(frame);
       frame = window.requestAnimationFrame(() =>
-        setSection(sectionInView(root.current)),
+        setSection(sectionInView(root.current, context)),
       );
     };
     follow();
@@ -2774,7 +2812,7 @@ export function NotesRail({ id }: { id?: string }) {
       window.cancelAnimationFrame(frame);
       window.removeEventListener("scroll", follow);
     };
-  }, [sectionOn, setSection, root]);
+  }, [sectionOn, setSection, root, context]);
   if (ui === null) {
     return null;
   }
@@ -3083,10 +3121,11 @@ export function AllNotesView({
     );
   }
   const all = ui.ordered;
-  const list = filterNotes(all, filters);
+  const list = filterNotes(all, filters, ui.context);
   const selected =
     list.find((note) => note.id === ui.selected) ?? list[0] ?? null;
-  const counts = (key: FilterKey) => choiceCounts(all, filters, key);
+  const counts = (key: FilterKey) =>
+    choiceCounts(all, filters, key, ui.context);
   const people = (
     pick: (note: ReviewNote) => { id: string; name: string },
   ): Choice[] => {
@@ -3100,7 +3139,7 @@ export function AllNotesView({
       .sort((a, b) => a.label.localeCompare(b.label));
   };
   const sections: Choice[] = SECTIONS.filter((item) =>
-    all.some((note) => sectionOf(note) === item.n),
+    all.some((note) => sectionOf(note, ui.context) === item.n),
   ).map((item) => ({ value: String(item.n), label: item.name }));
   const change = (next: Partial<NoteFilters>) =>
     setFilters((current) => ({ ...current, ...next }));

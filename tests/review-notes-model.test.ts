@@ -14,6 +14,7 @@ import {
   criticalityForKey,
   documentOrder,
   eventWords,
+  FIELD_KEY,
   fieldTextsOf,
   filterNotes,
   findAnchor,
@@ -26,6 +27,7 @@ import {
   isFiltered,
   isMine,
   isOpen,
+  isRetiredField,
   NO_FILTERS,
   NOTE_BOUNDS,
   noteFields,
@@ -42,6 +44,7 @@ import {
   passageOf,
   piecesOf,
   placeOf,
+  pointKey,
   positionsOf,
   RAIL_START,
   type ReviewNote,
@@ -54,6 +57,7 @@ import {
   reportKey,
   reviewNoteWrite,
   richPlain,
+  SECTIONS,
   STALE,
   STARTING_FILTERS,
   searchHit,
@@ -88,6 +92,10 @@ const DANA = uuid(11);
 const SAM = uuid(12);
 const ATTR_C = uuid(30);
 const ATTR_D = uuid(31);
+const FILE_E7 = uuid(70);
+const POINT_C = "c".repeat(32);
+const POINT_FILE = "f".repeat(32);
+const POINT_REQUEST = "e".repeat(32);
 
 const CAN_ALL = {
   reply: true,
@@ -178,7 +186,36 @@ const PAPER_FIELDS: PaperFields = {
   reports: [
     { ref: "E7", report: "Sign-on report", source: "Workday", procedure: "" },
   ],
-  matters: [{ text: "One matter." }],
+  // Rewritten (docs/design-workpaper.md, section 3.9). Old: `matters: [{ text }]`, noted
+  // by position as matters.<n>. New: the points, each at its place (an attribute's row, a
+  // report's row naming the file, the head of section 4), and the evidence that places a
+  // file's point.
+  points: [
+    {
+      key: POINT_C,
+      text: "Attribute C is shown only on files not relied on.",
+      place: { at: "ATTRIBUTE", attributeId: ATTR_C },
+      considered: {
+        id: uuid(301),
+        by: { id: DANA, name: "Dana Lee" },
+        at: "2026-11-16T12:00:00Z",
+        reason: "The ticket itself shows the approval.",
+      },
+    },
+    {
+      key: POINT_FILE,
+      text: "The sign-on report does not show its parameters.",
+      place: { at: "FILE", fileId: FILE_E7 },
+      considered: null,
+    },
+    {
+      key: POINT_REQUEST,
+      text: "The check of the request is out of date. Check the request again.",
+      place: { at: "REQUEST", requirementId: null },
+      considered: null,
+    },
+  ],
+  evidence: [{ ref: "E7", fileId: FILE_E7 }],
   conclusion: { text: "The control is designed and implemented." },
 };
 
@@ -353,9 +390,13 @@ describe("the field keys (section 3)", () => {
       [attributeKey(ATTR_C, "basis"), 4],
       [attributeKey(ATTR_C, "note"), 4],
       [reportKey(1, 2), 5],
-      ["matters.1", 6],
-      [CONCLUSION, 7],
-      ["conclusion.choice", 7],
+      // Rewritten (docs/design-workpaper.md, section 3.9). Old: ["matters.1", 6],
+      // [CONCLUSION, 7], ["conclusion.choice", 7]. New: the matters section is gone, so a
+      // note on it is in no section (it is listed as "On an item no longer listed"), and
+      // the Conclusion is section 6.
+      ["matters.1", null],
+      [CONCLUSION, 6],
+      ["conclusion.choice", 6],
       ["something.else", null],
       ["walkthrough.0.1", null],
     ];
@@ -367,6 +408,40 @@ describe("the field keys (section 3)", () => {
       );
     }
     assert.equal(sectionOf({ anchorKind: "WORKPAPER", field: "" }), 0);
+    // A considered point is in the section of its place; one this read does not have,
+    // or a key that is not 32 hex, is in none.
+    const context = contextOf(PAPER_FIELDS);
+    const pointSection = (field: string) =>
+      sectionOf({ anchorKind: "FIELD", field }, context);
+    assert.equal(pointSection(pointKey(POINT_C)), 4);
+    assert.equal(pointSection(pointKey(POINT_FILE)), 5);
+    assert.equal(pointSection(pointKey(POINT_REQUEST)), 4);
+    assert.equal(pointSection(pointKey("a".repeat(32))), null);
+    assert.equal(pointSection("points.ABC"), null);
+    assert.equal(
+      sectionOf({ anchorKind: "FIELD", field: pointKey(POINT_C) }),
+      null,
+    );
+    assert.deepEqual(placeOf(pointKey(POINT_C)), {
+      kind: "point",
+      key: POINT_C,
+    });
+    assert.ok(FIELD_KEY.test(pointKey(POINT_C)));
+    // The sections as the document numbers them: the Conclusion is 6, and there is no
+    // "Matters for the reviewer".
+    assert.deepEqual(
+      SECTIONS.map((item) => item.name),
+      [
+        "The workpaper as a whole",
+        "1 Objective, risk and control",
+        "2 Procedures performed",
+        "3 Walkthrough",
+        "4 Attributes tested",
+        "5 Information produced by the entity",
+        "6 Conclusion",
+        "Tickmarks and evidence",
+      ],
+    );
     assert.deepEqual(placeOf(walkthroughKey(12, 3)), {
       kind: "walkthrough",
       row: 12,
@@ -394,12 +469,79 @@ describe("the field keys (section 3)", () => {
     assert.equal(where(walkthroughKey(2, 4)), "3 Walkthrough · step 2, result");
     assert.equal(where(reportKey(1, 2)), "5 Reports · E7, source");
     assert.equal(where(reportKey(3, 1)), "5 Reports · row 3, report");
-    assert.equal(where(CONCLUSION), "7 Conclusion");
+    // Rewritten (section 3.9). Old: "7 Conclusion". New: the Conclusion is section 6.
+    assert.equal(where(CONCLUSION), "6 Conclusion");
+    assert.equal(where("conclusion.choice"), "6 Conclusion · the choice");
+    // A considered point: "Considered point" and its first words, in its place's section.
+    assert.equal(
+      where(pointKey(POINT_C)),
+      "4 Attributes · Considered point: Attribute C is shown only on files not relied…",
+    );
+    assert.equal(
+      where(pointKey(POINT_FILE)),
+      "5 Reports · Considered point: The sign-on report does not show its parameters.",
+    );
+    assert.equal(where(pointKey("a".repeat(32))), "Considered point");
+    // A note on the removed matters keeps its words, said as on an item no longer listed.
+    assert.equal(where("matters.3"), "On an item no longer listed");
+    assert.equal(isRetiredField("matters.3"), true);
+    assert.equal(isRetiredField(pointKey(POINT_C)), false);
     assert.equal(where("odd.key"), "odd.key");
     assert.equal(
       whereWords({ anchorKind: "WORKPAPER", field: "" }),
       "The workpaper as a whole",
     );
+  });
+
+  it("gives a considered point its one line, and orders it at its place (section 3.9)", () => {
+    const texts = fieldTextsOf(PAPER_FIELDS);
+    assert.equal(
+      texts.get(pointKey(POINT_C)),
+      "Considered by Dana Lee, 16 Nov: The ticket itself shows the approval.",
+    );
+    // Only a considered point is a field of the sheet.
+    assert.equal(texts.has(pointKey(POINT_FILE)), false);
+    const context = contextOf(PAPER_FIELDS);
+    const order = documentOrder(
+      [
+        note(1, { field: CONCLUSION }),
+        note(2, { field: "matters.2" }),
+        note(3, { field: pointKey(POINT_C) }),
+        note(4, { field: attributeKey(ATTR_D, "basis") }),
+        note(5, { field: attributeKey(ATTR_C, "basis") }),
+        note(6, { field: reportKey(1, 1) }),
+      ],
+      context,
+    ).map((item) => item.number);
+    // C's own field, then its point, then D; the report; the conclusion; and the note on
+    // an item no longer listed last.
+    assert.deepEqual(order, [5, 3, 4, 6, 1, 2]);
+    // The filters read the point's section from the same context.
+    assert.deepEqual(
+      filterNotes(
+        [note(3, { field: pointKey(POINT_C) }), note(1)],
+        { ...NO_FILTERS, section: 4 },
+        context,
+      ).map((item) => item.number),
+      [3],
+    );
+    assert.equal(
+      railNotes(
+        [note(3, { field: pointKey(POINT_C) })],
+        { ...RAIL_START, section: true },
+        null,
+        4,
+        context,
+      ).length,
+      1,
+    );
+    // A highlight on a removed matter's words is not said to have lost them.
+    const kept = note(7, {
+      anchor_kind: "TEXT",
+      field: "matters.1",
+      quote: "kept words",
+    });
+    assert.equal(wordsGone(kept, texts), false);
   });
 
   it("numbers the walkthrough's stored columns, a When column apart", () => {
@@ -694,7 +836,11 @@ describe("filters", () => {
     assert.deepEqual(numbers({ owner: SAM }), [2]);
     assert.deepEqual(numbers({ raisedBy: DANA }), [4]);
     assert.deepEqual(numbers({ section: 4 }), [3]);
-    assert.deepEqual(numbers({ section: 7 }), [4]);
+    // Rewritten (docs/design-workpaper.md, section 3.9). Old: { section: 7 } found the
+    // note on the conclusion. New: the Conclusion is section 6, and 7 is the unnumbered
+    // "Tickmarks and evidence", where no note of these is.
+    assert.deepEqual(numbers({ section: 6 }), [4]);
+    assert.deepEqual(numbers({ section: 7 }), []);
     // The search reads the note's text, its replies and its highlighted words.
     assert.deepEqual(numbers({ search: "  removed   TIMELY " }), [4]);
     assert.deepEqual(numbers({ search: "10:28" }), [5]);

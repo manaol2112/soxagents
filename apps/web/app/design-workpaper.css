@@ -734,8 +734,8 @@ button.dw-edit:focus-visible:not(:disabled) {
   color: var(--text-secondary);
 }
 
-/* Section 7 on the plain sheet, top to bottom (docs/design-workpaper.md, sections 3.5 to
-   3.7; product owner, 16 November 2026: section 7 lighter, option A): the conclusion and
+/* Section 6 on the plain sheet, top to bottom (docs/design-workpaper.md, sections 3.5 to
+   3.7; product owner, 16 November 2026: section 6 lighter, option A): the conclusion and
    one quiet line, the two results on one line, the choice in place after "Change", then
    a thin rule, the text, a thin rule and the sign-off. No card, no tinted block, no
    coloured bar, no pill: ink, greys and one thin rule between the parts. */
@@ -1149,7 +1149,7 @@ button.dw-why-toggle:hover {
   color: var(--text-secondary);
 }
 
-/* The way to the document's section 7, from the Matrix and the Evidence view. */
+/* The way to the document's section 6, from the Matrix and the Evidence view. */
 button.dw-to-concl {
   justify-self: start;
   margin-top: 0.25rem;
@@ -1686,12 +1686,6 @@ button.dw-cell:focus-visible:not(:disabled) {
   }
 }
 
-.dw-halves {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.875rem;
-}
-
 .dw-list {
   display: grid;
   gap: 0.5rem;
@@ -1812,10 +1806,6 @@ button.dw-thumb:focus-visible:not(:disabled) {
 }
 
 @container dw (max-width: 760px) {
-  .dw-halves {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .dw-sheet {
     padding: 1.125rem 1rem 1.25rem;
   }
@@ -2821,7 +2811,7 @@ button.se-tool:focus-visible:not(:disabled) {
   }
 }
 
-/* The preparer's sign-off at the end of section 7 (docs/design-workpaper.md, 3.7; option
+/* The preparer's sign-off at the end of section 6 (docs/design-workpaper.md, 3.7; option
    A): one row under a thin rule, the heading and what is attested on the left, the dark
    button or a quiet link on the right. */
 
@@ -2943,7 +2933,7 @@ button.se-tool:focus-visible:not(:disabled) {
   outline: none;
 }
 
-/* Section 7's Sign-off (docs/design-workpaper.md, section 3.8; the approved prototype):
+/* Section 6's Sign-off (docs/design-workpaper.md, section 3.8; the approved prototype):
    the label, then two numbered rows under a thin rule each, the preparer's and the
    reviewer's. A row's mark is a quiet numbered ring, a dashed one while it waits on the
    reviewer, and the one dark disc with a check once signed; its title reads "Prepared"
@@ -3313,4 +3303,111 @@ button.rp-trigger:hover {
   .so-review-go {
     justify-items: start;
   }
+}
+
+/* The points at their place (docs/design-workpaper.md, section 3.9; the approved prototype
+   brief-proto/place.png). "Your decision" is the one place colour carries meaning: a thin
+   warning rule and its soft ground, for the preparer only. A considered point is one quiet
+   line, part of the workpaper; one raised since the preparer signed reads in words, in the
+   same tone as a decision left. */
+.dw-points {
+  display: grid;
+  gap: 0.375rem;
+  margin: 0.375rem 0;
+}
+
+.dw-point {
+  min-width: 0;
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.dw-point:focus-visible {
+  border-radius: var(--radius-sm, 6px);
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+.dw-point:is(.is-decide, .is-raised) {
+  padding: 0.5rem 0.75rem;
+  border-left: 3px solid var(--warning);
+  border-radius: 0 var(--radius-sm, 6px) var(--radius-sm, 6px) 0;
+  background: var(--warning-soft);
+}
+
+.dw-point-line {
+  margin: 0;
+  color: var(--text);
+}
+
+.dw-point.is-considered .dw-point-line {
+  color: var(--text-secondary);
+}
+
+.dw-point-said {
+  margin: 0.25rem 0 0;
+  color: var(--text-tertiary);
+}
+
+.dw-point-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  margin: 0.5rem 0 0;
+}
+
+.dw-point-form {
+  margin-top: 0.5rem;
+}
+
+.dw-point-more {
+  font-weight: 500;
+}
+
+/* Under its attribute's or its report's row: the row's own cell, without a rule above. */
+.dw-table tr.dw-point-tr > td {
+  padding-top: 0;
+  border-top: 0;
+}
+
+/* A person's tickmark that does not change the attribute's state, on its row. */
+.dw-tm-note {
+  margin: 0.25rem 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.dw-more-files {
+  margin: 0.375rem 0 0;
+  font-size: var(--fs-sm);
+}
+
+/* The preparer's sign-off: the decisions left, each with the way to its place. */
+.ps-decisions {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0.25rem 0 0;
+  padding: 0;
+  font-size: var(--fs-sm);
+  list-style: none;
+}
+
+.ps-decisions li {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.ps-draft-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.ps-draft-head small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
 }

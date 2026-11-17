@@ -17,6 +17,12 @@ import {
   conclusionResultOf,
   type ResultKind,
 } from "./design-conclusion-model.ts";
+import {
+  type Observation,
+  observationsOf,
+  type Point,
+  pointsOf,
+} from "./design-points-model.ts";
 import { fileQuery } from "./evidence-preview-model.ts";
 import { formatDate } from "./format.ts";
 
@@ -130,7 +136,7 @@ export const ATTRIBUTE_STATES = [
   "NOT_APPLICABLE",
   "NOT_AVAILABLE",
   // A person's exception where the attribute would otherwise read as shown (by a check,
-  // or by a closing disposition): never counted as shown, an open matter, no tickmark.
+  // or by a closing disposition): never counted as shown, a point to settle, no tickmark.
   "EXCEPTION_RECORDED",
 ] as const;
 /** OTHER: a state this page does not know. It is shown in the server's own words, in a
@@ -178,6 +184,10 @@ export type EvidenceEntry = {
    * section 10.14): the server's sentence, "Not relied on, recorded by ... Reason: ...".
    * Absent where it sends none. */
   notReliedOn?: string;
+  /** Where a person's decision that the file's reliability is established on review
+   * stands (section 3.9): the server's sentence, the same words section 5 uses, so a file
+   * no section 5 row names still says it on its line. Absent where it sends none. */
+  established?: string;
 };
 
 export type Reference = {
@@ -216,16 +226,13 @@ export type Attribute = {
    * on files a person decided are not relied on (NOT_RELIED, whatever the attribute's
    * state reads); null otherwise, and for anything this page does not know. */
   shownBy: ShownBy | null;
+  /** Where a person's tickmark stands without changing the attribute's state (the check
+   * shows it, an exception, or not concluded; section 3.9): "Tickmark: “…”, by …, … .
+   * Reason: …", the server's sentence. Absent where it sends none. */
+  tickmarkNote?: string;
 };
 
 export type ShownBy = "IMPLEMENTATION" | "DESIGN" | "NOT_RELIED";
-
-export type Matter = {
-  state: "OPEN" | "NOTED";
-  kind: string;
-  text: string;
-  refs: string[];
-};
 
 export type DesignWorkpaper = {
   control: {
@@ -261,6 +268,9 @@ export type DesignWorkpaper = {
   understanding: string;
   procedures: string[];
   evidence: EvidenceEntry[];
+  /** How many files on the evidence list the index does not list (section 3.9: said
+   * under it, "N more files are not listed"); 0 where none. */
+  evidenceMore: number;
   walkthrough: { columns: string[]; steps: WalkStep[]; source: string };
   attributes: Attribute[];
   reports: Array<{
@@ -273,7 +283,15 @@ export type DesignWorkpaper = {
      * sent with the mark INSPECTED. Absent otherwise. */
     inspected?: string;
   }>;
-  matters: Matter[];
+  /** What waits on a person, at its place (section 3.9): every point of this read, the
+   * considered ones included. */
+  points: Point[];
+  /** The agent's observations: the draft of the message sent with the review request,
+   * never part of the workpaper. */
+  observations: Observation[];
+  /** The viewer may consider a point, or withdraw a consideration, now: a person who may
+   * update it, on the design workpaper's draft, not being drafted (the server's word). */
+  canSettle: boolean;
   conclusion: {
     text: string;
     source: string;
@@ -295,13 +313,12 @@ export type DesignWorkpaper = {
 };
 
 /** The most of each list this page reads: well above what the server sends (60 files,
- * 300 walkthrough rows, about 60 facts, 12 matters, 8 procedures), so nothing it sends is
+ * 300 walkthrough rows, about 60 facts, 8 procedures), so nothing it sends is
  * cut, and a view shows every item it is given. */
 export const LIMITS = {
   evidence: 240,
   steps: 600,
   facts: 120,
-  matters: 48,
   procedures: 32,
   attributes: 240,
 } as const;
@@ -400,6 +417,10 @@ function evidenceOf(value: unknown): EvidenceEntry[] {
       ...(line(item.not_relied_on, 1200) === ""
         ? {}
         : { notReliedOn: line(item.not_relied_on, 1200) }),
+      // A person's decision that its reliability is established on review.
+      ...(line(item.established, 1200) === ""
+        ? {}
+        : { established: line(item.established, 1200) }),
     });
     if (entries.length === LIMITS.evidence) {
       break;
@@ -490,6 +511,10 @@ function attributeOf(item: Raw, known: ReadonlySet<string>): Attribute | null {
         : state === "SHOWN"
           ? oneOf(["IMPLEMENTATION", "DESIGN"] as const, item.shown_by)
           : null,
+    // A person's tickmark that does not change the state: the server's sentence.
+    ...(line(item.tickmark_note, 1200) === ""
+      ? {}
+      : { tickmarkNote: line(item.tickmark_note, 1200) }),
   };
 }
 
@@ -592,6 +617,7 @@ export function parseDesignWorkpaper(value: unknown): DesignWorkpaper | null {
     understanding: prose(value.understanding, 20000),
     procedures: lines(value.procedures, LIMITS.procedures),
     evidence,
+    evidenceMore: count(value.evidence_more),
     walkthrough: {
       columns: lines(walk.columns, 12, 80),
       steps: stepsOf(walk.steps, known),
@@ -624,19 +650,9 @@ export function parseDesignWorkpaper(value: unknown): DesignWorkpaper | null {
       }))
       .filter((report) => report.report !== "")
       .slice(0, 40),
-    matters: raws(value.matters)
-      .map(
-        (matter): Matter => ({
-          // Only what the server says in as many words is noted: anything else waits on
-          // a person, so it is never shown as settled.
-          state: matter.state === "NOTED" ? "NOTED" : "OPEN",
-          kind: line(matter.kind, 40),
-          text: line(matter.text, 2000),
-          refs: refsOf(matter.refs, known),
-        }),
-      )
-      .filter((matter) => matter.text !== "")
-      .slice(0, LIMITS.matters),
+    points: pointsOf(value.points, known),
+    observations: observationsOf(value.observations, known),
+    canSettle: value.can_settle === true,
     conclusion: {
       text: prose(conclusion.text, 20000),
       source: line(conclusion.source, 40),
@@ -879,30 +895,6 @@ export function tickmarkLegend(
   );
 }
 
-const MATTER_KINDS: Record<string, string> = {
-  FINDING: "Evidence finding",
-  FOLLOW_UP: "Follow-up",
-  CONSIDERATION: "Consideration",
-  UNSETTLED: "Attribute not concluded",
-  FILE: "File left out",
-  COMPLETENESS: "Completeness or reliability",
-  DISPOSITION: "Tickmark",
-  NOTE: "Note",
-};
-
-/** A matter's state and kind in words. `OPEN` waits on a person; the rest is noted. */
-export function matterWords(matter: Pick<Matter, "state" | "kind">): {
-  state: string;
-  tone: Tone;
-  kind: string;
-} {
-  return {
-    state: matter.state === "OPEN" ? "Open" : "Noted",
-    tone: matter.state === "OPEN" ? "warning" : "neutral",
-    kind: own(MATTER_KINDS, matter.kind) ?? "",
-  };
-}
-
 const VERDICT_WORDS: Record<string, string> = {
   EFFECTIVE: "Effective",
   NOT_EFFECTIVE: "Not effective",
@@ -1071,16 +1063,16 @@ export const PROPOSED_BY_AGENT = "Proposed by the agent, not signed";
 /** What stands in the verdict's place until the records propose one. */
 export const NOT_CONCLUDED = "Not concluded yet";
 
-/** Where a link from another step lands: section 7 of the document, the conclusion
+/** Where a link from another step lands: section 6 of the document, the conclusion
  * (docs/design-workpaper.md, section 3.5). */
 export const CONCLUSION_ANCHOR = "di-conclusion";
 
-/** "/?…#di-conclusion": D&I Assessment, at section 7. */
+/** "/?…#di-conclusion": D&I Assessment, at section 6. */
 export function conclusionHref(assessmentHref: string): string {
   return `${assessmentHref.split("#")[0] ?? assessmentHref}#${CONCLUSION_ANCHOR}`;
 }
 
-/** The pill of the agent's proposal in section 7 until the preparer records a
+/** The pill of the agent's proposal in section 6 until the preparer records a
  * conclusion (docs/design-workpaper.md, sections 3.5 and 3.6). */
 export const PROPOSED_REVIEW = "Proposed by the agent · review it";
 
@@ -1343,7 +1335,7 @@ export function choiceFactsOf(
   };
 }
 
-/** Whether section 7 offers "Log a design deficiency": while an exception stands (a
+/** Whether section 6 offers "Log a design deficiency": while an exception stands (a
  * deficiency is one way to answer it), or where the conclusion is "Not effective" and no
  * design deficiency is logged yet (its sign-off needs one). */
 export function deficiencyWanted(
@@ -1430,24 +1422,6 @@ export function strayLine(
     : attribute.strayExceptions === 1
       ? "Exception on a file not listed"
       : `Exceptions on ${attribute.strayExceptions} files not listed`;
-}
-
-/** The count of matters that wait on a person, as the line under a verdict: a reviewer
- * never reads a verdict without it. */
-export function openMatters(paper: Pick<DesignWorkpaper, "matters">): {
-  count: number;
-  words: string;
-} {
-  const count = paper.matters.filter(
-    (matter) => matter.state === "OPEN",
-  ).length;
-  return {
-    count,
-    words:
-      count === 0
-        ? "No matter is open"
-        : `${plural(count, "matter")} open for the reviewer`,
-  };
 }
 
 /* The matrix --------------------------------------------------------------------------- */
@@ -1541,7 +1515,7 @@ export function matrixOf(
 /* The tiles ---------------------------------------------------------------------------- */
 
 export type Tile = {
-  key: "conclusion" | "attributes" | "exceptions" | "matters" | "files";
+  key: "conclusion" | "attributes" | "exceptions" | "files";
   label: string;
   value: string;
   note: string;
@@ -1560,7 +1534,7 @@ const DISPOSITION_TILE_WORDS: Record<string, string> = {
  * concluded here. */
 export function tilesOf(paper: DesignWorkpaper): Tile[] {
   const conclusion = conclusionOf(paper);
-  const { attributes, matters, evidence } = paper;
+  const { attributes, evidence } = paper;
   const shown = attributes.filter((item) => item.state === "SHOWN");
   const exceptions = attributes.filter((item) => item.state === "EXCEPTION");
   // Recorded by a person on an attribute that would otherwise read as shown: counted
@@ -1578,8 +1552,6 @@ export function tilesOf(paper: DesignWorkpaper): Tile[] {
       rest.set(words, (rest.get(words) ?? 0) + 1);
     }
   }
-  const open = matters.filter((matter) => matter.state === "OPEN");
-  const noted = matters.length - open.length;
   const leftOut = evidence.filter((entry) => entry.leftOut !== null).length;
   const annotated = evidence.reduce((sum, entry) => sum + entry.annotations, 0);
   const reviewed = evidence.reduce((sum, entry) => sum + entry.reviewed, 0);
@@ -1633,18 +1605,6 @@ export function tilesOf(paper: DesignWorkpaper): Tile[] {
         .filter((part) => part !== "")
         .join("; "),
       tone: exceptions.length + recorded.length === 0 ? "neutral" : "danger",
-    },
-    {
-      key: "matters",
-      label: "Matters for the reviewer",
-      value: open.length === 0 ? "None open" : `${open.length} open`,
-      note:
-        open.length > 0
-          ? (open[0]?.text ?? "")
-          : noted === 0
-            ? "Nothing waits on a person"
-            : `${noted} noted`,
-      tone: open.length === 0 ? "neutral" : "warning",
     },
     {
       key: "files",
@@ -1747,7 +1707,7 @@ export type EditableSection =
  * The sections of a view that carry an "Edit" link. The server says whether the viewer may
  * edit (`can_edit`, the existing rule); a link is offered only while there is a draft on
  * screen to edit, and it only opens the existing section editor, which applies the rule
- * itself. Procedures, matters and the header are written from the records and are never
+ * itself. Procedures, the points and the header are written from the records and are never
  * edited here.
  */
 export function editableSections(
@@ -1876,6 +1836,24 @@ export function notReliedOnLine(
   return entry.notReliedOn ?? "";
 }
 export const NOT_RELIED_ON = "Not relied on";
+
+/** Said in the evidence index of a file whose reliability a person established on review
+ * (section 3.9): the server's sentence; "" otherwise. */
+export function establishedLine(
+  entry: Pick<EvidenceEntry, "established">,
+): string {
+  return entry.established ?? "";
+}
+
+/** Under the evidence index, where the list has files it does not name (section 3.9):
+ * "3 more files are not listed."; "" for none. */
+export function moreFilesLine(more: number): string {
+  return more <= 0
+    ? ""
+    : more === 1
+      ? "1 more file is not listed."
+      : `${more} more files are not listed.`;
+}
 
 /** One line on a file of the index: what it is, its request, its annotations. */
 export function evidenceLine(entry: EvidenceEntry): string {

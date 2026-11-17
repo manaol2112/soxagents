@@ -72,11 +72,11 @@ const ACTION: Record<StepKey, { title: string; label: string; why: string }> = {
     why: "Each file is read on arrival; accept it, or ask for what is missing.",
   },
   // One D&I step (docs/design-workpaper.md, section 3.8): prepared, sent for review and
-  // signed off in section 7.
+  // signed off in section 6.
   designassessment: {
     title: "Prepare the design workpaper",
     label: "Review the assessment",
-    why: "The walkthrough and each design attribute are drafted; review them, record the conclusion, then sign and send it for review in section 7. A reviewer who did not prepare it signs it off there, and an effective sign-off clears OE.",
+    why: "The walkthrough and each design attribute are drafted; review them, record the conclusion, then sign and send it for review in section 6. A reviewer who did not prepare it signs it off there, and an effective sign-off clears OE.",
   },
   testdesign: {
     title: "Approve scope and sampling",
@@ -110,12 +110,12 @@ const ACTION: Record<StepKey, { title: string; label: string; why: string }> = {
   },
 };
 
-/** D&I Assessment once its workpaper is prepared: the reviewer's sign-off in section 7
+/** D&I Assessment once its workpaper is prepared: the reviewer's sign-off in section 6
  * (section 3.8; before, the "D&I Conclusion and Review" step's). */
 const DESIGN_SIGN_OFF = {
   title: "Sign off the D&I conclusion",
   label: "Review and sign off",
-  why: "A reviewer who did not prepare the design workpaper signs it off in section 7, or returns it to the preparer. An effective sign-off clears OE.",
+  why: "A reviewer who did not prepare the design workpaper signs it off in section 6, or returns it to the preparer. An effective sign-off clears OE.",
 };
 
 const link = (step: WorkflowStep): PanelLink => ({
@@ -246,7 +246,7 @@ function needOf(step: WorkflowStep, steps: readonly WorkflowStep[]): PanelNeed {
     };
   }
   // D&I Assessment carries the reviewer's sign-off (docs/design-workpaper.md, section
-  // 3.8): once the workpaper is prepared, what it needs is that sign-off, in section 7.
+  // 3.8): once the workpaper is prepared, what it needs is that sign-off, in section 6.
   const action =
     step.key === "designassessment" &&
     step.status !== STEP_DRAFT &&
@@ -499,7 +499,7 @@ export function agentNote(
 }
 
 /** What the agent says of the D&I conclusion, under D&I Assessment (section 3.8: the
- * conclusion and its sign-off are in that step, section 7). */
+ * conclusion and its sign-off are in that step, section 6). */
 function conclusionNote(input: WorkflowInput): {
   did: string;
   found: string[];
@@ -535,11 +535,11 @@ function conclusionNote(input: WorkflowInput): {
   if (named !== undefined) {
     const signedOff = input.designConclusion?.status === "SIGNED_OFF";
     return {
-      did: "Proposed the D&I conclusion from the records; the preparer records it and sends the workpaper for review in section 7, and a reviewer signs it off there.",
+      did: "Proposed the D&I conclusion from the records; the preparer records it and sends the workpaper for review in section 6, and a reviewer signs it off there.",
       found: [
         ...(held > 0 ? [holdLine] : []),
         named.standing === null
-          ? "No conclusion recorded yet: the preparer records it in section 7 of D&I Assessment."
+          ? "No conclusion recorded yet: the preparer records it in section 6 of D&I Assessment."
           : `${signedOff ? "Signed off" : "Recorded by the preparer"}: ${standingWords(named.standing)}.`,
         ...(named.proposed !== null && !signedOff
           ? [`Proposed by the agent: ${CONCLUSION_WORDS[named.proposed]}.`]

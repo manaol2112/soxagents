@@ -470,7 +470,7 @@ describe("the preparer's conclusion: reading it", () => {
     // Rewritten (independent review, 15 November 2026, docs/design-workpaper.md section 3.6). Old: "the preparer has
     // not recorded a conclusion" was blanked on every body, so where the card did not
     // say it nothing did. New: it is left out below the card only where the card says it
-    // itself, with the way to section 7 (a 3.6 body with no choice); elsewhere it is the
+    // itself, with the way to section 6 (a 3.6 body with no choice); elsewhere it is the
     // page's sentence.
     const named = parseDesignConclusion(
       body({ ...fragments, choice: null, proposed_conclusion: "EFFECTIVE" }),
@@ -824,7 +824,7 @@ describe("the independent review of the preparer's conclusion", () => {
     assert.equal(head.tone, "none");
     assert.equal(head.status, NOT_READY_TO_SIGN);
     assert.doesNotMatch(head.effect, /cleared to proceed/);
-    // The card says it with the way to section 7; nothing below says it again.
+    // The card says it with the way to section 6; nothing below says it again.
     assert.deepEqual(holdsBelow(none), []);
     // A body from before 3.6 still reads its verdict.
     const old = conclusionHead(read({}));
@@ -871,9 +871,11 @@ describe("the independent review of the preparer's conclusion", () => {
       "a tickmark on attribute B changed after the sign-off",
     ]);
     assert.equal(conclusionHead(stale).word, "No conclusion recorded yet");
+    // Renumbered (docs/design-workpaper.md, section 3.9). Old: "section 7". New: the
+    // matters section is gone and the Conclusion is section 6.
     assert.equal(
       outOfDateNext(stale),
-      "What to do: reopen the design workpaper, record a conclusion in section 7 of D&I Assessment, and prepare the workpaper again. OE waits until a reviewer signs that conclusion off.",
+      "What to do: reopen the design workpaper, record a conclusion in section 6 of D&I Assessment, and prepare the workpaper again. OE waits until a reviewer signs that conclusion off.",
     );
     // On a draft there is nothing to reopen.
     assert.equal(
@@ -885,7 +887,7 @@ describe("the independent review of the preparer's conclusion", () => {
           workpaper: { ...prepared, status: "DRAFT", prepared_version: null },
         }),
       ),
-      "What to do: record a conclusion in section 7 of D&I Assessment, and prepare the workpaper. OE waits until a reviewer signs that conclusion off.",
+      "What to do: record a conclusion in section 6 of D&I Assessment, and prepare the workpaper. OE waits until a reviewer signs that conclusion off.",
     );
     // With a conclusion that can be signed, as before.
     assert.equal(

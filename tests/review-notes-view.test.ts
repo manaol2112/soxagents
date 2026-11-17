@@ -445,10 +445,19 @@ describe("wired in the four places", () => {
       "field={reportKey(index + 1, 1)}",
       "field={reportKey(index + 1, 2)}",
       "field={reportKey(index + 1, 3)}",
-      "field={matterKey(index + 1)}",
     ]) {
       has(doc, written);
     }
+    // Rewritten (docs/design-workpaper.md, section 3.9). Old: each matter of section 6
+    // was a field, `field={matterKey(index + 1)}`. New: there is no matters section, so
+    // nothing on the page is noted as a matter any more (old notes on one are listed as
+    // "On an item no longer listed", with no marker); a considered point is a field of
+    // its own, `points.<key>`, at its place.
+    assert.ok(!sheet.includes("matterKey("));
+    has(
+      component(read("apps/web/src/design-points.tsx"), "PointRow"),
+      "field={pointField(point.key)}",
+    );
     // Added (independent review, 16 November 2026): section 3 lists the conclusion
     // chosen too, `conclusion.choice`, which was in the model and never wired. A note on
     // it is on the field (it has no words to highlight).

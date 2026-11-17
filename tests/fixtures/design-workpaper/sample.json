@@ -403,30 +403,71 @@
       "procedure": "Parameters inspected: system account jreyes; 10/01/2026 12:00 AM to 10/14/2026 11:59 PM; failed sign-ons included."
     }
   ],
-  "matters": [
+  "points": [
     {
-      "state": "OPEN",
+      "key": "59724e6801ce0f8cf1342cc2ea19f561",
       "kind": "FOLLOW_UP",
       "text": "The record that disabled the Workday account at 11:59 PM on 09/30/2026 does not name who or what made the change. Confirm that the account is disabled by the termination's effective date in Workday itself.",
+      "refs": [
+        "E3"
+      ],
+      "place": {
+        "at": "REQUEST",
+        "attribute_id": null,
+        "file_id": null,
+        "requirement_id": "00000000-0000-4000-8000-000000000004"
+      },
+      "settle": [
+        "TICKMARK",
+        "RERUN",
+        "CONSIDER"
+      ],
+      "considered": null
+    },
+    {
+      "key": "2c9808a21f6dda83271a782ae7a6d5c0",
+      "kind": "NOT_CONCLUDED",
+      "text": "Attribute D is not concluded: access was removed on time, so the check of later activity was not triggered.",
+      "refs": [
+        "E7"
+      ],
+      "place": {
+        "at": "ATTRIBUTE",
+        "attribute_id": "00000000-0000-4000-8000-000000000014",
+        "file_id": null,
+        "requirement_id": null
+      },
+      "settle": [
+        "TICKMARK",
+        "CONSIDER"
+      ],
+      "considered": {
+        "id": "00000000-0000-4000-8000-000000000301",
+        "by": {
+          "id": "00000000-0000-4000-8000-000000000031",
+          "name": "Dana Lee"
+        },
+        "at": "2026-11-16T12:00:00Z",
+        "reason": "Access was removed on time, so the later-activity check did not apply."
+      }
+    }
+  ],
+  "observations": [
+    {
+      "text": "The account was disabled by a scheduled job, not by a named administrator.",
       "refs": [
         "E3"
       ]
     },
     {
-      "state": "NOTED",
-      "kind": "UNSETTLED",
-      "text": "Attribute D is not concluded: access was removed on time, so the check of later activity was not triggered.",
+      "text": "The sign-on report covers 1 to 14 October only, which is enough for the one instance walked through.",
       "refs": [
         "E7"
       ]
-    },
-    {
-      "state": "NOTED",
-      "kind": "NOTE",
-      "text": "One instance was walked through. Operating effectiveness is tested separately on a sample of the period's leavers.",
-      "refs": []
     }
   ],
+  "can_settle": false,
+  "evidence_more": 0,
   "conclusion": {
     "text": "The control is designed to remove a leaver's access within 1 business day of the termination date, and the instance walked through shows it in place: the Workday account was disabled on the effective date, single sign-on was deactivated five minutes after midnight, and the remaining security group was removed the next morning, within the limit.\n\nThis is a conclusion on design and implementation only, proposed for the preparer and an independent reviewer to sign.",
     "source": "AGENT",

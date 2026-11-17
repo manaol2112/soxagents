@@ -10,6 +10,14 @@
  * Urgent, as Cleared or as allowed.
  */
 
+import {
+  type Consideration,
+  consideredLine,
+  type PointPlace,
+  placeSection,
+  pointField,
+  shownAt,
+} from "./design-points-model.ts";
 import { parseRich } from "./rich-text-model.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -580,7 +588,12 @@ export const attributeKey = (id: string, part: AttributePart): string =>
 export const reportKey = (row: number, column: number): string =>
   `reports.${row}.${column}`;
 export const procedureKey = (n: number): string => `procedures.${n}`;
-export const matterKey = (n: number): string => `matters.${n}`;
+/* `matters.<n>` named a row of the removed "Matters for the reviewer"
+ * (docs/design-workpaper.md, section 3.9): its notes are kept, and listed as "On an item
+ * no longer listed"; nothing on the page is noted with it any more (placeOf still reads
+ * it). */
+/** A considered point (section 3.9): `points.<its 32-hex key>`. */
+export const pointKey = (key: string): string => pointField(key);
 export const controlKey = (fact: ControlFact): string => `control.${fact}`;
 
 export type FieldPlace =
@@ -592,7 +605,8 @@ export type FieldPlace =
   | { kind: "walkthrough"; row: number; column: number }
   | { kind: "attribute"; id: string; part: AttributePart }
   | { kind: "report"; row: number; column: number }
-  | { kind: "matter"; n: number };
+  | { kind: "matter"; n: number }
+  | { kind: "point"; key: string };
 
 const N = "([1-9][0-9]{0,4})";
 const PLACES: ReadonlyArray<[RegExp, (m: RegExpExecArray) => FieldPlace]> = [
@@ -611,6 +625,7 @@ const PLACES: ReadonlyArray<[RegExp, (m: RegExpExecArray) => FieldPlace]> = [
     new RegExp(`^matters\\.${N}$`),
     (m) => ({ kind: "matter", n: Number(m[1]) }),
   ],
+  [/^points\.([0-9a-f]{32})$/, (m) => ({ kind: "point", key: m[1] ?? "" })],
   [
     new RegExp(`^walkthrough\\.${N}\\.${N}$`),
     (m) => ({ kind: "walkthrough", row: Number(m[1]), column: Number(m[2]) }),
@@ -645,14 +660,19 @@ export const SECTIONS: ReadonlyArray<{ n: number; name: string }> = [
   { n: 3, name: "3 Walkthrough" },
   { n: 4, name: "4 Attributes tested" },
   { n: 5, name: "5 Information produced by the entity" },
-  { n: 6, name: "6 Matters for the reviewer" },
-  { n: 7, name: "7 Conclusion" },
+  // Rewritten (docs/design-workpaper.md, section 3.9). Old: 6 Matters for the reviewer,
+  // 7 Conclusion. New: there is no matters section; the Conclusion is 6, and the
+  // unnumbered "Tickmarks and evidence" after it holds the points placed on a file's line.
+  { n: 6, name: "6 Conclusion" },
+  { n: 7, name: "Tickmarks and evidence" },
 ];
 
 /** The section a note's field is in (0 for the workpaper as a whole); null for a key this
- * page does not know. */
+ * page does not know, a note on the removed matters, and a point this read does not
+ * have. A point is in the section of its place (`context`). */
 export function sectionOf(
   note: Pick<ReviewNote, "anchorKind" | "field">,
+  context: FieldContext = NO_CONTEXT,
 ): number | null {
   if (note.anchorKind === "WORKPAPER") {
     return 0;
@@ -674,9 +694,14 @@ export function sectionOf(
     case "report":
       return 5;
     case "matter":
-      return 6;
+      return null;
+    case "point":
+      return (
+        (context.points ?? []).find((item) => item.key === place.key)
+          ?.section ?? null
+      );
     default:
-      return 7;
+      return 6;
   }
 }
 
@@ -686,12 +711,33 @@ export type FieldContext = {
   attributes: ReadonlyArray<{ id: string; code: string }>;
   walkthroughColumns: readonly string[];
   reportRefs: readonly string[];
+  /** The points of this read (section 3.9): their words, the section of their place, and
+   * their place in the document's order. */
+  points?: ReadonlyArray<PointContext>;
+};
+
+export type PointContext = {
+  key: string;
+  text: string;
+  section: number;
+  rank: number[];
 };
 
 export const NO_CONTEXT: FieldContext = {
   attributes: [],
   walkthroughColumns: [],
   reportRefs: [],
+  points: [],
+};
+
+/** Said of a note on the removed "Matters for the reviewer" (section 3.9). */
+export const RETIRED_FIELD = "On an item no longer listed";
+export const CONSIDERED_POINT = "Considered point";
+
+const SECTION_LEADS: Readonly<Record<number, string>> = {
+  4: "4 Attributes",
+  5: "5 Reports",
+  7: "Tickmarks and evidence",
 };
 
 const REPORT_COLUMNS = [
@@ -750,11 +796,21 @@ export function whereWords(
       return `5 Reports · ${ref === "" ? `row ${place.row}` : ref}, ${name}`;
     }
     case "matter":
-      return `6 Matters · ${place.n}`;
+      return RETIRED_FIELD;
+    case "point": {
+      const point = (context.points ?? []).find(
+        (item) => item.key === place.key,
+      );
+      if (point === undefined) {
+        return CONSIDERED_POINT;
+      }
+      const lead = SECTION_LEADS[point.section];
+      return `${lead === undefined ? "" : `${lead} · `}${CONSIDERED_POINT}: ${firstWords(point.text, 48)}`;
+    }
     case "choice":
-      return "7 Conclusion · the choice";
+      return "6 Conclusion · the choice";
     default:
-      return "7 Conclusion";
+      return "6 Conclusion";
   }
 }
 
@@ -790,11 +846,18 @@ function rankOf(key: string, context: FieldContext): number[] {
     case "report":
       return [5, place.row, place.column];
     case "matter":
-      return [6, place.n];
+      // No longer on the page: after everything that is.
+      return [8, place.n];
+    case "point":
+      return (
+        (context.points ?? []).find((item) => item.key === place.key)?.rank ?? [
+          8,
+        ]
+      );
     case "choice":
-      return [7, 0];
+      return [6, 0];
     default:
-      return [7, 1];
+      return [6, 1];
   }
 }
 
@@ -887,7 +950,14 @@ export type PaperFields = {
     source: string;
     procedure: string;
   }>;
-  matters: ReadonlyArray<{ text: string }>;
+  /** The points (section 3.9), placed by the rows above and the evidence index. */
+  points: ReadonlyArray<{
+    key: string;
+    text: string;
+    place: PointPlace;
+    considered: Consideration | null;
+  }>;
+  evidence: ReadonlyArray<{ ref: string; fileId: string }>;
   conclusion: { text: string };
 };
 
@@ -929,6 +999,36 @@ export function contextOf(paper: PaperFields): FieldContext {
     })),
     walkthroughColumns: paper.walkthrough.columns,
     reportRefs: paper.reports.map((item) => item.ref),
+    points: paper.points.map((point, at) => {
+      const shown = shownAt(point, paper);
+      // In the document's order: under its attribute's row (after the row's own fields),
+      // under its report's row, on its file's line, or at the head of section 4.
+      const rank =
+        shown.where === "attribute"
+          ? [
+              4,
+              paper.attributes.findIndex(
+                (item) => item.id === shown.attributeId,
+              ),
+              3,
+              at,
+            ]
+          : shown.where === "report"
+            ? [5, shown.index + 1, 4, at]
+            : shown.where === "evidence"
+              ? [
+                  7,
+                  paper.evidence.findIndex((item) => item.ref === shown.ref),
+                  at,
+                ]
+              : [4, -1, at];
+      return {
+        key: point.key,
+        text: point.text,
+        section: placeSection(shown),
+        rank,
+      };
+    }),
   };
 }
 
@@ -961,9 +1061,12 @@ export function fieldTextsOf(paper: PaperFields): Map<string, string> {
     texts.set(reportKey(at + 1, 2), item.source);
     texts.set(reportKey(at + 1, 3), item.procedure);
   });
-  paper.matters.forEach((item, at) => {
-    texts.set(matterKey(at + 1), item.text);
-  });
+  // A considered point's field is its one line, as the sheet draws it.
+  for (const point of paper.points) {
+    if (point.considered !== null) {
+      texts.set(pointKey(point.key), consideredLine(point.considered));
+    }
+  }
   texts.set(CONCLUSION, richPlain(paper.conclusion.text));
   return texts;
 }
@@ -1206,12 +1309,23 @@ export function positionsOf(
   return positions;
 }
 
-/** Whether a TEXT note's words are no longer in its field. */
+/** Whether a key names the removed "Matters for the reviewer" (section 3.9 of
+ * docs/design-workpaper.md): its notes are listed with their kept words, never marked. */
+export function isRetiredField(key: string): boolean {
+  return placeOf(key)?.kind === "matter";
+}
+
+/** Whether a TEXT note's words are no longer in its field. A note on a removed item is
+ * not said to have lost its words: it says it is on an item no longer listed. */
 export function wordsGone(
   note: ReviewNote,
   texts: ReadonlyMap<string, string>,
 ): boolean {
-  return note.anchorKind === "TEXT" && placeIn(note, texts) === null;
+  return (
+    note.anchorKind === "TEXT" &&
+    !isRetiredField(note.field) &&
+    placeIn(note, texts) === null
+  );
 }
 
 /** A passage of the field around the note's words now, for the note's side panel: up to
@@ -1397,6 +1511,7 @@ function passes(
   note: ReviewNote,
   filters: NoteFilters,
   leave: FilterKey | null = null,
+  context: FieldContext = NO_CONTEXT,
 ): boolean {
   return (
     (leave === "statuses" ||
@@ -1415,7 +1530,7 @@ function passes(
       note.raisedBy.id === filters.raisedBy) &&
     (leave === "section" ||
       filters.section === null ||
-      sectionOf(note) === filters.section) &&
+      sectionOf(note, context) === filters.section) &&
     searchHit(note, filters.search)
   );
 }
@@ -1423,8 +1538,9 @@ function passes(
 export function filterNotes(
   notes: readonly ReviewNote[],
   filters: NoteFilters,
+  context: FieldContext = NO_CONTEXT,
 ): ReviewNote[] {
-  return notes.filter((note) => passes(note, filters));
+  return notes.filter((note) => passes(note, filters, null, context));
 }
 
 /** For each choice of one filter, how many notes it would show with the others as they
@@ -1433,10 +1549,11 @@ export function choiceCounts(
   notes: readonly ReviewNote[],
   filters: NoteFilters,
   key: FilterKey,
+  context: FieldContext = NO_CONTEXT,
 ): Map<string, number> {
   const counts = new Map<string, number>();
   for (const note of notes) {
-    if (!passes(note, filters, key)) {
+    if (!passes(note, filters, key, context)) {
       continue;
     }
     const value =
@@ -1448,7 +1565,7 @@ export function choiceCounts(
             ? note.owner.id
             : key === "raisedBy"
               ? note.raisedBy.id
-              : String(sectionOf(note));
+              : String(sectionOf(note, context));
     counts.set(value, (counts.get(value) ?? 0) + 1);
   }
   return counts;
@@ -1548,6 +1665,7 @@ export function railNotes(
   view: RailView,
   viewerId: string | null,
   section: number | null,
+  context: FieldContext = NO_CONTEXT,
 ): ReviewNote[] {
   return notes.filter(
     (note) =>
@@ -1556,7 +1674,8 @@ export function railNotes(
         : isOpen(note) && (view.tab === "open" || isMine(note, viewerId))) &&
       (!view.urgent || note.criticality === "URGENT") &&
       (!view.mine || isMine(note, viewerId)) &&
-      (!view.section || (section !== null && sectionOf(note) === section)) &&
+      (!view.section ||
+        (section !== null && sectionOf(note, context) === section)) &&
       (view.owner === null || note.owner.id === view.owner) &&
       searchHit(note, view.search),
   );
@@ -1570,8 +1689,9 @@ export function tabCount(
   tab: RailTab,
   viewerId: string | null,
   section: number | null,
+  context: FieldContext = NO_CONTEXT,
 ): number {
-  return railNotes(notes, { ...view, tab }, viewerId, section).length;
+  return railNotes(notes, { ...view, tab }, viewerId, section, context).length;
 }
 
 /** Whether a choice of the filter menu narrows the list (the search apart). */

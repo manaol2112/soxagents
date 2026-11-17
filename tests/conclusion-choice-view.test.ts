@@ -61,7 +61,9 @@ describe("section 7 is where the preparer concludes", () => {
     assert.match(button, /className="dw-link"/);
     assert.match(
       sheet,
-      /number=\{7\}\s+title="Conclusion"[\s\S]{0,400}<EditLink\s+section="conclusion"/,
+      // Renumbered (docs/design-workpaper.md, section 3.9). Old: number={7}. New: the
+      // matters section is gone and the Conclusion is section 6.
+      /number=\{6\}\s+title="Conclusion"[\s\S]{0,400}<EditLink\s+section="conclusion"/,
     );
     assert.match(sheet, /<EditConclusion\s+actions=\{actions\}/);
     // Nothing else edits the conclusion: the step has no editor and no box.
@@ -322,9 +324,12 @@ describe("the reviewer signs in section 7, and the sign-off edits nothing", () =
       conclusionModel,
       /body: \{\s*conclusion,\s*choice_id: choice,\s*workpaper_version: version,\s*note,\s*\.\.\.\(request === "" \? \{\} : \{ request_id: request \}\),\s*\},/,
     );
+    // Rewritten (docs/design-workpaper.md, section 3.9). Old: `conclusion.canSign &&
+    // choice !== null && signable !== null &&`. New: also `raised === 0`: a point raised
+    // since the preparer signed holds the sign-off; the reviewer returns it.
     assert.match(
       panel,
-      /const signs =\s*conclusion\.canSign &&\s*choice !== null &&\s*signable !== null &&/,
+      /const signs =\s*conclusion\.canSign &&\s*raised === 0 &&\s*choice !== null &&\s*signable !== null &&/,
     );
     assert.equal(/body: \{ verdict,/.test(conclusionModel), false);
     // The route still posts the sign-off through the model's write.

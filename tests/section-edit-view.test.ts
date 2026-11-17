@@ -423,8 +423,11 @@ describe("saving", () => {
     // refusal.
     // Rewritten (product owner, 15 November 2026, docs/design-workpaper.md section 3.7).
     // Old: 2 (a confirmed save, a 409). New: 3, the third after the preparer's sign-off
-    // or reopening was confirmed (the `signOff.onDone` of the view).
-    assert.equal(count(view, /refreshRecords\(\)/g), 3);
+    // or reopening was confirmed (the `signOff.onDone` of the view). Rewritten again
+    // (section 3.9). Old: 3. New: 4, the fourth after a consideration of a point was
+    // recorded or withdrawn (`points.onSettled`): it moves the workpaper's version, as a
+    // recorded conclusion does.
+    assert.equal(count(view, /refreshRecords\(\)/g), 4);
     assert.match(
       view,
       /onDone: \(\) => \{\s*setAttempt\(\(n\) => n \+ 1\);\s*refreshRecords\(\);\s*\}/,
@@ -443,7 +446,9 @@ describe("saving", () => {
       body,
       /const behind = useMemo\(\(\) => recordsBehind\(papers, paper\), \[papers, paper\]\);/,
     );
-    assert.match(body, /\n\s*behind,\n\s*onMatters:/);
+    // Rewritten (docs/design-workpaper.md, section 3.9). Old: `behind,` then `onMatters:`.
+    // New: the matters' link is gone; `onPoint:` (a point at its place) follows.
+    assert.match(body, /\n\s*behind,\n\s*onPoint:/);
     // The card's editor of a section is another one for each version: an uncontrolled
     // box keeps what it was mounted with, and the records now change under it.
     assert.match(
