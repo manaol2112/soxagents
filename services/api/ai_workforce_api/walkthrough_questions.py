@@ -59,6 +59,28 @@ and each of those comes after a structured question on the same follow-up. A con
 question keeps its key, since an earlier free-text answer is not a valid answer to it and so
 reads as missing; a question split into new parts gets new keys.
 
+Revised again on 16 November 2026 (B1k and B1l, docs/control-workflow-plan.md): Control
+Understanding ends with a review of the questions asked, attribute by attribute, so that no
+question is left for the attributes to ask later. So:
+
+- Every question says which kind of fact it establishes (`fact`, one of FACTS: the performer,
+  the approver, the system, the record, the timing, the population, the exception handling,
+  or another fact), and `informing` gives, for an attribute of a control, the questions that
+  inform it with their kind of fact (`fact_of`), which the review reads.
+- Each attribute of the access and change families says which kinds of fact its criteria
+  need (`criteria_needs`), and every need is met by a question that informs the attribute or
+  by a recorded reason (MET_ELSEWHERE: a value the control's statement asks, or what each
+  item's own evidence shows). problems() reports a need met by neither.
+- The bank for patching (ITGC-CM-06) asks the three facts its attributes needed later: who
+  applies patches to production, how a patch in the patch history is linked to its change
+  record, and how a patch applied without prior approval is approved afterwards. The other
+  banks were checked for the same kind of gap: the transfer of access asks where the new
+  manager records each decision and whether the system records each role's removal, the
+  removal of leavers asks how a leaver's local accounts are found, and direct data changes
+  ask how the data owner is identified.
+- A question added after a control's understanding was finished does not hold it (`since`):
+  it is required only of a control still in progress (walkthrough_answers).
+
 Status: draft for professional review, like the rest of the library. Nothing here sets a
 threshold, a deadline or a role on the client's behalf. Pure and deterministic: no database.
 """
@@ -66,6 +88,7 @@ threshold, a deadline or a role on the client's behalf. Pure and deterministic: 
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import date
 from typing import Literal
 
 from ai_workforce_api.controls import LIBRARY_KEYS
@@ -154,6 +177,21 @@ NARRATIVE_LIMIT = 220
 
 FAMILIES: dict[str, str] = {"access-": "ACCESS", "change-": "CHANGE"}
 
+# The kind of fact a question establishes, and an attribute's criteria need (B1l, 16 November
+# 2026): who performs the control (PERFORMER), who approves, reviews or signs it off and their
+# independence (APPROVER), the system, tool, layer, environment or setting (SYSTEM), the
+# record that shows it and where it is kept (RECORD), when it happens or by when (TIMING),
+# which items there are and where they come from (POPULATION), what happens to an exception,
+# a conflict or a difference (EXCEPTION), and any other fact (OTHER).
+Fact = Literal[
+    "PERFORMER", "APPROVER", "SYSTEM", "RECORD", "TIMING", "POPULATION", "EXCEPTION", "OTHER"
+]
+FACTS: tuple[Fact, ...] = (
+    "PERFORMER", "APPROVER", "SYSTEM", "RECORD", "TIMING", "POPULATION", "EXCEPTION", "OTHER"
+)  # fmt: skip
+# The day the questions of B1k were added to the bank (see Question.since).
+B1K_ADDED = date(2026, 11, 16)
+
 # The only free-text questions (product owner, 11 November 2026: options wherever an answer
 # can be listed), each a narrative no list holds and each asked after a structured question
 # on the same follow-up: the dates, causes and resolution of each known deviation; when each
@@ -204,6 +242,13 @@ class Question:
     # free-text part "Other: <text>" (product owner, 11 November 2026). False where a fixed
     # answer set is essential; always False for YES_NO and TEXT.
     allows_other: bool = True
+    # The kind of fact its answer establishes (FACTS; chosen for each question in _FACTS).
+    fact: Fact = "OTHER"
+    # The day the question was added to the bank, when after the bank was first in use (None:
+    # in it from the start). A question added later is required only of a control whose
+    # understanding was not yet completed when it was added, and never of one whose
+    # attributes are accepted (B1l: finished work is not disturbed; walkthrough_answers).
+    since: date | None = None
 
 
 def _drives(informs: tuple[str, ...]) -> tuple[Drive, ...]:
@@ -225,10 +270,11 @@ def _yes_no(
     no: str,
     required: bool = True,
     when: tuple[str, str] | None = None,
+    since: date | None = None,
 ) -> Question:
     return Question(
         key, topic, text, why, _drives(informs), "YES_NO", informs, (), required, when, (),
-        order, "", yes, no, allows_other=False,
+        order, "", yes, no, allows_other=False, fact=_FACTS.get(key, "OTHER"), since=since,
     )  # fmt: skip
 
 
@@ -243,10 +289,11 @@ def _text(
     *,
     required: bool = True,
     when: tuple[str, str] | None = None,
+    since: date | None = None,
 ) -> Question:
     return Question(
         key, topic, text, why, _drives(informs), "TEXT", informs, (), required, when, (),
-        order, narrative, allows_other=False,
+        order, narrative, allows_other=False, fact=_FACTS.get(key, "OTHER"), since=since,
     )  # fmt: skip
 
 
@@ -264,10 +311,12 @@ def _choice(
     when: tuple[str, str] | None = None,
     natures: tuple[str, ...] = (),
     allows_other: bool = True,
+    since: date | None = None,
 ) -> Question:
     return Question(
         key, topic, text, why, _drives(informs), "CHOICE", informs, options, required, when,
-        natures, order, narrative, allows_other=allows_other,
+        natures, order, narrative, allows_other=allows_other, fact=_FACTS.get(key, "OTHER"),
+        since=since,
     )  # fmt: skip
 
 
@@ -284,11 +333,189 @@ def _multi(
     required: bool = True,
     when: tuple[str, str] | None = None,
     allows_other: bool = True,
+    since: date | None = None,
 ) -> Question:
     return Question(
         key, topic, text, why, _drives(informs), "MULTI", informs, options, required, when, (),
-        order, narrative, allows_other=allows_other,
+        order, narrative, allows_other=allows_other, fact=_FACTS.get(key, "OTHER"),
+        since=since,
     )  # fmt: skip
+
+
+# The kind of fact each question's answer establishes (B1l, 16 November 2026), chosen for
+# every question of the bank (problems() checks none is missing): the one its answer settles
+# first, where it touches several (whether the tool enforces an approval is TIMING, since
+# the attribute it informs is that the approval came first).
+_FACTS: dict[str, Fact] = {
+    # Universal.
+    "wt-known-deviations": "EXCEPTION",
+    "wt-known-deviations-kind": "EXCEPTION",
+    "wt-known-deviations-detail": "EXCEPTION",
+    "wt-changes-in-period": "OTHER",
+    "wt-changes-in-period-what": "OTHER",
+    "wt-changes-in-period-detail": "OTHER",
+    "wt-service-org": "OTHER",
+    "wt-service-org-report": "OTHER",
+    "wt-service-org-detail": "OTHER",
+    "wt-volume": "POPULATION",
+    # Logical access, the family.
+    "wt-ac-layers": "SYSTEM",
+    "wt-ac-population-source": "POPULATION",
+    # Change management, the family.
+    "wt-cm-change-types": "POPULATION",
+    "wt-cm-components": "SYSTEM",
+    "wt-cm-who-deploys": "PERFORMER",
+    "wt-cm-environments": "SYSTEM",
+    "wt-cm-environments-shared": "SYSTEM",
+    "wt-cm-environments-tested": "SYSTEM",
+    "wt-cm-population-source": "POPULATION",
+    "wt-cm-vendor-changes": "POPULATION",
+    # ITGC-AC-01.
+    "wt-ac01-account-types": "POPULATION",
+    "wt-ac01-authority": "APPROVER",
+    "wt-ac01-enforced-approval": "TIMING",
+    "wt-ac01-provisioning": "PERFORMER",
+    "wt-ac01-self-approval": "APPROVER",
+    "wt-ac01-sod-check": "OTHER",
+    "wt-ac01-sod-method": "OTHER",
+    "wt-ac-change-logging": "RECORD",
+    "wt-ac-change-logging-gap": "RECORD",
+    # ITGC-AC-02.
+    "wt-ac02-contractors": "POPULATION",
+    "wt-ac02-trigger": "TIMING",
+    "wt-ac02-involuntary": "TIMING",
+    "wt-ac02-involuntary-deadline": "TIMING",
+    "wt-ac02-disable-delete": "RECORD",
+    "wt-ac02-directory-only": "SYSTEM",
+    "wt-ac02-account-mapping": "POPULATION",
+    "wt-ac02-removal-record": "RECORD",
+    "wt-ac02-leaver-list": "POPULATION",
+    # ITGC-AC-03.
+    "wt-ac03-coverage": "POPULATION",
+    "wt-ac03-what-checked": "OTHER",
+    "wt-ac03-performed-in": "RECORD",
+    "wt-ac03-remediation-check": "RECORD",
+    "wt-ac03-own-access": "APPROVER",
+    "wt-ac03-investigation": "EXCEPTION",
+    "wt-ac03-listing-check": "POPULATION",
+    # ITGC-AC-04.
+    "wt-ac04-who-holds": "POPULATION",
+    "wt-ac04-pam": "SYSTEM",
+    "wt-ac04-reviewer-holds": "APPROVER",
+    "wt-ac04-reviewer-own": "APPROVER",
+    "wt-ac04-listing-check": "POPULATION",
+    # ITGC-AC-05.
+    "wt-ac05-other-paths": "SYSTEM",
+    "wt-ac05-exemptions": "POPULATION",
+    "wt-ac05-exempt-accounts": "POPULATION",
+    "wt-ac05-exempt-approval": "RECORD",
+    "wt-ac05-change-history": "RECORD",
+    # ITGC-AC-06.
+    "wt-ac06-types": "POPULATION",
+    "wt-ac06-owner-record": "RECORD",
+    "wt-ac06-owner-current": "OTHER",
+    "wt-ac06-interactive": "SYSTEM",
+    "wt-ac06-interactive-detail": "RECORD",
+    "wt-ac06-inventory-source": "POPULATION",
+    # ITGC-AC-07.
+    "wt-ac07-what-counts": "POPULATION",
+    "wt-ac07-trigger": "TIMING",
+    "wt-ac07-old-access": "OTHER",
+    "wt-ac07-transition-length": "TIMING",
+    "wt-ac07-transition-approver": "APPROVER",
+    "wt-ac07-reapproval-record": "RECORD",
+    "wt-ac07-removal-record": "RECORD",
+    # ITGC-AC-08.
+    "wt-ac08-id-rights": "OTHER",
+    "wt-ac08-pre-approval": "TIMING",
+    "wt-ac08-reviewer-user": "APPROVER",
+    "wt-ac08-log-content": "RECORD",
+    "wt-ac08-direct-signin": "POPULATION",
+    # ITGC-AC-09.
+    "wt-ac09-who": "POPULATION",
+    "wt-ac09-sponsor-approval": "RECORD",
+    "wt-ac09-expiry": "SYSTEM",
+    "wt-ac09-identification": "POPULATION",
+    # ITGC-AC-10.
+    "wt-ac10-mitigation-approver": "APPROVER",
+    "wt-ac10-mitigation-evidence": "RECORD",
+    "wt-ac10-rule-change-log": "RECORD",
+    "wt-ac10-report-scope": "POPULATION",
+    # ITGC-AC-11.
+    "wt-ac11-platforms": "SYSTEM",
+    "wt-ac11-instances": "POPULATION",
+    "wt-ac11-default-accounts": "OTHER",
+    "wt-ac11-log-destination": "RECORD",
+    "wt-ac11-group-access": "POPULATION",
+    # ITGC-AC-12.
+    "wt-ac12-sources": "SYSTEM",
+    "wt-ac12-triage": "RECORD",
+    "wt-ac12-weekends": "TIMING",
+    "wt-ac12-source-failure": "SYSTEM",
+    "wt-ac12-escalation": "EXCEPTION",
+    "wt-ac12-alert-listing": "POPULATION",
+    # ITGC-CM-01.
+    "wt-cm01-standard-changes": "POPULATION",
+    "wt-cm01-standard-approver": "APPROVER",
+    "wt-cm01-approval-enforced": "TIMING",
+    "wt-cm01-testing-who": "PERFORMER",
+    "wt-cm01-approver-independent": "APPROVER",
+    "wt-cm01-version-match": "RECORD",
+    # ITGC-CM-02.
+    "wt-cm02-who-declares": "APPROVER",
+    "wt-cm02-decision-record": "RECORD",
+    "wt-cm02-access-used": "PERFORMER",
+    "wt-cm02-approver-independent": "APPROVER",
+    "wt-cm02-flag": "POPULATION",
+    # ITGC-CM-03.
+    "wt-cm03-approved-list": "RECORD",
+    "wt-cm03-small-team": "PERFORMER",
+    "wt-cm03-compensating": "EXCEPTION",
+    "wt-cm03-exception-approver": "APPROVER",
+    "wt-cm03-exception-term": "TIMING",
+    "wt-cm03-deploy-rights": "POPULATION",
+    "wt-cm03-service-accounts": "POPULATION",
+    "wt-cm03-developer-list": "POPULATION",
+    # ITGC-CM-04.
+    "wt-cm04-who-can-configure": "PERFORMER",
+    "wt-cm04-route": "OTHER",
+    "wt-cm04-approver-independent": "APPROVER",
+    "wt-cm04-log-enabled": "RECORD",
+    "wt-cm04-log-gap": "POPULATION",
+    "wt-cm04-unlogged-detection": "POPULATION",
+    # ITGC-CM-05.
+    "wt-cm05-methods": "SYSTEM",
+    "wt-cm05-data-owner": "APPROVER",
+    "wt-cm05-authorized-list": "PERFORMER",
+    "wt-cm05-other-access": "PERFORMER",
+    "wt-cm05-logging": "RECORD",
+    "wt-cm05-logging-gap": "POPULATION",
+    # ITGC-CM-06.
+    "wt-cm06-layers": "SYSTEM",
+    "wt-cm06-automated": "PERFORMER",
+    "wt-cm06-automated-which": "POPULATION",
+    "wt-cm06-schedule-approver": "APPROVER",
+    "wt-cm06-testing": "SYSTEM",
+    "wt-cm06-who-applies": "PERFORMER",
+    "wt-cm06-approver-independent": "APPROVER",
+    "wt-cm06-change-link": "RECORD",
+    "wt-cm06-unapproved": "APPROVER",
+    "wt-cm06-history": "POPULATION",
+    # ITGC-CM-07.
+    "wt-cm07-what-qualifies": "POPULATION",
+    "wt-cm07-methodology": "OTHER",
+    "wt-cm07-open-defects": "EXCEPTION",
+    "wt-cm07-defects-accepted-by": "APPROVER",
+    "wt-cm07-defects-record": "RECORD",
+    "wt-cm07-migration": "OTHER",
+    "wt-cm07-release-register": "POPULATION",
+    # ITGC-CM-08.
+    "wt-cm08-objects": "POPULATION",
+    "wt-cm08-method": "OTHER",
+    "wt-cm08-reconciliation": "OTHER",
+    "wt-cm08-approver-independent": "APPROVER",
+    "wt-cm08-extracts-retained": "RECORD",
+}
 
 
 # A control-designed safeguard is tested once in its configuration; one by policy only is
@@ -743,6 +970,20 @@ _bank(
         no="Disabling a leaver's directory or single sign-on account alone does not stop them "
         "signing in to the system.",
     ),
+    # Added 16 November 2026 (B1k): with local accounts to remove, the attribute's criteria
+    # cannot name the leaver's accounts without knowing how they are found.
+    _multi(
+        "wt-ac02-account-mapping", "EXECUTION", 0,
+        "How are a leaver's local accounts in the system found from their HR record?",
+        "Every account of the leaver must be removed, so how the system's accounts are matched "
+        "to the HR record decides whether the accounts tested for each leaver are complete.",
+        ("ac02-accounts", "EVIDENCE"),
+        ("By an employee ID held on each account",
+         "By a user ID that matches the directory account", "By name or email address",
+         "Without a reliable link"),
+        "A leaver's local accounts in the system are found {answer}.",
+        when=("wt-ac02-directory-only", "No"), since=B1K_ADDED,
+    ),
     _yes_no(
         "wt-ac02-removal-record", "RECORDS", 10,
         "Does the system record the date each account was disabled or removed, and who did it?",
@@ -1080,6 +1321,34 @@ _bank(
          "No one (it is kept without approval)"),
         "Keeping old access during the transition period is approved by {answer}.",
         when=("wt-ac07-old-access", "Old access is removed after a transition period"),
+    ),
+    # Added 16 November 2026 (B1k): the re-approval attribute needs a decision for each role,
+    # and its evidence cannot be requested without knowing where that decision is kept.
+    _multi(
+        "wt-ac07-reapproval-record", "EXECUTION", 0,
+        "Where does the new manager record the decision on each role the user keeps?",
+        "The attribute needs a decision for each role held, and where the decision is recorded "
+        "is the evidence requested for each transfer.",
+        ("ac07-reapproved", "EVIDENCE"),
+        ("In a ticket in the access request tool",
+         "In a transfer review in an identity governance tool",
+         "In an email or form kept with the transfer", "Only for the access as a whole"),
+        "The new manager's decision on each role the user keeps is recorded {answer}.",
+        when=("wt-ac07-old-access", "The new manager re-approves what the user keeps"),
+        since=B1K_ADDED,
+    ),
+    # Added 16 November 2026 (B1k): the deadline is tested against the date of each removal,
+    # as for leavers (wt-ac02-removal-record).
+    _yes_no(
+        "wt-ac07-removal-record", "RECORDS", 10,
+        "Does the system record the date each role was removed from a user, and who removed "
+        "it?",
+        "The system's own record of the removal is the evidence that old access went and when, "
+        "and without it the removal and its timing must be shown another way.",
+        ("ac07-removed", "ac07-timely", "EVIDENCE"),
+        yes="The system records the date each role was removed from a user and who removed it.",
+        no="The system does not record the date each role was removed from a user.",
+        since=B1K_ADDED,
     ),
 )  # fmt: skip
 
@@ -1646,6 +1915,19 @@ _bank(
          "Vendor tools or support access"),
         "Production data can be changed outside the normal screens through {answer}.",
     ),
+    # Added 16 November 2026 (B1k): the statement names the data owner as the approver but
+    # asks no value for it, so the approval cannot be tested without knowing who that is.
+    _multi(
+        "wt-cm05-data-owner", "APPROVAL", 10,
+        "How is the data owner who must approve a direct data change identified?",
+        "Each approval is tested against the data owner, so the source that names the owner is "
+        "what the approver is compared with and is requested as evidence.",
+        ("cm05-approved", "EVIDENCE"),
+        ("A data ownership register or matrix", "The business process owner of the data",
+         "The requester's manager", "Whoever the requester names"),
+        "The data owner who approves a direct data change is identified by {answer}.",
+        since=B1K_ADDED,
+    ),
     _yes_no(
         "wt-cm05-authorized-list", "EXECUTION", 10,
         "Is there an approved list of the staff authorized to make direct data changes?",
@@ -1743,6 +2025,21 @@ _bank(
          "Only by the vendor, before release"),
         "Before production, patches are tested {answer}.",
     ),
+    # Added 16 November 2026 (B1k): the three facts ITGC-CM-06's attributes needed after the
+    # walkthrough, each asked where the patch reaches it: applied, linked to its record, and
+    # the exception of a patch applied before its approval.
+    _multi(
+        "wt-cm06-who-applies", "EXECUTION", 30,
+        "Who applies patches to production?",
+        "The approver is compared with whoever applied each patch, so the answer sets whose "
+        "names the patch history must show and who may not approve.",
+        ("cm06-independent", "EVIDENCE"),
+        ("Server or infrastructure administrators", "Database administrators",
+         "Application support staff", "The vendor or a managed service provider",
+         "A patching tool, for the patches it applies automatically"),
+        "Patches are applied to production by {answer}.",
+        since=B1K_ADDED,
+    ),
     _choice(
         "wt-cm06-approver-independent", "SEGREGATION", 10,
         "Can the administrator who applies a patch also approve it?",
@@ -1751,6 +2048,32 @@ _bank(
         ("cm06-independent", "EVIDENCE"),
         _PREVENTED,
         "Approval of a patch by the administrator who applies it is {answer}.",
+    ),
+    _multi(
+        "wt-cm06-change-link", "RECORDS", 10,
+        "How is a patch in the system's patch history linked to its change record?",
+        "Each patch in the history is traced to the change record that names it, and a link by "
+        "date alone does not show that the record is for that patch.",
+        ("cm06-record", "EVIDENCE"),
+        ("The change number recorded with the patch in the patching tool",
+         "The patch and hosts listed on the change record",
+         "One change record for each scheduled patch cycle", "The patch name and date only"),
+        "A patch in the patch history is linked to its change record by {answer}.",
+        since=B1K_ADDED,
+    ),
+    _choice(
+        "wt-cm06-unapproved", "EXCEPTIONS", 10,
+        "How is a patch applied without prior approval, such as an emergency patch, approved "
+        "afterwards?",
+        "A patch applied before its approval passes only under the emergency change procedure, "
+        "so the answer decides whether such patches are tested here or under the emergency "
+        "change control.",
+        ("cm06-approved", "POPULATION"),
+        ("Approved afterwards under the emergency change procedure",
+         "Approved afterwards by the approver of patches", "Not approved afterwards",
+         "Not allowed, as every patch is approved first"),
+        "A patch applied without prior approval is {answer}.",
+        since=B1K_ADDED,
     ),
     _yes_no(
         "wt-cm06-history", "POPULATION", 10,
@@ -1959,6 +2282,194 @@ def questions_for(library_key: str, nature: str = "", frequency: str = "") -> tu
 
 def question(key: str) -> Question | None:
     return _BY_KEY.get(key)
+
+
+# What each attribute's criteria need (B1k and B1l, 16 November 2026), read by the review of
+# the questions asked.
+
+
+def fact_of(item: Question) -> Fact:
+    """The kind of fact a question's answer establishes (one of FACTS)."""
+    return item.fact
+
+
+def informing(library_key: str, definition_key: str) -> tuple[Question, ...]:
+    """The questions a library control can be asked that inform one attribute of its testing
+    definition (the attribute's key in their `informs`), in the asking order, with no nature
+    or frequency filter, follow-ups included whether or not their parent's answer opens
+    them: what the review reads for the attribute, each with its kind of fact (fact_of).
+    Empty for an unknown control or attribute. Pure."""
+    return tuple(item for item in questions_for(library_key) if definition_key in item.informs)
+
+
+# The kinds of fact each attribute's criteria cannot be written without, by attribute
+# definition key, for every attribute of the access and change families. A fact the
+# statement fixes for every item (an order such as "approved before it is applied") is listed
+# where the criterion compares it, with the reason in MET_ELSEWHERE.
+CRITERIA_NEEDS: dict[str, tuple[Fact, ...]] = {
+    "ac01-request": ("RECORD",),
+    "ac01-approver": ("APPROVER",),
+    "ac01-before": ("TIMING", "RECORD"),
+    "ac01-matches": ("PERFORMER",),
+    "ac01-not-self": ("APPROVER", "PERFORMER"),
+    "ac02-removed": ("RECORD",),
+    "ac02-timely": ("TIMING", "RECORD"),
+    "ac02-accounts": ("SYSTEM", "POPULATION"),
+    "ac03-listing": ("POPULATION",),
+    "ac03-reviewer": ("APPROVER",),
+    "ac03-decisions": ("RECORD",),
+    "ac03-actioned": ("RECORD",),
+    "ac03-deadline": ("TIMING",),
+    "ac03-investigated": ("EXCEPTION",),
+    "ac04-complete": ("POPULATION",),
+    "ac04-approved": ("APPROVER", "RECORD"),
+    "ac04-independent": ("APPROVER",),
+    "ac04-removed": ("RECORD",),
+    "ac05-values": ("SYSTEM",),
+    "ac05-unchanged": ("RECORD",),
+    "ac05-scope": ("SYSTEM", "POPULATION"),
+    "ac06-inventory": ("POPULATION",),
+    "ac06-signoff": ("APPROVER",),
+    "ac06-owner": ("RECORD",),
+    "ac06-interactive": ("SYSTEM", "RECORD"),
+    "ac06-disabled": ("RECORD",),
+    "ac07-reapproved": ("APPROVER", "RECORD"),
+    "ac07-removed": ("RECORD",),
+    "ac07-timely": ("TIMING", "RECORD"),
+    "ac08-approved": ("APPROVER", "TIMING"),
+    "ac08-purpose": ("RECORD",),
+    "ac08-reviewed": ("APPROVER",),
+    "ac08-timely": ("TIMING",),
+    "ac09-complete": ("POPULATION",),
+    "ac09-sponsored": ("RECORD",),
+    "ac09-expiry": ("SYSTEM", "TIMING"),
+    "ac09-reviewed": ("APPROVER",),
+    "ac10-complete": ("POPULATION",),
+    "ac10-resolved": ("APPROVER", "RECORD"),
+    "ac10-rules": ("RECORD", "APPROVER"),
+    "ac10-signoff": ("APPROVER",),
+    "ac11-complete": ("POPULATION", "SYSTEM"),
+    "ac11-restricted": ("PERFORMER",),
+    "ac11-reviewed": ("APPROVER",),
+    "ac11-logged": ("RECORD",),
+    "ac12-sources": ("SYSTEM",),
+    "ac12-reviewed": ("RECORD", "POPULATION"),
+    "ac12-escalated": ("EXCEPTION",),
+    "cm01-request": ("RECORD",),
+    "cm01-tested": ("PERFORMER",),
+    "cm01-environment": ("SYSTEM",),
+    "cm01-approved": ("APPROVER", "TIMING"),
+    "cm01-segregated": ("APPROVER", "PERFORMER"),
+    "cm01-matches": ("RECORD",),
+    "cm02-record": ("RECORD",),
+    "cm02-classified": ("APPROVER", "RECORD"),
+    "cm02-reviewed": ("APPROVER",),
+    "cm02-independent": ("APPROVER", "PERFORMER"),
+    "cm02-approved": ("TIMING",),
+    "cm03-listing": ("POPULATION",),
+    "cm03-separate": ("PERFORMER", "POPULATION"),
+    "cm03-authorized": ("RECORD",),
+    "cm03-signoff": ("APPROVER", "EXCEPTION", "TIMING"),
+    "cm04-request": ("RECORD",),
+    "cm04-approval": ("APPROVER",),
+    "cm04-matches": ("RECORD",),
+    "cm04-independent": ("APPROVER", "PERFORMER"),
+    "cm04-before": ("TIMING",),
+    "cm05-approved": ("APPROVER",),
+    "cm05-performer": ("PERFORMER",),
+    "cm05-matches": ("RECORD",),
+    "cm05-before": ("TIMING",),
+    "cm06-record": ("RECORD",),
+    "cm06-tested": ("SYSTEM",),
+    "cm06-approved": ("APPROVER", "TIMING"),
+    "cm06-independent": ("APPROVER", "PERFORMER"),
+    "cm07-requirements": ("APPROVER",),
+    "cm07-uat": ("APPROVER", "RECORD", "EXCEPTION"),
+    "cm07-golive": ("APPROVER", "TIMING"),
+    "cm08-reconciled": ("RECORD",),
+    "cm08-resolved": ("EXCEPTION",),
+    "cm08-approved": ("APPROVER", "TIMING"),
+}
+
+# A need no question informs, with the reason it is met without one: a value the control's
+# statement asks ({slot}, filled at setup), or what each item's own evidence shows. A need a
+# question informs has no reason here (problems() reports one that does).
+_FIXED_ORDER = "The statement fixes the order"
+_REMOVAL_SHOWN = (
+    "No deadline is tested: the removal is shown by the system's record of it or by the next "
+    "listing produced from the system, which the evidence requests."
+)
+MET_ELSEWHERE: dict[tuple[str, Fact], str] = {
+    ("ac01-request", "RECORD"): "{access-tool}: the statement names the tool each request is "
+    "raised in.",
+    ("ac01-not-self", "PERFORMER"): "{admin-role}: the statement names who grants access, and "
+    "each grant's administrator is read from the system's record of it.",
+    ("ac03-deadline", "TIMING"): "{review-deadline}: the statement asks the deadline.",
+    ("ac04-approved", "APPROVER"): "{privileged-reviewer}: the statement asks who approves.",
+    ("ac04-approved", "RECORD"): "The statement says the reviewer signs the listing, which is "
+    "the record of each decision.",
+    ("ac04-removed", "RECORD"): _REMOVAL_SHOWN,
+    ("ac05-values", "SYSTEM"): "{auth-settings} and {security-policy}: the statement asks the "
+    "required settings and the policy, and the authentication interview "
+    "(authentication_profile.py) asks each configured value.",
+    ("ac06-signoff", "APPROVER"): "{account-reviewer}: the statement asks who reviews.",
+    ("ac06-disabled", "RECORD"): _REMOVAL_SHOWN,
+    ("ac08-approved", "APPROVER"): "{ff-approver}: the statement asks who approves.",
+    ("ac08-timely", "TIMING"): "{ff-review-days}: the statement asks the days allowed.",
+    ("ac09-expiry", "TIMING"): "The engagement's end date is read, account by account, from "
+    "the sponsor's approval or the contract the evidence requests.",
+    ("ac09-reviewed", "APPROVER"): "{sponsor-reviewer}: the statement asks who reviews.",
+    ("ac10-rules", "APPROVER"): "{sod-reviewer}: the statement asks who approves rule changes.",
+    ("ac10-signoff", "APPROVER"): "{sod-reviewer}: the statement asks who reviews.",
+    ("ac11-complete", "SYSTEM"): "wt-ac11-platforms and wt-ac11-instances ask the layers and "
+    "instances for the whole control (its scope), which this attribute's listings follow.",
+    ("ac11-restricted", "PERFORMER"): "{infra-admin-role}: the statement asks the roles allowed "
+    "direct access.",
+    ("ac11-reviewed", "APPROVER"): "{infra-reviewer}: the statement asks who reviews.",
+    ("cm01-request", "RECORD"): "{change-tool}: the statement names the tool each change is "
+    "raised in.",
+    ("cm01-segregated", "PERFORMER"): "The developer and the implementer of each change are "
+    "read from its ticket and deployment record, which the evidence requests change by change.",
+    ("cm02-record", "RECORD"): "{change-tool}: the statement names the tool the ticket is in.",
+    ("cm02-reviewed", "APPROVER"): "{emergency-approver}: the statement asks who approves.",
+    ("cm02-approved", "TIMING"): "{emergency-days}: the statement asks the days allowed.",
+    ("cm04-approval", "APPROVER"): "{config-approver}: the statement asks who approves.",
+    ("cm04-matches", "RECORD"): "The configuration change log (wt-cm04-log-enabled) is the "
+    "record each change is matched from, and wt-cm04-route says which log it is.",
+    ("cm04-independent", "PERFORMER"): "The person who made each change is the configuration "
+    "log's 'changed by', and who may change the configuration is asked for the scope "
+    "(wt-cm04-who-can-configure).",
+    ("cm04-before", "TIMING"): f"{_FIXED_ORDER} (approved before it is made), and both dates "
+    "are read from the request and the log.",
+    ("cm05-before", "TIMING"): f"{_FIXED_ORDER} (requested and approved before it is made), "
+    "and both dates are read from the request and the log.",
+    ("cm06-approved", "TIMING"): f"{_FIXED_ORDER} (approved before it is applied to "
+    "production), and both times are read from the change record and the patch history.",
+    ("cm07-requirements", "APPROVER"): "Each project names the business owner of the process "
+    "it affects in its own requirements sign-off, which the evidence requests project by "
+    "project.",
+    ("cm07-golive", "APPROVER"): "{go-live-approver}: the statement asks who approves go-live.",
+    ("cm07-golive", "TIMING"): f"{_FIXED_ORDER} (go-live approved before the release reaches "
+    "production).",
+    ("cm08-resolved", "EXCEPTION"): "Each difference and its resolution are recorded on the "
+    "reconciliation itself, which the evidence requests for each data object.",
+    ("cm08-approved", "TIMING"): f"{_FIXED_ORDER} (approved before cutover).",
+}
+
+
+def criteria_needs(definition_key: str) -> tuple[Fact, ...]:
+    """The kinds of fact an attribute's criteria cannot be written without (CRITERIA_NEEDS);
+    empty for an attribute the access and change families do not have. Pure."""
+    return CRITERIA_NEEDS.get(definition_key, ())
+
+
+def met_elsewhere(definition_key: str, fact: str) -> str:
+    """Why an attribute's need is met without a question that informs it (MET_ELSEWHERE),
+    or "" when a question is meant to inform it. Pure."""
+    for (key, need), reason in MET_ELSEWHERE.items():
+        if key == definition_key and need == fact:
+            return reason
+    return ""
 
 
 def _parts(value: str) -> list[str]:
@@ -2302,6 +2813,82 @@ def _order(scope: str, nature: str, frequency: str) -> list[str]:
     return found
 
 
+_SLOT = re.compile(r"\{([a-z][a-z0-9-]{1,40})\}")
+_QUESTION_KEY = re.compile(r"\bwt-[a-z0-9-]+[a-z0-9]")
+
+
+def _facts(every: Sequence[Question]) -> list[str]:
+    """Every question has a kind of fact chosen in _FACTS, one of FACTS, and _FACTS names
+    only questions of the bank."""
+    keys = {item.key for item in every}
+    found = [
+        f"{item.key}: no kind of fact chosen (_FACTS)" for item in every if item.key not in _FACTS
+    ]
+    found.extend(
+        f"{item.key}: unknown fact {item.fact}" for item in every if item.fact not in FACTS
+    )
+    found.extend(
+        f"{item.key}: fact {item.fact}, but _FACTS chooses {_FACTS[item.key]}"
+        for item in every
+        if item.key in _FACTS and item.fact != _FACTS[item.key]
+    )
+    found.extend(
+        f"{key}: a fact for a question not in the bank" for key in _FACTS if key not in keys
+    )
+    return found
+
+
+def _needs() -> list[str]:
+    """Every attribute of the access and change families says what its criteria need, and
+    every need is met by a question informing the attribute with that kind of fact or by a
+    reason in MET_ELSEWHERE, never both; a reason names only the control's statement values
+    and questions of the bank."""
+    from ai_workforce_api.statement_registry import statement_for
+
+    found: list[str] = []
+    attributes: set[str] = set()
+    for library_key in LIBRARY_KEYS:
+        if not _family(library_key):
+            continue
+        definition = definition_for(library_key)
+        statement = statement_for(library_key)
+        slots = {slot.key for slot in statement.slots} if statement is not None else set()
+        for attribute in definition.attributes if definition is not None else ():
+            key = attribute.key
+            attributes.add(key)
+            needs = criteria_needs(key)
+            if not needs or len(set(needs)) != len(needs) or not set(needs) <= set(FACTS):
+                found.append(f"{key}: its criteria name no needs, or repeat or unknown ones")
+            facts = {fact_of(item) for item in informing(library_key, key)}
+            for need in needs:
+                reason = met_elsewhere(key, need)
+                if need in facts and reason:
+                    found.append(f"{key}: {need} is informed by a question and has a reason")
+                elif need not in facts and not reason:
+                    found.append(f"{key}: no question informs its {need} and no reason is given")
+                found.extend(
+                    f"{key}: the reason for {need} names {slot}, not a value of {library_key}"
+                    for slot in _SLOT.findall(reason)
+                    if slot not in slots
+                )
+                found.extend(
+                    f"{key}: the reason for {need} names {name}, not a question of {library_key}"
+                    for name in _QUESTION_KEY.findall(reason)
+                    if name not in {item.key for item in questions_for(library_key)}
+                )
+    found.extend(
+        f"{key}: needs for an attribute of no family control"
+        for key in CRITERIA_NEEDS
+        if key not in attributes
+    )
+    found.extend(
+        f"{key}: a reason for {need}, which its criteria do not need"
+        for key, need in MET_ELSEWHERE
+        if need not in criteria_needs(key)
+    )
+    return found
+
+
 def problems() -> list[str]:
     """Structural checks over the whole bank: unique keys and texts, key pattern, lengths,
     options rules per kind; `when` parent exists, is in the same topic, is asked directly
@@ -2312,7 +2899,9 @@ def problems() -> list[str]:
     every question informs at least one need, each a known token or an attribute key of every
     control it is asked for; every question is narrated; every library key in the access and
     change families has a bank; a free-text question is one of TEXT_KEPT, and each of those
-    is a free-text question of the bank."""
+    is a free-text question of the bank; every question has a kind of fact (_facts); and
+    every need of every family attribute's criteria is met by an informing question or a
+    recorded reason (_needs)."""
     every = _all()
     found: list[str] = []
     keys = [item.key for item in every]
@@ -2352,4 +2941,6 @@ def problems() -> list[str]:
             for member in sorted(members)
             if member not in LIBRARY_KEYS or _family(member) != family_of[key]
         )
+    found.extend(_facts(every))
+    found.extend(_needs())
     return sorted(set(found), key=found.index)

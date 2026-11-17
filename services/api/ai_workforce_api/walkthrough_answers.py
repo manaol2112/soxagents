@@ -55,6 +55,7 @@ and question (control_walkthrough_answers):
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from functools import lru_cache
 from typing import Annotated, Any
 from uuid import UUID
@@ -238,6 +239,56 @@ def standing_answers(
     return confirmed_answers(asked(library_key, nature, frequency, confirmed_values(rows)), rows)
 
 
+def holds(item: Question, completed_on: date | None, accepted: bool) -> bool:
+    """Whether a required question left unanswered holds a control's Control Understanding
+    (B1k and B1l, 16 November 2026: a question added to the bank does not disturb finished
+    work). A question in the bank from the start (`since` None) holds every control, as
+    before. One added later holds a control still in progress, and never one whose
+    attributes are accepted (they count as completed, B1l point 2), nor one whose
+    understanding was completed (`completed_on`, its UTC day) before the day the question
+    was added. Pure."""
+    if item.since is None:
+        return True
+    if accepted:
+        return False
+    return completed_on is None or item.since <= completed_on
+
+
+# Whether each control's understanding was completed (B1j, migration 0172) and whether its
+# attributes are accepted: the rule of control_context.attributes_accepted (approved
+# attributes, none proposed, and every approved one's criteria accepted by a person or
+# written by one), for many controls in one query.
+_FINISHED_SQL = """
+    SELECT c.id, c.understanding_completed_at,
+           EXISTS (SELECT 1 FROM control_attributes a
+                   WHERE a.engagement_control_id = c.id AND a.status = 'APPROVED')
+           AND NOT EXISTS (SELECT 1 FROM control_attributes a
+                           WHERE a.engagement_control_id = c.id AND a.status = 'PROPOSED')
+           AND NOT EXISTS (SELECT 1 FROM control_attributes a
+                           WHERE a.engagement_control_id = c.id AND a.status = 'APPROVED'
+                             AND a.criteria_accepted_at IS NULL
+                             AND a.criteria_origin IS DISTINCT FROM 'PERSON')
+    FROM engagement_controls c
+    WHERE c.project_id = %(p)s AND c.id = ANY(%(ids)s)
+"""
+
+
+def _finished(
+    connection: psycopg.Connection[Any], project_id: UUID, ids: Sequence[UUID]
+) -> dict[UUID, tuple[date | None, bool]]:
+    """For each control named: the UTC day its understanding was completed (None: not yet),
+    and whether its attributes are accepted."""
+    if not ids:
+        return {}
+    found: dict[UUID, tuple[date | None, bool]] = {}
+    for cid, completed, accepted in connection.execute(
+        _FINISHED_SQL, {"p": project_id, "ids": list(ids)}
+    ).fetchall():
+        day = completed.astimezone(UTC).date() if isinstance(completed, datetime) else None
+        found[UUID(str(cid))] = (day, bool(accepted))
+    return found
+
+
 def unanswered_required(
     connection: psycopg.Connection[Any],
     project_id: UUID,
@@ -246,7 +297,10 @@ def unanswered_required(
 ) -> dict[UUID, int]:
     """How many required walkthrough questions each control (id, library key, nature,
     frequency) has without a confirmed answer; a control with none is left out. One query
-    for the whole engagement (or the one control)."""
+    for the whole engagement (or the one control), and one more only when a question added
+    to the bank later (`since`) is unanswered: such a question counts only where it holds
+    the control (`holds`: not once its attributes are accepted, nor when its understanding
+    was completed before the question was added)."""
     params = {"p": project_id, "c": control_id}
     which = " AND engagement_control_id = %(c)s" if control_id is not None else ""
     held: dict[UUID, dict[str, Row]] = {}
@@ -259,14 +313,24 @@ def unanswered_required(
         held.setdefault(UUID(str(cid)), {})[str(key)] = Row(
             str(key), str(value), bool(not_applicable), "CONFIRMED", "PERSON", "", 1
         )
-    found: dict[UUID, int] = {}
+    waiting: dict[UUID, list[Question]] = {}
     for control, library_key, nature, frequency in controls:
         rows = held.get(control, {})
-        count = sum(
-            1
+        items = [
+            item
             for item in asked(library_key, nature, frequency, confirmed_values(rows))
             if item.required and not stands(rows.get(item.key), item)
-        )
+        ]
+        if items:
+            waiting[control] = items
+    later = [
+        control for control, items in waiting.items() if any(i.since is not None for i in items)
+    ]
+    finished = _finished(connection, project_id, later)
+    found: dict[UUID, int] = {}
+    for control, items in waiting.items():
+        completed_on, accepted = finished.get(control, (None, False))
+        count = sum(1 for item in items if holds(item, completed_on, accepted))
         if count:
             found[control] = count
     return found
