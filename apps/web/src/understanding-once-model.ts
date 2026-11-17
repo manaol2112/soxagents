@@ -15,9 +15,12 @@
 
 import type {
   Assumption,
+  Attribute,
   CriteriaVersion,
   QuestionPass,
   QuestionReview,
+  ReviewNotRun,
+  ReviewRequest,
 } from "./control-context-model.ts";
 
 /** Control Understanding while the question pass runs. */
@@ -115,7 +118,17 @@ export type Once = {
   completedAt: string | null;
   questionPass: QuestionPass | null;
   review?: QuestionReview | null;
+  /** A read a person asked for after completion, while it runs or once it could not run. */
+  request?: ReviewRequest | null;
+  /** Why no review could run (no model). */
+  notRun?: ReviewNotRun | null;
+  /** The approved attributes in the Attributes step's order, so the review names them by
+   * letter. */
+  approved?: readonly ApprovedRef[];
 };
+
+/** An approved attribute as the review's lines name it: by its letter, from its place. */
+export type ApprovedRef = Pick<Attribute, "id" | "code" | "definition">;
 
 /**
  * What Control Understanding's last screen shows.
@@ -181,6 +194,36 @@ export function decidedAssumptions(
   return (items ?? []).filter((item) => item.status !== "OPEN");
 }
 
+/** An assumption accepted with its attribute is not yet anyone's answer (B1l point 6): it is
+ * a D&I point, and stays decidable on the attribute, with the same two choices. */
+export const ACCEPTED_UNCONFIRMED =
+  "Accepted with the attribute, not confirmed:";
+/** Said before a change to an assumption already accepted with its attribute: the accepted
+ * criteria never silently rest on an assumption a person said is wrong. */
+export const CHANGE_REOPENS =
+  "The attribute's criteria were accepted with this assumption: changing it re-opens them for acceptance, re-tailored from your words.";
+
+/** The ones a person may still decide on the attribute: open, or accepted with the
+ * attribute and not confirmed (the D&I point links here, B1l point 6). */
+export function decidableAssumptions(
+  items: readonly Assumption[] | undefined,
+): Assumption[] {
+  return (items ?? []).filter(
+    (item) =>
+      item.status === "OPEN" || item.status === "ACCEPTED_WITH_ATTRIBUTE",
+  );
+}
+
+/** The ones settled for good, each as one quiet line. */
+export function settledAssumptions(
+  items: readonly Assumption[] | undefined,
+): Assumption[] {
+  return (items ?? []).filter(
+    (item) =>
+      item.status !== "OPEN" && item.status !== "ACCEPTED_WITH_ATTRIBUTE",
+  );
+}
+
 /**
  * A decided assumption as one quiet line. A person's decision names the person; accepting
  * the attribute while it was open is never worded as anyone's confirmation; one a later run
@@ -190,7 +233,7 @@ export function decidedLine(
   item: Pick<
     Assumption,
     "status" | "assumed" | "answer" | "decidedBy" | "decidedAt"
-  > & { kind?: Assumption["kind"] },
+  > & { kind?: Assumption["kind"]; upholds?: string },
   timeZone?: string,
 ): string | null {
   const who = item.decidedBy?.name.trim() || "a person";
@@ -202,7 +245,10 @@ export function decidedLine(
       // A conflict decided for the confirmed understanding (B1l): never worded as the
       // conflicting source being confirmed.
       if (item.kind === "CONFLICT") {
-        return `Decided by ${who}${day === "" ? "" : `, ${day}`}: the confirmed understanding stands.`;
+        // The decision names the confirmed fact it upholds, in the record's words: never the
+        // agent's account of the conflict.
+        const upheld = (item.upholds ?? "").trim();
+        return `Decided by ${who}${day === "" ? "" : `, ${day}`}: the confirmed understanding stands${upheld === "" ? "." : ` (${upheld.replace(/[.\s]+$/, "")}).`}`;
       }
       return `Confirmed by ${who}${day === "" ? "" : `, ${day}`}: ${item.assumed}`;
     }

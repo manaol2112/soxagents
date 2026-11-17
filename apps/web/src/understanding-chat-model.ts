@@ -575,6 +575,18 @@ export type Review = {
   /** The other systems the answers can start from; nothing chosen and none offered when the
    * API leaves it out. */
   startFrom: StartFrom;
+  /** The walkthrough questions and statement values a person left as not known yet (B1l
+   * point 1; a need the API sends with status NOT_KNOWN): closed as their "not known", never
+   * an answer, so out of `needs` and out of the course. Absent on a body from before. */
+  notKnown?: NotKnownNeed[];
+};
+
+/** A question a person left as not known yet: what it asked, and their optional note. */
+export type NotKnownNeed = {
+  key: string;
+  kind: "ANSWER" | "WALKTHROUGH";
+  question: string;
+  note: string;
 };
 
 const KINDS: readonly NeedKind[] = [
@@ -749,12 +761,31 @@ export function parseReview(body: unknown): Review | null {
     return null;
   }
   const needs: Need[] = [];
+  const notKnown: NotKnownNeed[] = [];
   for (const raw of item.needs as unknown[]) {
     if (typeof raw !== "object" || raw === null) {
       continue;
     }
     const need = raw as Record<string, unknown>;
     const kind = KINDS.find((each) => each === need.kind);
+    // B1l point 1: left as not known yet. Never read as an answer: kept apart.
+    if (
+      need.status === "NOT_KNOWN" &&
+      (kind === "ANSWER" || kind === "WALKTHROUGH") &&
+      typeof need.key === "string" &&
+      !notKnown.some((each) => each.key === need.key)
+    ) {
+      notKnown.push({
+        key: need.key,
+        kind,
+        question: (text(need.question) || text(need.label)).trim(),
+        note: text(need.not_known_note)
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 500),
+      });
+      continue;
+    }
     const status = STATUSES.find((each) => each === need.status);
     const source = SOURCES.find((each) => each === need.source);
     if (
@@ -835,6 +866,7 @@ export function parseReview(body: unknown): Review | null {
         ? item.questions_checking
         : 0,
     startFrom: readStartFrom(item.start_from),
+    notKnown,
   };
 }
 

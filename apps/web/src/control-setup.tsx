@@ -10,7 +10,12 @@ import {
   useRef,
   useState,
 } from "react";
-import type { QuestionPass, QuestionReview } from "./control-context-model";
+import type {
+  QuestionPass,
+  QuestionReview,
+  ReviewNotRun,
+  ReviewRequest,
+} from "./control-context-model";
 import { useAction } from "./control-context-view";
 import {
   agentQuestions,
@@ -49,6 +54,7 @@ import {
   parseReading,
   parseTargets,
 } from "./understanding-chat-model";
+import type { ApprovedRef } from "./understanding-once-model";
 import { UnderstandingReview } from "./understanding-review";
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
@@ -87,6 +93,11 @@ export type Conversation = {
   /** B1k: the IT audit specialist's latest review of the questions asked; absent or null
    * on a body from before it. */
   review?: QuestionReview | null;
+  /** B1k/B1l: a read a person asked for after completion, why no review could run, and the
+   * approved attributes the review names by letter. */
+  reviewRequest?: ReviewRequest | null;
+  reviewNotRun?: ReviewNotRun | null;
+  approved?: readonly ApprovedRef[];
 };
 
 /** What each step is for, under its title. */
@@ -202,6 +213,9 @@ export function ControlSetup({
             completedAt: conversation.completedAt ?? null,
             questionPass: conversation.questionPass ?? null,
             review: conversation.review ?? null,
+            request: conversation.reviewRequest ?? null,
+            notRun: conversation.reviewNotRun ?? null,
+            approved: conversation.approved ?? [],
           }}
         />
       </div>

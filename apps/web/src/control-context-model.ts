@@ -143,6 +143,12 @@ export type Attribute = {
   /** An OPEN conflict holds this attribute's acceptance until a person decides it (B1l point
    * 6): accepting it is refused, and "Accept all" leaves it out. Absent: not held. */
   heldByConflict?: boolean;
+  /** The hold is a conflict that names no attribute (B1l, product owner 16 November 2026: it
+   * holds the whole set's acceptance): set on every attribute while one is open. */
+  heldBySet?: boolean;
+  /** The attribute's code as the agents and the review name it ("A2"); "" or absent where the
+   * API does not say. Never shown: the page names an attribute by its letter. */
+  code?: string;
 };
 
 /** Where the question pass stands (B1j): the required walkthrough answers or values are not
@@ -180,6 +186,19 @@ export type QuestionReview = {
   /** One sentence, "" unless FAILED. */
   failure: string;
 };
+
+/** A read a person asked for once the understanding is complete ("Review again"), while it
+ * waits or works, or when it could not run (ContextBody.review_request). The last READY
+ * review stays `review` meanwhile, so the last good one is never hidden. */
+export type ReviewRequest = {
+  status: "PENDING" | "FAILED";
+  /** One sentence, "" unless FAILED. */
+  failure: string;
+};
+
+/** Why no review ran (ContextBody.review_not_run): NO_MODEL, none is configured (B1k
+ * "Without a model": the review is not run and says so in one line). */
+export type ReviewNotRun = "NO_MODEL";
 
 /** The kind of fact a question asks for (B1l point 4: asked once, by key). */
 export type AskedFact =
@@ -253,6 +272,10 @@ export type Assumption = {
   version: number;
   /** What it is (B1l); ASSUMPTION on a body from before B1l. */
   kind: AssumptionKind;
+  /** For a CONFLICT decided as "The confirmed understanding stands": the confirmed fact the
+   * person's decision upholds, in the record's words (a person's earlier answer, never the
+   * agent's text); "" or absent where the API does not say. */
+  upholds?: string;
 };
 
 /** One earlier version of an attribute's criteria, kept on every change (B1j). */
@@ -1847,8 +1870,16 @@ export type ControlContext = {
   /** The agent's assumptions that name no attribute: shown at the top of the list. */
   setAssumptions?: Assumption[];
   /** The latest IT audit specialist's review of the questions asked (B1k); null when none
-   * ran, or on a body from before B1k. */
+   * ran, or on a body from before B1k. Once complete, the latest READY one. */
   questionReview?: QuestionReview | null;
+  /** A read a person asked for after completion, while it runs or once it could not run;
+   * null when none (B1k/B1l: "Review again" keeps the last good review shown). */
+  questionReviewRequest?: ReviewRequest | null;
+  /** Why no review ran; null when one could run. */
+  reviewNotRun?: ReviewNotRun | null;
+  /** An OPEN conflict that names no attribute holds the whole set's acceptance (B1l point
+   * 6, product owner 16 November 2026): nothing is accepted until a person decides it. */
+  setHeldByConflict?: boolean;
   note: string;
 };
 
@@ -2211,6 +2242,10 @@ export function parseAssumption(value: unknown): Assumption | null {
     attributeCodes: strings(value.attribute_codes).slice(0, 12),
     version,
     kind: ASSUMPTION_KINDS.find((each) => each === value.kind) ?? "ASSUMPTION",
+    upholds:
+      status === "CONFIRMED" && value.kind === "CONFLICT"
+        ? plainLine(str(value.upholds), 1000)
+        : "",
   };
 }
 
@@ -2355,7 +2390,35 @@ function parseAttribute(item: Raw): Attribute {
         ? item.criteria_versions
         : 0,
     heldByConflict: item.held_by_conflict === true,
+    code:
+      typeof item.code === "string" && ATTRIBUTE_CODE.test(item.code)
+        ? item.code
+        : "",
   };
+}
+
+/** An attribute's code as the API names it ("A2", or a library definition key). */
+const ATTRIBUTE_CODE = /^[A-Za-z0-9._-]{1,80}$/;
+
+/** Whether an OPEN conflict that names no attribute holds the set (B1l point 6): the server
+ * says so, or the set's own assumptions hold one. */
+export function setHeld(
+  flag: unknown,
+  setAssumptions: readonly Assumption[],
+): boolean {
+  return (
+    flag === true ||
+    setAssumptions.some(
+      (item) => item.status === "OPEN" && item.kind === "CONFLICT",
+    )
+  );
+}
+
+/** The attributes as the set's hold leaves them: every one held while it stands. */
+function underSetHold(items: Attribute[], held: boolean): Attribute[] {
+  return held
+    ? items.map((item) => ({ ...item, heldByConflict: true, heldBySet: true }))
+    : items;
 }
 
 function parseReviewSummary(value: unknown): AttributeReviewSummary | null {
@@ -2460,6 +2523,8 @@ export function parseContext(value: unknown): ControlContext | null {
     (Array.isArray(raw) ? raw : []).filter((item): item is Classification =>
       CLASSIFICATION_KEYS.some((key) => key === item),
     );
+  const setAssumptions = assumptionsOf(value.set_assumptions, 20);
+  const heldSet = setHeld(value.set_held_by_conflict, setAssumptions);
   return {
     controlId: value.control_id,
     classifications: classes(value.classifications),
@@ -2467,8 +2532,14 @@ export function parseContext(value: unknown): ControlContext | null {
     classificationsOverridden: value.classifications_overridden === true,
     processRequired: value.process_required === true,
     readiness: parseReadiness(value.readiness),
-    approved: records(attributes.approved).map(parseAttribute),
-    proposed: records(attributes.proposed).map(parseAttribute),
+    approved: underSetHold(
+      records(attributes.approved).map(parseAttribute),
+      heldSet,
+    ),
+    proposed: underSetHold(
+      records(attributes.proposed).map(parseAttribute),
+      heldSet,
+    ),
     history: records(attributes.history).map(parseAttribute),
     issues: records(value.issues).map((item) => ({
       id: str(item.id),
@@ -2622,8 +2693,11 @@ export function parseContext(value: unknown): ControlContext | null {
     understandingCompletedAt: timeOrNull(value.understanding_completed_at),
     questionPass:
       QUESTION_PASSES.find((each) => each === value.question_pass) ?? null,
-    setAssumptions: assumptionsOf(value.set_assumptions, 20),
+    setAssumptions,
     questionReview: parseQuestionReview(value.review),
+    questionReviewRequest: parseReviewRequest(value.review_request),
+    reviewNotRun: value.review_not_run === "NO_MODEL" ? "NO_MODEL" : null,
+    setHeldByConflict: heldSet,
     note: str(value.note),
   };
 }
@@ -2727,6 +2801,24 @@ export function parseQuestionReview(value: unknown): QuestionReview | null {
   };
 }
 
+/** A read a person asked for after completion (ContextBody.review_request), read strictly:
+ * PENDING or FAILED, the failure one plain sentence; null otherwise. */
+export function parseReviewRequest(value: unknown): ReviewRequest | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  if (value.status !== "PENDING" && value.status !== "FAILED") {
+    return null;
+  }
+  return {
+    status: value.status,
+    failure:
+      value.status === "FAILED"
+        ? plainNote(plainLine(str(value.failure), 300))
+        : "",
+  };
+}
+
 export type ContextIntent =
   | "classify"
   | "attribute-add"
@@ -2753,8 +2845,11 @@ export type ContextIntent =
   | "assumption-confirm"
   | "assumption-change"
   | "issue-not-known"
+  | "walkthrough-not-known"
+  | "value-not-known"
   | "review-run"
-  | "review-proceed";
+  | "review-proceed"
+  | "review-ensure";
 
 export type ContextWrite =
   | { error: "invalid" }
@@ -3155,6 +3250,31 @@ export function contextWrite(fields: Fields): ContextWrite {
       return ok("POST", `${control}/understanding/review/run`, {});
     case "review-proceed":
       return ok("POST", `${control}/understanding/review/proceed`, {});
+    // B1l point 1: a required walkthrough question or a statement value left as not known
+    // yet, with an optional note: the person's not-known record, never an answer.
+    case "walkthrough-not-known":
+    case "value-not-known": {
+      const key = text(fields, "key");
+      const note = typeof fields.note === "string" ? fields.note.trim() : "";
+      const keyed =
+        intent === "walkthrough-not-known"
+          ? /^wt-[a-z0-9-]{2,60}$/.test(key)
+          : /^[a-z][a-z0-9-]{1,40}$/.test(key);
+      return keyed && notKnownNoteProblem(note) === null
+        ? ok(
+            "POST",
+            intent === "walkthrough-not-known"
+              ? `${control}/walkthrough-answers/${key}/not-known`
+              : `${control}/values/${key}/not-known`,
+            { note },
+          )
+        : { error: "invalid" };
+    }
+    // The page's re-read while it shows "Checking…" before completion: an explicit,
+    // idempotent request that the server queue a review that is due (or record a completion
+    // that is due). Never a write in a GET; a second call changes nothing.
+    case "review-ensure":
+      return ok("POST", `${control}/understanding/review/ensure`, {});
     default:
       return { error: "invalid" };
   }
@@ -3212,6 +3332,14 @@ export function notKnownNoteProblem(value: string): string | null {
 /** The server's refusal of an attribute held by a conflict (B1l point 6). */
 export const CONFLICT_HOLDS =
   "A conflict on this attribute is to be decided first.";
+/** The same, for a conflict that names no attribute: it holds the whole set. */
+export const SET_CONFLICT_HOLDS =
+  "A conflict on the attributes as a set is to be decided first.";
+
+/** Why an attribute's acceptance waits, in one sentence: its own conflict, or the set's. */
+export function holdWords(item: Pick<Attribute, "heldBySet">): string {
+  return item.heldBySet === true ? SET_CONFLICT_HOLDS : CONFLICT_HOLDS;
+}
 
 /** A changed assumption is the person's own words, 10 to 1,000 characters (B1j). */
 export const ASSUMPTION_TEXT_MIN = 10;
@@ -3285,6 +3413,7 @@ export function contextProblem(status: number, detail = ""): string | null {
       "the control changed":
         "This control changed while you were working. Refresh and try again.",
       [CONFLICT_HOLDS]: CONFLICT_HOLDS,
+      [SET_CONFLICT_HOLDS]: SET_CONFLICT_HOLDS,
     };
     return (
       known[detail] ??

@@ -54,6 +54,7 @@ import {
   FREQUENCY_LABELS,
   firstUnifiedToDecide,
   heldRow,
+  holdWords,
   type LibraryUpdate,
   NATURE_LABELS,
   offersAgentRun,
@@ -63,6 +64,7 @@ import {
   reviewUnfinished,
   runFailureLine,
   SECTION_HEADINGS,
+  SET_CONFLICT_HOLDS,
   SOURCE_LABELS,
   selectionPlan,
   settledRunLine,
@@ -75,6 +77,7 @@ import {
   unifiedRows,
   unifiedState,
 } from "./control-context-model";
+import { attributeAnchor, attributeFromHash } from "./design-points-model";
 import { planningHref } from "./planning-model";
 import {
   type NarrativeAttribute,
@@ -89,6 +92,7 @@ import { DRAFTED_ONCE_COMPLETE } from "./understanding-once-model";
 import {
   acceptAllNote,
   acceptAllWords,
+  notYetAccepted,
 } from "./understanding-specialist-model";
 import { isTopmostDialog, useFocusTrap } from "./use-focus-trap";
 
@@ -1136,7 +1140,7 @@ export function AttributesPanel({
               item.proposal === "RETIRE" ? "Approve the retirement" : "Approve",
             icon: "check",
             // B1l point 6: a conflict on it is decided first.
-            unavailable: held ? CONFLICT_HOLDS : null,
+            unavailable: held ? holdWords(item) : null,
             onSelect: () => void decideOne("APPROVE", item),
           },
           {
@@ -1174,6 +1178,7 @@ export function AttributesPanel({
     return (
       <li
         key={item.id}
+        id={attributeAnchor(item.id)}
         className={`ta-row${selected.has(item.id) ? " is-selected" : ""}${proposed ? " is-proposed" : ""}`}
       >
         {canAct ? (
@@ -1547,7 +1552,9 @@ export function AttributesPanel({
                     disabled={action.pending || updating}
                     title={
                       approvable.length < plan.proposals.length
-                        ? CONFLICT_HOLDS
+                        ? context.setHeldByConflict === true
+                          ? SET_CONFLICT_HOLDS
+                          : CONFLICT_HOLDS
                         : undefined
                     }
                     onClick={() => void decideMany("APPROVE", approvable)}
@@ -1767,8 +1774,21 @@ function EmbeddedAttributes({
   // "Accept all" leaves out a row a conflict holds, and says so, and how many assumptions not
   // confirmed go with it (B1l point 6).
   const allRows = acceptAllRows(rows);
-  const allWords = acceptAllWords(allRows, toAccept.length - allRows.length);
+  // Each unconfirmed assumption counted once, and the set's too when the acceptance leaves
+  // nothing else to accept (the server accepts those with it); a conflict on the set holds
+  // every row, and the line says so.
+  const setHeldNow = context.setHeldByConflict === true;
+  const allWords = acceptAllWords(allRows, toAccept.length - allRows.length, {
+    assumptions: context.setAssumptions ?? [],
+    remaining: notYetAccepted(rows),
+    held: setHeldNow,
+  });
   const allNote = acceptAllNote(allWords);
+  // Shown under the bar whenever Accept all is, and on its own when a conflict on the set
+  // holds everything (Accept all is then not offered).
+  const showAllNote =
+    allNote !== "" &&
+    (allRows.length >= 2 || (setHeldNow && toAccept.length > 0));
   // Before the understanding is complete (B1j): said quietly, with no warning and no way
   // back; once it is, nothing on this step sends the person to Control Understanding.
   const beforeComplete =
@@ -1777,6 +1797,27 @@ function EmbeddedAttributes({
   const unreviewed = reviewUnfinished(context.reviewSummary);
   const first = running ? null : firstUnifiedToDecide(rows);
   const opened = open ?? new Set(first !== null ? [first] : []);
+  // A link to an attribute (the D&I point's "Confirm or change the assumption", B1l point
+  // 6) opens its row once and brings it into view, where its assumption is decided.
+  const linked = useRef(false);
+  useEffect(() => {
+    if (linked.current) {
+      return;
+    }
+    const target = attributeFromHash(window.location.hash);
+    if (target === null || !rows.some((row) => row.item.id === target)) {
+      return;
+    }
+    linked.current = true;
+    const next = new Set(opened);
+    next.add(target);
+    onOpen(next);
+    window.requestAnimationFrame(() =>
+      document
+        .getElementById(attributeAnchor(target))
+        ?.scrollIntoView({ block: "start" }),
+    );
+  }, [rows, opened, onOpen]);
   // A control keeps at least one attribute: the last cannot be retired.
   const lastOne = approved <= 1;
   const flip = (set: ReadonlySet<string>, each: string): Set<string> => {
@@ -1889,6 +1930,7 @@ function EmbeddedAttributes({
     return (
       <li
         key={item.id}
+        id={attributeAnchor(item.id)}
         className={`tar is-${state.toLowerCase()}${kind === "REMOVAL" ? " is-removal" : ""}${isOpen ? " is-open" : ""}`}
       >
         <button
@@ -2000,7 +2042,7 @@ function EmbeddedAttributes({
                 {notes}
                 {/* B1l point 6: a conflict holds the acceptance until it is decided. */}
                 {canAct && held ? (
-                  <p className="tc-held">{CONFLICT_HOLDS}</p>
+                  <p className="tc-held">{holdWords(item)}</p>
                 ) : null}
                 <div className="tc-row-acts">
                   {canAct ? (
@@ -2122,7 +2164,7 @@ function EmbeddedAttributes({
           </span>
         ) : null}
       </div>
-      {canAct && allRows.length >= 2 && allNote !== "" ? (
+      {canAct && showAllNote ? (
         <p className="ta-accept-note" id={`ta-accept-note-${ids.controlId}`}>
           {allNote.charAt(0).toUpperCase()}
           {allNote.slice(1)}

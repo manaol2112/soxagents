@@ -292,7 +292,7 @@ export function PointRow({
             // Done in the D&I Evidence step, where the request's check, its files and its
             // findings are, or, for an assumption, on its attribute in the Attributes step
             // (B1l point 6): none of these actions is on the workpaper's page.
-            const href = settleHref(action, links);
+            const href = settleHref(action, links, point.place);
             return href !== null ? (
               <Link
                 key={action}

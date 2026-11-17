@@ -20,12 +20,14 @@ import {
   parseCriteriaHistory,
 } from "./control-context-model";
 import {
+  ACCEPTED_UNCONFIRMED,
   ASSUMED_LEAD,
+  CHANGE_REOPENS,
   characterCount,
-  decidedAssumptions,
+  decidableAssumptions,
   decidedLine,
-  openAssumptions,
   previousCriteriaLabel,
+  settledAssumptions,
   updatedFromLine,
   versionLine,
 } from "./understanding-once-model";
@@ -65,8 +67,10 @@ export function AttributeAssumptions({
   /** What the list is about, for assistive technology. */
   label: string;
 }) {
-  const open = openAssumptions(items);
-  const decided = decidedAssumptions(items);
+  // Open, or accepted with the attribute and not confirmed (B1l point 6: the D&I point links
+  // here, so it is confirmed or changed here); the rest as one quiet line each.
+  const open = decidableAssumptions(items);
+  const decided = settledAssumptions(items);
   if (open.length === 0 && decided.length === 0) {
     return null;
   }
@@ -169,9 +173,14 @@ function OpenAssumption({
   // a question left as not known in Control Understanding says so; each is decided with the
   // same two choices.
   const conflict = item.kind === "CONFLICT";
+  // Accepted with its attribute, not confirmed (B1l point 6): still the agent's, decided here.
+  const accepted = item.status === "ACCEPTED_WITH_ATTRIBUTE";
   return (
-    <li className={`tas-open${conflict ? " is-conflict" : ""}`}>
+    <li
+      className={`tas-open${conflict ? " is-conflict" : ""}${accepted ? " is-accepted" : ""}`}
+    >
       {conflict ? <p className="tas-kicker">{CONFLICT_LEAD}</p> : null}
+      {accepted ? <p className="tas-kicker">{ACCEPTED_UNCONFIRMED}</p> : null}
       <p className="tas-assumed">
         {conflict ? null : (
           <strong>
@@ -243,6 +252,7 @@ function OpenAssumption({
           <p className="tas-note">
             Your words are recorded as your answer, and the attributes this
             assumption names are updated from them.
+            {accepted ? ` ${CHANGE_REOPENS}` : ""}
           </p>
           <div className="tas-acts">
             <button

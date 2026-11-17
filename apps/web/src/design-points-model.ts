@@ -395,10 +395,28 @@ export const SETTLE_WORDS: Readonly<
 export function settleHref(
   action: Exclude<SettleAction, "CONSIDER">,
   links: { evidenceHref: string | null; attributesHref?: string | null },
+  place?: PointPlace,
 ): string | null {
-  return action === "ASSUMPTION"
-    ? (links.attributesHref ?? null)
-    : links.evidenceHref;
+  if (action !== "ASSUMPTION") {
+    return links.evidenceHref;
+  }
+  const at = links.attributesHref ?? null;
+  // At the attribute the assumption was accepted with, where That's right and Change… are
+  // (B1l point 6): the Attributes step opens that row.
+  return at !== null && place?.at === "ATTRIBUTE"
+    ? `${at.split("#")[0]}#${attributeAnchor(place.attributeId)}`
+    : at;
+}
+
+/** An attribute's row in the Attributes step, as a link's anchor names it. */
+export function attributeAnchor(attributeId: string): string {
+  return `attribute-${attributeId}`;
+}
+
+/** The attribute a link's anchor names (`#attribute-<id>`), or null. */
+export function attributeFromHash(hash: string): string | null {
+  const found = /^#attribute-([A-Za-z0-9-]{1,80})$/.exec(hash);
+  return found === null ? null : (found[1] ?? null);
 }
 
 /** The same, for a screen reader. */

@@ -3,9 +3,9 @@
 import { type ReactNode, useId, useState } from "react";
 import {
   type Attribute,
-  CONFLICT_HOLDS,
   type CriteriaState,
   criteriaState,
+  holdWords,
 } from "./control-context-model";
 import { useRelease } from "./phases-view";
 import { UiIcon } from "./ui-icon";
@@ -86,7 +86,7 @@ export function TailoredCriteria({
   const held = item.heldByConflict === true;
   const heldLine =
     held && canAct && state === "TO_ACCEPT" ? (
-      <p className="tc-held">{CONFLICT_HOLDS}</p>
+      <p className="tc-held">{holdWords(item)}</p>
     ) : null;
   const accept = () =>
     void action.run({
@@ -228,7 +228,7 @@ export function TailoredCriteria({
                 type="button"
                 className="btn btn-secondary btn-sm"
                 disabled={action.pending || held}
-                title={held ? CONFLICT_HOLDS : undefined}
+                title={held ? holdWords(item) : undefined}
                 onClick={accept}
               >
                 {action.pending ? "Accepting…" : "Accept"}
