@@ -10,7 +10,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { QuestionPass } from "./control-context-model";
+import type { QuestionPass, QuestionReview } from "./control-context-model";
 import { useAction } from "./control-context-view";
 import {
   agentQuestions,
@@ -84,6 +84,9 @@ export type Conversation = {
    * stands. Absent or null on a body from before it. */
   completedAt?: string | null;
   questionPass?: QuestionPass | null;
+  /** B1k: the IT audit specialist's latest review of the questions asked; absent or null
+   * on a body from before it. */
+  review?: QuestionReview | null;
 };
 
 /** What each step is for, under its title. */
@@ -198,6 +201,7 @@ export function ControlSetup({
           once={{
             completedAt: conversation.completedAt ?? null,
             questionPass: conversation.questionPass ?? null,
+            review: conversation.review ?? null,
           }}
         />
       </div>

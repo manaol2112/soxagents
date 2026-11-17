@@ -36,6 +36,7 @@ import {
   completeStatus,
   whenWords,
 } from "./understanding-once-model.ts";
+import { REVIEW_FAILED_STATUS } from "./understanding-specialist-model.ts";
 
 export type StepKey =
   | "setup"
@@ -413,6 +414,11 @@ function understandingState(input: WorkflowInput): State {
   // join the same course.
   if (once?.questionPass === "CHECKING") {
     return { tone: "active", status: CHECKING_STATUS };
+  }
+  // The specialist's review could not be used (B1l point 7): said, and the person chooses
+  // in Control Understanding: Run again, or Proceed without it. Nothing waits on it.
+  if (once?.questionPass === "FAILED") {
+    return { tone: "attention", status: REVIEW_FAILED_STATUS };
   }
   const open = input.setup.find(
     (step) =>

@@ -148,14 +148,17 @@ describe("the existing workpaper card, kept once per mount", () => {
     // (product owner, 16 November 2026, docs/design-workpaper.md section 3.8). Rewritten
     // again (section 3.9). Old: the conclusion alone beside the card's props. New: also
     // the control's evidence step, where a point's own action is done; the card itself
-    // gets neither.
+    // gets neither. Rewritten again (B1l point 6, 16 November 2026: an assumption accepted
+    // with its attribute is a point of kind ASSUMPTION, settled on its attribute). Old: the
+    // evidence step alone. New: also the control's Attributes step (`attributesHref`), where
+    // the assumption is confirmed or changed; the card still gets neither.
     assert.match(
       view,
-      /type CardProps = Omit<\s*ComponentProps<typeof WorkpapersTab>,\s*"stage" \| "compact"\s*> & \{\s*(\/\*\*[\s\S]*?\*\/\s*)?conclusion\?: DesignConclusion \| null;\s*(\/\*\*[\s\S]*?\*\/\s*)?evidenceHref\?: string \| null;\s*\};/,
+      /type CardProps = Omit<\s*ComponentProps<typeof WorkpapersTab>,\s*"stage" \| "compact"\s*> & \{\s*(\/\*\*[\s\S]*?\*\/\s*)?conclusion\?: DesignConclusion \| null;\s*(\/\*\*[\s\S]*?\*\/\s*)?evidenceHref\?: string \| null;\s*(\/\*\*[\s\S]*?\*\/\s*)?attributesHref\?: string \| null;\s*\};/,
     );
     assert.match(
       step,
-      /export function DesignWorkpaperStep\(\{\s*conclusion = null,\s*evidenceHref = null,\s*\.\.\.props\s*\}: CardProps\)/,
+      /export function DesignWorkpaperStep\(\{\s*conclusion = null,\s*evidenceHref = null,\s*attributesHref = null,\s*\.\.\.props\s*\}: CardProps\)/,
     );
     assert.match(
       step,
@@ -185,10 +188,13 @@ describe("the existing workpaper card, kept once per mount", () => {
     // (product owner, 16 November 2026, docs/design-workpaper.md section 3.8). Rewritten
     // again (section 3.9). Old: `conclusion={openConclusion} />`. New: also
     // `evidenceHref={stepHrefsWf.designevidence}`, where a point's own action is done.
+    // Rewritten again (B1l point 6). Old: `evidenceHref={stepHrefsWf.designevidence} />`.
+    // New: also `attributesHref={stepHrefsWf.attributes}`, where an ASSUMPTION point's
+    // assumption is confirmed or changed.
     assert.equal(
       count(
         controls,
-        /<DesignWorkpaperStep\s+\{\.\.\.workpaperProps\}\s+conclusion=\{openConclusion\}\s+evidenceHref=\{stepHrefsWf\.designevidence\}\s*\/>/g,
+        /<DesignWorkpaperStep\s+\{\.\.\.workpaperProps\}\s+conclusion=\{openConclusion\}\s+evidenceHref=\{stepHrefsWf\.designevidence\}\s+attributesHref=\{stepHrefsWf\.attributes\}\s*\/>/g,
       ),
       2,
     );
@@ -207,11 +213,11 @@ describe("the existing workpaper card, kept once per mount", () => {
     // docs/design-workpaper.md section 3.8).
     assert.match(
       controls,
-      /<h4 className="stp-subhead">Design and implementation<\/h4>\s*<DesignWorkpaperStep\s+\{\.\.\.workpaperProps\}\s+conclusion=\{openConclusion\}\s+evidenceHref=\{stepHrefsWf\.designevidence\}\s*\/>\s*<h4 className="stp-subhead">Operating effectiveness<\/h4>\s*<WorkpapersTab compact \{\.\.\.workpaperProps\} stage="EFFECTIVENESS" \/>/,
+      /<h4 className="stp-subhead">Design and implementation<\/h4>\s*<DesignWorkpaperStep\s+\{\.\.\.workpaperProps\}\s+conclusion=\{openConclusion\}\s+evidenceHref=\{stepHrefsWf\.designevidence\}\s+attributesHref=\{stepHrefsWf\.attributes\}\s*\/>\s*<h4 className="stp-subhead">Operating effectiveness<\/h4>\s*<WorkpapersTab compact \{\.\.\.workpaperProps\} stage="EFFECTIVENESS" \/>/,
     );
     assert.match(
       controls,
-      /title="Walkthrough and design workpaper"[\s\S]{0,260}<DesignWorkpaperStep\s+\{\.\.\.workpaperProps\}\s+conclusion=\{openConclusion\}\s+evidenceHref=\{stepHrefsWf\.designevidence\}\s*\/>\s*<\/PhaseStep>/,
+      /title="Walkthrough and design workpaper"[\s\S]{0,260}<DesignWorkpaperStep\s+\{\.\.\.workpaperProps\}\s+conclusion=\{openConclusion\}\s+evidenceHref=\{stepHrefsWf\.designevidence\}\s+attributesHref=\{stepHrefsWf\.attributes\}\s*\/>\s*<\/PhaseStep>/,
     );
   });
 

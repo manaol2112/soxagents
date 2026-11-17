@@ -112,6 +112,22 @@ import {
   readyOnceComplete,
   understandingEnd,
 } from "./understanding-once-model";
+import {
+  NotKnownButton,
+  NotKnownPanel,
+  QuestionReviewSection,
+  ReviewFailed,
+} from "./understanding-specialist";
+import {
+  blocksLine,
+  courseWithout,
+  fromReview,
+  heldByFailedReview,
+  notKnownKeys,
+  offersNotKnown,
+  reviewView,
+  withoutNotKnown,
+} from "./understanding-specialist-model";
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
 
@@ -156,7 +172,8 @@ export function UnderstandingReview({
   /** The understanding asked once (B1j, 16 November 2026): when it was recorded complete,
    * and where the agents' question pass stands. While they check what else they need, the
    * course stays open and their questions join it; the way on to the attributes is offered
-   * only once it is complete. */
+   * only once it is complete. B1k: the pass is the IT audit specialist's review of the
+   * questions asked, shown under the understanding. */
   once?: Once;
   /** The control's issues: an open question of the agents is answered in place, from its
    * own choices (12 November 2026). */
@@ -236,6 +253,13 @@ export function UnderstandingReview({
   const startRef = useRef<{ control: string; from: string } | null>(null);
   const [startPending, setStartPending] = useState<string | null>(null);
   const restart = useRef(false);
+  // B1l point 1: the questions a person left as not known yet. Closed, never an answer: they
+  // leave the course and are never on record. Those this visit closed are kept until the
+  // page's data says so too; the reads leave them out.
+  const [notKnownFor, setNotKnownFor] = useState<string | null>(null);
+  const [closed, setClosed] = useState<ReadonlySet<string>>(new Set());
+  const closedRef = useRef<ReadonlySet<string>>(new Set());
+  closedRef.current = notKnownKeys(issues, closed);
 
   const read = useCallback(async (): Promise<Review | null> => {
     reads.current += 1;
@@ -262,7 +286,9 @@ export function UnderstandingReview({
       if (mine !== reads.current) {
         return null;
       }
-      const found = parseReview(first.body ?? null);
+      const parsed = parseReview(first.body ?? null);
+      const found =
+        parsed === null ? null : withoutNotKnown(parsed, closedRef.current);
       setFailed(found === null);
       if (found !== null) {
         setReview(found);
@@ -700,6 +726,23 @@ export function UnderstandingReview({
     await settle(`${need.label || "The question"}: answered.`);
   }
 
+  /** A question the person left as not known yet (B1l point 1), once the server recorded
+   * it: it leaves the course, never as an answer, and the course moves on. */
+  async function leftNotKnown(need: Need) {
+    if (review === null || interview === null) {
+      return;
+    }
+    const keys = new Set(closed);
+    keys.add(need.key);
+    setClosed(keys);
+    closedRef.current = notKnownKeys(issues, keys);
+    setNotKnownFor(null);
+    const now = withoutNotKnown(review, keys);
+    setReview(now);
+    go(nextOpen(now, interview, at));
+    await settle(`${need.label || "The question"}: left as not known yet.`);
+  }
+
   /** The carried step: the ticked answers confirmed together, the rest asked on their own. */
   async function confirmCarried() {
     if (!canAct || review === null || interview === null) {
@@ -1046,9 +1089,14 @@ export function UnderstandingReview({
     review.evidence.ready && review.attributes.ready,
   );
   const complete = end === "complete" && once.completedAt !== null;
+  const failedReview = reviewView(once.questionPass, once.review ?? null);
   // Where the answers start from: another system's, proposed below, or none.
   const banner = startFromBanner(review);
-  const progress = interviewProgress(review, interview);
+  // A question left as not known (B1l point 1) is never counted as confirmed.
+  const progress = interviewProgress(
+    review,
+    courseWithout(interview, closedRef.current),
+  );
   const plan = interview.plan;
   const step = at < plan.length ? (plan[at] ?? null) : null;
   const topic = step === null ? null : stepTopic(step);
@@ -1472,6 +1520,16 @@ export function UnderstandingReview({
         </section>
       ) : null}
 
+      {/* B1k: the IT audit specialist's review of the questions asked, under the
+          understanding, in the narrative's own form. */}
+      <QuestionReviewSection
+        ids={ids}
+        canAct={canAct}
+        pass={once.questionPass}
+        review={once.review ?? null}
+        completedAt={once.completedAt}
+      />
+
       <ul
         className={`ur-ready${checking ? " is-updating" : ""}`}
         aria-busy={checking}
@@ -1479,11 +1537,14 @@ export function UnderstandingReview({
       >
         {/* The attributes first, then the D&I evidence requested against them (product
             owner, 11 November 2026). */}
-        {readyOnceComplete(
-          readyLines(review),
-          complete,
-          review.attributesProposed,
-          end === "checking",
+        {heldByFailedReview(
+          readyOnceComplete(
+            readyLines(review),
+            complete,
+            review.attributesProposed,
+            end === "checking",
+          ),
+          end === "failed",
         ).map((line) => (
           <li key={line.key} className={line.ready ? "is-ok" : ""}>
             <span className="ur-check" aria-hidden="true">
@@ -1627,35 +1688,66 @@ export function UnderstandingReview({
     </>
   );
 
-  /** The foot of a step: where it stands, and Back with the step's own action. */
-  const foot = (primary: ReactNode, skip: boolean) => (
-    <div className="ur-foot">
-      <p className="ur-foot-where">
-        {plan.length > 1 ? `Step ${at + 1} of ${plan.length}` : null}
-        {skip ? (
-          <button
-            type="button"
-            className="ur-skip"
-            disabled={busy}
-            onClick={() => go(nextOpen(review, interview, at))}
-          >
-            Skip for now
-          </button>
+  /** The foot of a step: where it stands, and Back with the step's own action. A question
+   * the person is asked also offers "Not known yet, proceed" (B1l point 1), beside "Skip for
+   * now", which still only moves on in the course. */
+  const foot = (
+    primary: ReactNode,
+    skip: boolean,
+    asked: { need: Need; issue: SetupIssue | undefined } | null = null,
+  ) => {
+    const notKnown =
+      asked !== null && offersNotKnown(asked.issue, canAct)
+        ? asked.issue
+        : undefined;
+    return (
+      <>
+        <div className="ur-foot">
+          <p className="ur-foot-where">
+            {plan.length > 1 ? `Step ${at + 1} of ${plan.length}` : null}
+            {skip ? (
+              <button
+                type="button"
+                className="ur-skip"
+                disabled={busy}
+                onClick={() => go(nextOpen(review, interview, at))}
+              >
+                Skip for now
+              </button>
+            ) : null}
+            {notKnown !== undefined && notKnownFor !== notKnown.id ? (
+              <NotKnownButton
+                disabled={busy}
+                onOpen={() => setNotKnownFor(notKnown.id)}
+              />
+            ) : null}
+          </p>
+          <div className="ur-foot-actions">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={busy || at === 0}
+              onClick={() => go(Math.max(0, at - 1))}
+            >
+              <UiIcon name="back" size={14} /> Back
+            </button>
+            {primary}
+          </div>
+        </div>
+        {notKnown !== undefined &&
+        asked !== null &&
+        notKnownFor === notKnown.id ? (
+          <NotKnownPanel
+            key={notKnown.id}
+            ids={ids}
+            issue={notKnown}
+            onCancel={() => setNotKnownFor(null)}
+            onDone={() => void leftNotKnown(asked.need)}
+          />
         ) : null}
-      </p>
-      <div className="ur-foot-actions">
-        <button
-          type="button"
-          className="btn btn-secondary"
-          disabled={busy || at === 0}
-          onClick={() => go(Math.max(0, at - 1))}
-        >
-          <UiIcon name="back" size={14} /> Back
-        </button>
-        {primary}
-      </div>
-    </div>
-  );
+      </>
+    );
+  };
 
   const carriedStep = () => {
     const items = interview.carried
@@ -1763,8 +1855,13 @@ export function UnderstandingReview({
       need.kind === "QUESTION"
         ? issues.find((issue) => issue.id === need.key)
         : undefined;
-    const forAttributes = raised !== undefined && addedForAttributes(raised);
+    const forAttributes =
+      raised !== undefined &&
+      (addedForAttributes(raised) || fromReview(raised));
     const forLine = forAttributes ? "" : neededForLine(need);
+    // B1l point 5: a question from the review names what cannot be written without the fact.
+    const blocks = blocksLine(raised);
+    const asked = need.kind === "QUESTION" ? { need, issue: raised } : null;
     const chips = (
       <div className="ur-kicker">
         {need.kind === "QUESTION" ? (
@@ -1820,23 +1917,24 @@ export function UnderstandingReview({
     }
     // A question the agents raised is answered here, from its own choices; the planner's
     // conversation stays one click away (12 November 2026).
-    const asked =
+    const row =
       need.kind === "QUESTION"
         ? agentQuestions(issues.filter((issue) => issue.id === need.key))[0]
         : undefined;
-    if (asked !== undefined && asked.source !== "RECORDED") {
+    if (row !== undefined && row.source !== "RECORDED") {
       return (
         <AgentQuestionPoint
           key={need.key}
-          row={asked}
+          row={row}
           canAct={canAct}
           busy={busy}
           saving={saving === need.key}
           chips={chips}
           title={title}
+          reason={blocks}
           why={why}
-          foot={(primary) => foot(primary, true)}
-          onAnswer={(picks) => void answerQuestion(need, asked, picks)}
+          foot={(primary) => foot(primary, true, asked)}
+          onAnswer={(picks) => void answerQuestion(need, row, picks)}
           onTalk={onTalk}
         />
       );
@@ -1869,9 +1967,10 @@ export function UnderstandingReview({
         <>
           {chips}
           {title}
+          {blocks !== "" ? <p className="ur-hint ur-blocks">{blocks}</p> : null}
           <p className="ur-hint">{lead}</p>
           {why}
-          {foot(act, true)}
+          {foot(act, true, asked)}
         </>
       );
     }
@@ -2486,6 +2585,26 @@ export function UnderstandingReview({
         </div>
         <p className="ur-hint ur-once">{ONCE_COMPLETE_NOTE}</p>
       </div>
+    ) : end === "failed" ? (
+      // The specialist's review could not be used (B1l point 7): never a dead end.
+      <>
+        <ReviewFailed
+          ids={ids}
+          canAct={canAct}
+          failure={failedReview.state === "failed" ? failedReview.failure : ""}
+        />
+        <div className="ur-foot-actions">
+          {plan.length > 0 ? (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => go(Math.max(0, plan.length - 1))}
+            >
+              <UiIcon name="back" size={14} /> Back
+            </button>
+          ) : null}
+        </div>
+      </>
     ) : end === "checking" ? (
       // The question pass (B1j): the course stays open, and the agents' questions join it.
       <div className="ur-end">
@@ -2627,7 +2746,7 @@ export function UnderstandingReview({
         <div className="ur-head-text">
           <p className="ur-eyebrow">{eyebrow}</p>
           <h2 id="ur-title">
-            {complete || (status.done && end !== "checking")
+            {complete || (status.done && end !== "checking" && end !== "failed")
               ? `${review.controlRef} is understood`
               : `Confirm how ${review.controlRef} runs`}
           </h2>
@@ -2640,6 +2759,8 @@ export function UnderstandingReview({
               </span>
             ) : end === "checking" ? (
               `${draftedFrom(groups, interview)}. The agents are checking what else the attributes need: anything they ask is added here, not later.`
+            ) : end === "failed" ? (
+              `${draftedFrom(groups, interview)}. The review of the questions asked could not run: run it again, or proceed without it.`
             ) : status.done ? (
               "Every point the evidence and the attributes rely on is on record."
             ) : (

@@ -42,7 +42,8 @@ export async function POST(request: Request) {
     });
     status = response.status;
     const body = (await response.json()) as unknown;
-    if (status === 200) {
+    // 202: a review the server accepted to run (B1k), answered with the context as it stands.
+    if (status === 200 || status === 202) {
       context = body;
     } else if (typeof body === "object" && body !== null && "detail" in body) {
       const value = (body as { detail?: unknown }).detail;

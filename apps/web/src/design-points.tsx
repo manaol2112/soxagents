@@ -22,8 +22,9 @@ import {
   REASON_MIN,
   RECORD,
   RECORDED_READING,
-  SETTLE_WHERE,
   SETTLE_WORDS,
+  settleHref,
+  settleWhere,
   THE_POINT,
   WITHDRAW,
   WITHDRAWN_READING,
@@ -48,6 +49,9 @@ export type PointWrites = {
   version: number;
   held: boolean;
   evidenceHref: string | null;
+  /** The Attributes step, where an ASSUMPTION point's assumption is confirmed or changed
+   * (B1l point 6); absent or null where the page has no link to it. */
+  attributesHref?: string | null;
   onSettled: () => void;
 };
 
@@ -273,7 +277,10 @@ export function PointRow({
     (action): action is Exclude<typeof action, "CONSIDER"> =>
       action !== "CONSIDER",
   );
-  const href = writes?.evidenceHref ?? null;
+  const links = {
+    evidenceHref: writes?.evidenceHref ?? null,
+    attributesHref: writes?.attributesHref ?? null,
+  };
   return (
     <div className="dw-point is-decide" id={anchor} ref={box} tabIndex={-1}>
       <p className="dw-point-line">
@@ -281,20 +288,22 @@ export function PointRow({
       </p>
       {!asking && confirmed === null ? (
         <p className="dw-point-acts">
-          {href !== null
-            ? own.map((action) => (
-                // Done in the D&I Evidence step, where the request's check, its files
-                // and its findings are: none of these actions is on the workpaper's page.
-                <Link
-                  key={action}
-                  className="btn btn-secondary btn-sm"
-                  href={href}
-                >
-                  {SETTLE_WORDS[action]}
-                  <span className="sr-only"> {SETTLE_WHERE}</span>
-                </Link>
-              ))
-            : null}
+          {own.map((action) => {
+            // Done in the D&I Evidence step, where the request's check, its files and its
+            // findings are, or, for an assumption, on its attribute in the Attributes step
+            // (B1l point 6): none of these actions is on the workpaper's page.
+            const href = settleHref(action, links);
+            return href !== null ? (
+              <Link
+                key={action}
+                className="btn btn-secondary btn-sm"
+                href={href}
+              >
+                {SETTLE_WORDS[action]}
+                <span className="sr-only"> {settleWhere(action)}</span>
+              </Link>
+            ) : null;
+          })}
           <button
             ref={opener}
             type="button"

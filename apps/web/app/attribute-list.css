@@ -1402,6 +1402,43 @@ button.tar-head:focus-visible:not(:disabled) {
   font-weight: 650;
 }
 
+/* A conflict with a confirmed fact (B1l point 6): it holds the attribute's acceptance until a
+   person decides it, so it reads as a decision, in the danger tone only at its edge. */
+.tas-open.is-conflict {
+  background: color-mix(in srgb, var(--danger-soft) 45%, var(--surface));
+  border-left-color: var(--danger);
+}
+
+.tas-kicker {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--fs-2xs);
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* Why Accept is off on an attribute a conflict holds. */
+.tc-held {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+/* What "Accept all" leaves out, and the assumptions not confirmed that go with it. */
+.ta-accept-note {
+  margin: -0.25rem 0 0.5rem;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  text-align: right;
+}
+
+@media (max-width: 760px) {
+  .ta-accept-note {
+    text-align: left;
+  }
+}
+
 .tas-acts {
   display: flex;
   flex-wrap: wrap;

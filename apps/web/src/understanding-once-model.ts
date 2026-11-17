@@ -17,6 +17,7 @@ import type {
   Assumption,
   CriteriaVersion,
   QuestionPass,
+  QuestionReview,
 } from "./control-context-model.ts";
 
 /** Control Understanding while the question pass runs. */
@@ -25,6 +26,8 @@ export const CHECKING_LINE = "Checking what else the agents need…";
 export const CHECKING_STATUS = "Checking what else is needed";
 /** A question the pass added, in the same course. */
 export const ADDED_FOR_ATTRIBUTES = "Added by the agents · for the attributes";
+/** A question the IT audit specialist's review asked (B1k), in the same course. */
+export const FROM_REVIEW = "From the review · for the attributes";
 /** Under the completed understanding. */
 export const ONCE_COMPLETE_NOTE =
   "Once complete, no agent reopens this step. You can still change an answer here yourself.";
@@ -103,10 +106,12 @@ export function rulesOpen(
   ).length;
 }
 
-/** The understanding's facts the steps read (B1j); absent on a body from before it. */
+/** The understanding's facts the steps read (B1j); absent on a body from before it. B1k adds
+ * the specialist's latest review of the questions asked. */
 export type Once = {
   completedAt: string | null;
   questionPass: QuestionPass | null;
+  review?: QuestionReview | null;
 };
 
 /**
@@ -115,10 +120,17 @@ export type Once = {
  * - checking: the agents are checking what else they need; the course stays open, and their
  *   questions join it. Also while the gates read understood and the completion is not yet
  *   recorded, so "Go to the attributes" is never offered before it is.
+ * - failed: the specialist's review could not be used (B1l point 7): Run again, or Proceed
+ *   without it; nothing waits on it.
  * - understood: a body from before B1j says nothing of the pass: as before.
  * - open: points are still open.
  */
-export type EndState = "complete" | "checking" | "understood" | "open";
+export type EndState =
+  | "complete"
+  | "checking"
+  | "failed"
+  | "understood"
+  | "open";
 
 export function understandingEnd(once: Once, understood: boolean): EndState {
   if (once.completedAt !== null) {
@@ -126,6 +138,9 @@ export function understandingEnd(once: Once, understood: boolean): EndState {
   }
   if (once.questionPass === "CHECKING") {
     return "checking";
+  }
+  if (once.questionPass === "FAILED") {
+    return "failed";
   }
   if (!understood) {
     return "open";
@@ -172,7 +187,7 @@ export function decidedLine(
   item: Pick<
     Assumption,
     "status" | "assumed" | "answer" | "decidedBy" | "decidedAt"
-  >,
+  > & { kind?: Assumption["kind"] },
   timeZone?: string,
 ): string | null {
   const who = item.decidedBy?.name.trim() || "a person";
@@ -181,6 +196,11 @@ export function decidedLine(
       return null;
     case "CONFIRMED": {
       const day = dayWords(item.decidedAt ?? "", timeZone);
+      // A conflict decided for the confirmed understanding (B1l): never worded as the
+      // conflicting source being confirmed.
+      if (item.kind === "CONFLICT") {
+        return `Decided by ${who}${day === "" ? "" : `, ${day}`}: the confirmed understanding stands.`;
+      }
       return `Confirmed by ${who}${day === "" ? "" : `, ${day}`}: ${item.assumed}`;
     }
     case "CHANGED":
@@ -264,11 +284,17 @@ export function readyOnceComplete<
   );
 }
 
-/** The chip on a question in the course: the pass's for the attributes, the rules', or the
- * agents' otherwise. */
+/** The chip on a question in the course: the specialist review's, the pass's for the
+ * attributes, the rules', or the agents' otherwise. */
 export function raisedChip(
-  issue: { raisedBy?: string; origin: string } | undefined,
+  issue:
+    | { raisedBy?: string; origin: string; fromReview?: boolean }
+    | undefined,
 ): string {
+  // The specialist's review asked it (B1k), whatever its origin.
+  if (issue?.fromReview === true) {
+    return FROM_REVIEW;
+  }
   if (issue !== undefined && addedForAttributes(issue)) {
     return ADDED_FOR_ATTRIBUTES;
   }

@@ -2228,6 +2228,7 @@ function ControlRecord({
                 attributesHref: stepHrefsWf.attributes ?? null,
                 completedAt: context.understandingCompletedAt ?? null,
                 questionPass: context.questionPass ?? null,
+                review: context.questionReview ?? null,
               }
             : null
         }
@@ -2612,6 +2613,7 @@ function ControlRecord({
             {...workpaperProps}
             conclusion={openConclusion}
             evidenceHref={stepHrefsWf.designevidence}
+            attributesHref={stepHrefsWf.attributes}
           />
           <h4 className="stp-subhead">Operating effectiveness</h4>
           <WorkpapersTab compact {...workpaperProps} stage="EFFECTIVENESS" />
@@ -2751,6 +2753,7 @@ function ControlRecord({
                           {...workpaperProps}
                           conclusion={openConclusion}
                           evidenceHref={stepHrefsWf.designevidence}
+                          attributesHref={stepHrefsWf.attributes}
                         />
                       </PhaseStep>
                     </PhasePanel>

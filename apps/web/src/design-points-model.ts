@@ -33,6 +33,9 @@ export const POINT_KINDS = [
   "HELD",
   "COMPLETENESS",
   "FOLLOW_UP",
+  // B1l point 6 (16 November 2026): an assumption accepted with its attribute, not confirmed,
+  // to settle before the preparer signs: confirmed or changed on the attribute, or considered.
+  "ASSUMPTION",
 ] as const;
 export type PointKind = (typeof POINT_KINDS)[number] | "OTHER";
 
@@ -41,6 +44,7 @@ export const SETTLE_ACTIONS = [
   "TICKMARK",
   "RERUN",
   "FINDING",
+  "ASSUMPTION",
   "CONSIDER",
 ] as const;
 export type SettleAction = (typeof SETTLE_ACTIONS)[number];
@@ -371,6 +375,8 @@ export const CLEAR_DRAFT = "Clear the note";
 
 /** Where those actions are done, for a screen reader: the step's name spelled out. */
 export const SETTLE_WHERE = "in the design and implementation evidence step";
+/** Where an assumption is confirmed or changed: its attribute, in the Attributes step. */
+export const ASSUMPTION_WHERE = "in the attributes step";
 
 /** The words of each existing action, where it is done (D&I Evidence: the request's
  * check, its files and its findings). */
@@ -381,7 +387,24 @@ export const SETTLE_WORDS: Readonly<
   TICKMARK: "Record a tickmark",
   RERUN: "Check the request again",
   FINDING: "Decide the finding",
+  ASSUMPTION: "Confirm or change the assumption",
 };
+
+/** Where an action of a point is done: an assumption on its attribute in the Attributes step,
+ * the others in the D&I Evidence step. Null where the page has no link to it. */
+export function settleHref(
+  action: Exclude<SettleAction, "CONSIDER">,
+  links: { evidenceHref: string | null; attributesHref?: string | null },
+): string | null {
+  return action === "ASSUMPTION"
+    ? (links.attributesHref ?? null)
+    : links.evidenceHref;
+}
+
+/** The same, for a screen reader. */
+export function settleWhere(action: Exclude<SettleAction, "CONSIDER">): string {
+  return action === "ASSUMPTION" ? ASSUMPTION_WHERE : SETTLE_WHERE;
+}
 
 /** "2 decisions before you sign."; "" for none. */
 export function decisionsWords(count: number): string {

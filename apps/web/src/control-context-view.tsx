@@ -27,6 +27,7 @@ import {
   type Attribute,
   type AttributeDecisionKind,
   type AttributeDefinition,
+  acceptAllRows,
   acceptableRows,
   acceptItems,
   agentRan,
@@ -39,6 +40,7 @@ import {
   CLASSIFICATIONS,
   type Classification,
   CONFIDENCE_LABELS,
+  CONFLICT_HOLDS,
   type Confidence,
   type ContextIssue,
   type ControlContext,
@@ -51,6 +53,7 @@ import {
   decidedNote,
   FREQUENCY_LABELS,
   firstUnifiedToDecide,
+  heldRow,
   type LibraryUpdate,
   NATURE_LABELS,
   offersAgentRun,
@@ -83,6 +86,10 @@ import { RecordDialog } from "./record-dialog";
 import { RowMenu, type RowMenuItem } from "./row-menu";
 import { type IconName, UiIcon } from "./ui-icon";
 import { DRAFTED_ONCE_COMPLETE } from "./understanding-once-model";
+import {
+  acceptAllNote,
+  acceptAllWords,
+} from "./understanding-specialist-model";
 import { isTopmostDialog, useFocusTrap } from "./use-focus-trap";
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
@@ -1025,6 +1032,14 @@ export function AttributesPanel({
   );
   const selected = new Set([...chosen].filter((each) => live.has(each)));
   const plan = selectionPlan(selected, context);
+  const approvable = plan.proposals.filter(
+    (item) =>
+      !heldRow({
+        item,
+        target:
+          context.approved.find((each) => each.id === item.replacesId) ?? null,
+      }),
+  );
   const issues = context.issues.filter((item) => item.origin !== "PROCESS");
   const lastOne = context.approved.length <= 1;
   // The agents are updating the attributes (a redraft of the understanding included, as the
@@ -1086,13 +1101,20 @@ export function AttributesPanel({
   // criteria accepted in one call. Done is said only once the server has recorded it.
   async function acceptRows(rows: UnifiedRow[]) {
     setDone("");
+    // A row a conflict holds is never sent (B1l point 6): the server refuses the whole call.
+    const items = acceptItems(rows);
+    if (items.length === 0) {
+      return;
+    }
     const ok = await action.run(
       rows.length === 1 ? `accept-${rows[0]?.item.id ?? ""}` : "accept-all",
-      { intent: "attributes-accept", items: acceptItems(rows) },
+      { intent: "attributes-accept", items },
     );
     if (ok) {
       setDone(
-        rows.length === 1 ? "Accepted." : `${rows.length} attributes accepted.`,
+        items.length === 1
+          ? "Accepted."
+          : `${items.length} attributes accepted.`,
       );
     }
   }
@@ -1104,6 +1126,7 @@ export function AttributesPanel({
         ? (context.approved.find((each) => each.id === item.replacesId) ?? null)
         : null;
     const targetLetter = target !== null ? (letters.get(target.id) ?? "") : "";
+    const held = heldRow({ item, target });
     const open = shown.has(item.id);
     const name = letter !== null ? `attribute ${letter}` : "the proposal";
     const statusItems: RowMenuItem[] = proposed
@@ -1112,6 +1135,8 @@ export function AttributesPanel({
             label:
               item.proposal === "RETIRE" ? "Approve the retirement" : "Approve",
             icon: "check",
+            // B1l point 6: a conflict on it is decided first.
+            unavailable: held ? CONFLICT_HOLDS : null,
             onSelect: () => void decideOne("APPROVE", item),
           },
           {
@@ -1514,16 +1539,24 @@ export function AttributesPanel({
           <span className="ta-bulk-actions">
             {plan.proposals.length > 0 ? (
               <>
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  disabled={action.pending || updating}
-                  onClick={() => void decideMany("APPROVE", plan.proposals)}
-                >
-                  {action.busy === "many-APPROVE"
-                    ? "Approving…"
-                    : `Approve ${plan.proposals.length}`}
-                </button>
+                {/* A proposal a conflict holds is left out of the approval (B1l point 6). */}
+                {approvable.length > 0 ? (
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={action.pending || updating}
+                    title={
+                      approvable.length < plan.proposals.length
+                        ? CONFLICT_HOLDS
+                        : undefined
+                    }
+                    onClick={() => void decideMany("APPROVE", approvable)}
+                  >
+                    {action.busy === "many-APPROVE"
+                      ? "Approving…"
+                      : `Approve ${approvable.length}`}
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="btn-secondary btn-sm"
@@ -1731,6 +1764,11 @@ function EmbeddedAttributes({
   }, [running, router]);
   const locked = busy || running;
   const toAccept = acceptableRows(rows);
+  // "Accept all" leaves out a row a conflict holds, and says so, and how many assumptions not
+  // confirmed go with it (B1l point 6).
+  const allRows = acceptAllRows(rows);
+  const allWords = acceptAllWords(allRows, toAccept.length - allRows.length);
+  const allNote = acceptAllNote(allWords);
   // Before the understanding is complete (B1j): said quietly, with no warning and no way
   // back; once it is, nothing on this step sends the person to Control Understanding.
   const beforeComplete =
@@ -1754,6 +1792,7 @@ function EmbeddedAttributes({
   function row(each: UnifiedRow) {
     const { item, kind, target, letter } = each;
     const state = unifiedState(each, running);
+    const held = heldRow(each);
     const chip = UNIFIED_CHIPS[state];
     const isOpen = opened.has(item.id);
     const standardShown = shown.has(item.id) && item.definition !== null;
@@ -1959,13 +1998,17 @@ function EmbeddedAttributes({
                   </p>
                 )}
                 {notes}
+                {/* B1l point 6: a conflict holds the acceptance until it is decided. */}
+                {canAct && held ? (
+                  <p className="tc-held">{CONFLICT_HOLDS}</p>
+                ) : null}
                 <div className="tc-row-acts">
                   {canAct ? (
                     <>
                       <button
                         type="button"
                         className="btn btn-secondary btn-sm"
-                        disabled={locked}
+                        disabled={locked || held}
                         onClick={() => onAccept([each])}
                       >
                         {busyKey === `accept-${item.id}`
@@ -2035,17 +2078,18 @@ function EmbeddedAttributes({
         </h4>
         {canAct ? (
           <span className="ta-bar-acts">
-            {toAccept.length >= 2 ? (
+            {allRows.length >= 2 ? (
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
                 disabled={locked}
                 title="Accepts each attribute as the agent prepared it: its change and its criteria, each recorded on its own."
-                onClick={() => onAccept(toAccept)}
+                aria-describedby={
+                  allNote !== "" ? `ta-accept-note-${ids.controlId}` : undefined
+                }
+                onClick={() => onAccept(allRows)}
               >
-                {busyKey === "accept-all"
-                  ? "Accepting…"
-                  : `Accept all ${toAccept.length}`}
+                {busyKey === "accept-all" ? "Accepting…" : allWords.label}
               </button>
             ) : null}
             {offersAgentRun(
@@ -2078,6 +2122,12 @@ function EmbeddedAttributes({
           </span>
         ) : null}
       </div>
+      {canAct && allRows.length >= 2 && allNote !== "" ? (
+        <p className="ta-accept-note" id={`ta-accept-note-${ids.controlId}`}>
+          {allNote.charAt(0).toUpperCase()}
+          {allNote.slice(1)}
+        </p>
+      ) : null}
       {working !== null ? (
         <p className="ta-working">
           <small className="ep-reading" role="status">
@@ -2343,7 +2393,12 @@ export function IssuesList({
           <ul>
             {settled.map((issue) => (
               <li key={issue.id}>
-                <Badge>{issue.status.toLowerCase()}</Badge>{" "}
+                {/* B1l: a question left as not known is never read as settled by an answer. */}
+                <Badge>
+                  {issue.status === "NOT_KNOWN"
+                    ? "not known yet"
+                    : issue.status.toLowerCase()}
+                </Badge>{" "}
                 <span>{issue.topic}:</span> <span>{issue.resolutionNote}</span>
               </li>
             ))}

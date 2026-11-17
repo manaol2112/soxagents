@@ -293,6 +293,8 @@ type CardProps = Omit<
   /** The control's D&I Evidence step: where a point's own action is done (a file's
    * reliability, a tickmark, checking a request again, a finding; section 3.9). */
   evidenceHref?: string | null;
+  /** The control's Attributes step: where an ASSUMPTION point is confirmed or changed. */
+  attributesHref?: string | null;
 };
 
 /**
@@ -305,6 +307,7 @@ type CardProps = Omit<
 export function DesignWorkpaperStep({
   conclusion = null,
   evidenceHref = null,
+  attributesHref = null,
   ...props
 }: CardProps) {
   const { ids, papers, notice, viewing } = props;
@@ -406,6 +409,7 @@ export function DesignWorkpaperStep({
         canAct={props.canAct}
         conclusion={conclusion}
         evidenceHref={evidenceHref}
+        attributesHref={attributesHref}
       />
       <details
         ref={fold}
@@ -495,6 +499,7 @@ export function DesignWorkpaper({
   canAct = false,
   conclusion = null,
   evidenceHref = null,
+  attributesHref = null,
 }: {
   scope: WorkpaperScope;
   /** Changes when the workpaper record does: the views then read again. */
@@ -518,6 +523,8 @@ export function DesignWorkpaper({
   conclusion?: DesignConclusion | null;
   /** The control's D&I Evidence step, where a point's own action is done (section 3.9). */
   evidenceHref?: string | null;
+  /** The control's Attributes step, where an ASSUMPTION point is settled (B1l point 6). */
+  attributesHref?: string | null;
 }) {
   const uid = useId();
   const query = designWorkpaperQuery(scope);
@@ -1427,6 +1434,7 @@ export function DesignWorkpaper({
             // the read that shows it, so it never posts the version before.
             held: held || rereading,
             evidenceHref,
+            attributesHref,
             // Confirmed (or in doubt): the views are read again, and the page's records,
             // whose version the write moved (as after a recorded conclusion, 3.6).
             onSettled: () => {

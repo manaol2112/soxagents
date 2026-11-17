@@ -591,6 +591,10 @@ export type SetupIssue = {
   /** The reviewer agent is still checking its wording: left out until it is checked. */
   wordingPending?: boolean;
   interview?: readonly InterviewStep[];
+  /** Asked by the IT audit specialist's review (B1k), and the criterion or request it blocks
+   * (B1l point 5); absent on a question from before. */
+  fromReview?: boolean;
+  blocks?: string;
 };
 
 /**

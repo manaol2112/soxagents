@@ -76,9 +76,12 @@ describe("Control Understanding: one pass, complete once", () => {
       controls,
       /completedAt: context\.understandingCompletedAt \?\? null,\s*questionPass: context\.questionPass \?\? null,/,
     );
+    // Rewritten (B1k, 16 November 2026: the specialist's review of the questions asked is
+    // shown under the understanding). Old: `once={{ completedAt, questionPass }}`. New: the
+    // same, and the latest review, `review: conversation.review ?? null`.
     assert.match(
       setup,
-      /once=\{\{\s*completedAt: conversation\.completedAt \?\? null,\s*questionPass: conversation\.questionPass \?\? null,\s*\}\}/,
+      /once=\{\{\s*completedAt: conversation\.completedAt \?\? null,\s*questionPass: conversation\.questionPass \?\? null,\s*review: conversation\.review \?\? null,\s*\}\}/,
     );
     assert.match(
       controls,
@@ -111,9 +114,11 @@ describe("Control Understanding: one pass, complete once", () => {
   });
 
   it("labels the pass's questions in the same course", () => {
+    // Rewritten (B1k). Old: `raised !== undefined && addedForAttributes(raised)`. New: a
+    // question from the specialist's review is for the attributes too, whatever its origin.
     assert.match(
       review,
-      /const forAttributes = raised !== undefined && addedForAttributes\(raised\);/,
+      /const forAttributes =\s*raised !== undefined &&\s*\(addedForAttributes\(raised\) \|\| fromReview\(raised\)\);/,
     );
     assert.match(
       review,
@@ -167,7 +172,13 @@ describe("the assumption on the attribute", () => {
   });
 
   it("offers That's right and Change…, with a counted box of 10 to 1,000 characters", () => {
-    assert.match(assumptions, /\{ASSUMED_LEAD\}/);
+    // Rewritten (B1l: a question left as not known reads as such). Old: `{ASSUMED_LEAD}`
+    // alone. New: the agent's lead for an assumption, the not-known lead for a question a
+    // person left as not known; a conflict is led by "A conflict to decide".
+    assert.match(
+      assumptions,
+      /\{item\.kind === "NOT_KNOWN" \? NOT_KNOWN_LEAD : ASSUMED_LEAD\}/,
+    );
     assert.match(assumptions, /"That's right"/);
     assert.match(assumptions, />\s*Change…\s*</);
     assert.match(assumptions, /maxLength=\{ASSUMPTION_TEXT_MAX\}/);
@@ -179,9 +190,15 @@ describe("the assumption on the attribute", () => {
   });
 
   it("shows a decision only once the server confirms it, and the context it answered at once", () => {
+    // Rewritten (B1l). Old end marker: `return (\n    <li className="tas-open">`. New: the
+    // card's kind (`const conflict = …`) is read right after `send`, before its markup.
+    const end = assumptions.indexOf(
+      'const conflict = item.kind === "CONFLICT";',
+    );
+    assert.ok(end > 0);
     const send = assumptions.slice(
       assumptions.indexOf("async function send("),
-      assumptions.indexOf('return (\n    <li className="tas-open">'),
+      end,
     );
     // Nothing is shown as decided before the answer: the context comes only from a 200.
     assert.match(

@@ -25,6 +25,7 @@ export function AgentQuestionPoint({
   saving,
   chips,
   title,
+  reason = "",
   why,
   foot,
   onAnswer,
@@ -36,6 +37,9 @@ export function AgentQuestionPoint({
   saving: boolean;
   chips: ReactNode;
   title: ReactNode;
+  /** What cannot be written without the fact (B1l point 5: the attribute criterion or the
+   * evidence request), under the question; "" for none. */
+  reason?: string;
   why: ReactNode;
   /** The card's footer around its primary action. */
   foot: (primary: ReactNode) => ReactNode;
@@ -64,6 +68,7 @@ export function AgentQuestionPoint({
     >
       {chips}
       {title}
+      {reason !== "" ? <p className="ur-hint ur-blocks">{reason}</p> : null}
       {row.context !== undefined && row.context !== "" ? (
         <p className="ur-hint">{row.context}</p>
       ) : null}

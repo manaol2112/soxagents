@@ -140,16 +140,84 @@ export type Attribute = {
   criteriaUpdatedFrom?: string;
   /** How many earlier versions of these criteria are kept (attribute_criteria_versions). */
   criteriaVersions?: number;
+  /** An OPEN conflict holds this attribute's acceptance until a person decides it (B1l point
+   * 6): accepting it is refused, and "Accept all" leaves it out. Absent: not held. */
+  heldByConflict?: boolean;
 };
 
 /** Where the question pass stands (B1j): the required walkthrough answers or values are not
- * in yet (WAITING); the attribute agent is checking what else it needs (CHECKING); or the pass
- * ran, or the understanding is complete (DONE). */
-export type QuestionPass = "WAITING" | "CHECKING" | "DONE";
+ * in yet (WAITING); the agents are checking what else they need (CHECKING); or the pass
+ * ran, or the understanding is complete (DONE). B1k/B1l: the pass is the IT audit
+ * specialist's review of the questions asked, and FAILED says its answer could not be used
+ * (the page offers Run again and Proceed without it; nothing waits on it). */
+export type QuestionPass = "WAITING" | "CHECKING" | "DONE" | "FAILED";
 export const QUESTION_PASSES: readonly QuestionPass[] = [
   "WAITING",
   "CHECKING",
   "DONE",
+  "FAILED",
+];
+
+/** The IT audit specialist's review of the questions asked (B1k, B1l; understanding_reviews):
+ * the latest one of the control. Agent output throughout, shown as the specialist's, never as
+ * a person's. */
+export type QuestionReviewStatus = "PENDING" | "READY" | "FAILED";
+export type QuestionReview = {
+  id: string;
+  status: QuestionReviewStatus;
+  /** The first read, or the one follow-up read on its own questions' answers. */
+  round: 1 | 2;
+  /** The review in narrative form, at most 150 words; "" unless READY. */
+  narrative: string;
+  /** Exact parts of the narrative naming what is not yet established, in the narrative's
+   * order; only those the narrative holds. */
+  marked: string[];
+  /** The attributes the specialist skipped after one correction ("not reviewed"). */
+  notReviewed: string[];
+  /** Its questions still waiting on a person. */
+  openQuestions: number;
+  reviewedAt: string | null;
+  /** One sentence, "" unless FAILED. */
+  failure: string;
+};
+
+/** The kind of fact a question asks for (B1l point 4: asked once, by key). */
+export type AskedFact =
+  | "PERFORMER"
+  | "APPROVER"
+  | "SYSTEM"
+  | "RECORD"
+  | "TIMING"
+  | "POPULATION"
+  | "EXCEPTION"
+  | "OTHER";
+export const ASKED_FACTS: readonly AskedFact[] = [
+  "PERFORMER",
+  "APPROVER",
+  "SYSTEM",
+  "RECORD",
+  "TIMING",
+  "POPULATION",
+  "EXCEPTION",
+  "OTHER",
+];
+
+/** What a question asks, by key: the attribute and the kind of fact, or, for a follow-up, the
+ * question whose answer opened it. */
+export type IssueAsks = {
+  attributeCode: string | null;
+  fact: AskedFact | null;
+  parentIssueId: string | null;
+};
+
+/** What an assumption is (B1l): the agent's assumption on a gap, a conflict with a confirmed
+ * fact (which holds the attribute's acceptance while open), or a question a person left as
+ * not known in Control Understanding. */
+export type AssumptionKind = "ASSUMPTION" | "CONFLICT" | "NOT_KNOWN";
+export const ASSUMPTION_KINDS: readonly AssumptionKind[] = [
+  "ASSUMPTION",
+  "CONFLICT",
+  "NOT_KNOWN",
 ];
 
 /** An assumption's standing. ACCEPTED_WITH_ATTRIBUTE (the attribute was accepted while it was
@@ -183,6 +251,8 @@ export type Assumption = {
   /** The attributes it names, by code ("A", "C"); none for an assumption on the whole set. */
   attributeCodes: string[];
   version: number;
+  /** What it is (B1l); ASSUMPTION on a body from before B1l. */
+  kind: AssumptionKind;
 };
 
 /** One earlier version of an attribute's criteria, kept on every change (B1j). */
@@ -392,8 +462,11 @@ export function criteriaState(criteria: AttributeCriteria): CriteriaState {
 export function criteriaToAccept(context: {
   approved: Attribute[];
 }): Attribute[] {
+  // A conflict holds the attribute's acceptance (B1l point 6): its criteria wait too.
   return context.approved.filter(
-    (item) => criteriaState(item.criteria) === "TO_ACCEPT",
+    (item) =>
+      criteriaState(item.criteria) === "TO_ACCEPT" &&
+      item.heldByConflict !== true,
   );
 }
 
@@ -544,10 +617,25 @@ export function acceptableRows(rows: readonly UnifiedRow[]): UnifiedRow[] {
   return rows.filter((row) => unifiedState(row, false) === "TO_ACCEPT");
 }
 
+/** Whether an OPEN conflict holds the row's acceptance (B1l point 6): on the attribute, or on
+ * the approved attribute a rewording replaces. */
+export function heldRow(row: Pick<UnifiedRow, "item" | "target">): boolean {
+  return (
+    row.item.heldByConflict === true || row.target?.heldByConflict === true
+  );
+}
+
+/** The rows "Accept all" accepts: every row to accept that no conflict holds. */
+export function acceptAllRows(rows: readonly UnifiedRow[]): UnifiedRow[] {
+  return acceptableRows(rows).filter((row) => !heldRow(row));
+}
+
+/** The items one acceptance sends: a row a conflict holds is never among them (the server
+ * refuses the whole call when one is, B1l point 6). */
 export function acceptItems(
   rows: readonly UnifiedRow[],
 ): Array<{ attribute_id: string; version: number }> {
-  return acceptableRows(rows).map((row) => ({
+  return acceptAllRows(rows).map((row) => ({
     attribute_id: row.item.id,
     version: row.item.version,
   }));
@@ -1130,7 +1218,9 @@ export type ContextIssue = {
   resolve: string;
   quotes: Array<{ source: string; title: string; quote: string }>;
   raisedBy: "AGENT" | "RULES";
-  status: "OPEN" | "RESOLVED" | "DISMISSED";
+  /** NOT_KNOWN (B1l point 1): a person's "Not known yet, proceed". Closed, never an answer,
+   * and never read by an agent as a fact. */
+  status: "OPEN" | "RESOLVED" | "DISMISSED" | "NOT_KNOWN";
   resolutionNote: string;
   version: number;
   /** A question the narrative's agents need the client to answer (0117), and the answers
@@ -1155,6 +1245,15 @@ export type ContextIssue = {
   wordingPending?: boolean;
   /** The question as short steps, each answer leading on or ending it; [] until written. */
   interview?: InterviewStep[];
+  /** Asked by the IT audit specialist's review (B1k), and in which read; false and null on
+   * a body from before B1k. */
+  fromReview?: boolean;
+  reviewRound?: 1 | 2 | null;
+  /** What it asks, by key (B1l point 4). */
+  asks?: IssueAsks;
+  /** The attribute criterion or evidence request that cannot be written without the fact,
+   * in one sentence (B1l point 5); "" for other questions. */
+  blocks?: string;
 };
 
 export type SupportingDocument = {
@@ -1747,6 +1846,9 @@ export type ControlContext = {
   questionPass?: QuestionPass | null;
   /** The agent's assumptions that name no attribute: shown at the top of the list. */
   setAssumptions?: Assumption[];
+  /** The latest IT audit specialist's review of the questions asked (B1k); null when none
+   * ran, or on a body from before B1k. */
+  questionReview?: QuestionReview | null;
   note: string;
 };
 
@@ -2072,6 +2174,13 @@ export function parseAssumption(value: unknown): Assumption | null {
   ) {
     return null;
   }
+  // B1l: a kind this page does not know is not shown as any of them.
+  if (
+    value.kind !== undefined &&
+    !ASSUMPTION_KINDS.some((each) => each === value.kind)
+  ) {
+    return null;
+  }
   const decidedBy = personOf(value.decided_by);
   const decidedAt = timeOrNull(value.decided_at);
   if (value.decided_by !== null && value.decided_by !== undefined) {
@@ -2101,6 +2210,7 @@ export function parseAssumption(value: unknown): Assumption | null {
     decidedAt,
     attributeCodes: strings(value.attribute_codes).slice(0, 12),
     version,
+    kind: ASSUMPTION_KINDS.find((each) => each === value.kind) ?? "ASSUMPTION",
   };
 }
 
@@ -2244,6 +2354,7 @@ function parseAttribute(item: Raw): Attribute {
       item.criteria_versions > 0
         ? item.criteria_versions
         : 0,
+    heldByConflict: item.held_by_conflict === true,
   };
 }
 
@@ -2383,7 +2494,7 @@ export function parseContext(value: unknown): ControlContext | null {
       raisedBy: item.raised_by === "AGENT" ? "AGENT" : "RULES",
       status: oneOf(
         item.status,
-        ["OPEN", "RESOLVED", "DISMISSED"] as const,
+        ["OPEN", "RESOLVED", "DISMISSED", "NOT_KNOWN"] as const,
         "OPEN",
       ),
       resolutionNote: str(item.resolution_note),
@@ -2420,6 +2531,7 @@ export function parseContext(value: unknown): ControlContext | null {
           next: str(answer.next),
         })),
       })),
+      ...issueReviewFields(item),
     })),
     documents: records(value.documents).map((item) => ({
       id: str(item.id),
@@ -2511,7 +2623,107 @@ export function parseContext(value: unknown): ControlContext | null {
     questionPass:
       QUESTION_PASSES.find((each) => each === value.question_pass) ?? null,
     setAssumptions: assumptionsOf(value.set_assumptions, 20),
+    questionReview: parseQuestionReview(value.review),
     note: str(value.note),
+  };
+}
+
+/** A question's B1k/B1l fields, read strictly; absent ones read as a question from before. */
+function issueReviewFields(item: Raw): {
+  fromReview: boolean;
+  reviewRound: 1 | 2 | null;
+  asks: IssueAsks;
+  blocks: string;
+} {
+  const fromReview = item.from_review === true;
+  const round = item.review_round;
+  const asks = isRecord(item.asks) ? item.asks : {};
+  const code = asks.attribute_code;
+  const parent = asks.parent_issue_id;
+  return {
+    fromReview,
+    reviewRound: fromReview && (round === 1 || round === 2) ? round : null,
+    asks: {
+      attributeCode:
+        typeof code === "string" && /^[A-Za-z0-9._-]{1,80}$/.test(code)
+          ? code
+          : null,
+      fact: ASKED_FACTS.find((each) => each === asks.fact) ?? null,
+      parentIssueId:
+        typeof parent === "string" && UUID.test(parent) ? parent : null,
+    },
+    // One sentence, as the server checks it; a long text is not shown as the reason.
+    blocks: plainLine(str(item.blocks), 400),
+  };
+}
+
+/** One line of agent text for a reason line: its spacing folded, "" when over `most`. */
+function plainLine(value: string, most: number): string {
+  const flat = value.replace(/\s+/g, " ").trim();
+  return flat.length > most || SECRET.test(flat) ? "" : flat;
+}
+
+const REVIEW_STATUSES: readonly QuestionReviewStatus[] = [
+  "PENDING",
+  "READY",
+  "FAILED",
+];
+/** The review's paragraph: at most 150 words as the server checks it, read up to a margin. */
+export const REVIEW_WORDS_MAX = 150;
+
+/**
+ * The latest specialist's review (B1k), read strictly, or null: an id, a status and a round
+ * this page knows. Its narrative is shown only when READY, and only whole (a paragraph over
+ * the words the server allows is not cut, it is not shown); a marked part is kept only where
+ * the narrative holds it word for word, so nothing is marked that the review does not say;
+ * the failure is one plain sentence, only when FAILED.
+ */
+export function parseQuestionReview(value: unknown): QuestionReview | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const id = str(value.id);
+  const status = REVIEW_STATUSES.find((each) => each === value.status);
+  const round = value.round;
+  if (
+    !/^[A-Za-z0-9-]{1,80}$/.test(id) ||
+    status === undefined ||
+    (round !== 1 && round !== 2)
+  ) {
+    return null;
+  }
+  const said = status === "READY" ? str(value.narrative).trim() : "";
+  const words = said === "" ? 0 : said.split(/\s+/).length;
+  const narrative = words > REVIEW_WORDS_MAX + 10 ? "" : said;
+  if (status === "READY" && narrative === "") {
+    return null;
+  }
+  const marked: string[] = [];
+  for (const part of strings(value.marked)) {
+    if (
+      part.trim() !== "" &&
+      narrative.includes(part) &&
+      !marked.includes(part) &&
+      marked.length < 12
+    ) {
+      marked.push(part);
+    }
+  }
+  const open = value.open_questions;
+  return {
+    id,
+    status,
+    round,
+    narrative,
+    marked,
+    notReviewed: strings(value.not_reviewed)
+      .filter((code) => /^[A-Za-z0-9._-]{1,80}$/.test(code))
+      .slice(0, 26),
+    openQuestions:
+      typeof open === "number" && Number.isInteger(open) && open > 0 ? open : 0,
+    reviewedAt: timeOrNull(value.reviewed_at),
+    failure:
+      status === "FAILED" ? plainNote(plainLine(str(value.failure), 300)) : "",
   };
 }
 
@@ -2539,7 +2751,10 @@ export type ContextIntent =
   | "document-link"
   | "document-unlink"
   | "assumption-confirm"
-  | "assumption-change";
+  | "assumption-change"
+  | "issue-not-known"
+  | "review-run"
+  | "review-proceed";
 
 export type ContextWrite =
   | { error: "invalid" }
@@ -2918,6 +3133,28 @@ export function contextWrite(fields: Fields): ContextWrite {
           })
         : { error: "invalid" };
     }
+    // B1l point 1: a person leaves a question as not known yet, with an optional note. It is
+    // closed as their "not known", never as an answer.
+    case "issue-not-known": {
+      const at = version(fields);
+      const issueId = text(fields, "issue_id");
+      const note = typeof fields.note === "string" ? fields.note.trim() : "";
+      return UUID.test(issueId) &&
+        at !== null &&
+        at >= 1 &&
+        notKnownNoteProblem(note) === null
+        ? ok("POST", `${control}/issues/${issueId}/not-known`, {
+            note,
+            version: at,
+          })
+        : { error: "invalid" };
+    }
+    // B1k/B1l: a person asks the specialist to review again (after a failed review, or once
+    // complete, whose findings become assumptions); or proceeds without a failed review.
+    case "review-run":
+      return ok("POST", `${control}/understanding/review/run`, {});
+    case "review-proceed":
+      return ok("POST", `${control}/understanding/review/proceed`, {});
     default:
       return { error: "invalid" };
   }
@@ -2956,6 +3193,25 @@ export function documentUploadTarget(
     path: `/organizations/${organizationId}/projects/${projectId}/source-documents/upload?${params.toString()}`,
   };
 }
+
+/** A note on a question left as not known (B1l point 1): optional, at most 500 characters. */
+export const NOT_KNOWN_NOTE_MAX = 500;
+
+/** Why a not-known note cannot be sent, or null when it can (none is fine). */
+export function notKnownNoteProblem(value: string): string | null {
+  const words = value.trim();
+  if (words.length > NOT_KNOWN_NOTE_MAX) {
+    return `Keep the note to ${NOT_KNOWN_NOTE_MAX} characters.`;
+  }
+  if (SECRET.test(words)) {
+    return "A note cannot hold a password or key.";
+  }
+  return null;
+}
+
+/** The server's refusal of an attribute held by a conflict (B1l point 6). */
+export const CONFLICT_HOLDS =
+  "A conflict on this attribute is to be decided first.";
 
 /** A changed assumption is the person's own words, 10 to 1,000 characters (B1j). */
 export const ASSUMPTION_TEXT_MIN = 10;
@@ -3028,6 +3284,7 @@ export function contextProblem(status: number, detail = ""): string | null {
         "This control is already on the current library version.",
       "the control changed":
         "This control changed while you were working. Refresh and try again.",
+      [CONFLICT_HOLDS]: CONFLICT_HOLDS,
     };
     return (
       known[detail] ??

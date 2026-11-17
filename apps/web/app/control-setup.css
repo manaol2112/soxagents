@@ -2362,6 +2362,137 @@
   opacity: 0.7;
 }
 
+/* The IT audit specialist's review of the questions asked (B1k; approved prototype
+   brief-proto/ureview2.png): under the understanding, after a rule, in the narrative's own
+   serif. The matters not yet established are marked quietly, a warm tint that wraps with the
+   text; nothing moves. */
+.ur-review {
+  display: grid;
+  gap: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ur-review-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ur-review-tile {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 22px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.ur-review-by {
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.ur-review-text {
+  margin: 0;
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: 15.5px;
+  line-height: 1.7;
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+}
+
+.ur-review-mark {
+  padding: 1px 2px;
+  color: inherit;
+  background: color-mix(in srgb, var(--warning-soft) 70%, transparent);
+  border-radius: 4px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+.ur-review-when {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.ur-review-quiet {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+/* A question's reason line: what cannot be written without the fact (B1l point 5). */
+.ur-blocks {
+  margin-top: -10px;
+}
+
+/* "Not known yet, proceed" (B1l point 1): an optional note under the question's foot. */
+.ur-notknown {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  animation: ur-notknown-in 200ms ease;
+}
+
+.ur-notknown label {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.ur-notknown textarea {
+  width: 100%;
+  min-height: 64px;
+  font: inherit;
+  font-size: 14px;
+}
+
+.ur-notknown-hint {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.ur-notknown .ur-foot-actions {
+  justify-content: flex-end;
+}
+
+@keyframes ur-notknown-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ur-notknown {
+    animation: none;
+  }
+}
+
 /* What the understanding is ready for: the gates' own verdicts. */
 .ur-ready {
   display: grid;

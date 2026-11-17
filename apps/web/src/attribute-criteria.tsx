@@ -3,6 +3,7 @@
 import { type ReactNode, useId, useState } from "react";
 import {
   type Attribute,
+  CONFLICT_HOLDS,
   type CriteriaState,
   criteriaState,
 } from "./control-context-model";
@@ -80,6 +81,13 @@ export function TailoredCriteria({
     (form.condition.trim() !== "" &&
       form.pass_criteria.trim() !== "" &&
       form.fail_criteria.trim() !== "");
+  // B1l point 6: an OPEN conflict on the attribute holds its acceptance until a person
+  // decides it; Accept is off, with the reason.
+  const held = item.heldByConflict === true;
+  const heldLine =
+    held && canAct && state === "TO_ACCEPT" ? (
+      <p className="tc-held">{CONFLICT_HOLDS}</p>
+    ) : null;
   const accept = () =>
     void action.run({
       intent: "criteria-accept",
@@ -165,13 +173,14 @@ export function TailoredCriteria({
         {state === "OWNED" ? <p className="tc-by">{owner}</p> : null}
         {notes}
         {editor}
+        {!editing ? heldLine : null}
         {!editing && (canAct || extra !== null) ? (
           <div className="tc-row-acts">
             {canAct && state === "TO_ACCEPT" ? (
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
-                disabled={action.pending}
+                disabled={action.pending || held}
                 onClick={accept}
               >
                 {action.pending ? "Accepting…" : "Accept"}
@@ -218,7 +227,8 @@ export function TailoredCriteria({
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
-                disabled={action.pending}
+                disabled={action.pending || held}
+                title={held ? CONFLICT_HOLDS : undefined}
                 onClick={accept}
               >
                 {action.pending ? "Accepting…" : "Accept"}

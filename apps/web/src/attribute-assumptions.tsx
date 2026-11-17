@@ -29,6 +29,11 @@ import {
   updatedFromLine,
   versionLine,
 } from "./understanding-once-model";
+import {
+  CONFLICT_LEAD,
+  CONFLICT_STANDS,
+  NOT_KNOWN_LEAD,
+} from "./understanding-specialist-model";
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
 
@@ -160,10 +165,20 @@ function OpenAssumption({
     }
   }
 
+  // B1l: a conflict with a confirmed fact holds the attribute until a person decides it, and
+  // a question left as not known in Control Understanding says so; each is decided with the
+  // same two choices.
+  const conflict = item.kind === "CONFLICT";
   return (
-    <li className="tas-open">
+    <li className={`tas-open${conflict ? " is-conflict" : ""}`}>
+      {conflict ? <p className="tas-kicker">{CONFLICT_LEAD}</p> : null}
       <p className="tas-assumed">
-        <strong>{ASSUMED_LEAD}</strong> {item.assumed}
+        {conflict ? null : (
+          <strong>
+            {item.kind === "NOT_KNOWN" ? NOT_KNOWN_LEAD : ASSUMED_LEAD}
+          </strong>
+        )}{" "}
+        {item.assumed}
       </p>
       {canAct && !changing ? (
         <div className="tas-acts">
@@ -173,7 +188,11 @@ function OpenAssumption({
             disabled={locked || busy !== ""}
             onClick={() => void send("assumption-confirm")}
           >
-            {busy === "confirm" ? "Recording…" : "That's right"}
+            {busy === "confirm"
+              ? "Recording…"
+              : conflict
+                ? CONFLICT_STANDS
+                : "That's right"}
           </button>
           <button
             type="button"
