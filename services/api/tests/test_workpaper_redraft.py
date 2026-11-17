@@ -32,6 +32,7 @@ from ai_workforce_api.db import connect
 from ai_workforce_api.engagement_close import closed_detail
 from ai_workforce_api.inbound import clean_text
 from ai_workforce_api.models import ModelConfig, ModelRaw, ModelRequest
+from ai_workforce_api.provenance import agent_actor
 from ai_workforce_api.workpaper_service import run_draft
 
 _ = migrated
@@ -290,7 +291,13 @@ def test_a_redraft_is_proposed_beside_the_persons_text_and_changes_nothing_until
         "section": bench.key, "proposal_id": proposal["id"], "status": "READY",
         "quotations_removed": 1,
     }  # fmt: skip
-    assert trail[1][2] == bench.team["owner_id"] and trail[1][3] is not None
+    # The agent is named as a draft names it: the engagement's workpaper-preparer
+    # instance, or none where the engagement is not staffed with one (provenance.
+    # agent_actor; this bench is not). Corrected on its first database run (16 November
+    # 2026): it expected an instance the bench never has.
+    with connect(migrated.url) as connection:
+        staffed = agent_actor(connection, UUID(str(bench.team["project"])), "workpaper-preparer")
+    assert trail[1][2] == bench.team["owner_id"] and trail[1][3] == staffed
     # A run of a proposal that is no longer PENDING does nothing.
     again = _Provider([bench.answer("Something else.")])
     assert bench.run(proposal["id"], again) == "SKIPPED" and again.requests == []
@@ -518,9 +525,16 @@ def test_who_may_redraft_and_where(migrated: Database, monkeypatch: pytest.Monke
     assert asks(TestClient(bench.owner.app)) == [401, 401, 401]
     # An agent principal is refused before anything is written.
     agent = Principal(kind=PrincipalKind.AGENT, id=bench.team["owner_id"])
+    # The version is read as the owner before the session is patched, so that what is
+    # refused is the agent's own requests (corrected on the first database run).
+    version = bench.current
     with monkeypatch.context() as patched:
         patched.setattr(workpaper_service, "_session_principal", lambda _request: agent)
-        refused = asks(None)
+        refused = [
+            bench.ask(workpaper_version=version).status_code,
+            bench.read().status_code,
+            bench.keep_mine(mine["id"]).status_code,
+        ]
     assert len(set(refused)) == 1 and refused[0] in (403, 404)
     where = (bench.team["org"], bench.team["project"], UUID(bench.paper_id), bench.key)
     calls: tuple[Callable[[psycopg.Connection[Any]], object], ...] = (
