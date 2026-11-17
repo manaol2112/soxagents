@@ -1370,11 +1370,26 @@ class LocalDraftScheduler:
                 logger.warning("planning a control's evidence failed; retrying")
                 try:
                     with connect(self._settings.database_url) as connection:
-                        connection.execute(
-                            "UPDATE evidence_plans SET run_status = 'PENDING', "
-                            "run_lease_until = NULL WHERE id = %s AND run_status = 'WORKING'",
-                            (plan_id,),
+                        # Reset for a retry only within the run's attempts: a run out of them
+                        # ends failed now, never left waiting for a claim that cannot succeed
+                        # (after the end-to-end check of the second fix round of B1k).
+                        exhausted = (
+                            connection.execute(
+                                "SELECT 1 FROM evidence_plans WHERE id = %s "
+                                "AND run_status = 'WORKING' AND run_attempts >= %s",
+                                (plan_id, PLAN_RUN_ATTEMPTS),
+                            ).fetchone()
+                            is not None
                         )
+                        if not exhausted:
+                            connection.execute(
+                                "UPDATE evidence_plans SET run_status = 'PENDING', "
+                                "run_lease_until = NULL "
+                                "WHERE id = %s AND run_status = 'WORKING'",
+                                (plan_id,),
+                            )
+                    if exhausted:
+                        break
                 except psycopg.Error:
                     logger.warning("an evidence plan run could not be reset for retry")
         with connect(self._settings.database_url) as connection:
@@ -1384,9 +1399,10 @@ class LocalDraftScheduler:
 
     def _follow_plan(self, plan_id: UUID) -> None:
         """A plan run that failed may have been busy when the specialist's read fell due (a
-        save it could not be queued over): it is queued now, over the failed run, keeping its
-        attempts, and taken here; one nothing could queue ends FAILED, so a due review is
-        never left unqueued (after the review of B1k, 16 November 2026;
+        save it could not be queued over): it is queued now, over the failed run, as a
+        follow-on run with its own attempts (the chain bounded by PLAN_RUN_FOLLOWS), and
+        taken here; one nothing could queue ends FAILED, so a due review is never left
+        unqueued (after the review of B1k, 16 November 2026;
         understanding_once.after_agents). A run that ends normally does this itself
         (evidence_plans.run_plan). Only with a model, as context_routes.changed queues it."""
         if not live_model(self._settings):

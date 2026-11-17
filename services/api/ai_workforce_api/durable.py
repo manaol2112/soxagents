@@ -1080,7 +1080,8 @@ def activities_for(
         """The run failed: the rules' plan stands. Then, as the local worker does
         (LocalDraftScheduler._follow_plan; after the review of B1k, 16 November 2026), the
         understanding is followed: a read that fell due while the run was busy is queued
-        again on the same plan, keeping its attempts (REQUEUED: the workflow runs it as a new
+        again on the same plan as a follow-on run with its own attempts, within the chain's
+        bound (evidence_plans.PLAN_RUN_FOLLOWS; REQUEUED: the workflow runs it as a new
         activity), or ends FAILED when nothing could queue it. Only with a model."""
         from ai_workforce_api.evidence_plans import REQUEUED, fail_plan_run
 

@@ -298,7 +298,7 @@ class PlanRunRequest(TypedDict):
 
 # What run_evidence_plan and fail_evidence_plan_run return when the plan was queued again
 # (evidence_plans.REQUEUED; the workflow module imports nothing of the API's), and how many
-# runs one workflow makes at most: the plan's attempts (3) bound it first.
+# runs one workflow makes at most: the first and evidence_plans.PLAN_RUN_FOLLOWS (3) more.
 PLAN_REQUEUED = "REQUEUED"
 PLAN_FOLLOWS = 4
 
@@ -313,8 +313,9 @@ class EvidencePlanRunWorkflow:
         """A run whose end queued the same plan again (REQUEUED: what fell due while it
         worked), or whose failure was followed by queueing it again, is run as a new activity
         with its own time limit, never inside the one before (after the review of B1k, 16
-        November 2026). The plan's attempts bound how often (evidence_plans.
-        PLAN_RUN_ATTEMPTS, kept on requeue); FOLLOWS bounds the workflow as well."""
+        November 2026). Each is a new run with its own attempts; the plan's follow-on runs are
+        bounded on the plan (evidence_plans.PLAN_RUN_FOLLOWS, 3, so a chain makes at most
+        PLAN_FOLLOWS runs), and FOLLOWS bounds the workflow as well."""
         result = "FAILED"
         for _turn in range(PLAN_FOLLOWS):
             try:

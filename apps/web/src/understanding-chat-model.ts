@@ -586,10 +586,16 @@ export type NotKnownNeed = {
   key: string;
   /** A statement value (ANSWER, or the sign-in settings' AUTH) or a walkthrough question:
    * the kinds the server reads a not-known for (understanding_chat.with_not_known). */
-  kind: "ANSWER" | "AUTH" | "WALKTHROUGH";
+  kind: NotKnownKind;
   question: string;
   note: string;
 };
+
+/** The need kinds a person may leave as not known yet, the same list as the server's
+ * (tests/contracts/control-understanding.json, values.not_known_kinds). A governing
+ * document (DOCUMENT) is not among them: it is answered in D&I Evidence. */
+export const NOT_KNOWN_KINDS = ["WALKTHROUGH", "ANSWER", "AUTH"] as const;
+export type NotKnownKind = (typeof NOT_KNOWN_KINDS)[number];
 
 const KINDS: readonly NeedKind[] = [
   "RCM",
@@ -770,16 +776,17 @@ export function parseReview(body: unknown): Review | null {
     }
     const need = raw as Record<string, unknown>;
     const kind = KINDS.find((each) => each === need.kind);
+    const notKnownKind = NOT_KNOWN_KINDS.find((each) => each === need.kind);
     // B1l point 1: left as not known yet. Never read as an answer: kept apart.
     if (
       need.status === "NOT_KNOWN" &&
-      (kind === "ANSWER" || kind === "AUTH" || kind === "WALKTHROUGH") &&
+      notKnownKind !== undefined &&
       typeof need.key === "string" &&
       !notKnown.some((each) => each.key === need.key)
     ) {
       notKnown.push({
         key: need.key,
-        kind,
+        kind: notKnownKind,
         question: (text(need.question) || text(need.label)).trim(),
         note: text(need.not_known_note)
           .replace(/\s+/g, " ")

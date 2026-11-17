@@ -2336,7 +2336,7 @@ def plan_and_issue(
         # The planner agent refines the rules' plan after the launch commits.
         cursor.execute(
             "UPDATE evidence_plans SET run_status = 'PENDING', run_attempts = 0, "
-            "run_lease_until = NULL, run_note = '', run_stage = '' "
+            "run_follows = 0, run_lease_until = NULL, run_note = '', run_stage = '' "
             "WHERE engagement_control_id = %s AND status = 'PROPOSED'",
             (control_id,),
         )
@@ -2347,6 +2347,11 @@ def plan_and_issue(
 # The planner agent's run on a launched control (migration 0077)
 
 PLAN_RUN_ATTEMPTS = 3
+# How many follow-on runs one chain makes at most (queue_for_understanding with requeue: a
+# run whose end, or failure, queued the same plan again), each a new run with its own
+# PLAN_RUN_ATTEMPTS: 3, so a chain makes at most 4 runs, as the durable workflow's
+# PLAN_FOLLOWS turns (after the end-to-end check of the second fix round of B1k).
+PLAN_RUN_FOLLOWS = 3
 # How long a queued plan run may wait for a worker before it reads as stopped (the D&I
 # requests list then says what a person does, instead of "working" for ever). Counted from
 # evidence_plans.run_queued_at, which a trigger sets whenever a run is queued (0150).
@@ -2374,7 +2379,8 @@ def queue_unrefined_plans(connection: psycopg.Connection[Any], project_id: UUID)
         rows = cursor.execute(
             """
             UPDATE evidence_plans
-            SET run_status = 'PENDING', run_lease_until = NULL, run_note = '',
+            SET run_status = 'PENDING', run_follows = 0, run_lease_until = NULL,
+                run_note = '',
                 run_stage = '', run_codes = '{}', run_cause = ''
             WHERE project_id = %s AND status = 'PROPOSED' AND source = 'RULES'
               AND run_status = 'IDLE' AND run_attempts = 0
@@ -2408,7 +2414,8 @@ def replan_for_new_attributes(connection: psycopg.Connection[Any], control_id: U
         row = cursor.execute(
             f"""
             UPDATE evidence_plans p
-            SET run_status = 'PENDING', run_attempts = 0, run_lease_until = NULL,
+            SET run_status = 'PENDING', run_attempts = 0, run_follows = 0,
+                run_lease_until = NULL,
                 run_note = '', run_stage = '', run_codes = '{{}}', run_cause = ''
             WHERE p.engagement_control_id = %s
               AND p.run_status NOT IN ('PENDING', 'WORKING')
@@ -2611,9 +2618,14 @@ def queue_for_understanding(
     (understanding_review.informed_update, the one limited update of B1j).
 
     `requeue` (after the review of B1k, 16 November 2026): queued by the end of an agent run
-    on the control, not by a person's save (understanding_review.follow_or_fail): the run's
-    attempts are kept, and nothing is queued once they reach PLAN_RUN_ATTEMPTS, so runs that
-    keep queueing each other, or keep failing, always end."""
+    on the control, not by a person's save (understanding_review.follow_or_fail). Rewritten
+    after the end-to-end check of the second fix round (16 November 2026). Old: the run's
+    attempts were kept, so a chain of follow-on runs could leave a PENDING plan nobody could
+    claim (the claim requires run_attempts < PLAN_RUN_ATTEMPTS). New: a follow-on run is a new
+    run with its own attempts for its retries, and the chain is bounded on its own
+    (run_follows, at most PLAN_RUN_FOLLOWS follow-on runs): past it nothing is queued, and the
+    caller ends the read still due FAILED, so runs that keep queueing each other always end.
+    Any other queue starts the chain again."""
     from ai_workforce_api import understanding_review as review
     from ai_workforce_api.control_context import understanding_completed
 
@@ -2630,16 +2642,17 @@ def queue_for_understanding(
                 f"""
                 UPDATE evidence_plans p
                 SET run_status = 'PENDING',
-                    run_attempts = CASE WHEN %(requeue)s THEN p.run_attempts ELSE 0 END,
+                    run_attempts = 0,
+                    run_follows = CASE WHEN %(requeue)s THEN p.run_follows + 1 ELSE 0 END,
                     run_lease_until = NULL,
                     run_note = '', run_stage = 'ATTRIBUTES', run_codes = '{{}}', run_cause = ''
                 WHERE p.project_id = %(project)s AND p.engagement_control_id = %(control)s
                   AND p.run_status IN ('IDLE', 'FAILED') AND NOT {_AGENTS_AT_WORK_SQL}
-                  AND (NOT %(requeue)s OR p.run_attempts < %(attempts)s)
+                  AND (NOT %(requeue)s OR p.run_follows < %(follows)s)
                 RETURNING p.id
                 """,
                 {"requeue": requeue, "project": project_id, "control": control_id,
-                 "attempts": PLAN_RUN_ATTEMPTS},
+                 "follows": PLAN_RUN_FOLLOWS},
             ).fetchone()  # fmt: skip
             if row is not None:
                 review.queue_due(cursor, project_id, control_id, due)
@@ -2659,17 +2672,18 @@ def queue_for_understanding(
             f"""
             UPDATE evidence_plans p
             SET run_status = 'PENDING',
-                run_attempts = CASE WHEN %(requeue)s THEN p.run_attempts ELSE 0 END,
+                run_attempts = 0,
+                run_follows = CASE WHEN %(requeue)s THEN p.run_follows + 1 ELSE 0 END,
                 run_lease_until = NULL,
                 run_note = '', run_stage = 'ATTRIBUTES', run_codes = %(codes)s,
                 run_cause = %(cause)s
             WHERE p.project_id = %(project)s AND p.engagement_control_id = %(control)s
               AND p.run_status = 'IDLE' AND NOT {_AGENTS_AT_WORK_SQL}
-              AND (NOT %(requeue)s OR p.run_attempts < %(attempts)s)
+              AND (NOT %(requeue)s OR p.run_follows < %(follows)s)
             RETURNING p.id
             """,
             {"requeue": requeue, "codes": codes, "cause": cause[:300], "project": project_id,
-             "control": control_id, "attempts": PLAN_RUN_ATTEMPTS},
+             "control": control_id, "follows": PLAN_RUN_FOLLOWS},
         ).fetchone()  # fmt: skip
     return None if row is None else UUID(str(row[0]))
 
@@ -2738,7 +2752,8 @@ def queue_assumption_update(
         row = cursor.execute(
             f"""
             UPDATE evidence_plans p
-            SET run_status = 'PENDING', run_attempts = 0, run_lease_until = NULL,
+            SET run_status = 'PENDING', run_attempts = 0, run_follows = 0,
+                run_lease_until = NULL,
                 run_note = '', run_stage = 'ATTRIBUTES', run_codes = %s, run_cause = %s
             WHERE p.project_id = %s AND p.engagement_control_id = %s
               AND NOT {_AGENTS_AT_WORK_SQL}
@@ -2768,7 +2783,8 @@ def request_attributes_run(
         row = cursor.execute(
             f"""
             UPDATE evidence_plans p
-            SET run_status = 'PENDING', run_attempts = 0, run_lease_until = NULL,
+            SET run_status = 'PENDING', run_attempts = 0, run_follows = 0,
+                run_lease_until = NULL,
                 run_note = '', run_stage = 'ATTRIBUTES', run_codes = '{{}}', run_cause = ''
             WHERE p.project_id = %s AND p.engagement_control_id = %s
               AND NOT {_AGENTS_AT_WORK_SQL}
@@ -2861,12 +2877,13 @@ def reclaim_interrupted_plan_runs(connection: psycopg.Connection[Any]) -> int:
     process that was working on them is gone (a restart, or a reload on a saved file), so
     their leases protect nobody: they go back to waiting and resume at once, instead of
     reading as working until a lease of many minutes runs out (12 November 2026). A run out
-    of attempts is marked failed with a note the page shows. Not for a worker that shares
-    the database with other workers: there a live lease is somebody's."""
+    of attempts is marked failed with a note the page shows, a waiting one too (no worker can
+    claim it; after the end-to-end check of the second fix round of B1k). Not for a worker
+    that shares the database with other workers: there a live lease is somebody's."""
     with transaction(connection) as cursor:
         cursor.execute(
             "UPDATE evidence_plans SET run_status = 'FAILED', run_lease_until = NULL, "
-            "run_note = %s WHERE run_status = 'WORKING' AND run_attempts >= %s",
+            "run_note = %s WHERE run_status IN ('WORKING', 'PENDING') AND run_attempts >= %s",
             (STOPPED_NOTE, PLAN_RUN_ATTEMPTS),
         )
         waiting = cursor.execute(
@@ -3039,6 +3056,9 @@ def run_plan(
             (PLAN_LEASE_MINUTES, plan_id, PLAN_RUN_ATTEMPTS),
         ).fetchone()
     if row is None:
+        # Nothing to claim. A run out of attempts that nobody can claim ends FAILED here, so
+        # no worker skips it for ever (end_exhausted_run).
+        end_exhausted_run(connection, plan_id, reviewing=provider is not None)
         return "SKIPPED"
     organization_id, project_id, control_id = (
         UUID(str(row[0])),
@@ -3150,9 +3170,9 @@ def run_plan(
     # saved meanwhile, or what the attributes follow once completed (a save the run did not
     # read, which changed() could not queue over it). Queued as a new run the caller takes
     # (REQUEUED), never run inside this one, so each run stays within its own time limit;
-    # the attempts are kept, so the runs that follow each other end within PLAN_RUN_ATTEMPTS,
-    # and a read still due that nothing could queue ends FAILED (follow_or_fail). The reads
-    # are bounded by their own budget too (understanding_review.READS).
+    # each a new run with its own attempts, and the chain ends within PLAN_RUN_FOLLOWS
+    # follow-on runs; a read still due that nothing could queue ends FAILED (follow_or_fail).
+    # The reads are bounded by their own budget too (understanding_review.READS).
     if provider is not None:
         from ai_workforce_api.understanding_review import follow_or_fail
 
@@ -3377,11 +3397,15 @@ def _run_stage(connection: psycopg.Connection[Any], control_id: UUID, stage: str
         )
 
 
-def fail_plan_run(connection: psycopg.Connection[Any], plan_id: UUID) -> None:
+def fail_plan_run(
+    connection: psycopg.Connection[Any], plan_id: UUID, exhausted_only: bool = False
+) -> bool:
     """The agent could not plan: the rules' plan stands, and still waits for a person. The
     run keeps its stage, which says it was one that follows the understanding
     (attributes_run reads it as stopped); the next run sets it again. What the agents
-    would have read is kept (run_tried), so nothing queues the same run again by itself."""
+    would have read is kept (run_tried), so nothing queues the same run again by itself.
+    `exhausted_only`: only a run no worker can claim any more (end_exhausted_run). Returns
+    whether the run was ended."""
     tried = ""
     try:
         found = connection.execute(
@@ -3400,8 +3424,10 @@ def fail_plan_run(connection: psycopg.Connection[Any], plan_id: UUID) -> None:
             "run_tried = CASE WHEN %s <> '' THEN %s ELSE run_tried END, "
             "run_note = 'The planner agent could not refine this plan; the rules plan "
             "stands and waits for approval.' WHERE id = %s AND run_status IN "
-            "('PENDING', 'WORKING') RETURNING engagement_control_id",
-            (tried, tried, plan_id),
+            "('PENDING', 'WORKING') AND (NOT %s OR (run_attempts >= %s AND "
+            "(run_status = 'PENDING' OR run_lease_until < clock_timestamp()))) "
+            "RETURNING engagement_control_id",
+            (tried, tried, plan_id, exhausted_only, PLAN_RUN_ATTEMPTS),
         )
         failed = cursor.fetchone()
         if failed is not None:
@@ -3415,6 +3441,41 @@ def fail_plan_run(connection: psycopg.Connection[Any], plan_id: UUID) -> None:
             from ai_workforce_api.phase_release import settle_after_run
 
             settle_after_run(cursor.connection, UUID(str(failed[0])), "PLAN_RUN")
+    return failed is not None
+
+
+# A plan run out of attempts that no worker can claim any more (the claim in run_plan
+# requires run_attempts < PLAN_RUN_ATTEMPTS): waiting, or at work under an expired lease.
+EXHAUSTED_RUN_SQL = """
+    run_attempts >= %(attempts)s
+    AND (run_status = 'PENDING'
+         OR (run_status = 'WORKING' AND run_lease_until < clock_timestamp()))
+"""
+
+
+def end_exhausted_run(
+    connection: psycopg.Connection[Any], plan_id: UUID, reviewing: bool = True
+) -> bool:
+    """A plan run out of attempts that nobody can claim (EXHAUSTED_RUN_SQL) ends FAILED, as a
+    failed run does (fail_plan_run: the read it carried ends FAILED with it), and, with a
+    model (`reviewing`), a read still due that nothing could start ends FAILED with its
+    sentence (understanding_review.fail_if_unqueued). The page then offers Run again and
+    Proceed without it instead of "Checking..." with nothing at work (B1l point 7; after the
+    end-to-end check of the second fix round of B1k, 16 November 2026: before, such a run was
+    skipped by every worker and handed back by the page's follow every 30 seconds). Returns
+    whether it was ended; a run still claimable is left as it is."""
+    found = connection.execute(
+        f"SELECT project_id, engagement_control_id FROM evidence_plans "
+        f"WHERE id = %(plan)s AND {EXHAUSTED_RUN_SQL}",
+        {"plan": plan_id, "attempts": PLAN_RUN_ATTEMPTS},
+    ).fetchone()
+    if found is None or not fail_plan_run(connection, plan_id, exhausted_only=True):
+        return False
+    if reviewing:
+        from ai_workforce_api.understanding_review import fail_if_unqueued
+
+        fail_if_unqueued(connection, UUID(str(found[0])), UUID(str(found[1])))
+    return True
 
 
 def plan_runner(settings: Settings) -> Callable[[UUID], str]:

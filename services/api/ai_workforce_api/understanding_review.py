@@ -1410,7 +1410,8 @@ def request_run(
         plan_row = cursor.execute(
             f"""
             UPDATE evidence_plans p
-            SET run_status = 'PENDING', run_attempts = 0, run_lease_until = NULL,
+            SET run_status = 'PENDING', run_attempts = 0, run_follows = 0,
+                run_lease_until = NULL,
                 run_note = '', run_stage = %s, run_codes = '{{}}', run_cause = ''
             WHERE p.project_id = %s AND p.engagement_control_id = %s
               AND NOT {_AGENTS_AT_WORK_SQL}
@@ -2235,7 +2236,8 @@ def answer_not_known(
     kind NOT_KNOWN, to confirm or change on the attribute. It closes the question for the
     gates (phase_release.answers_waiting, understanding_waits) while no answer is given; an
     answer given later stands over it. 404 for a question the control is not asked or a value
-    its statement does not ask; 409 when it is answered or already left as not known; 422 for
+    its statement does not ask (a governing document's name among them: it is answered in D&I
+    Evidence); 409 when it is answered or already left as not known; 422 for
     a note with a credential."""
     from ai_workforce_api import attribute_assumptions
     from ai_workforce_api.authorization import NotVisible
@@ -2263,7 +2265,10 @@ def answer_not_known(
 
         design = design_for(connection, control_id)
         slot = next((x for x in ([] if design is None else design.slots) if x.key == key), None)
-        if slot is None or slot.automatic or key in AUTOMATIC:
+        # A governing document's name is answered with a linked document in D&I Evidence
+        # (or as having none), never left as not known (the web never offers it; after the
+        # end-to-end check of the second fix round of B1k, 16 November 2026).
+        if slot is None or slot.automatic or key in AUTOMATIC or slot.document:
             raise NotVisible()
         if slot.value.strip():
             raise ContextState(SETTLED)
@@ -2319,17 +2324,34 @@ def follow(connection: psycopg.Connection[Any], project_id: UUID, control_id: UU
     already queued is returned to be handed to the worker again (its claim is atomic, so one
     already taken is skipped). When nothing could be queued or handed over and the read is
     still due, it ends FAILED with its sentence (follow_or_fail), so the page offers Run
-    again and Proceed without it instead of "Checking..." with nothing at work."""
-    from ai_workforce_api.evidence_plans import queue_for_understanding
+    again and Proceed without it instead of "Checking..." with nothing at work.
 
+    A plan run out of attempts that no worker can claim (waiting, or at work under an expired
+    lease) is never handed back: it ends FAILED first, and the read due with it
+    (evidence_plans.end_exhausted_run). Added after the end-to-end check of the second fix
+    round of B1k (16 November 2026): before, such a run was handed back on every follow and
+    skipped by the worker, so the page polled "Checking..." for ever."""
+    from ai_workforce_api.evidence_plans import (
+        EXHAUSTED_RUN_SQL,
+        PLAN_RUN_ATTEMPTS,
+        end_exhausted_run,
+        queue_for_understanding,
+    )
+
+    for (exhausted,) in connection.execute(
+        f"SELECT id FROM evidence_plans WHERE engagement_control_id = %(control)s "
+        f"AND {EXHAUSTED_RUN_SQL}",
+        {"control": control_id, "attempts": PLAN_RUN_ATTEMPTS},
+    ).fetchall():
+        end_exhausted_run(connection, UUID(str(exhausted)))
     queued = queue_for_understanding(connection, project_id, control_id)
     if queued is not None:
         return queued
     waiting = connection.execute(
         "SELECT id FROM evidence_plans WHERE engagement_control_id = %s "
-        "AND (run_status = 'PENDING' "
+        "AND run_attempts < %s AND (run_status = 'PENDING' "
         "OR (run_status = 'WORKING' AND run_lease_until < clock_timestamp()))",
-        (control_id,),
+        (control_id, PLAN_RUN_ATTEMPTS),
     ).fetchone()
     if waiting is not None:
         return UUID(str(waiting[0]))
@@ -2342,12 +2364,12 @@ def follow_or_fail(
 ) -> UUID | None:
     """After an agent run on the control ended (understanding_once.after_agents: a run's end,
     a failed run, a narrative run): the read that fell due meanwhile is queued again on the
-    plan run without resetting its attempts (evidence_plans.queue_for_understanding with
-    requeue, so a run that keeps failing stays within PLAN_RUN_ATTEMPTS). When nothing could
+    plan run as a follow-on run (evidence_plans.queue_for_understanding with requeue: its own
+    attempts, and the chain within PLAN_RUN_FOLLOWS follow-on runs). When nothing could
     be queued and the read is still due with nothing at work, it ends FAILED with its
     sentence (B1l point 7: a failed review never blocks; Run again or Proceed without it).
-    `requeue` False (a narrative run's end, which is not the plan run's attempt) starts its
-    attempts again. Returns the plan run queued, for the worker to take as a new run."""
+    `requeue` False (a narrative run's end, which is not the plan run's chain) starts the
+    chain again. Returns the plan run queued, for the worker to take as a new run."""
     from ai_workforce_api.evidence_plans import queue_for_understanding
 
     queued = queue_for_understanding(connection, project_id, control_id, requeue=requeue)

@@ -1143,11 +1143,22 @@ def understanding_review(
     )
 
 
-# The needs a person may leave as not known yet, by the not-known record's subject.
+# The needs a person may leave as not known yet, by the not-known record's subject: the
+# kinds the web offers "Not known yet" on and reads back (tests/contracts/
+# control-understanding.json, values.not_known_kinds). Rewritten after the end-to-end check
+# of the second fix round of B1k (16 November 2026). Old: VALUE also read a DOCUMENT need as
+# NOT_KNOWN, which the web neither offers nor reads, so such a need vanished from the page.
+# New: a governing document is answered in D&I Evidence (or as having none), never left as
+# not known; understanding_review.answer_not_known refuses a document slot.
 _NOT_KNOWN_KINDS: dict[str, tuple[str, ...]] = {
     "WALKTHROUGH": ("WALKTHROUGH",),
-    "VALUE": ("ANSWER", "AUTH", "DOCUMENT"),
+    "VALUE": ("ANSWER", "AUTH"),
 }
+
+
+def not_known_kinds() -> list[str]:
+    """Every need kind a not-known record is read for, in order (the contract pins it)."""
+    return [kind for kinds in _NOT_KNOWN_KINDS.values() for kind in kinds]
 
 
 def with_not_known(

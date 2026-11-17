@@ -724,8 +724,14 @@ def test_a_due_read_is_queued_at_a_runs_end_its_failure_and_the_workers_start() 
     body = plans[plans.index("def run_plan(") : plans.index("def _now(")]
     assert body.count("run_plan(") == 1 and "_depth" not in body
     assert "p.run_status IN ('IDLE', 'FAILED') AND NOT" in plans
-    assert "AND (NOT %(requeue)s OR p.run_attempts < %(attempts)s)" in plans
-    assert "run_attempts = CASE WHEN %(requeue)s THEN p.run_attempts ELSE 0 END" in plans
+    # Rewritten after the end-to-end check of the second fix round of B1k (16 November 2026).
+    # Old: a requeue kept the attempts ("run_attempts = CASE WHEN %(requeue)s THEN
+    # p.run_attempts ELSE 0 END") and was refused at PLAN_RUN_ATTEMPTS, so a chain could leave
+    # a PENDING plan nobody could claim. New: a requeue is a new run (its attempts start
+    # again), counted on the chain, and refused at PLAN_RUN_FOLLOWS.
+    assert "AND (NOT %(requeue)s OR p.run_follows < %(follows)s)" in plans
+    assert "run_follows = CASE WHEN %(requeue)s THEN p.run_follows + 1 ELSE 0 END" in plans
+    assert "run_attempts = CASE WHEN %(requeue)s" not in plans
     worker = (ROOT / "pbc_drafting.py").read_text(encoding="utf-8")
     assert "self._follow_plan(plan_id)" in worker and "queue_due_reads(connection)" in worker
     assert "if result == REQUEUED:" in worker and "requeue=True" in worker
@@ -1026,9 +1032,12 @@ def test_the_process_map_agent_never_asks_its_gaps_are_assumptions() -> None:
     from ai_workforce_api import process_understanding
 
     source = inspect.getsource(process_understanding.build)
-    branch = source[source.index('elif built == "AGENT":') :][:1400]
+    branch = source[source.index('elif built == "AGENT":') :][:1800]
     assert "attribute_assumptions.record(" in branch
-    assert "from_issue(item) for item in found" in branch and "found = []" in branch
+    # Rewritten after the end-to-end check of the second fix round of B1k (16 November 2026).
+    # Old: "from_issue(item) for item in found", so no assumption carried the codes its
+    # finding named and every conflict held the whole set. New: each carries them.
+    assert "from_issue(item, codes) for item, codes in coded" in branch and "found = []" in branch
 
 
 def test_the_attribute_body_says_its_code_and_the_set_hold_is_on_the_attributes() -> None:
@@ -1055,3 +1064,238 @@ def test_the_gates_read_only_a_standing_not_known_as_closed() -> None:
     assert "subject = 'WALKTHROUGH' AND superseded_at IS NULL" in inspect.getsource(
         walkthrough_answers.unanswered_required
     )
+
+
+def test_a_document_is_never_read_or_left_as_not_known() -> None:
+    # End-to-end check of the second fix round of B1k (16 November 2026): "the server can
+    # mark a DOCUMENT need NOT_KNOWN, but the web drops it". Old: VALUE read ANSWER, AUTH and
+    # DOCUMENT needs as NOT_KNOWN. New: a governing document is answered in D&I Evidence, so
+    # a not-known record never turns a DOCUMENT need NOT_KNOWN, and answer_not_known refuses
+    # a document slot.
+    import inspect
+
+    from ai_workforce_api.understanding_chat import NeedBody, not_known_kinds, with_not_known
+
+    document = NeedBody(key="change-policy", kind="DOCUMENT", label="Policy",
+                        question="Which policy governs changes?", value="", options=[],
+                        why="", status="MISSING", source="NONE",
+                        needed_for=["EVIDENCE"])  # fmt: skip
+    [shown] = with_not_known([document], {("VALUE", "change-policy"): "Asked."})
+    assert shown.status == "MISSING" and shown.not_known_note == ""
+    assert "DOCUMENT" not in not_known_kinds()
+    source = inspect.getsource(review.answer_not_known)
+    assert "or key in AUTOMATIC or slot.document:" in source
+
+
+# After the end-to-end check of the second fix round of B1k (16 November 2026).
+
+
+def test_a_chain_of_follow_on_runs_is_bounded_as_the_durable_workflow() -> None:
+    # A chain makes at most the first run and PLAN_RUN_FOLLOWS more: the durable workflow's
+    # PLAN_FOLLOWS turns, so its last turn never ends REQUEUED in a chain it started.
+    from ai_workforce_api.durable_workflow import PLAN_FOLLOWS
+    from ai_workforce_api.evidence_plans import PLAN_RUN_FOLLOWS
+
+    assert PLAN_RUN_FOLLOWS + 1 == PLAN_FOLLOWS
+    migration = ROOT.parent.parent.parent / "migrations" / "0174_plan_run_follows.sql"
+    sql = migration.read_text(encoding="utf-8")
+    assert "ADD COLUMN run_follows integer NOT NULL DEFAULT 0" in sql
+    # Every queue that is not a requeue starts the chain again.
+    plans = (ROOT / "evidence_plans.py").read_text(encoding="utf-8")
+    assert plans.count("run_attempts = 0, run_follows = 0,") == 3
+    reviews = (ROOT / "understanding_review.py").read_text(encoding="utf-8")
+    assert "run_attempts = 0, run_follows = 0," in reviews
+
+
+class _Found:
+    def __init__(self, rows: list[tuple[Any, ...]]) -> None:
+        self._rows = rows
+
+    def fetchone(self) -> tuple[Any, ...] | None:
+        return self._rows[0] if self._rows else None
+
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        return list(self._rows)
+
+
+class _Plans:
+    """A connection over one plan run's row, enough for the worker's retry and follow."""
+
+    def __init__(self, attempts: int) -> None:
+        self.attempts = attempts
+        self.statements: list[str] = []
+
+    def __enter__(self) -> _Plans:
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+    def execute(self, sql: str, params: Any = ()) -> _Found:
+        from ai_workforce_api.evidence_plans import PLAN_RUN_ATTEMPTS
+
+        self.statements.append(sql)
+        if sql.startswith("SELECT 1 FROM evidence_plans"):
+            return _Found([(1,)] if self.attempts >= PLAN_RUN_ATTEMPTS else [])
+        return _Found([])
+
+
+def test_the_local_worker_fails_a_run_out_of_attempts_instead_of_leaving_it_waiting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Blocker: a run reset after its last attempt was skipped by the next iteration
+    # (SKIPPED, no exception), so it stayed PENDING with no claim possible, and neither
+    # fail_plan_run nor the follow ran. Now the worker resets for a retry only within the
+    # attempts, and a run out of them ends failed and is followed.
+    from ai_workforce_api import evidence_plans, pbc_drafting
+    from ai_workforce_api.settings import Settings
+
+    plans = _Plans(attempts=1)
+    ran: list[int] = []
+    failed: list[UUID] = []
+    followed: list[UUID] = []
+
+    def plan(_plan_id: UUID) -> str:
+        plans.attempts += 1
+        ran.append(plans.attempts)
+        raise RuntimeError("the model call failed")
+
+    monkeypatch.setattr(pbc_drafting, "connect", lambda _url: plans)
+    monkeypatch.setattr(evidence_plans, "fail_plan_run",
+                        lambda _connection, plan_id: failed.append(plan_id))  # fmt: skip
+    worker = pbc_drafting.LocalDraftScheduler(Settings(database_url=""), plan=plan)
+    monkeypatch.setattr(worker, "_draft_released", lambda _plan_id: None)
+    monkeypatch.setattr(worker, "_follow_plan", followed.append)
+    plan_id = uuid4()
+    worker._attempt_plan(plan_id)
+    # Two claims were left (attempts 2 and 3); the third iteration never runs.
+    assert ran == [2, 3]
+    assert failed == [plan_id] and followed == [plan_id]
+    resets = [sql for sql in plans.statements if sql.startswith("UPDATE evidence_plans")]
+    assert len(resets) == 1
+
+
+def test_a_run_nobody_can_claim_is_ended_failed_with_the_read_due(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Blocker and minor (durable): a run out of attempts, waiting or under an expired lease,
+    # ends FAILED, and a read still due that nothing could start ends FAILED with its
+    # sentence (fail_if_unqueued); a run still claimable is left as it is.
+    from ai_workforce_api import evidence_plans
+
+    project, control = uuid4(), uuid4()
+    ended: list[tuple[UUID, bool]] = []
+    recorded: list[UUID] = []
+
+    def fail(_connection: Any, plan_id: UUID, exhausted_only: bool = False) -> bool:
+        ended.append((plan_id, exhausted_only))
+        return True
+
+    def record(_connection: Any, _project: UUID, control_id: UUID) -> bool:
+        recorded.append(control_id)
+        return True
+
+    monkeypatch.setattr(evidence_plans, "fail_plan_run", fail)
+    monkeypatch.setattr(review, "fail_if_unqueued", record)
+
+    class _One:
+        def __init__(self, rows: list[tuple[Any, ...]]) -> None:
+            self.rows = rows
+            self.sql = ""
+
+        def execute(self, sql: str, params: Any = ()) -> _Found:
+            self.sql = sql
+            return _Found(self.rows)
+
+    plan_id = uuid4()
+    exhausted = _One([(project, control)])
+    assert evidence_plans.end_exhausted_run(exhausted, plan_id) is True  # type: ignore[arg-type]
+    assert ended == [(plan_id, True)] and recorded == [control]
+    assert "run_attempts >= %(attempts)s" in exhausted.sql
+    assert "run_lease_until < clock_timestamp()" in exhausted.sql
+    claimable = _One([])
+    assert evidence_plans.end_exhausted_run(claimable, uuid4()) is False  # type: ignore[arg-type]
+    assert len(ended) == 1
+    # Without a model no read is recorded.
+    assert evidence_plans.end_exhausted_run(exhausted, plan_id, reviewing=False) is True  # type: ignore[arg-type]
+    assert recorded == [control]
+    plans = (ROOT / "evidence_plans.py").read_text(encoding="utf-8")
+    run = plans[plans.index("def run_plan(") : plans.index("def _now(")]
+    assert "end_exhausted_run(connection, plan_id, reviewing=provider is not None)" in run
+    failed = plans[plans.index("def fail_plan_run(") : plans.index("def end_exhausted_run(")]
+    assert "\"('PENDING', 'WORKING') AND (NOT %s OR (run_attempts >= %s AND \"" in failed
+
+
+def test_follow_ends_a_run_out_of_attempts_and_never_hands_it_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Minor (durable): a plain run WORKING under an expired lease at PLAN_RUN_ATTEMPTS was
+    # handed back by follow every 30 seconds and skipped by the worker, so the page polled
+    # "Checking..." for ever. Follow ends it first, and hands back only a claimable run.
+    from ai_workforce_api import evidence_plans
+
+    project, control, stuck = uuid4(), uuid4(), uuid4()
+    ended: list[UUID] = []
+    recorded: list[UUID] = []
+
+    def end(_connection: Any, plan_id: UUID) -> bool:
+        ended.append(plan_id)
+        return True
+
+    def record(_connection: Any, _project: UUID, control_id: UUID) -> bool:
+        recorded.append(control_id)
+        return True
+
+    monkeypatch.setattr(evidence_plans, "end_exhausted_run", end)
+    monkeypatch.setattr(evidence_plans, "queue_for_understanding", lambda *_a, **_k: None)
+    monkeypatch.setattr(review, "fail_if_unqueued", record)
+
+    class _Follow:
+        def __init__(self) -> None:
+            self.waiting_sql = ""
+
+        def execute(self, sql: str, params: Any = ()) -> _Found:
+            if "run_attempts >= %(attempts)s" in sql:
+                return _Found([(stuck,)])
+            self.waiting_sql = sql
+            return _Found([])
+
+    connection = _Follow()
+    assert review.follow(connection, project, control) is None  # type: ignore[arg-type]
+    assert ended == [stuck] and recorded == [control]
+    assert "AND run_attempts < %s" in connection.waiting_sql
+
+
+def test_the_process_map_agents_assumptions_carry_the_codes_its_findings_name() -> None:
+    # Minor: process-map conflicts carried no codes (from_issue(item)), so every one held the
+    # whole set. Each now carries the codes its finding names, as the attribute agent's;
+    # only one naming none bears on the set.
+    import inspect
+
+    from ai_workforce_api import attribute_assumptions, process_understanding
+    from ai_workforce_api.control_context import AnswerIssue, checked_issues_with_codes
+
+    def issue(topic: str, codes: list[str]) -> AnswerIssue:
+        return AnswerIssue.model_validate({
+            "kind": "AMBIGUOUS", "topic": topic, "detail": f"{topic} is unclear.",
+            "why": "It changes the test.", "resolve": "Ask the owner.", "quotes": [],
+            "attribute_codes": codes,
+        })  # fmt: skip
+
+    coded = checked_issues_with_codes(
+        [issue("Approver", ["A2"]), issue("Population", [])], [], "PROCESS"
+    )
+    assert [(found.topic, codes) for found, codes in coded] == [
+        ("Approver", ("A2",)), ("Population", ()),
+    ]  # fmt: skip
+    drafts = [attribute_assumptions.from_issue(found, codes) for found, codes in coded]
+    assert [None if d is None else d.codes for d in drafts] == [("A2",), ()]
+    schema = process_understanding.PROCESS_SCHEMA["properties"]["issues"]["items"]
+    assert "attribute_codes" in schema["properties"]
+    assert "attribute_codes" not in schema["required"]
+    assert "give in attribute_codes the codes of the approved attributes" in (
+        process_understanding.SYSTEM_PROMPT
+    )
+    source = inspect.getsource(process_understanding.build)
+    assert "from_issue(item, codes) for item, codes in coded" in source
+    assert '"process-map/3"' in source

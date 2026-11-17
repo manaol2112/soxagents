@@ -119,6 +119,10 @@ def test_the_values_both_sides_read_are_the_same() -> None:
     values = CONTRACT["values"]
     assert list(typing.get_args(understanding_review.NotRun)) == values["review_not_run"]
     assert list(typing.get_args(understanding_chat.NeedStatus)) == values["need_status"]
+    # Added after the end-to-end check of the second fix round of B1k (16 November 2026): the
+    # need kinds a not-known is read for are the ones the web keeps apart (DOCUMENT is not).
+    assert understanding_chat.not_known_kinds() == values["not_known_kinds"]
+    assert "DOCUMENT" not in values["not_known_kinds"]
     assert list(typing.get_args(understanding_once.QuestionPass)) == values["question_pass"]
     status = understanding_review.ReviewRequestBody.model_fields["status"].annotation
     assert list(typing.get_args(status)) == values["review_request_status"]

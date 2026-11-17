@@ -28,6 +28,7 @@
   "values": {
     "review_not_run": ["", "NO_MODEL", "PROCEEDED", "ACCEPTED"],
     "need_status": ["CONFIRMED", "PROPOSED", "MISSING", "NOT_KNOWN"],
+    "not_known_kinds": ["WALKTHROUGH", "ANSWER", "AUTH"],
     "question_pass": ["WAITING", "CHECKING", "DONE", "FAILED"],
     "review_request_status": ["PENDING", "FAILED"],
     "set_held_sentence": "A conflict on the attributes as a set is to be decided first.",

@@ -20,7 +20,10 @@ import {
   parseReviewRequest,
   SET_CONFLICT_HOLDS,
 } from "../apps/web/src/control-context-model.ts";
-import { parseReview } from "../apps/web/src/understanding-chat-model.ts";
+import {
+  NOT_KNOWN_KINDS,
+  parseReview,
+} from "../apps/web/src/understanding-chat-model.ts";
 import { updatedFromLine } from "../apps/web/src/understanding-once-model.ts";
 
 type Route = {
@@ -39,6 +42,7 @@ type Contract = {
   values: {
     review_not_run: string[];
     need_status: string[];
+    not_known_kinds: string[];
     question_pass: string[];
     review_request_status: string[];
     set_held_sentence: string;
@@ -263,6 +267,14 @@ describe("Every field the contract names is read where the API sends it", () => 
         ["auth-settings", "AUTH", ""],
       ],
     );
+  });
+
+  it("keeps apart exactly the not-known kinds the API reads, never a document", () => {
+    // Added after the end-to-end check of the second fix round of B1k (16 November 2026):
+    // the API read a DOCUMENT need as NOT_KNOWN, which the web dropped. Both sides now pin
+    // the same kinds, and DOCUMENT is not among them.
+    assert.deepEqual([...NOT_KNOWN_KINDS], CONTRACT.values.not_known_kinds);
+    assert.ok(!CONTRACT.values.not_known_kinds.includes("DOCUMENT"));
   });
 
   it("words the holds and a reopened acceptance as the API does", () => {

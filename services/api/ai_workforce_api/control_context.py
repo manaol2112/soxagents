@@ -1165,3 +1165,17 @@ def checked_issues(
             )
         )
     return found
+
+
+def checked_issues_with_codes(
+    raw: list[AnswerIssue], sources: list[Source], origin: IssueOrigin
+) -> list[tuple[Issue, tuple[str, ...]]]:
+    """The issues as checked_issues shapes them, each with the attribute codes its finding
+    names (AnswerIssue.attribute_codes), for the assumption it becomes: only a finding naming
+    none bears on, and for a conflict holds, the whole set (after the end-to-end check of the
+    second fix round of B1k, 16 November 2026, for the process-map agent). Pure."""
+    return [
+        (issue, tuple(item.attribute_codes))
+        for item in raw[:5]
+        for issue in checked_issues([item], sources, origin)
+    ]

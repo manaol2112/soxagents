@@ -234,9 +234,9 @@ def after_agents(
     understanding may be complete now, and the review or what the attributes follow may be
     due (B1l point 1: a read that fell due while the run was busy is queued now, never left
     unqueued; one nothing could queue ends FAILED, understanding_review.follow_or_fail).
-    `requeue` (a failed plan run) keeps the plan run's attempts, so a run that keeps failing
-    is not queued again past PLAN_RUN_ATTEMPTS. Returns the plan run queued, for the worker
-    to take."""
+    `requeue` (a failed plan run) queues a follow-on run, with its own attempts, within the
+    chain's bound (evidence_plans.PLAN_RUN_FOLLOWS), so runs that keep failing always end.
+    Returns the plan run queued, for the worker to take."""
     from ai_workforce_api.understanding_review import follow_or_fail
 
     complete(connection, project_id, control_id)

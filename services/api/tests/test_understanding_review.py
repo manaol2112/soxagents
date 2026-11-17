@@ -1380,17 +1380,23 @@ def test_a_due_read_nothing_could_start_ends_failed_and_may_be_proceeded_without
 ) -> None:
     # Decided for the fix round: FAILED, with a sentence, when a read is due and nothing is
     # queued after the follow attempt, and proceed accepts that state.
+    # Rewritten after the end-to-end check of the second fix round of B1k (16 November 2026).
+    # Old: the run's attempts at their limit (run_attempts 3) refused the requeue, since a
+    # requeue kept them. New: a requeue is a new run with its own attempts, and what bounds it
+    # is the chain's follow-on runs (run_follows at PLAN_RUN_FOLLOWS).
+    from ai_workforce_api.evidence_plans import PLAN_RUN_FOLLOWS
+
     team, control, _scheduler, client = _ready(migrated, "ur-not-started")
     _plan_state(migrated, control, "PENDING")
     _answer_required(migrated, team, control, client)
     with connect(migrated.url) as connection:
         connection.execute(
-            "UPDATE evidence_plans SET run_status = 'FAILED', run_attempts = %s "
+            "UPDATE evidence_plans SET run_status = 'FAILED', run_follows = %s "
             "WHERE engagement_control_id = %s",
-            (3, UUID(control)),
+            (PLAN_RUN_FOLLOWS, UUID(control)),
         )
         connection.commit()
-        # The end of a failed run: queued again only within its attempts, so not now.
+        # The end of a failed run: queued again only within the chain's bound, so not now.
         assert review.follow_or_fail(connection, team["project"], UUID(control)) is None
         connection.commit()
     assert [row[:3] for row in _reviews(migrated, control)] == [(1, "UNDERSTANDING", "FAILED")]
@@ -1403,7 +1409,10 @@ def test_a_due_read_nothing_could_start_ends_failed_and_may_be_proceeded_without
 
 
 def test_a_run_whose_end_finds_a_read_due_queues_a_new_run(migrated: Database) -> None:
-    # Decided for the fix round: no recursion inside one activity; the attempts are kept.
+    # Decided for the fix round: no recursion inside one activity. Rewritten after the
+    # end-to-end check of the second fix round of B1k (16 November 2026). Old: the attempts
+    # were kept on the requeue (run_attempts >= 1). New: the follow-on run is a new run with
+    # its own attempts (run_attempts 0), and the chain counts it (run_follows 1).
     from ai_workforce_api.evidence_plans import REQUEUED, run_plan
 
     team, control, _scheduler, client = _ready(migrated, "ur-requeued")
@@ -1416,12 +1425,12 @@ def test_a_run_whose_end_finds_a_read_due_queues_a_new_run(migrated: Database) -
     assert first in ("DONE", REQUEUED)
     [attempts] = _rows(
         migrated,
-        "SELECT run_attempts, run_status FROM evidence_plans WHERE id = %s",
+        "SELECT run_attempts, run_status, run_follows FROM evidence_plans WHERE id = %s",
         plan_id,
     )
     if first == REQUEUED:
-        # Queued again on the same plan, its attempts kept (never reset by a run's end).
-        assert attempts[1] == "PENDING" and attempts[0] >= 1
+        # Queued again on the same plan as a follow-on run: its own attempts, counted once.
+        assert attempts == (0, "PENDING", 1)
 
 
 def test_an_open_conflict_holds_the_set_from_being_accepted_on_the_database(
@@ -1450,3 +1459,127 @@ def test_an_open_conflict_holds_the_set_from_being_accepted_on_the_database(
     assert decided.status_code == 200, decided.text
     with connect(migrated.url) as connection, connection.cursor() as cursor:
         assert attributes_accepted(cursor, UUID(control))
+
+
+# After the end-to-end check of the second fix round of B1k (16 November 2026): a run nobody
+# can claim never leaves the page "Checking..." with neither Run again nor Proceed.
+
+
+def _exhaust(migrated: Database, control: str, status: str, lease: str | None) -> UUID:
+    from ai_workforce_api.evidence_plans import PLAN_RUN_ATTEMPTS
+
+    plan_id = _plan_run(migrated, control)[0]
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE evidence_plans SET run_status = %s, run_attempts = %s, run_lease_until = "
+            "CASE WHEN %s::text IS NULL THEN NULL ELSE clock_timestamp() + %s::interval END "
+            "WHERE id = %s",
+            (status, PLAN_RUN_ATTEMPTS, lease, lease, plan_id),
+        )
+        connection.commit()
+    return UUID(str(plan_id))
+
+
+def test_a_follow_on_run_has_its_own_attempts_and_the_chain_is_bounded(
+    migrated: Database,
+) -> None:
+    # Blocker: a chain of requeued runs kept its attempts and could leave a PENDING plan no
+    # worker could claim. A follow-on run starts its attempts again and is counted on the
+    # chain; past PLAN_RUN_FOLLOWS nothing is queued, and the read still due ends FAILED
+    # with its sentence, so the page offers Run again and Proceed.
+    from ai_workforce_api.evidence_plans import PLAN_RUN_FOLLOWS, queue_for_understanding
+
+    team, control, _scheduler, client = _ready(migrated, "ur-chain")
+    _plan_state(migrated, control, "PENDING")
+    _answer_required(migrated, team, control, client)
+    _plan_state(migrated, control, "IDLE")
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE evidence_plans SET run_attempts = 2, run_follows = %s "
+            "WHERE engagement_control_id = %s",
+            (PLAN_RUN_FOLLOWS - 1, UUID(control)),
+        )
+        connection.commit()
+        queued = queue_for_understanding(connection, team["project"], UUID(control), requeue=True)
+        connection.commit()
+    assert queued is not None
+    [row] = _rows(migrated, "SELECT run_attempts, run_follows, run_status FROM evidence_plans "
+                  "WHERE id = %s", queued)  # fmt: skip
+    assert row == (0, PLAN_RUN_FOLLOWS, "PENDING")
+    assert [row[:3] for row in _reviews(migrated, control)] == [(1, "UNDERSTANDING", "PENDING")]
+
+    # Another control whose chain is at its bound when its run ends with a read due.
+    other_team, other, _other_scheduler, other_client = _ready(migrated, "ur-chain-bound")
+    _plan_state(migrated, other, "PENDING")
+    _answer_required(migrated, other_team, other, other_client)
+    _plan_state(migrated, other, "IDLE")
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE evidence_plans SET run_follows = %s WHERE engagement_control_id = %s",
+            (PLAN_RUN_FOLLOWS, UUID(other)),
+        )
+        connection.commit()
+        assert review.follow_or_fail(connection, other_team["project"], UUID(other)) is None
+        connection.commit()
+    assert [row[:3] for row in _reviews(migrated, other)] == [(1, "UNDERSTANDING", "FAILED")]
+    body = _context(other_team, other, other_client)
+    assert body["question_pass"] == "FAILED" and body["review_due"] is False
+    assert body["review"]["failure"] == review.NOT_STARTED_SENTENCE
+    # A person's Run again starts a new chain.
+    again = other_client.post(f"{_path(other_team, other)}/understanding/review/run")
+    assert again.status_code == 200, again.text
+    [row] = _rows(migrated, "SELECT run_attempts, run_follows, run_status FROM evidence_plans "
+                  "WHERE engagement_control_id = %s", UUID(other))  # fmt: skip
+    assert row == (0, 0, "PENDING")
+
+
+def test_a_waiting_run_out_of_attempts_ends_failed_when_a_worker_takes_it(
+    migrated: Database,
+) -> None:
+    # Blocker: a PENDING run at PLAN_RUN_ATTEMPTS was skipped by every worker for ever.
+    # run_plan's claim fails, and the run ends FAILED with the read it carried.
+    from ai_workforce_api.evidence_plans import run_plan
+
+    team, control, _scheduler, client = _ready(migrated, "ur-exhausted-pending")
+    _plan_state(migrated, control, "PENDING")
+    _answer_required(migrated, team, control, client)
+    plan_id = _exhaust(migrated, control, "PENDING", None)
+    with connect(migrated.url) as connection:
+        review.queue_due(connection.cursor(), team["project"], UUID(control), 1)
+        connection.commit()
+    agents = _Agents(migrated, team, control)
+    with connect(migrated.url) as connection:
+        assert run_plan(connection, agents, plan_id) == "SKIPPED"
+    [row] = _rows(migrated, "SELECT run_status FROM evidence_plans WHERE id = %s", plan_id)
+    assert row == ("FAILED",)
+    assert [row[:3] for row in _reviews(migrated, control)] == [(1, "UNDERSTANDING", "FAILED")]
+    body = _context(team, control, client)
+    assert body["question_pass"] == "FAILED" and body["review_due"] is False
+    proceeded = client.post(f"{_path(team, control)}/understanding/review/proceed")
+    assert proceeded.status_code == 200, proceeded.text
+
+
+def test_follow_never_hands_back_a_run_out_of_attempts_under_an_expired_lease(
+    migrated: Database,
+) -> None:
+    # Minor (durable): a plain run left WORKING with an expired lease at PLAN_RUN_ATTEMPTS
+    # made review_due true for ever; follow handed it back every 30 seconds and the worker
+    # skipped it. Follow ends it FAILED and the read due with it.
+    team, control, scheduler, client = _ready(migrated, "ur-exhausted-lease")
+    _plan_state(migrated, control, "PENDING")
+    _answer_required(migrated, team, control, client)
+    plan_id = _exhaust(migrated, control, "WORKING", "-1 minute")
+    assert _context(team, control, client)["review_due"] is True
+    handed = len(scheduler.plans)
+    followed = client.post(f"{_path(team, control)}/understanding/review/follow")
+    assert followed.status_code == 200, followed.text
+    assert followed.json()["question_pass"] == "FAILED"
+    assert followed.json()["review_due"] is False
+    assert len(scheduler.plans) == handed
+    [row] = _rows(migrated, "SELECT run_status FROM evidence_plans WHERE id = %s", plan_id)
+    assert row == ("FAILED",)
+    assert [row[:3] for row in _reviews(migrated, control)] == [(1, "UNDERSTANDING", "FAILED")]
+    # Asked again, nothing changes and nothing is handed over.
+    again = client.post(f"{_path(team, control)}/understanding/review/follow")
+    assert again.status_code == 200 and len(_reviews(migrated, control)) == 1
+    assert len(scheduler.plans) == handed
