@@ -4,6 +4,7 @@ import hashlib
 import logging
 import re
 import secrets
+from ipaddress import ip_address
 from typing import Any, Literal
 from urllib.parse import urlencode, urlsplit
 from uuid import UUID
@@ -156,7 +157,7 @@ def register_auth(
             )
         if provider is not None:
             listed.append(ProviderBody(id="entra", label="Microsoft", login_path="/auth/login"))
-        preview = settings.preview_login_enabled and request.url.hostname in LOOPBACK_HOSTS
+        preview = settings.preview_login_enabled and _from_this_machine(request, settings)
         return ProvidersBody(providers=listed, preview=preview)
 
     @app.get("/auth/login")
@@ -179,7 +180,7 @@ def register_auth(
 
     @app.get("/auth/preview")
     def preview(request: Request) -> Response:
-        if not settings.preview_login_enabled or request.url.hostname not in LOOPBACK_HOSTS:
+        if not settings.preview_login_enabled or not _from_this_machine(request, settings):
             raise HTTPException(status_code=404, detail="not found")
         if settings.database_url == "":
             raise HTTPException(status_code=503, detail="authentication unavailable")
@@ -245,7 +246,8 @@ def _begin_login(
         return RedirectResponse(hop, status_code=302)
     # A network address starts only so many sign-ins in a window (Step 7); the count is
     # kept with the login attempts, failing open if it cannot be kept.
-    if settings.database_url != "" and _throttled(settings, "login", client_address(request)):
+    address = client_address(request, settings)
+    if settings.database_url != "" and _throttled(settings, "login", address):
         return _login_failed(settings, "throttled")
     binding = secrets.token_urlsafe(32)
     try:
@@ -286,7 +288,8 @@ def _finish_login(
     state = request.query_params.get("state", "")
     if state == "":
         return _login_failed(settings, "failed")
-    if settings.database_url != "" and _throttled(settings, "callback", client_address(request)):
+    address = client_address(request, settings)
+    if settings.database_url != "" and _throttled(settings, "callback", address):
         return _login_failed(settings, "throttled")
     try:
         flow = _take_attempt(settings, state)
@@ -305,7 +308,7 @@ def _finish_login(
         logger.warning("oidc callback failed: %s", issuer)
         return _login_failed(settings, "failed")
     try:
-        raw_token = _open_session(settings, identity, client_address(request))
+        raw_token = _open_session(settings, identity, address)
     except RateLimited:
         return _login_failed(settings, "throttled")
     except AccountLinkError:
@@ -325,6 +328,17 @@ def _finish_login(
     _set_session_cookie(response, settings, raw_token)
     _clear_login_cookie(response, settings)
     return response
+
+
+def _from_this_machine(request: Request, settings: Settings) -> bool:
+    """Whether the caller is on this machine: its network address (the socket's peer, or
+    what a trusted proxy saw) is a loopback address. Never the Host header, which any
+    caller writes as it likes (security review, 17 November 2026: a request naming Host:
+    localhost from another machine opened the preview sign-in)."""
+    try:
+        return ip_address(client_address(request, settings)).is_loopback
+    except ValueError:
+        return False
 
 
 def _callback_host(request: Request, redirect_uri: str) -> str | None:

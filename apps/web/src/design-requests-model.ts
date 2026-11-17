@@ -162,10 +162,12 @@ export type RequestState = "UPDATING" | "TO_ACCEPT" | "ACCEPTED";
 /** The chip each state shows, as the attributes list words its own. */
 export const REQUEST_CHIPS: Record<
   RequestState,
-  { label: string; tone: "ai" | "success" }
+  { label: string; tone: "ai" | "success" | "warning" }
 > = {
   UPDATING: { label: "Updating…", tone: "ai" },
-  TO_ACCEPT: { label: "To accept", tone: "ai" },
+  // Waits on a person: the warning tone the step's header uses for the same state (shadcn/ui
+  // sweep, 17 November 2026). Violet is kept for what an agent is doing.
+  TO_ACCEPT: { label: "To accept", tone: "warning" },
   ACCEPTED: { label: "Accepted", tone: "success" },
 };
 
@@ -596,6 +598,32 @@ function isDrafting(
   );
 }
 
+/** Whether the coverage line carries the check: no attribute is left unaddressed, read from
+ * the chips. Not from `uncovered`, which leaves out every line while the list is empty
+ * (17 November 2026: a check beside "0 of 3 attributes addressed"). */
+export function coverageComplete(view: RequestsList): boolean {
+  return view.coverage.every((item) => item.state !== "UNCOVERED");
+}
+
+/** The decision box's line: where the requests leave the attributes, as the coverage line
+ * counts them. "All" only when a request addresses every one; never "all 3" beside "2 of
+ * 3 attributes addressed, 1 with a recorded reason" (17 November 2026). */
+export function decideLine(view: RequestsList): string {
+  const sent = "Each request is still approved before it is sent.";
+  const n = view.attributes.length;
+  const covered = view.coverage.filter(
+    (item) => item.state === "COVERED",
+  ).length;
+  if (n === 0 || !coverageComplete(view)) {
+    return sent;
+  }
+  if (covered === n) {
+    return `Together they address all ${plural(n, "attribute")}. ${sent}`;
+  }
+  const rest = n - covered;
+  return `Together they address ${covered} of ${plural(n, "attribute")}; ${rest === 1 ? "the other has" : `the other ${rest} have`} a recorded reason. ${sent}`;
+}
+
 /** What the D&I Evidence step shows before its requests are drafted: nothing of its own
  * (hidden: the evidence workspace takes over), one line while an earlier step holds it,
  * the list, or the list at rest while the requests are drafted. */
@@ -822,7 +850,13 @@ export function requestsView(input: RequestsInput): RequestsView {
                   };
   return {
     mode: drafting ? "drafting" : "list",
-    failure: runFailureLine(input.plan, working),
+    // A list a person settled asks nothing more: the planner's old failure line ("Plan the
+    // evidence again, or change the requests yourself") is not said over it (17 November
+    // 2026: never a call to act beside "nothing is needed").
+    failure:
+      settled && !toConfirm && held === ""
+        ? null
+        : runFailureLine(input.plan, working),
     title:
       rows.length === 0 ? "No requests yet" : plural(rows.length, "request"),
     rows,

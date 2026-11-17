@@ -39,8 +39,8 @@
   color: var(--cx-muted);
   background: none;
   border: 0;
-  font-size: 12px;
-  font-weight: 550;
+  font-size: var(--fs-sm);
+  font-weight: 500;
 }
 
 .cx .cx-status::before {
@@ -64,7 +64,7 @@
 }
 
 .cx .tone-warning.cx-status::before {
-  background: #e08a00;
+  background: var(--warning);
 }
 
 .cx .tone-success.cx-status {
@@ -88,7 +88,7 @@
   align-items: center;
   gap: 0.375rem;
   color: var(--cx-faint);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   font-variant-numeric: tabular-nums;
 }
 
@@ -100,9 +100,9 @@
   color: var(--cx-text);
   background: var(--surface);
   border: 1px solid var(--cx-line);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   box-shadow: var(--cx-shadow);
-  font-size: 16px;
+  font-size: var(--fs-lg);
   line-height: 1;
   text-decoration: none;
 }
@@ -112,7 +112,7 @@
 }
 
 .cx-pager-btn.is-disabled {
-  opacity: 0.4;
+  opacity: 0.5;
   box-shadow: none;
 }
 
@@ -134,7 +134,7 @@
   text-align: left;
   background: var(--surface-muted);
   border: 1px solid var(--border-subtle);
-  border-radius: 8px;
+  border-radius: var(--radius);
   box-shadow: none;
   font: inherit;
   font-weight: 400;
@@ -169,12 +169,12 @@
 button.cite-open {
   height: 26px;
   padding: 0 0.6rem;
-  color: #fff;
+  color: var(--text-on-accent);
   background: var(--accent-hover);
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   box-shadow: none;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   cursor: pointer;
 }
@@ -188,7 +188,7 @@ button.cite-open:hover {
   align-items: center;
   gap: 0.25rem;
   color: var(--text-tertiary);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 500;
 }
 
@@ -220,9 +220,9 @@ button.cite-open:hover {
   color: var(--cx-accent-ink);
   background: var(--cx-accent-soft);
   border: 1px solid var(--accent-border);
-  border-radius: 10px;
-  font-size: 14px;
-  font-weight: 700;
+  border-radius: var(--radius-lg);
+  font-size: var(--fs-md);
+  font-weight: 600;
 }
 
 .cx-phase.is-done .cx-phase-no {
@@ -245,8 +245,8 @@ button.cite-open:hover {
 .cx-phase-title h2 {
   margin: 0.125rem 0 0.25rem;
   color: var(--cx-ink);
-  font-size: 17px;
-  font-weight: 650;
+  font-size: var(--fs-xl);
+  font-weight: 600;
   letter-spacing: -0.015em;
 }
 
@@ -254,7 +254,7 @@ button.cite-open:hover {
   max-width: 64ch;
   margin: 0;
   color: var(--cx-muted);
-  font-size: 13px;
+  font-size: var(--fs-base);
   line-height: 1.5;
 }
 
@@ -270,7 +270,7 @@ button.cite-open:hover {
   align-items: center;
   gap: 0.4rem;
   color: var(--cx-muted);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .cx-phase-agent svg {
@@ -335,8 +335,8 @@ button.cite-open:hover {
 }
 
 .cx-step.is-active {
-  border-color: var(--accent-border);
-  box-shadow: 0 0 0 3px rgb(59 91 219 / 6%);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-xs);
 }
 
 .cx-step-head {
@@ -361,24 +361,24 @@ button.cite-open:hover {
   background: var(--cx-tint);
   border: 1px solid var(--cx-line);
   border-radius: 999px;
-  font-size: 12px;
-  font-weight: 700;
+  font-size: var(--fs-sm);
+  font-weight: 600;
 }
 
 .cx-step.is-active .cx-step-no {
-  color: #fff;
+  color: var(--text-on-accent);
   background: var(--cx-accent);
   border-color: var(--cx-accent);
 }
 
 .cx-step.is-done .cx-step-no {
-  color: #fff;
+  color: var(--text-on-status);
   background: var(--cx-green);
   border-color: var(--cx-green);
 }
 
 .cx-step.is-issue .cx-step-no {
-  color: #fff;
+  color: var(--text-on-status);
   background: var(--cx-red);
   border-color: var(--cx-red);
 }
@@ -386,22 +386,22 @@ button.cite-open:hover {
 .cx-step-head h3 {
   margin: 0;
   color: var(--cx-ink);
-  font-size: 14px;
-  font-weight: 650;
+  font-size: var(--fs-md);
+  font-weight: 600;
 }
 
 .cx-step-head p {
   margin: 0.125rem 0 0;
   color: var(--cx-muted);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   line-height: 1.45;
 }
 
 .cx-step-note {
   flex: none;
   color: var(--cx-muted);
-  font-size: 12px;
-  font-weight: 550;
+  font-size: var(--fs-sm);
+  font-weight: 500;
   white-space: nowrap;
 }
 
@@ -447,7 +447,7 @@ button.cite-open:hover {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-xl);
-  box-shadow: 0 24px 64px rgb(15 23 42 / 0.3);
+  box-shadow: var(--shadow-pop);
   outline: none;
 }
 
@@ -467,15 +467,15 @@ button.cite-open:hover {
 .nw-head h2 {
   margin: 0;
   color: var(--text-strong);
-  font-size: 18px;
-  font-weight: 650;
+  font-size: var(--fs-xl);
+  font-weight: 600;
   letter-spacing: -0.015em;
 }
 
 .nw-lede {
   margin: 0.375rem 0 0;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-base);
   line-height: 1.5;
 }
 
@@ -488,7 +488,7 @@ button.cite-open:hover {
   color: var(--text-secondary);
   background: none;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--radius);
   cursor: pointer;
 }
 
@@ -508,7 +508,7 @@ button.cite-open:hover {
 .nw-problem {
   margin: 0;
   color: var(--danger);
-  font-size: 13px;
+  font-size: var(--fs-base);
 }
 
 .nw-actions {
@@ -541,28 +541,28 @@ button.cite-open:hover {
   color: var(--warning);
   background: var(--warning-soft);
   border: 1px solid var(--warning-border);
-  border-radius: 8px;
-  font-size: 13px;
+  border-radius: var(--radius);
+  font-size: var(--fs-base);
   line-height: 1.45;
 }
 
 .cc-blockers p,
 .cc-issue p {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--fs-base);
   line-height: 1.45;
 }
 
 .cc-why {
   margin-top: 0.25rem !important;
   color: var(--cx-muted, var(--text-secondary));
-  font-size: 12.5px !important;
+  font-size: var(--fs-sm) !important;
 }
 
 .cc-why span {
   margin-right: 0.35rem;
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   font-weight: 600;
   letter-spacing: 0.03em;
   text-transform: uppercase;
@@ -582,7 +582,7 @@ button.cite-open:hover {
   padding: 0;
   list-style: none;
   border: 1px solid var(--cx-line, var(--border));
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 .cc-item {
@@ -610,9 +610,9 @@ button.cite-open:hover {
   place-items: center;
   color: var(--cx-muted, var(--text-secondary));
   background: var(--surface-sunken);
-  border-radius: 6px;
-  font-size: 11.5px;
-  font-weight: 700;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  font-weight: 600;
 }
 
 .cc-item-body {
@@ -624,14 +624,14 @@ button.cite-open:hover {
 .cc-text {
   margin: 0;
   color: var(--cx-ink, var(--text-strong));
-  font-size: 13.5px;
+  font-size: var(--fs-md);
   line-height: 1.45;
 }
 
 .cc-replaces {
   margin: 0;
   color: var(--text-tertiary);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   text-decoration: line-through;
 }
 
@@ -650,16 +650,10 @@ button.cite-open:hover {
   padding: 0 0.45rem;
   color: var(--cx-muted, var(--text-secondary));
   background: var(--surface-sunken);
-  border-radius: 5px;
-  font-size: 11px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-2xs);
   font-weight: 600;
   white-space: nowrap;
-}
-
-.cc-badge.is-inferred,
-.cc-badge.is-question {
-  color: var(--warning);
-  background: var(--warning-soft);
 }
 
 .cc-badge.is-conflict {
@@ -672,16 +666,11 @@ button.cite-open:hover {
   background: var(--accent-soft);
 }
 
-.cc-badge.is-reviewed {
-  color: var(--success);
-  background: var(--success-soft);
-}
-
 .cc-quote {
   overflow: hidden;
   max-width: 100%;
   color: var(--cx-muted, var(--text-secondary));
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-style: italic;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -711,9 +700,9 @@ button.cite-open:hover {
   height: 32px;
   padding: 0 0.625rem;
   border: 1px solid var(--cx-line, var(--border));
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-base);
 }
 
 .cc-reword {
@@ -727,7 +716,7 @@ button.cite-open:hover {
 .cc-empty {
   padding: 0.75rem;
   color: var(--text-tertiary);
-  font-size: 13px;
+  font-size: var(--fs-base);
 }
 
 .cc-proposals,
@@ -742,8 +731,8 @@ button.cite-open:hover {
   gap: 0.5rem;
   align-items: center;
   margin: 0.25rem 0 0;
-  font-size: 13px;
-  font-weight: 650;
+  font-size: var(--fs-base);
+  font-weight: 600;
 }
 
 .cc-issues ul,
@@ -761,12 +750,11 @@ button.cite-open:hover {
   gap: 0.35rem;
   padding: 0.75rem;
   border: 1px solid var(--cx-line, var(--border));
-  border-left: 3px solid #e08a00;
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 
 .cc-issue.is-conflict {
-  border-left-color: var(--danger);
+  border-color: var(--danger-border);
 }
 
 .cc-issue-head {
@@ -774,12 +762,12 @@ button.cite-open:hover {
   flex-wrap: wrap;
   gap: 0.5rem;
   align-items: center;
-  font-size: 13px;
+  font-size: var(--fs-base);
 }
 
 .cc-by {
   color: var(--text-tertiary);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .cc-cited {
@@ -787,12 +775,12 @@ button.cite-open:hover {
   flex-wrap: wrap;
   gap: 0.35rem;
   color: var(--text-tertiary);
-  font-size: 12px !important;
+  font-size: var(--fs-sm) !important;
 }
 
 .cc-history {
   color: var(--cx-muted, var(--text-secondary));
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
 }
 
 .cc-history > summary,
@@ -800,8 +788,8 @@ button.cite-open:hover {
 .cc-also > summary {
   width: fit-content;
   color: var(--cx-accent-ink, var(--accent-strong));
-  font-size: 12.5px;
-  font-weight: 550;
+  font-size: var(--fs-sm);
+  font-weight: 500;
   cursor: pointer;
 }
 
@@ -814,14 +802,14 @@ button.cite-open:hover {
   padding: 0.5rem 0.75rem;
   color: var(--cx-muted, var(--text-secondary));
   background: var(--cx-tint, var(--surface-muted));
-  border-radius: 8px;
-  font-size: 12.5px;
+  border-radius: var(--radius);
+  font-size: var(--fs-sm);
 }
 
 .cc-problem {
   margin: 0;
   color: var(--danger);
-  font-size: 13px;
+  font-size: var(--fs-base);
 }
 
 .cc-process-head,
@@ -844,7 +832,7 @@ button.cite-open:hover {
   display: grid;
   gap: 0.3rem;
   color: var(--cx-muted, var(--text-secondary));
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
 }
 
 .cc-field textarea,
@@ -854,9 +842,9 @@ button.cite-open:hover {
   padding: 0.5rem 0.625rem;
   color: var(--cx-text, var(--text));
   border: 1px solid var(--cx-line, var(--border));
-  border-radius: 8px;
+  border-radius: var(--radius);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-base);
   line-height: 1.45;
 }
 
@@ -875,12 +863,12 @@ button.cite-open:hover {
   align-items: start;
   padding: 0.625rem 0.75rem;
   border: 1px solid var(--cx-line, var(--border));
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 .cc-step.is-control {
   border-color: var(--accent-border);
-  box-shadow: inset 3px 0 0 var(--accent);
+  box-shadow: none;
 }
 
 .cc-step-fields {
@@ -893,9 +881,9 @@ button.cite-open:hover {
   width: 100%;
   padding: 0.4rem 0.55rem;
   border: 1px solid var(--cx-line, var(--border));
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-base);
   line-height: 1.45;
   resize: vertical;
 }
@@ -912,9 +900,9 @@ button.cite-open:hover {
   height: 30px;
   padding: 0 0.55rem;
   border: 1px solid var(--cx-line, var(--border));
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
 }
 
 .cc-check-label {
@@ -922,7 +910,7 @@ button.cite-open:hover {
   gap: 0.4rem;
   align-items: center;
   color: var(--cx-text, var(--text));
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   white-space: nowrap;
 }
 
@@ -932,8 +920,8 @@ button.cite-open:hover {
   padding: 0.75rem;
   background: var(--surface-muted);
   border: 1px solid var(--accent-border);
-  border-radius: 10px;
-  font-size: 13px;
+  border-radius: var(--radius-lg);
+  font-size: var(--fs-base);
 }
 
 .cc-proposed-map p,
@@ -969,7 +957,7 @@ button.cite-open:hover {
   align-items: center;
   padding: 0.625rem 0.75rem;
   border: 1px solid var(--cx-line, var(--border));
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 .cc-docs li > div {
@@ -980,7 +968,7 @@ button.cite-open:hover {
 
 .cc-docs strong {
   overflow: hidden;
-  font-size: 13.5px;
+  font-size: var(--fs-md);
   white-space: nowrap;
   text-overflow: ellipsis;
 }
@@ -992,16 +980,16 @@ button.cite-open:hover {
   place-items: center;
   color: var(--accent-strong);
   background: var(--accent-soft);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
 }
 
 .cc-segment {
   display: inline-flex;
   width: fit-content;
-  padding: 3px;
-  background: var(--surface-muted);
-  border: 1px solid var(--border);
-  border-radius: 9px;
+  padding: 2px;
+  background: var(--surface-sunken);
+  border: 0;
+  border-radius: var(--radius);
 }
 
 .cc-segment button {
@@ -1010,17 +998,17 @@ button.cite-open:hover {
   color: var(--text-secondary);
   background: none;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   font: inherit;
-  font-size: 12.5px;
-  font-weight: 550;
+  font-size: var(--fs-sm);
+  font-weight: 500;
   cursor: pointer;
 }
 
 .cc-segment button.is-on {
   color: var(--text-strong);
   background: var(--surface);
-  box-shadow: 0 1px 2px rgb(16 24 40 / 10%);
+  box-shadow: var(--shadow-xs);
 }
 
 .cc-form-grid {
@@ -1039,9 +1027,9 @@ button.cite-open:hover {
   margin-top: 0.5rem;
   padding: 0 0.625rem;
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-base);
 }
 
 .cc-also-list {
@@ -1085,44 +1073,10 @@ button.cite-open:hover {
   scroll-margin-top: 5rem;
 }
 
-@keyframes ca-breathe {
-  0%,
-  100% {
-    box-shadow:
-      0 0 0 6px color-mix(in srgb, var(--surface) 70%, transparent),
-      0 12px 32px -10px rgb(91 108 240 / 70%);
-  }
-  50% {
-    box-shadow:
-      0 0 0 10px color-mix(in srgb, var(--surface) 45%, transparent),
-      0 14px 40px -8px rgb(124 77 219 / 75%);
-  }
-}
-
 /* The control record keeps room at its foot for the agent launcher, so it never covers
    the last lines of the page. */
 .cx.record-page {
   padding-bottom: 4.5rem;
-}
-
-@keyframes ca-fade {
-  from {
-    opacity: 0;
-  }
-}
-
-@keyframes ca-pop {
-  from {
-    transform: translateY(12px) scale(0.97);
-    opacity: 0;
-  }
-}
-
-@keyframes ca-rise {
-  from {
-    transform: translateY(6px);
-    opacity: 0;
-  }
 }
 
 /* Evidence plan by phase (evidence-plan-view.tsx) */
@@ -1149,7 +1103,7 @@ button.cite-open:hover {
   gap: 0.375rem 0.75rem;
   align-items: center;
   margin: 0;
-  font-size: 13px;
+  font-size: var(--fs-base);
 }
 
 .ep-state-line > span:not(.cx-status):not(.cc-badge) {
@@ -1165,20 +1119,20 @@ button.cite-open:hover {
   background: var(--cx-tint);
   border: 1px solid var(--cx-line);
   border-radius: 999px;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   white-space: nowrap;
 }
 
 .ep-period {
   color: var(--cx-muted);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
 }
 
 .ep-explain {
   margin: 0;
   color: var(--cx-muted);
-  font-size: 13px;
+  font-size: var(--fs-base);
 }
 
 .ep-why {
@@ -1186,19 +1140,19 @@ button.cite-open:hover {
   gap: 0.375rem;
   padding: 0.625rem 0.75rem;
   background: var(--cx-tint);
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 
 .ep-why p {
   margin: 0;
-  font-size: 13px;
+  font-size: var(--fs-base);
   line-height: 1.45;
 }
 
 .ep-why span {
   margin-right: 0.4rem;
   color: var(--cx-faint);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   font-weight: 600;
   letter-spacing: 0.03em;
   text-transform: uppercase;
@@ -1206,15 +1160,15 @@ button.cite-open:hover {
 
 .ep-by {
   color: var(--cx-faint);
-  font-size: 12px !important;
+  font-size: var(--fs-sm) !important;
 }
 
 .ep-more > summary,
 .ep-decide > summary {
   width: fit-content;
   color: var(--cx-accent-ink);
-  font-size: 12.5px;
-  font-weight: 550;
+  font-size: var(--fs-sm);
+  font-weight: 500;
   cursor: pointer;
 }
 
@@ -1232,8 +1186,8 @@ button.cite-open:hover {
   gap: 0.5rem;
   align-items: center;
   margin: 0 0 0.375rem;
-  font-size: 13px;
-  font-weight: 650;
+  font-size: var(--fs-base);
+  font-weight: 600;
 }
 
 .ep-more-body ul,
@@ -1243,7 +1197,7 @@ button.cite-open:hover {
   margin: 0;
   padding-left: 1.125rem;
   color: var(--cx-text);
-  font-size: 13px;
+  font-size: var(--fs-base);
   line-height: 1.45;
 }
 
@@ -1254,7 +1208,7 @@ button.cite-open:hover {
 
 .ep-group h4 {
   color: var(--cx-muted);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   letter-spacing: 0.02em;
   text-transform: uppercase;
 }
@@ -1268,7 +1222,7 @@ button.cite-open:hover {
   color: var(--cx-muted);
   background: var(--surface-sunken);
   border-radius: 999px;
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   letter-spacing: 0;
 }
 
@@ -1297,7 +1251,7 @@ button.cite-open:hover {
 }
 
 .ep-dot.tone-warning {
-  background: #e08a00;
+  background: var(--warning);
 }
 
 .ep-dot.tone-danger {
@@ -1310,7 +1264,7 @@ button.cite-open:hover {
   gap: 0.35rem 0.5rem;
   align-items: center;
   margin: 0;
-  font-size: 13.5px;
+  font-size: var(--fs-md);
 }
 
 .ep-meta {
@@ -1319,7 +1273,7 @@ button.cite-open:hover {
   gap: 0.25rem 0.875rem;
   margin: 0;
   color: var(--cx-muted);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.45;
 }
 
@@ -1328,8 +1282,8 @@ button.cite-open:hover {
   padding: 0.375rem 0.625rem;
   color: var(--cx-text);
   background: var(--cx-tint);
-  border-radius: 6px;
-  font-size: 12.5px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
 }
 
 /* A change to an item's file, confirmed by the server. */
@@ -1341,8 +1295,8 @@ button.cite-open:hover {
   padding: 0.45rem 0.7rem;
   color: var(--text-strong);
   background: var(--success-soft);
-  border-radius: 8px;
-  font-size: 13px;
+  border-radius: var(--radius);
+  font-size: var(--fs-base);
   line-height: 1.45;
 }
 
@@ -1363,12 +1317,12 @@ button.cite-open:hover {
   gap: 0.5rem;
   padding: 0.5rem 0.625rem;
   background: var(--cx-amber-soft);
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 
 .ep-change p {
   margin: 0;
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
 }
 
 .ep-ask {
@@ -1395,7 +1349,7 @@ button.cite-open:hover {
   align-items: center;
   margin: 0;
   color: var(--cx-muted);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
 }
 
 .ep-actions {
@@ -1418,13 +1372,13 @@ button.cite-open:hover {
   margin-top: 0.625rem;
   padding: 0.75rem;
   border: 1px solid var(--cx-line);
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 
 .ep-decide-form label {
   color: var(--cx-muted);
-  font-size: 12.5px;
-  font-weight: 550;
+  font-size: var(--fs-sm);
+  font-weight: 500;
 }
 
 .ep-decide-form select,
@@ -1434,9 +1388,9 @@ button.cite-open:hover {
   height: 32px;
   padding: 0 2rem 0 0.5rem;
   border: 1px solid var(--cx-line);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--fs-base);
 }
 
 .ep-decide-form .ep-actions {
@@ -1447,7 +1401,7 @@ button.cite-open:hover {
   margin: 0;
   padding: 0.625rem 0.75rem;
   border: 1px dashed var(--cx-line);
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 
 .ep-list {
@@ -1487,8 +1441,8 @@ button.cite-open:hover {
   align-items: center;
   width: fit-content;
   color: var(--cx-accent-ink, var(--accent-strong));
-  font-size: 12px;
-  font-weight: 550;
+  font-size: var(--fs-sm);
+  font-weight: 500;
   cursor: pointer;
 }
 
@@ -1500,15 +1454,15 @@ button.cite-open:hover {
   margin: 0.5rem 0 0;
   padding: 0.625rem 0.75rem;
   background: var(--cx-tint, var(--surface-muted));
-  border-radius: 8px;
-  font-size: 12.5px;
+  border-radius: var(--radius);
+  font-size: var(--fs-sm);
   line-height: 1.45;
 }
 
 .cc-def dt,
 .cc-def-list dt {
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   font-weight: 600;
   letter-spacing: 0.03em;
   text-transform: uppercase;
@@ -1533,7 +1487,7 @@ button.cite-open:hover {
   padding: 0;
   list-style: none;
   border: 1px solid var(--cx-line, var(--border));
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 .cc-procedures li {
@@ -1557,7 +1511,7 @@ button.cite-open:hover {
   gap: 0.5rem;
   padding: 0.75rem;
   border: 1px solid var(--accent-border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--accent-soft);
 }
 
@@ -1574,8 +1528,8 @@ button.cite-open:hover {
   gap: 0.5rem;
   align-items: center;
   margin: 0;
-  font-size: 13px;
-  font-weight: 650;
+  font-size: var(--fs-base);
+  font-weight: 600;
 }
 
 .cc-update .form-hint {
@@ -1639,9 +1593,9 @@ button.cite-open:hover {
   padding: 0.75rem 0.875rem;
   color: var(--cx-ink, var(--text-strong));
   background: var(--cx-tint, var(--surface-muted));
-  border-left: 3px solid var(--accent-strong);
-  border-radius: 8px;
-  font-size: 13.5px;
+  border-left: 2px solid var(--border-strong);
+  border-radius: var(--radius);
+  font-size: var(--fs-md);
   line-height: 1.55;
 }
 
@@ -1651,7 +1605,7 @@ button.cite-open:hover {
   align-items: flex-start;
   margin: 0;
   color: var(--warning);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   line-height: 1.45;
 }
 
@@ -1677,7 +1631,7 @@ button.cite-open:hover {
   gap: 0.5rem;
   padding: 0.75rem;
   border: 1px solid var(--cx-line, var(--border));
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 .cc-values h4 {
@@ -1685,8 +1639,8 @@ button.cite-open:hover {
   gap: 0.5rem;
   align-items: center;
   margin: 0;
-  font-size: 13px;
-  font-weight: 650;
+  font-size: var(--fs-base);
+  font-weight: 600;
 }
 
 .cc-values .form-hint {

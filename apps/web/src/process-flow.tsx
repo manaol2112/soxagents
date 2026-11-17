@@ -29,7 +29,9 @@ const KIND_ICON: Record<StepKind, IconName> = {
 };
 
 /** Each lane takes the next of four tones, so roles read apart at a glance. */
-const LANE_TONES = ["accent", "success", "ai", "warning"] as const;
+// One neutral tone for every lane (17 November 2026): a role is not a status, and violet
+// is kept for agent work.
+const LANE_TONES = ["neutral"] as const;
 
 const plural = (count: number, one: string, many = `${one}s`) =>
   `${count} ${count === 1 ? one : many}`;

@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from ai_workforce_api.control_instances import control_label
 from ai_workforce_api.inbound import clean_line
+from ai_workforce_api.prompt_data import neutral
 
 # Below this, the model's choice is a suggestion for a person, not a filing.
 CONFIDENT = 0.8
@@ -356,9 +357,11 @@ def prompt_for(facts: FileFacts, pool: list[Candidate]) -> str:
     }
     return (
         "Match this uploaded evidence file to its control.\n\n"
-        f"<file_and_candidates>\n{json.dumps(data, ensure_ascii=False, indent=1)}\n"
+        # The file's name, folders and words are untrusted: none of the prompt's tags in
+        # them can close a block (prompt_data; security review, 17 November 2026).
+        f"<file_and_candidates>\n{neutral(json.dumps(data, ensure_ascii=False, indent=1))}\n"
         "</file_and_candidates>\n\n"
-        f"<evidence_excerpt>\n{facts.text[:EXCERPT_CHARS]}\n</evidence_excerpt>"
+        f"<evidence_excerpt>\n{neutral(facts.text[:EXCERPT_CHARS])}\n</evidence_excerpt>"
     )
 
 

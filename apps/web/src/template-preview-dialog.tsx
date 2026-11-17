@@ -13,6 +13,7 @@ import { createPortal } from "react-dom";
 
 import { SheetTabBar } from "./sheet-tabs";
 import { UiIcon } from "./ui-icon";
+import { isTopmostDialog, useFocusTrap } from "./use-focus-trap";
 
 export type PreviewChoice = {
   id: string;
@@ -51,6 +52,8 @@ export function TemplatePreviewDialog({
 }: Props) {
   const router = useRouter();
   const dialog = useRef<HTMLDivElement>(null);
+  // Tab stays inside the preview; Escape closes only the topmost dialog.
+  useFocusTrap(dialog);
   const stage = useRef<HTMLElement>(null);
   const [pending, startTransition] = useTransition();
   const [mounted, setMounted] = useState(false);
@@ -78,7 +81,7 @@ export function TemplatePreviewDialog({
     const previous = document.activeElement as HTMLElement | null;
     dialog.current?.focus();
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && isTopmostDialog(dialog.current)) {
         close();
       }
     };

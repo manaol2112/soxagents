@@ -54,7 +54,7 @@ The team is the engagement's project membership, so being on it is what gives a 
 
 **Removing someone from a running engagement** says what it does first (`GET …/onboarding/team/{user}/impact`): their open tasks go back to the team, unassigned (`released_tasks` in the audit), and the work they did keeps their name. The only independent reviewer of a running engagement cannot be removed while independence is enforced ("name another reviewer first").
 
-**Development mode.** `REVIEW_INDEPENDENCE_REQUIRED=false` lets anyone on the team act as the reviewer, for development only. Readiness says so as an advisory, the Team step shows a banner, the API logs a warning at start, and it refuses to start with `APP_ENV=production`.
+**Development mode.** `REVIEW_INDEPENDENCE_REQUIRED=false` lets anyone on the team act as the reviewer, for development only. Readiness says so as an advisory, the Team step shows a banner, the API logs a warning at start, and it refuses to start with `APP_ENV=production`. The switch takes effect only with `APP_ENV` set to `development`, `dev`, `local` or `test`; with any other value, empty included, the rules stay on and the API logs that the switch was refused.
 
 ### In-scope systems first
 

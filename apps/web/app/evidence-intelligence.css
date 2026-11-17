@@ -15,7 +15,7 @@
 .ei-kicker {
   display: block;
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -28,7 +28,7 @@
   padding: 0 0.4rem;
   place-items: center;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   font-weight: 600;
   background: var(--surface-muted);
   border-radius: 999px;
@@ -40,23 +40,23 @@
   height: 44px;
   margin-bottom: 0.15rem;
   place-items: center;
-  color: var(--accent-strong);
+  color: var(--text-secondary);
   background: var(--surface);
-  border: 1px solid var(--accent-border);
+  border: 1px solid var(--border);
   border-radius: 999px;
-  box-shadow: 0 2px 8px rgb(59 91 219 / 12%);
+  box-shadow: var(--shadow-xs);
 }
 
 .request-upload-title {
   color: var(--text-strong);
-  font-size: 14px;
-  font-weight: 650;
+  font-size: var(--fs-md);
+  font-weight: 600;
 }
 
 .request-upload-for {
   max-width: 100%;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.4;
 }
 
@@ -74,38 +74,19 @@
   place-items: center;
   color: var(--text-secondary);
   font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 700;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
   letter-spacing: 0.02em;
-  background: var(--surface-muted);
-  border-radius: 9px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
 }
 
 .ei-badge.is-small {
   width: 30px;
   height: 30px;
-  font-size: 10px;
-  border-radius: 8px;
-}
-
-.ei-badge.kind-pdf {
-  color: var(--danger);
-  background: var(--danger-soft);
-}
-
-.ei-badge.kind-doc {
-  color: var(--accent-strong);
-  background: var(--accent-soft);
-}
-
-.ei-badge.kind-xls {
-  color: var(--success);
-  background: var(--success-soft);
-}
-
-.ei-badge.kind-img {
-  color: var(--ai);
-  background: var(--ai-soft);
+  font-size: var(--fs-2xs);
+  border-radius: var(--radius);
 }
 
 @keyframes ei-pulse {
@@ -150,7 +131,7 @@
   align-items: start;
   padding: 0.75rem 0.85rem;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
 }
 
 .ei-status strong {
@@ -173,18 +154,18 @@
 }
 
 .ei-status.is-success {
-  background: var(--success-soft);
-  border-color: var(--success-border);
+  background: var(--surface);
+  border-color: var(--border);
 }
 
 .ei-status.is-success .ei-status-mark {
-  color: var(--text-on-accent);
-  background: var(--success);
+  color: var(--success);
+  background: var(--success-soft);
 }
 
 .ei-status.is-info {
-  background: var(--accent-soft);
-  border-color: var(--accent-border);
+  background: var(--surface);
+  border-color: var(--border);
 }
 
 .ei-status.is-info .ei-status-mark {
@@ -198,7 +179,7 @@
 }
 
 .ei-status.is-danger .ei-status-mark {
-  color: var(--text-on-accent);
+  color: var(--text-on-status);
   background: var(--danger);
 }
 
@@ -218,7 +199,7 @@
   padding: 0.75rem 0.85rem;
   background: var(--surface-muted);
   border: 1px solid var(--border-subtle);
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
 }
 
 .ei-block-head {
@@ -264,7 +245,7 @@
   place-items: center;
   color: var(--ai);
   background: var(--ai-soft);
-  border-radius: 9px;
+  border-radius: var(--radius);
 }
 
 .ei-denominator {
@@ -324,12 +305,12 @@
 .ei-findings > li {
   background: var(--surface);
   border: 1px solid var(--border-subtle);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 .ei-findings > li.is-here {
-  border-color: var(--accent-border);
-  box-shadow: 0 0 0 3px rgb(59 91 219 / 8%);
+  border-color: var(--text-strong);
+  box-shadow: inset 0 0 0 1px var(--text-strong);
 }
 
 .ei-finding {
@@ -352,7 +333,7 @@
   text-align: left;
   background: transparent;
   border: 0;
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   box-shadow: none;
   font-size: var(--fs-sm);
   font-weight: 500;
@@ -455,7 +436,7 @@
   color: var(--text);
   background: var(--surface-muted);
   border-left: 2px solid var(--accent-border);
-  border-radius: 0 6px 6px 0;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 
 .ei-supports > summary {
@@ -503,7 +484,7 @@
   text-align: left;
   background: var(--surface);
   border: 1px solid var(--border-subtle);
-  border-radius: 8px;
+  border-radius: var(--radius);
   box-shadow: none;
   font-size: var(--fs-xs);
   font-weight: 500;
@@ -650,7 +631,7 @@
   padding: 0.6rem 0.7rem;
   background: var(--surface-muted);
   border: 1px solid var(--border-subtle);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 .ei-trace > li.is-cited {
@@ -760,7 +741,7 @@
   padding: 0.4rem 0.6rem;
   color: var(--text);
   background: var(--accent-soft);
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 
 .ei-finding-question strong {
@@ -843,7 +824,7 @@
   padding: 0.75rem;
   background: var(--surface);
   border: 1px solid var(--accent-border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 .ei-followup-form > label {

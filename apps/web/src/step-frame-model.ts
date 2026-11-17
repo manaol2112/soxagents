@@ -181,10 +181,13 @@ function branchOf(key: StepKey): string | null {
 
 /** The footer's "Next": each step that follows, with the outcome it follows on where the
  * step decides ("If effective"). Where the work splits into both branches at once, as after
- * the attributes, each says its branch ("D&I branch · D&I Evidence"). */
+ * the attributes, each says its branch ("D&I branch · D&I Evidence"). Each is named with its
+ * status, as "Based on" is (design review, 17 November 2026: "Next · D&I Assessment" pointed
+ * to a step "Waiting on D&I evidence" that asks nothing): "Next · D&I Assessment · Waiting on
+ * D&I evidence". */
 export function nextLinks(
   next: ReadonlyArray<PanelLink & { when: string }>,
-): Array<{ key: StepKey; label: string; title: string }> {
+): Array<{ key: StepKey; label: string; title: string; status: string }> {
   const branches = new Set(next.map((item) => branchOf(item.key)));
   const forks = next.length > 1 && branches.size > 1;
   return next.map((item) => ({
@@ -196,5 +199,6 @@ export function nextLinks(
           ? (branchOf(item.key) ?? "Next")
           : "Next",
     title: stepName(item),
+    status: item.status,
   }));
 }

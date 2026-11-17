@@ -21,10 +21,13 @@ import {
   copyChoices,
   copyOffer,
   copyTargetLine,
+  countsOpen,
+  courseWhere,
   draftedFrom,
   draftText,
   drivesLine,
   extendInterview,
+  foldChip,
   followUpShown,
   greeting,
   ignoredNote,
@@ -41,7 +44,11 @@ import {
   notesSummary,
   OTHER_RULE,
   OTHER_SYSTEM_FALLBACK,
+  openFeeding,
+  openQuestionsLine,
   opensFollowUp,
+  openStepKeys,
+  optionalOpen,
   otherProblem,
   otherSystemLabel,
   otherText,
@@ -57,6 +64,7 @@ import {
   proposedPick,
   type Review,
   readyLines,
+  readyWithOpen,
   restartInterview,
   reviewGroups,
   SAME_SYSTEM_FALLBACK,
@@ -79,6 +87,7 @@ import {
   topicSave,
   topicShown,
   topicStep,
+  understoodLede,
   walkthroughOutcome,
   walkthroughRecord,
   withConfirmed,
@@ -461,7 +470,9 @@ describe("the understanding as a draft to review", () => {
         // attributes finalized." New: the attributes come next, and only once they are
         // settled is the D&I evidence the next step.
         done: true,
-        text: "Understood. Next, finalize the attributes: the D&I evidence is requested against them.",
+        // Rewritten 17 November 2026 (design review): the pane's title already says the
+        // control is understood. Old: "Understood. Next, finalize the attributes: ...".
+        text: "Next, finalize the attributes: the D&I evidence is requested against them.",
       },
     );
     assert.equal(
@@ -474,7 +485,9 @@ describe("the understanding as a draft to review", () => {
       // Was "…The D&I evidence can be released." There is no separate D&I release since the
       // D&I requests list (product owner, 12 November 2026: "I don't want a separate D&I
       // release"): the requests are reviewed and accepted, and drafting follows.
-      "Understood, and the attributes are settled. The D&I requests are ready to review.",
+      // Rewritten 17 November 2026 (design review). Old: "Understood, and the attributes are
+      // settled. The D&I requests are ready to review."
+      "The attributes are settled from this understanding, and the D&I requests are ready to review.",
     );
     assert.equal(
       statusLine({ ...review, evidence: { ready: false, missing: [] } }).text,
@@ -503,7 +516,7 @@ describe("the understanding as a draft to review", () => {
       ],
     );
     assert.equal(nextAfterUnderstanding(parsed), "attributes");
-    // Settled: both done, and the step that follows is the D&I evidence.
+    // Settled: both done.
     const settled = {
       ...parsed,
       attributesSettled: true,
@@ -516,7 +529,11 @@ describe("the understanding as a draft to review", () => {
         ["D&I evidence can be requested", true, "Ready"],
       ],
     );
-    assert.equal(nextAfterUnderstanding(settled), "evidence");
+    // Rewritten 17 November 2026 (product owner: "Next step is attributes after control
+    // understanding"). Old expectation: once the attributes were settled, the done step led
+    // past them to the D&I evidence. New: it leads to the Attributes step, which now says
+    // what was settled and leads on to each branch's next step (attributes-handoff-model).
+    assert.equal(nextAfterUnderstanding(settled), "attributes");
     // Not understood yet: the evidence line counts what is left, never "Ready".
     const open = parseReview(body);
     assert.ok(open !== null);
@@ -820,6 +837,12 @@ describe("the guided review: one point at a time (mock-up approved 9 November 20
       "Needed for D&I evidence · attributes · testing",
     );
     assert.equal(neededForLine(need("x", { neededFor: [] })), "");
+    // Added 17 November 2026 (design review): an optional point says what it is used for,
+    // and never "Optional" beside "Needed for".
+    assert.equal(
+      neededForLine(need("x", { neededFor: ["EVIDENCE"], required: false })),
+      "Used for D&I evidence",
+    );
   });
 });
 
@@ -3433,5 +3456,369 @@ describe("statement questions that take more than one answer (12 November 2026)"
     assert.equal(single.value, "Change Manager");
     assert.deepEqual(single.options, APPROVERS);
     assert.equal(single.walkthrough, undefined);
+  });
+});
+
+describe("Control Understanding never contradicts itself (design review, 17 November 2026)", () => {
+  // The screen the review found: "ITGC-AC-01 is understood. Every point the evidence and the
+  // attributes rely on is on record.", a fold chip "Confirmed" and "D&I evidence can be
+  // requested · Ready", over "Step 1 of 2: Which policy sets who may approve access, and to
+  // what?" tagged "Used for D&I evidence", with no answer chosen. The second review the same
+  // day: "1 question is open below" and "1 open" over "Step 1 of 2", where the second step
+  // was a walkthrough topic with only optional questions left. One count for all of them.
+  const need = (
+    key: string,
+    extra: Partial<Review["needs"][number]> = {},
+  ): Review["needs"][number] => ({
+    key,
+    kind: "ANSWER",
+    label: key,
+    question: `${key}?`,
+    value: "On record",
+    options: [],
+    why: "",
+    status: "CONFIRMED",
+    source: "PERSON",
+    neededFor: ["EVIDENCE", "ATTRIBUTES"],
+    proposalId: null,
+    required: true,
+    multiple: false,
+    ...extra,
+  });
+  // A governing policy left unanswered: optional, so neither gate counts it.
+  const policy = (key: string) =>
+    need(key, {
+      kind: "DOCUMENT",
+      label: "The access policy",
+      question: "Which policy sets who may approve access, and to what?",
+      value: "",
+      status: "MISSING",
+      source: "NONE",
+      neededFor: ["EVIDENCE"],
+      required: false,
+    });
+  // A walkthrough topic whose required question is on record and whose optional one is not.
+  const walkthrough = (key: string, extra: Partial<Review["needs"][number]>) =>
+    need(key, {
+      kind: "WALKTHROUGH",
+      label: "Scope",
+      neededFor: ["TESTING"],
+      walkthrough: {
+        topic: "SCOPE",
+        topicLabel: "Scope",
+        answerKind: "TEXT",
+        drives: ["SCOPE"],
+        quote: "",
+        allowsOther: false,
+        whenKey: "",
+        whenValue: "",
+      },
+      ...extra,
+    });
+  const optionalTopic = [
+    walkthrough("wt-scope-users", {}),
+    walkthrough("wt-scope-note", {
+      value: "",
+      status: "MISSING",
+      source: "NONE",
+      required: false,
+    }),
+  ];
+  const review = (
+    needs: Review["needs"],
+    gates: { evidence: boolean; attributes: boolean } = {
+      evidence: true,
+      attributes: true,
+    },
+  ): Review => ({
+    controlRef: "ITGC-AC-01",
+    system: "SAP ERP",
+    otherSystems: [],
+    statement: [],
+    narrative: [],
+    needs,
+    evidence: {
+      ready: gates.evidence,
+      missing: gates.evidence ? [] : ["Is the approver independent?"],
+    },
+    attributes: { ready: gates.attributes, missing: [] },
+    attributesApproved: 5,
+    attributesProposed: 0,
+    attributesSettled: true,
+    attributesWaiting: "",
+    questionsChecking: 0,
+    startFrom: { chosen: null, options: [] },
+  });
+  const on = [
+    need("rcm", { kind: "RCM", source: "RCM" }),
+    need("approver"),
+    need("tool"),
+  ];
+  const COMPLETE = "Understanding complete · Nov 16, 4:12 PM";
+  const agentQuestion = need("q-1", {
+    kind: "QUESTION",
+    question: "Is the approver independent?",
+    value: "",
+    status: "MISSING",
+    source: "AGENT",
+    neededFor: ["EVIDENCE"],
+  });
+  const mixes: Record<
+    string,
+    {
+      review: Review;
+      open: number;
+      optional: number;
+      evidence: number;
+    }
+  > = {
+    "complete, nothing open": {
+      review: review(on),
+      open: 0,
+      optional: 0,
+      evidence: 0,
+    },
+    "complete, 1 optional question open": {
+      review: review([...on, policy("access-policy")]),
+      open: 1,
+      optional: 1,
+      evidence: 1,
+    },
+    "complete, 2 optional questions open": {
+      review: review([
+        ...on,
+        policy("access-policy"),
+        policy("provisioning-procedure"),
+      ]),
+      open: 2,
+      optional: 2,
+      evidence: 2,
+    },
+    "complete, the policy and an optional walkthrough topic": {
+      review: review([...on, policy("access-policy"), ...optionalTopic]),
+      open: 2,
+      optional: 2,
+      evidence: 1,
+    },
+    "complete, a question raised since holds the evidence": {
+      review: review([...on, agentQuestion], {
+        evidence: false,
+        attributes: true,
+      }),
+      open: 1,
+      optional: 0,
+      evidence: 1,
+    },
+    "complete, a question raised since and an optional policy": {
+      review: review([...on, agentQuestion, policy("access-policy")], {
+        evidence: false,
+        attributes: true,
+      }),
+      open: 2,
+      optional: 1,
+      evidence: 2,
+    },
+  };
+
+  for (const [name, mix] of Object.entries(mixes)) {
+    it(`agrees on the open questions: ${name}`, () => {
+      const course = startInterview(mix.review);
+      const keys = openStepKeys(mix.review, course);
+      const open = keys.length;
+      const optional = optionalOpen(mix.review, course, keys);
+      assert.equal(open, mix.open);
+      assert.equal(optional, mix.optional);
+      const status = statusLine(mix.review);
+      const progress = interviewProgress(mix.review, course);
+      const lede = understoodLede({
+        done: status.done,
+        completeLine: COMPLETE,
+        open,
+        optional,
+        statusText: status.text,
+      });
+      const chip = foldChip({
+        progress,
+        done: status.done,
+        complete: true,
+        open,
+      });
+      const settled = countsOpen({
+        progress,
+        done: status.done,
+        complete: true,
+      });
+      assert.equal(settled, true);
+      const feeding = openFeeding(mix.review, course, "EVIDENCE");
+      assert.equal(feeding, mix.evidence);
+      const evidence = readyWithOpen(
+        readyLines(mix.review),
+        feeding,
+        open,
+      ).find((line) => line.key === "evidence");
+      assert.ok(evidence !== undefined);
+      // The footer on each open step: its place among the same open steps.
+      const footers = keys.map((key) =>
+        courseWhere({
+          plan: course.plan,
+          changing: [],
+          at: course.plan.indexOf(key),
+          open: keys,
+          settled,
+        }),
+      );
+      if (open === 0) {
+        assert.match(lede, /Every point .* is on record\./);
+        assert.equal(chip, "Confirmed");
+        assert.equal(evidence.note, "Ready");
+        return;
+      }
+      // Never "all on record" while a question is open, and the count agrees everywhere: the
+      // header, the chip and the footer's total.
+      assert.doesNotMatch(lede, /on record/);
+      assert.ok(
+        lede.startsWith(
+          `${COMPLETE}. ${open} ${optional === open ? "optional " : ""}${open === 1 ? "question" : "questions"}`,
+        ),
+        lede,
+      );
+      assert.equal(chip, `${open} open`);
+      for (const [index, footer] of footers.entries()) {
+        assert.equal(footer, open > 1 ? `Step ${index + 1} of ${open}` : null);
+      }
+      // Some optional, some not: the header names how many.
+      if (optional > 0 && optional < open) {
+        assert.match(lede, new RegExp(`, ${optional} of them optional;`));
+      }
+      // An open question tagged "… for D&I evidence" never sits under a bare "Ready", and a
+      // share of the open questions is said as a share.
+      const tagged = mix.review.needs.filter(
+        (each) =>
+          each.status !== "CONFIRMED" &&
+          neededForLine(each).includes("D&I evidence"),
+      );
+      assert.ok(tagged.length > 0);
+      if (evidence.ready) {
+        assert.equal(
+          evidence.note,
+          tagged.length < open
+            ? `Ready · ${tagged.length} of the ${open} open questions may change a request`
+            : `Ready · ${tagged.length} open ${tagged.length === 1 ? "question" : "questions"} may change a request`,
+        );
+      } else {
+        assert.doesNotMatch(evidence.note, /^Ready/);
+      }
+    });
+  }
+
+  it("says the open questions with the right number, and 'raised since' only after completion", () => {
+    assert.equal(openQuestionsLine(0), "");
+    assert.equal(
+      openQuestionsLine(1),
+      "1 question is open below; it does not hold the attributes.",
+    );
+    assert.equal(
+      openQuestionsLine(1, 1),
+      "1 optional question is open below; it does not hold the attributes.",
+    );
+    assert.equal(
+      openQuestionsLine(2, 2),
+      "2 optional questions are open below; they do not hold the attributes.",
+    );
+    assert.equal(
+      openQuestionsLine(2, 1),
+      "2 questions are open below, 1 of them optional; they do not hold the attributes.",
+    );
+    assert.equal(
+      openQuestionsLine(3, 2, false, "here"),
+      "3 questions are open here, 2 of them optional; they do not hold the attributes.",
+    );
+    assert.equal(
+      openQuestionsLine(2, 0, true),
+      "2 questions raised since are open below; they do not hold the attributes.",
+    );
+    // Rewritten 17 November 2026 (design review). Old: complete with a gate open read "A
+    // question raised since is open below; it does not hold the attributes." whatever the
+    // count, and complete with the gates read understood read "Every point … is on record."
+    // over an open question. New: the count of the open steps, singular or plural.
+    assert.equal(
+      understoodLede({
+        done: false,
+        completeLine: COMPLETE,
+        open: 2,
+        statusText: "",
+      }),
+      `${COMPLETE}. 2 questions raised since are open below; they do not hold the attributes.`,
+    );
+    // Understood without a recorded completion (a body from before B1j): the same rule.
+    assert.equal(
+      understoodLede({
+        done: true,
+        completeLine: null,
+        open: 1,
+        statusText: "",
+      }),
+      "1 question is open below; it does not hold the attributes.",
+    );
+    assert.equal(
+      understoodLede({
+        done: true,
+        completeLine: null,
+        open: 0,
+        statusText: "",
+      }),
+      "Every point the evidence and the attributes rely on is on record.",
+    );
+  });
+
+  it("keeps the header's count on the chip and the footer while the header counts", () => {
+    const progress = { done: 2, total: 5 };
+    assert.equal(countsOpen({ progress, done: false, complete: false }), false);
+    assert.equal(
+      foldChip({ progress, done: false, complete: false, open: 3 }),
+      "2 of 5",
+    );
+    // During the course the footer pages through the whole of it, as before.
+    assert.equal(
+      courseWhere({
+        plan: ["a", "b", "c", "d"],
+        changing: [],
+        at: 1,
+        open: ["b", "d"],
+        settled: false,
+      }),
+      "Step 2 of 4",
+    );
+    // Once the header counts the open questions, a step no longer open has no count, and a
+    // step reopened to change an answer says so.
+    assert.equal(
+      courseWhere({
+        plan: ["a", "b", "c"],
+        changing: [],
+        at: 0,
+        open: ["b", "c"],
+        settled: true,
+      }),
+      null,
+    );
+    assert.equal(
+      courseWhere({
+        plan: ["a", "b", "c"],
+        changing: ["c"],
+        at: 2,
+        open: ["b"],
+        settled: true,
+      }),
+      "Changing an answer on record",
+    );
+    assert.equal(
+      foldChip({
+        progress: { done: 0, total: 0 },
+        done: false,
+        complete: false,
+        open: 0,
+      }),
+      "Draft",
+    );
   });
 });

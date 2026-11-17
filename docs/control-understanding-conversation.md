@@ -98,6 +98,22 @@ The coverage the owner asked for is enforced in three places:
 - **Copying is a person's action.** It is authorized as an answer (TASK_UPDATE), recorded on each system it changed with where it came from (`control.understanding_copied`), and never overwrites.
 - **No new tables.**
 
+## The understanding as a document (built 17 November 2026)
+
+The product owner asked for the understanding on the left to look "professional, clean, and SaaS grade". A prototype was approved the same day. Web only; nothing the server sends changed (`understanding-document-model.ts`, the left pane of `understanding-review.tsx`).
+
+- **The head:** the system, the day the understanding was confirmed once complete, and how many answers are on record.
+- **Two views of the same answers:** Narrative, and Facts & sources.
+- **Narrative:**
+  - the statement first, as the summary, in the serif;
+  - the key facts it rests on as a strip: each confirmed point the statement names, once, in its order, at most six;
+  - each walkthrough topic as a labelled section with its count of answers, in the sans-serif;
+  - every answer marked with a quiet underline in place of a shaded box, dashed where carried from last year's workpaper, and still opening its point to change. A point not confirmed keeps its earlier marking.
+- **Facts & sources** replaces the "On record" fold: a table of each answer, where it came from and a Change that opens it as before. The walkthrough's answers are grouped by topic.
+- **The pane responds to its own width** (a container query): in the drawer's narrow column each section's label sits over its text and each fact is a compact row.
+- Not built from the prototype: the note on a design point an answer reveals (self-approval not prevented). Which answers are design points is not on record, and the page draws no conclusion of its own.
+- Tests: `understanding-document-model.test.ts`.
+
 ## Not in this increment
 
 - **The agent linking the governing policy by itself in D&I Evidence.**

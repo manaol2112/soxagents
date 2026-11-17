@@ -252,6 +252,10 @@ function RowMenu({
   );
 }
 
+/** The table's columns: select, open, control, system and process, type and frequency,
+ * status, owner, next action, more. */
+const TABLE_COLUMNS = 9;
+
 function Pill({ tone, children }: { tone: string; children: ReactNode }) {
   return <span className={`cpg-pill ${tone}`}>{children}</span>;
 }
@@ -551,6 +555,7 @@ export function ControlsPage({
   notices = null,
   extra = null,
   systemLayers = {},
+  context = "",
 }: {
   ids: Ids;
   rows: PageRow[];
@@ -567,6 +572,8 @@ export function ControlsPage({
   extra?: ReactNode;
   /** Each system's layer by its name, for its icon on its group (system-layer.ts). */
   systemLayers?: Record<string, string>;
+  /** The engagement, named above the title where the breadcrumb is cut short. */
+  context?: string;
 }) {
   const [filters, setFiltersNow] = useState<Filters>(() => {
     if (initial === null) {
@@ -593,7 +600,9 @@ export function ControlsPage({
   const [selected, setSelected] = useState<string[]>([]);
   const [page, setPage] = useState(1);
   const [size, setSize] = useState<number>(DEFAULT_PAGE_VIEW.size);
-  const [side, setSide] = useState(true);
+  // The filters start folded away at every width; More filters opens them (design review,
+  // 17 November 2026).
+  const [side, setSide] = useState(false);
   const [typed, setTyped] = useState("");
   // The view the person last chose in this browser, once the page is in it.
   useEffect(() => {
@@ -616,12 +625,6 @@ export function ControlsPage({
       // Storage can be off; the choice then lasts until the page is left.
     }
   };
-  // On a narrow screen the filters start folded away; More filters opens them.
-  useEffect(() => {
-    if (window.matchMedia("(max-width: 900px)").matches) {
-      setSide(false);
-    }
-  }, []);
   // The search waits for a pause in typing.
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -705,7 +708,7 @@ export function ControlsPage({
     {
       label: "Out of scope",
       value: top.outOfScope,
-      icon: "shield",
+      icon: "minus",
       tone: "is-muted",
       apply: () => setFilters({ ...NO_FILTERS, scope: ["OUT"] }),
     },
@@ -713,13 +716,14 @@ export function ControlsPage({
       label: "Plan to approve",
       value: top.planToApprove,
       icon: "file",
-      tone: "is-warning",
+      // Its colour only while there is something to do (the neutral theme, 17 Nov 2026).
+      tone: top.planToApprove > 0 ? "is-warning" : "is-muted",
       apply: () => setFilters({ ...NO_FILTERS, plan: ["PENDING"] }),
     },
     {
       label: "Testing in progress",
       value: top.testingInProgress,
-      icon: "wand",
+      icon: "activity",
       tone: "is-info",
       apply: () => setFilters({ ...NO_FILTERS, testing: ["IN_PROGRESS"] }),
     },
@@ -734,12 +738,15 @@ export function ControlsPage({
       label: "Needs attention",
       value: top.needsAttention,
       icon: "risk",
-      tone: "is-danger",
+      // Its colour only while there is something to do (the neutral theme, 17 Nov 2026).
+      tone: top.needsAttention > 0 ? "is-danger" : "is-muted",
       apply: () => setFilters({ ...NO_FILTERS, testing: ["EXCEPTIONS"] }),
     },
   ];
   const row = (item: PageRow) => {
     const isOpen = open === item.id;
+    // The step the control is on, as its row menu names it.
+    const nextStep = STEPS.find((step) => step.key === item.step);
     const action = actions[item.id];
     return (
       <Fragment key={item.id}>
@@ -795,6 +802,11 @@ export function ControlsPage({
                   </span>
                 ) : null}
               </span>
+              {item.source === "LIBRARY" ? null : (
+                <small>
+                  Source: {SOURCE_LABEL[item.source] ?? item.source}
+                </small>
+              )}
             </span>
           </td>
           <td>
@@ -804,30 +816,31 @@ export function ControlsPage({
             </span>
           </td>
           <td>
-            <span className="cpg-type">{TYPE_LABEL[item.type]}</span>
-          </td>
-          <td>{item.frequency}</td>
-          <td>{SOURCE_LABEL[item.source] ?? item.source}</td>
-          <td>
-            <Pill tone={item.included ? "is-success" : "is-muted"}>
-              {item.included ? "In scope" : "Out of scope"}
-            </Pill>
-          </td>
-          <td>
-            {item.included ? (
-              <Pill tone={PLAN_TONE[item.plan]}>{PLAN_LABEL[item.plan]}</Pill>
-            ) : (
-              "—"
-            )}
+            {/* Type and frequency share a cell, and the three statuses another, so the
+                table fits its card (design audit, 17 November 2026). */}
+            <span className="cpg-two">
+              <span>
+                <span className="cpg-type">{TYPE_LABEL[item.type]}</span>
+              </span>
+              <small>{item.frequency}</small>
+            </span>
           </td>
           <td>
-            {item.included ? (
-              <Pill tone={TESTING_TONE[item.testing]}>
-                {TESTING_LABEL[item.testing]}
-              </Pill>
-            ) : (
-              "—"
-            )}
+            <span className="cpg-statuses">
+              {item.included ? null : <Pill tone="is-muted">Out of scope</Pill>}
+              {item.included ? (
+                <>
+                  <Pill tone={PLAN_TONE[item.plan]}>
+                    <span className="sr-only">Plan: </span>
+                    {PLAN_LABEL[item.plan]}
+                  </Pill>
+                  <Pill tone={TESTING_TONE[item.testing]}>
+                    <span className="sr-only">Testing: </span>
+                    {TESTING_LABEL[item.testing]}
+                  </Pill>
+                </>
+              ) : null}
+            </span>
           </td>
           <td>
             <span className="cpg-owner">
@@ -840,10 +853,14 @@ export function ControlsPage({
           <td>
             {item.included ? (
               <a
-                className="btn btn-sm cpg-next"
-                href={controlHref(ids, item.id)}
+                className="btn btn-secondary btn-sm cpg-next"
+                href={
+                  nextStep === undefined
+                    ? controlHref(ids, item.id)
+                    : stepHref(ids, item.id, nextStep.link)
+                }
               >
-                Open control
+                {nextStep === undefined ? "Open control" : nextStep.action}
                 <UiIcon name="arrow" size={13} />
               </a>
             ) : editable && action !== undefined ? (
@@ -879,7 +896,7 @@ export function ControlsPage({
         </tr>
         {isOpen ? (
           <tr className="cpg-detail-row">
-            <td colSpan={13}>
+            <td colSpan={TABLE_COLUMNS}>
               <Detail
                 ids={ids}
                 row={item}
@@ -894,19 +911,20 @@ export function ControlsPage({
   };
   return (
     <div className="cpg">
-      <header className="cpg-head">
-        <span className="cpg-head-icon" aria-hidden="true">
-          <UiIcon name="shield" size={26} />
-        </span>
+      {/* The workspace's page header (PageHeader's markup; design audit, 17 November 2026). */}
+      <header className="page-header">
         <div>
-          <h1>Controls</h1>
-          <p>
+          {context === "" ? null : <p className="page-context">{context}</p>}
+          <div className="page-title">
+            <h1>Controls</h1>
+          </div>
+          <p className="page-desc">
             The controls selected for each system and process. Each opens with
             its scope, test plan, evidence and testing in Planning, Evidence and
             Testing.
           </p>
         </div>
-        <div className="cpg-head-actions">
+        <div className="page-actions">
           <Select
             label="View by"
             value={by}
@@ -971,8 +989,8 @@ export function ControlsPage({
           <input
             type="search"
             value={typed}
-            placeholder="Search controls, ID, keyword, or description…"
-            aria-label="Search controls"
+            placeholder="Search controls"
+            aria-label="Search controls by ID, keyword, or description"
             onChange={(event) => setTyped(event.target.value)}
           />
         </label>
@@ -1243,12 +1261,8 @@ export function ControlsPage({
                     </th>
                     <th scope="col">Control</th>
                     <th scope="col">System / process</th>
-                    <th scope="col">Type</th>
-                    <th scope="col">Frequency</th>
-                    <th scope="col">Source</th>
-                    <th scope="col">Scope status</th>
-                    <th scope="col">Plan status</th>
-                    <th scope="col">Testing status</th>
+                    <th scope="col">Type / frequency</th>
+                    <th scope="col">Status</th>
                     <th scope="col">Owner</th>
                     <th scope="col">Next action</th>
                     <th scope="col" className="cpg-more-cell">
@@ -1261,7 +1275,7 @@ export function ControlsPage({
                     <Fragment key={group.key}>
                       {group.label !== "" ? (
                         <tr className="cpg-group">
-                          <th scope="rowgroup" colSpan={13}>
+                          <th scope="rowgroup" colSpan={TABLE_COLUMNS}>
                             <div className="cpg-group-band">
                               <UiIcon
                                 name={
@@ -1348,7 +1362,7 @@ export function ControlsPage({
                                   className="cpg-card-icon"
                                   aria-hidden="true"
                                 >
-                                  <UiIcon name={controlIcon(item)} size={22} />
+                                  <UiIcon name={controlIcon(item)} size={18} />
                                 </span>
                                 <span className="cpg-card-name">
                                   {item.included ? (
@@ -1386,7 +1400,6 @@ export function ControlsPage({
                                 <span
                                   className={`cpg-pill cpg-card-status ${status.tone}`}
                                 >
-                                  <UiIcon name={status.icon} size={13} />
                                   {status.label}
                                 </span>
                                 {item.included ? (

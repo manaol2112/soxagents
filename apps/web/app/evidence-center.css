@@ -15,6 +15,12 @@
   gap: 0.5rem;
 }
 
+.ec-head-actions :is(.btn, button).btn-sm {
+  height: 32px;
+  padding: 0 0.8rem;
+  font-size: var(--fs-base);
+}
+
 .ec-more {
   position: relative;
 }
@@ -38,74 +44,84 @@
   padding: 0.3rem;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgb(16 24 40 / 12%);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
 }
 
 .ec-more-pop a {
   padding: 0.45rem 0.6rem;
   color: var(--text);
   font-size: var(--fs-sm);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 
 .ec-more-pop a:hover {
   background: var(--surface-hover);
 }
 
-/* Figures: one compact strip, each a filter. */
-.ec-kpis {
+/* Figures: the shared KPI tile (design review, 17 November 2026), separate tiles in a
+   grid that wraps by width; each tile is a filter. */
+.ec-kpis,
+.shell .ec .ec-kpis {
   display: grid;
-  grid-template-columns: repeat(8, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
   margin: 0;
   padding: 0;
   list-style: none;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-}
-
-.ec-kpis li + li {
-  border-left: 1px solid var(--border-subtle);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .ec-kpi {
   display: grid;
-  gap: 0.15rem;
+  align-content: space-between;
+  gap: 0.5rem;
   height: 100%;
-  padding: 0.6rem 0.75rem;
+  padding: 0.85rem 1rem;
   color: var(--text-secondary);
   text-decoration: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
+  transition: border-color 120ms ease;
 }
 
 .ec-kpi:hover {
-  background: var(--surface-hover);
+  color: var(--text-secondary);
+  border-color: var(--border-strong);
 }
 
 .ec-kpi strong {
   color: var(--text-strong);
-  font-size: var(--fs-xl);
+  font-size: var(--fs-display);
   font-weight: 600;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
 }
 
+/* A long label wraps instead of cutting off ("Awaiting the organiz…" at 1440, 17 November
+   2026); the label sits on top and the number at the tile's foot, so the numbers stay on
+   one line across a row of tiles. */
 .ec-kpi-label {
-  font-size: var(--fs-xs);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  line-height: 1.3;
 }
 
+/* The alert colour only when there is something to act on (the model adds is-alert when
+   the count is above zero). */
 .ec-kpi.is-alert strong {
   color: var(--warning);
 }
 
-.ec-kpi.is-active {
-  background: var(--accent-soft);
-  box-shadow: inset 0 -2px 0 var(--accent);
-}
-
-.ec-kpi.is-active .ec-kpi-label {
-  color: var(--accent-strong);
+/* The chosen tile: a firm edge, no fill. */
+.ec-kpi.is-active,
+.ec-kpi.is-active:hover {
+  border-color: var(--text-strong);
 }
 
 .ec-setup {
@@ -119,7 +135,7 @@
   font-size: var(--fs-sm);
   background: var(--warning-soft);
   border: 1px solid var(--warning-border);
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 
 .ec-setup > svg {
@@ -146,6 +162,7 @@
 
 .ec-view {
   max-width: 14rem;
+  height: 34px;
 }
 
 .ec-search {
@@ -154,16 +171,17 @@
   align-items: center;
   gap: 0.35rem;
   max-width: 24rem;
+  height: 34px;
   padding: 0 0.55rem;
   color: var(--text-tertiary);
   background: var(--surface);
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius);
 }
 
 .ec-search:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  border-color: var(--border-control);
+  box-shadow: var(--ring);
 }
 
 .ec-search input {
@@ -184,17 +202,35 @@
 .ec-filter > summary {
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
-  padding: 0.32rem 0.6rem;
-  color: var(--text-secondary);
+  gap: 0.4rem;
+  height: 34px;
+  padding: 0 0.6rem 0 0.75rem;
+  color: var(--text);
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: 500;
   white-space: nowrap;
   list-style: none;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius);
   cursor: pointer;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.ec-filter > summary:hover {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+}
+
+.ec-filter > summary > svg {
+  color: var(--text-tertiary);
+  transition: transform 150ms ease;
+}
+
+.ec-filter[open] > summary > svg {
+  transform: rotate(180deg);
 }
 
 .ec-filter > summary::-webkit-details-marker {
@@ -202,9 +238,9 @@
 }
 
 .ec-filter > summary.is-on {
-  color: var(--accent-strong);
-  background: var(--accent-soft);
-  border-color: var(--accent-border);
+  color: var(--text-strong);
+  background: var(--surface);
+  border-color: var(--text-strong);
 }
 
 .ec-filter-count {
@@ -226,8 +262,8 @@
   padding: 0.35rem;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgb(16 24 40 / 12%);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
 }
 
 .ec-filter-pop fieldset {
@@ -244,7 +280,7 @@
   gap: 0.5rem;
   padding: 0.35rem 0.45rem;
   font-size: var(--fs-sm);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 
@@ -291,9 +327,9 @@
   gap: 0.5rem;
   padding: 0.55rem 0.75rem;
   background: var(--surface);
-  border: 1px solid var(--accent-border);
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgb(16 24 40 / 10%);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
 }
 
 .ec-bulk-row {
@@ -376,8 +412,10 @@
   top: 0;
   padding: 0.45rem 0.55rem;
   color: var(--text-tertiary);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-2xs);
   font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   text-align: left;
   white-space: nowrap;
   background: var(--surface-muted);
@@ -404,7 +442,7 @@
 }
 
 .ec-table tr.is-open td:first-child {
-  box-shadow: inset 3px 0 0 var(--accent);
+  box-shadow: none;
 }
 
 /* The request takes what the other columns leave: about 300px at a 1440px screen. */
@@ -492,12 +530,13 @@
   padding: 0 0.3rem;
   font-size: var(--fs-2xs);
   font-weight: 600;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .ec-priority.is-high {
-  color: var(--warning);
-  background: var(--warning-soft);
+  color: var(--text-secondary);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 
 .ec-priority.is-urgent {
@@ -574,7 +613,7 @@
   text-align: left;
   background: none;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   box-shadow: none;
   cursor: pointer;
 }
@@ -604,8 +643,8 @@
   padding: 0.5rem;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgb(16 24 40 / 14%);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
   white-space: normal;
 }
 
@@ -614,15 +653,16 @@
 }
 
 .ec-empty {
-  display: grid;
-  justify-items: center;
-  gap: 0.5rem;
-  padding: 2.5rem 1rem;
-  color: var(--text-secondary);
-  text-align: center;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  padding: 0.75rem 1rem;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
   background: var(--surface);
-  border: 1px dashed var(--border-strong);
-  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
 }
 
 .ec-empty p {
@@ -687,7 +727,7 @@
   padding: 0.6rem 0.75rem;
   background: var(--ai-soft);
   border: 1px solid var(--ai-border);
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 
 .ec-planned p {
@@ -725,7 +765,7 @@
   padding: 0.65rem 0.75rem;
   background: var(--surface-muted);
   border: 1px solid var(--border-subtle);
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 
 .ec-preview p {
@@ -745,39 +785,10 @@
   overflow-wrap: anywhere;
 }
 
-@media (max-width: 1100px) {
-  .ec-kpis {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
-  .ec-kpis li:nth-child(5) {
-    border-left: 0;
-  }
-
-  .ec-kpis li:nth-child(n + 5) {
-    border-top: 1px solid var(--border-subtle);
-  }
-}
-
 @media (max-width: 760px) {
-  .ec-kpis {
+  .ec-kpis,
+  .shell .ec .ec-kpis {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .ec-kpis li:nth-child(odd) {
-    border-left: 0;
-  }
-
-  .ec-kpis li:nth-child(n + 3) {
-    border-top: 1px solid var(--border-subtle);
-  }
-
-  .ec-kpis li:nth-child(5) {
-    border-left: 1px solid var(--border-subtle);
-  }
-
-  .ec-kpis li:nth-child(5):nth-child(odd) {
-    border-left: 0;
   }
 
   .ec-search {
@@ -816,7 +827,7 @@
   font-size: var(--fs-sm);
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 
 /* The test plan attributes a request's items evidence (internal). */
@@ -1034,7 +1045,7 @@ a.gp-name:focus-visible {
   margin: 0;
   color: var(--text-strong);
   font-size: var(--fs-md);
-  font-weight: 650;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
@@ -1169,34 +1180,63 @@ a.gp-name:focus-visible {
 }
 
 .gp-item-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   justify-self: start;
+  height: 20px;
   padding: 0 0.45rem;
   font-size: var(--fs-xs);
-  font-weight: 600;
-  border-radius: 999px;
-  border: 1px solid var(--border-subtle);
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
   color: var(--text-secondary);
-  background: var(--surface-muted);
+  background: var(--surface);
+}
+
+.gp-item-status:is(.is-missing, .is-verified, .is-accepted)::before {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  content: "";
+  background: var(--gp-dot);
+  border-radius: 999px;
 }
 
 .gp-item-status.is-missing {
-  color: var(--warning);
-  background: var(--warning-soft);
-  border-color: var(--warning-border);
+  --gp-dot: var(--warning);
 }
 
 .gp-item-status.is-verified {
-  color: var(--info, var(--accent));
-  background: var(--info-soft, var(--surface-muted));
+  --gp-dot: var(--info);
 }
 
 .gp-item-status.is-accepted {
-  color: var(--success);
-  background: var(--success-soft);
-  border-color: var(--success-border, var(--border-subtle));
+  --gp-dot: var(--success);
 }
 
 .gp-item-title {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+/* The evidence views (Requests, the library, the portal) stay on one line on a phone and
+   scroll sideways inside their own row; the row's rule is drawn inside it, so the scroll
+   box does not clip the chosen tab's underline. */
+.evidence-page .page-tabs {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  border-bottom: 0;
+  box-shadow: inset 0 -1px 0 var(--border);
+}
+
+.evidence-page .page-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.evidence-page .page-tabs a {
+  flex: none;
+  margin-bottom: 0;
+  white-space: nowrap;
 }

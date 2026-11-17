@@ -12,14 +12,15 @@
 /* The card: the delivery line, then the rows. */
 .de-card {
   min-width: 0;
-  border: 1px solid var(--border-subtle);
-  border-radius: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
 }
 
 .de-card > .tar-list {
   border: 0;
   border-top: 1px solid var(--border-subtle);
-  border-radius: 0 0 11px 11px;
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
 }
 
 .dq.de .de-card .tar:first-child {
@@ -36,7 +37,7 @@
   padding: 0.3rem 0.5rem 0.3rem 0.9rem;
   color: var(--text-secondary);
   background: var(--surface-muted);
-  border-radius: 11px 11px 0 0;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   font-size: var(--fs-sm);
   line-height: 1.3;
 }
@@ -55,7 +56,7 @@
   gap: 0.35rem 0.75rem;
   padding: 0.55rem 0.9rem;
   color: var(--text);
-  background: color-mix(in srgb, var(--accent-soft) 70%, var(--surface));
+  background: var(--surface-muted);
   border-top: 1px solid var(--border-subtle);
   font-size: var(--fs-sm);
 }
@@ -63,7 +64,7 @@
 /* With no request to sit under, the line is a card of its own. */
 .dq.de > .de-progress {
   border: 1px solid var(--border-subtle);
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
 }
 
 .de-progress > svg {
@@ -133,7 +134,7 @@
 }
 
 .de-delivery-status.tone-info {
-  color: var(--info);
+  color: var(--text-secondary);
   font-weight: 600;
 }
 
@@ -151,7 +152,7 @@ button.de-link {
   border: 0;
   box-shadow: none;
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: 500;
   text-decoration: none;
 }
 
@@ -165,9 +166,9 @@ button.de-link:hover:not(:disabled) {
 }
 
 .de-change:focus-visible {
-  border-radius: 4px;
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+  outline: 0;
+  box-shadow: var(--ring);
 }
 
 /* A row: its head, then Upload and its menu, then the caret; its body under all three. */
@@ -225,7 +226,7 @@ button.de-head-toggle {
   white-space: normal;
   background: transparent;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   box-shadow: none;
 }
 
@@ -276,7 +277,7 @@ button.de-link.de-files-toggle {
   display: inline;
   font-size: inherit;
   line-height: inherit;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 /* A finished check, open: its result takes the row's width, part under part, and what
@@ -316,20 +317,30 @@ button.de-link.de-files-toggle {
 .de-files-panel button.ep-file-flag {
   height: auto;
   min-height: 22px;
+  gap: 6px;
   padding: 0 0.5rem;
-  color: var(--warning);
+  color: var(--text-secondary);
   font-size: var(--fs-xs);
-  font-weight: 600;
-  background: var(--warning-soft);
-  border: 1px solid var(--warning-border);
+  font-weight: 500;
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: 999px;
   box-shadow: none;
 }
 
+.de-files-panel button.ep-file-flag::before {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  content: "";
+  background: var(--warning);
+  border-radius: 999px;
+}
+
 .de-files-panel button.ep-file-flag:hover {
-  color: var(--warning);
-  background: var(--warning-soft);
-  border-color: var(--warning);
+  color: var(--text-strong);
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
 }
 
 .de-files-panel > p {
@@ -372,12 +383,6 @@ button.de-caret > svg {
 }
 
 /* The states the shared chip has no tone for yet. */
-.de .tar-chip.tone-info {
-  color: var(--info);
-  background: var(--info-soft);
-  border-color: var(--info-border);
-}
-
 .de .tar-chip.tone-danger {
   color: var(--danger);
   background: var(--danger-soft);
@@ -416,7 +421,7 @@ button.de-caret > svg {
   gap: 0.25rem;
   color: var(--accent-text);
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: 500;
   cursor: pointer;
   list-style: none;
 }
@@ -434,9 +439,9 @@ button.de-caret > svg {
 }
 
 .de-must > summary:focus-visible {
-  border-radius: 4px;
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+  outline: 0;
+  box-shadow: var(--ring);
 }
 
 .de-must[open] {
@@ -478,7 +483,7 @@ button.de-caret > svg {
   padding: 0.55rem 0.7rem;
   background: var(--surface);
   border: 1px solid var(--border-subtle);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 .de-file-main {
@@ -520,14 +525,14 @@ button.ep-file-open {
   padding: 0;
   color: var(--text-strong);
   font-size: var(--fs-sm);
-  font-weight: 650;
+  font-weight: 600;
   line-height: 1.35;
   text-align: left;
   white-space: normal;
   overflow-wrap: anywhere;
   background: none;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   box-shadow: none;
 }
 
@@ -551,7 +556,8 @@ button.ep-file-open:focus-visible {
   padding: 0.6rem 0.75rem;
   color: var(--text);
   background: var(--ai-soft);
-  border-radius: var(--radius);
+  border: 1px solid var(--ai-border);
+  border-radius: var(--radius-lg);
   font-size: var(--fs-sm);
   line-height: 1.5;
 }
@@ -567,7 +573,7 @@ button.ep-file-open:focus-visible {
 }
 
 .de-agent strong {
-  color: var(--ai);
+  color: var(--text-strong);
   font-weight: 600;
 }
 
@@ -741,7 +747,7 @@ button.ep-file-open:focus-visible {
   min-width: 0;
   padding: 0.4rem 0.65rem;
   background: var(--surface-muted);
-  border-left: 3px solid var(--border-strong);
+  border-left: 2px solid var(--border-strong);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 
@@ -844,7 +850,7 @@ button.ep-file-open:focus-visible {
 }
 
 .de-unasked > summary:focus-visible {
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -892,7 +898,7 @@ button.ep-file-open:focus-visible {
   gap: 0.35rem;
   min-width: 0;
   padding: 0.1rem 0 0.1rem 0.7rem;
-  border-left: 3px solid var(--ai-border);
+  border-left: 2px solid var(--border-strong);
   font-size: var(--fs-sm);
   line-height: 1.5;
 }
@@ -1007,7 +1013,7 @@ button.de-copy {
 }
 
 .de-fold > summary:focus-visible {
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }

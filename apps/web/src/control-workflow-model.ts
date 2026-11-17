@@ -217,7 +217,15 @@ export type WorkflowInput = {
      * (11 November 2026). */
     untailored?: number;
   };
-  plan: { exists: boolean; approved: boolean; pendingReview: boolean };
+  /** The test plan. `drafting`: the planner is drawing it up, or a reviewer returned it to
+   * the preparer; any other plan that exists and is not approved waits on its approval (the
+   * header's and the register's "Plan to approve"). Absent: not drafting. */
+  plan: {
+    exists: boolean;
+    approved: boolean;
+    pendingReview: boolean;
+    drafting?: boolean;
+  };
   /** The understanding asked once (B1j, 16 November 2026): when it was recorded complete,
    * where the agents' question pass stands, and the questions the rules raised that are open
    * (they show in Control Understanding and never hold the attributes). Absent or null on a
@@ -712,6 +720,12 @@ function attributesState(input: WorkflowInput, understanding: State): State {
   return { tone: "done", status: `${plural(approved, "attribute")} settled` };
 }
 
+/** Scope and sampling's status while its plan waits on approval: the register's and the
+ * control header's words (controls-page-model.ts, PLAN_LABEL.PENDING). */
+export const PLAN_TO_APPROVE = "Plan to approve";
+/** Scope and sampling's status while its plan is drawn up, or returned to the preparer. */
+const PLAN_DRAFTING = "Plan being drafted";
+
 /** Scope and sampling (OE's): the rest of the test plan, once the attributes are settled. */
 function testDesignState(input: WorkflowInput, attributes: State): State {
   const { approved } = input.attributes;
@@ -724,11 +738,17 @@ function testDesignState(input: WorkflowInput, attributes: State): State {
   if (attributes.tone !== "done") {
     return waiting("attributes");
   }
+  // Rewritten 17 November 2026 (design review): a plan that exists and is not approved waits
+  // on its approval, as the header, the register and the panel's Approve plan say; only a
+  // plan the planner is drawing up, or one returned to the preparer, is being drafted.
   if (input.plan.pendingReview) {
-    return { tone: "attention", status: "Awaiting approval" };
+    return { tone: "attention", status: PLAN_TO_APPROVE };
+  }
+  if (input.plan.drafting === true) {
+    return { tone: "active", status: PLAN_DRAFTING };
   }
   if (input.plan.exists) {
-    return { tone: "active", status: "Plan being drafted" };
+    return { tone: "attention", status: PLAN_TO_APPROVE };
   }
   return { tone: "idle", status: "Not started" };
 }
@@ -937,12 +957,17 @@ export function workflowOf(input: WorkflowInput): WorkflowStep[] {
     requests !== null && designEvidence === requests
       ? (requests.line ?? "")
       : "";
+  // A plan the planner is drawing up (none on record yet) is the agent's work: the panel and
+  // the next-step card never ask a person to approve a plan that does not exist yet (17
+  // November 2026). One returned to the preparer stays the team's to finish and approve.
+  const planner =
+    states.testdesign.status === PLAN_DRAFTING && !input.plan.exists;
   const steps: WorkflowStep[] = STEPS.map((step, at) => ({
     ...step,
     number: at + 1,
     tone: states[step.key].tone,
     status: states[step.key].status,
-    agent: input.busy.has(step.key),
+    agent: input.busy.has(step.key) || (step.key === "testdesign" && planner),
     next: false,
     ...(step.key === "designevidence" && designNote !== ""
       ? { note: designNote }
@@ -1124,7 +1149,9 @@ export const KIND_ICON = {
 
 // Sized to be read (product owner, 11 November 2026: "I can't even read the letters on it"):
 // at the readable zoom below, a title is 14.4 px on screen and every other line 12.15 px.
-export const NODE_SIZE = { width: 224, height: 120 };
+// 100 high since the line of what a step covers left the node (product owner, 17 November
+// 2026: "remove the words in the middle"); it was 120 with that line.
+export const NODE_SIZE = { width: 224, height: 100 };
 /** Between two steps side by side, in a branch or in the preparation. */
 const GAP_X = 28;
 /** Between a stage and the one beside it, wide enough for the fork and the join. */

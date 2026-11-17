@@ -566,3 +566,160 @@ describe("the D&I conclusion's strip says the conclusion that stands", () => {
     );
   });
 });
+
+// Product owner, 17 November 2026, on a D&I Evidence screen whose agent line said "Drafted 2
+// requests" above "Not drafted yet": "Need you to make sure that things like this will never
+// show up in my app." Everything a step's panel says at one time (the node's status in the
+// header pill, the decision row, the agent's line and what it found, and the next-step card)
+// is read together here, for each mix of states, and must not contradict itself.
+describe("a step's panel never contradicts itself", () => {
+  const notStarted: Partial<WorkflowInput> = {
+    setup: [
+      {
+        key: "answers",
+        done: false,
+        optional: false,
+        mine: true,
+        summary: "4 to answer",
+      },
+    ],
+    attributes: { approved: 0, proposed: 0 },
+    plan: { exists: false, approved: false, pendingReview: false },
+    requirements: [],
+    designPaper: null,
+    designConclusion: null,
+    designRelease: { step: "WAITING", waitingOn: "UNDERSTANDING" },
+  };
+  const settledAttributes = { approved: 5, proposed: 0 };
+  const mixes: Record<string, WorkflowInput> = {
+    "a control not started": midway(notStarted),
+    "understood, attributes to decide, nothing planned": midway({
+      ...notStarted,
+      setup: midway().setup,
+      attributes: { approved: 3, proposed: 2 },
+      designRelease: { step: "WAITING", waitingOn: "ATTRIBUTES" },
+    }),
+    "attributes approved, criteria still to tailor": midway({
+      ...notStarted,
+      setup: midway().setup,
+      attributes: { approved: 5, proposed: 0, untailored: 2 },
+      designRelease: { step: "WAITING", waitingOn: "ATTRIBUTES" },
+    }),
+    "the planner drawing up the test plan": midway({
+      attributes: settledAttributes,
+      plan: {
+        exists: false,
+        approved: false,
+        pendingReview: false,
+        drafting: true,
+      },
+    }),
+    "the test plan returned to the preparer": midway({
+      attributes: settledAttributes,
+      plan: {
+        exists: true,
+        approved: false,
+        pendingReview: false,
+        drafting: true,
+      },
+    }),
+    "the test plan to approve": midway({
+      attributes: settledAttributes,
+      plan: { exists: true, approved: false, pendingReview: true },
+    }),
+    "a test plan held by attributes being updated": midway({
+      attributes: { approved: 5, proposed: 1 },
+      plan: { exists: true, approved: false, pendingReview: true },
+    }),
+    "D&I released, no message drafted, no workpaper": midway({
+      requirements: [
+        { phase: "DESIGN", state: "NOT_GENERATED" },
+        { phase: "DESIGN", state: "NOT_GENERATED" },
+      ],
+      designRelease: { step: "RELEASED" },
+      designPaper: null,
+      designConclusion: null,
+    }),
+    "the design workpaper being drafted": midway({
+      designPaper: { status: "DRAFT", drafting: true },
+      designConclusion: { status: "NOT_READY", proposed: null, signed: null },
+    }),
+    "no D&I conclusion proposed yet": midway({
+      designConclusion: {
+        status: "TO_SIGN",
+        proposed: null,
+        signed: null,
+        named: { standing: null, proposed: null },
+      },
+    }),
+    midway: midway(),
+  };
+  const PAST = /^(Drafted|Planned|Proposed|Started)\b/;
+  for (const [name, input] of Object.entries(mixes)) {
+    const steps = workflowOf(input);
+    it(`never says the agent did what the step says has not happened: ${name}`, () => {
+      for (const step of steps) {
+        const { did, found } = agentNote(step, input);
+        const all = found.join(" | ");
+        const at = `${step.key}: "${did}" over "${all}" (${step.status})`;
+        if (
+          /is not started|is being drafted/.test(all) &&
+          step.key !== "workpaper"
+        ) {
+          assert.doesNotMatch(did, /^Drafted the/, at);
+        }
+        if (/No verdict yet/.test(all)) {
+          assert.doesNotMatch(did, /Proposed the D&I verdict/, at);
+        }
+        if (/No requests are planned yet/.test(all)) {
+          assert.doesNotMatch(did, /^Planned/, at);
+        }
+        if (/No evidence items are planned yet|not drafted yet/.test(all)) {
+          assert.doesNotMatch(did, PAST, at);
+        }
+        if (/without pass\/fail criteria/.test(all)) {
+          assert.doesNotMatch(did, /tailored each/, at);
+        }
+        // Held by an earlier step, nothing on it is done yet: what the agent does. Only
+        // a record already there (requests planned, a plan on file) is said in the past.
+        const onRecord =
+          (step.key === "designevidence" && !/No requests/.test(all)) ||
+          (step.key === "testdesign" && input.plan.exists);
+        if (step.status.startsWith("Waiting on") && !onRecord) {
+          assert.doesNotMatch(did, PAST, at);
+        }
+        // "Drafted" on D&I Evidence names the message to the owner only.
+        if (step.key === "designevidence" && /^Drafted/.test(did)) {
+          assert.ok(
+            input.requirements.some(
+              (item) =>
+                item.phase === "DESIGN" &&
+                !["NOT_GENERATED", "AWAITING_DEPENDENCY"].includes(item.state),
+            ),
+            at,
+          );
+        }
+      }
+    });
+    it(`says the test plan as its node does: ${name}`, () => {
+      const step = steps.find((item) => item.key === "testdesign");
+      assert.ok(step !== undefined);
+      const found = agentNote(step, input).found.join(" | ");
+      const frame = panelFrame("testdesign", steps, null);
+      if (step.status === "Plan being drafted") {
+        assert.doesNotMatch(found, /awaits approval/, found);
+        if (!input.plan.exists) {
+          // Nothing to approve yet: the planner's work, never "Approve scope and sampling".
+          assert.equal(frame.need.kind, "agent");
+          assert.ok(step.agent);
+        }
+      }
+      if (step.status === "Plan to approve") {
+        assert.match(found, /awaits approval/);
+      }
+      if (!input.plan.exists && !input.plan.approved) {
+        assert.doesNotMatch(frame.need.title, /^Approve/, frame.need.title);
+      }
+    });
+  }
+});

@@ -7,6 +7,14 @@ from that tenant. With a multi-tenant authority (common, organizations, consumer
 directory's administrator can put any address on a user, so the token must carry the `email`
 claim with the optional `xms_edov` claim true (the email's domain is verified by its owner);
 the user name (`preferred_username`) is never taken as the email there.
+
+Security sweep, 17 November 2026: a tenant-specific authority must name its tenant by its
+directory id (a GUID), so that every token's `tid` is compared with it. A tenant named by a
+domain (`contoso.onmicrosoft.com`) was let through with no `tid` check at all, and is now
+refused when the provider is built, with the reason. And with a tenant-specific authority
+the email is the user name (`preferred_username`, one of the tenant's verified domains),
+or the `email` claim only when `xms_edov` is true: the `email` claim alone carries the
+mutable `mail` attribute, which an administrator can set to anyone's address.
 """
 
 import re
@@ -14,6 +22,10 @@ from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 from ai_workforce_api.identity import AuthStart, Identity, IdentityError
+
+
+class EntraConfigurationError(ValueError):
+    """The configured authority cannot be used safely. The message says how to fix it."""
 
 
 class MsalClient(Protocol):
@@ -63,17 +75,24 @@ def identity_from_claims(claims: object, *, tenant: str | None = None) -> Identi
         raise IdentityError()
     subject = claims.get("sub")
     named = (tenant or "").strip().lower()
+    verified_email = _true(claims.get("xms_edov"))
     if named == "" or named in MULTI_TENANT:
         email = claims.get("email")
-        if not _true(claims.get("xms_edov")):
+        if not verified_email:
             raise IdentityError()
     else:
+        # Every tenant-specific token is from that tenant: a tenant not named by its id
+        # cannot be compared, so it signs no one in (build_entra_provider refuses it).
         token_tenant = claims.get("tid")
-        if TENANT_ID.match(named) and (
-            not isinstance(token_tenant, str) or token_tenant.strip().lower() != named
+        if (
+            TENANT_ID.match(named) is None
+            or not isinstance(token_tenant, str)
+            or token_tenant.strip().lower() != named
         ):
             raise IdentityError()
-        email = claims.get("email") or claims.get("preferred_username")
+        email = claims.get("email") if verified_email else None
+        if not isinstance(email, str) or "@" not in email:
+            email = claims.get("preferred_username")
     if not isinstance(subject, str) or subject.strip() == "":
         raise IdentityError()
     if not isinstance(email, str) or "@" not in email:
@@ -87,6 +106,18 @@ def identity_from_claims(claims: object, *, tenant: str | None = None) -> Identi
 
 def _true(value: object) -> bool:
     return value is True or (isinstance(value, str) and value.strip().lower() in ("true", "1"))
+
+
+def require_usable_tenant(tenant: str | None) -> None:
+    """Refuse an authority whose tokens could not be checked against its tenant: one that
+    names its tenant by a domain instead of its directory id."""
+    named = (tenant or "").strip().lower()
+    if named == "" or named in MULTI_TENANT or TENANT_ID.match(named) is not None:
+        return
+    raise EntraConfigurationError(
+        "OIDC_ISSUER_URL names its tenant by a domain; use the tenant's directory id "
+        "(https://login.microsoftonline.com/<tenant id>/v2.0), or common/organizations"
+    )
 
 
 def tenant_from_issuer(issuer: str) -> str | None:
@@ -112,6 +143,7 @@ def build_entra_provider(
     parsed = urlsplit(authority_from_issuer(issuer))
     if parsed.scheme != "https" or parsed.netloc == "":
         raise IdentityError()
+    require_usable_tenant(tenant_from_issuer(issuer))
     client = msal.ConfidentialClientApplication(
         client_id,
         authority=authority_from_issuer(issuer),

@@ -26,7 +26,13 @@ import psycopg
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field, ValidationError
 
-from ai_workforce_api.db import connect, independent_steps, transaction
+from ai_workforce_api.db import (
+    connect,
+    hold_claim,
+    independent_steps,
+    releasing_claims,
+    transaction,
+)
 from ai_workforce_api.model_providers import fallback_note, live_model, provider_for
 from ai_workforce_api.models import ModelProvider, ModelRequest
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
@@ -564,7 +570,8 @@ def scan_runner(settings: Settings, provider: ModelProvider | None = None) -> Sc
         from ai_workforce_api.rcm_terms import run_terms
 
         chosen = model if use_model else None
-        with connect(settings.database_url) as connection:
+        # A run that raises gives its claims back, so the retry runs them (db.Claim).
+        with releasing_claims(settings.database_url), connect(settings.database_url) as connection:
             systems = run_scan(connection, chosen, import_id)
             terms = run_terms(connection, chosen, import_id)
         return "READY" if "READY" in (systems, terms) else "SKIPPED"
@@ -590,6 +597,12 @@ def run_scan(
             """,
             (LEASE_MINUTES, import_id, MAX_ATTEMPTS),
         ).fetchone()
+        if claimed is not None:
+            hold_claim(
+                cursor, "rcm_imports", "id", import_id, "systems_status",
+                attempts_column="systems_attempts", lease_column="systems_lease_until",
+                working="SCANNING",
+            )  # fmt: skip
     if claimed is None:
         return "SKIPPED"
     (

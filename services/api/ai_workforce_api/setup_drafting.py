@@ -25,7 +25,13 @@ from pydantic import BaseModel, Field, ValidationError
 from ai_workforce_api.actions import contains_secret
 from ai_workforce_api.authorization import Principal, _call, _session_principal
 from ai_workforce_api.controls import DOMAIN_LABELS
-from ai_workforce_api.db import connect, independent_steps, transaction
+from ai_workforce_api.db import (
+    connect,
+    hold_claim,
+    independent_steps,
+    releasing_claims,
+    transaction,
+)
 from ai_workforce_api.inbound import clean_line, clean_text
 from ai_workforce_api.model_providers import live_model, provider_for
 from ai_workforce_api.models import ModelProvider, ModelRequest
@@ -165,7 +171,8 @@ def draft_runner(
     use_model = provider is not None or live_model(settings)
 
     def run(project_id: UUID) -> str:
-        with connect(settings.database_url) as connection:
+        # A run that raises gives its claim back, so the retry drafts it (db.Claim).
+        with releasing_claims(settings.database_url), connect(settings.database_url) as connection:
             return run_draft(connection, model if use_model else None, project_id)
 
     return run
@@ -257,6 +264,8 @@ def run_draft(
             """,
             (LEASE_MINUTES, project_id, MAX_ATTEMPTS),
         ).fetchone()
+        if claimed is not None:
+            hold_claim(cursor, "setup_drafts", "project_id", project_id, "draft_status")
     if claimed is None:
         # Started engagements keep whatever draft they had; the request is dropped.
         with transaction(connection) as cursor:

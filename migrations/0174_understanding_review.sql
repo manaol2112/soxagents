@@ -100,7 +100,7 @@
 -- 3b);
 -- the backfill of section 6 is not undone (a completion is never cleared: 0172's guard), and
 -- its audit records say which were backfilled (payload backfilled true); delete the
--- '0173_understanding_review' row from schema_migrations. A rollback loses the specialist's
+-- '0174_understanding_review' row from schema_migrations. A rollback loses the specialist's
 -- reviews, which questions it asked and why, and every "not known yet".
 
 -- 1. The specialist's reviews

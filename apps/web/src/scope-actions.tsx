@@ -33,6 +33,7 @@ import {
 } from "./select-controls-model";
 import { selectTargetFor } from "./system-added-model";
 import { type IconName, UiIcon } from "./ui-icon";
+import { isTopmostDialog, useFocusTrap } from "./use-focus-trap";
 
 type Target = { kind: "system" | "process"; id: string; name: string };
 
@@ -67,7 +68,7 @@ export function DiscardBar({
         >
           Keep editing
         </button>
-        <button type="button" className="btn as-discard" onClick={onDiscard}>
+        <button type="button" className="btn-danger" onClick={onDiscard}>
           Discard
         </button>
       </span>
@@ -157,9 +158,12 @@ export function Drawer({
   children: ReactNode;
 }) {
   const id = useId();
+  const box = useRef<HTMLElement>(null);
+  // Tab stays inside the drawer; Escape closes only the topmost dialog.
+  useFocusTrap(box);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busy) {
+      if (event.key === "Escape" && !busy && isTopmostDialog(box.current)) {
         onClose();
       }
     };
@@ -170,6 +174,7 @@ export function Drawer({
     // A click outside never closes it: what was entered stays until Cancel or Close.
     <div className="as-backdrop" role="presentation">
       <section
+        ref={box}
         className={`as${aside === null ? " is-single" : ""}${compact ? " is-compact" : ""}${className === undefined ? "" : ` ${className}`}`}
         role="dialog"
         aria-modal="true"
@@ -740,7 +745,7 @@ function SelectControlsDrawer({
                 <input
                   type="search"
                   value={typed}
-                  placeholder="Search by control ID or name…"
+                  placeholder="Search controls"
                   aria-label="Search controls"
                   onChange={(event) => setTyped(event.target.value)}
                 />
@@ -801,7 +806,7 @@ function SelectControlsDrawer({
                       <th scope="col">Control ID</th>
                       <th scope="col">Control name</th>
                       <th scope="col">Category</th>
-                      <th scope="col">Source</th>
+                      <th scope="col">Status</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -868,7 +873,7 @@ function SelectControlsDrawer({
                           ) : null}
                         </td>
                         <td>
-                          <span className="pill tone-info mc-tag">
+                          <span className="pill mc-tag">
                             {selectionCategory(item.domain).key}
                           </span>
                         </td>

@@ -42,7 +42,7 @@ from ai_workforce_api.control_context import (
     source_blocks,
     understanding_completed,
 )
-from ai_workforce_api.db import independent_steps, transaction
+from ai_workforce_api.db import hold_claim, independent_steps, releasing_claims, transaction
 from ai_workforce_api.model_providers import live_model, provider_for
 from ai_workforce_api.models import ModelProvider, ModelRequest
 from ai_workforce_api.process_understanding import (
@@ -485,7 +485,8 @@ def narrative_runner(settings: Settings) -> Callable[[UUID], str]:
 
     def run(control_id: UUID) -> str:
         provider = provider_for(settings) if live_model(settings) else None
-        with connect(settings.database_url) as connection:
+        # A run that raises gives its claim back, so the retry runs it (db.Claim).
+        with releasing_claims(settings.database_url), connect(settings.database_url) as connection:
             outcome = run_narrative(connection, provider, control_id)
             # The run held the control's attributes while it worked: its end may be the
             # last thing a D&I requests list a person had completed waited for (B1f).
@@ -691,6 +692,11 @@ def run_narrative(
             """,
             (LEASE_MINUTES, control_id, RUN_ATTEMPTS),
         ).fetchone()
+        if row is not None:
+            hold_claim(
+                cursor, "process_narrative_runs", "engagement_control_id", control_id,
+                "run_status", attempts_column="run_attempts", lease_column="run_lease_until",
+            )  # fmt: skip
     if row is None:
         return "SKIPPED"
     organization_id, project_id = UUID(str(row[0])), UUID(str(row[1]))

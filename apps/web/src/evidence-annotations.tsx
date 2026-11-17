@@ -1408,34 +1408,36 @@ export function AnnotatedEvidence({
           }
         >
           {withPanel ? (
-            <div
-              className="ea-tabs"
-              role="tablist"
-              aria-label="Beside the file"
-              onKeyDown={onTabKey}
-            >
-              {PANEL_TABS.map(([key, label]) => (
-                <button
-                  key={key}
-                  type="button"
-                  role="tab"
-                  id={`${tabsId}-${key}`}
-                  ref={(node) => {
-                    if (node === null) {
-                      tabRefs.current.delete(key);
-                    } else {
-                      tabRefs.current.set(key, node);
-                    }
-                  }}
-                  className={`ea-tab${shownTab === key ? " is-on" : ""}`}
-                  aria-selected={shownTab === key}
-                  aria-controls={`${tabsId}-${key}-panel`}
-                  tabIndex={shownTab === key ? 0 : -1}
-                  onClick={() => setTab(key)}
-                >
-                  {label}
-                </button>
-              ))}
+            <div className="ea-tabs-bar">
+              <div
+                className="ea-tabs"
+                role="tablist"
+                aria-label="Beside the file"
+                onKeyDown={onTabKey}
+              >
+                {PANEL_TABS.map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    role="tab"
+                    id={`${tabsId}-${key}`}
+                    ref={(node) => {
+                      if (node === null) {
+                        tabRefs.current.delete(key);
+                      } else {
+                        tabRefs.current.set(key, node);
+                      }
+                    }}
+                    className={`ea-tab${shownTab === key ? " is-on" : ""}`}
+                    aria-selected={shownTab === key}
+                    aria-controls={`${tabsId}-${key}-panel`}
+                    tabIndex={shownTab === key ? 0 : -1}
+                    onClick={() => setTab(key)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
             </div>
           ) : null}
           {withPanel ? (

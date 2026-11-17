@@ -862,14 +862,8 @@ function Text({ parts }: { parts: Inline[] }) {
           node = <strong>{node}</strong>;
         }
         if (part.href !== undefined) {
-          // Only the web or a page of this app (safeHref); the web opens on its own.
-          node = part.href.startsWith("/") ? (
-            <a href={part.href}>{node}</a>
-          ) : (
-            <a href={part.href} target="_blank" rel="noopener noreferrer">
-              {node}
-            </a>
-          );
+          // Only a page of this app (safeHref): any other address is shown as text.
+          node = <a href={part.href}>{node}</a>;
         }
         // biome-ignore lint/suspicious/noArrayIndexKey: parts of one line keep their order.
         return <span key={index}>{node}</span>;

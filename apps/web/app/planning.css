@@ -53,9 +53,9 @@
 
 .pl-ref {
   font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  font-weight: 600;
-  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--text-strong);
 }
 
 .pl-empty {
@@ -112,19 +112,28 @@
   padding: 0 0.6rem;
   color: var(--text-tertiary);
   background: var(--surface);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border-control);
   border-radius: var(--radius);
 }
 
-.pl-search input {
+.pl-search input,
+.pl-search input:focus {
   flex: 1;
   min-width: 0;
-  height: 30px;
+  height: 32px;
+  padding: 0;
   border: 0;
   outline: 0;
   background: transparent;
+  box-shadow: none;
   font: inherit;
   color: var(--text);
+}
+
+/* The ring around the box; the borderless field inside draws none. */
+.pl-search:focus-within {
+  border-color: var(--accent);
+  box-shadow: var(--ring);
 }
 
 .pl-count {
@@ -164,12 +173,16 @@
 }
 
 .pl-table th {
-  padding: 0.5rem 0.75rem;
+  height: 32px;
+  padding: 0 0.75rem;
   color: var(--text-tertiary);
   background: var(--surface-muted);
-  border-bottom: 1px solid var(--border);
-  font-size: var(--fs-xs);
+  font-size: var(--fs-2xs);
   font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
   text-align: left;
   white-space: nowrap;
 }
@@ -261,8 +274,8 @@
   padding: 1.15rem 1.35rem;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
 }
 
 .pl-shell-head .pl-id {
@@ -294,20 +307,20 @@
   padding: 0.9rem 1.1rem;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
 }
 
 .pl-holding.has-blockers {
   border-color: var(--warning-border);
-  box-shadow: inset 3px 0 0 var(--warning), var(--shadow-sm);
+  box-shadow: var(--shadow-xs);
 }
 
 .pl-holding-title {
   margin: 0;
   color: var(--text-strong);
   font-size: var(--fs-md);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .pl-holds {
@@ -398,7 +411,7 @@
 
 .pl-crumbs a {
   color: var(--text-secondary);
-  font-weight: 550;
+  font-weight: 500;
   text-decoration: none;
 }
 
@@ -428,7 +441,7 @@
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-xs);
   font-size: var(--fs-lg);
   line-height: 1;
   text-decoration: none;
@@ -447,7 +460,7 @@
 .pl-pager-next {
   margin-left: 0.25rem;
   color: var(--accent-strong);
-  font-weight: 550;
+  font-weight: 500;
   text-decoration: none;
 }
 
@@ -470,10 +483,10 @@
 }
 
 .pl-control-ref {
-  color: var(--text);
+  color: var(--text-strong);
   font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--fs-sm);
+  font-weight: 500;
 }
 
 .pl-kicker > span + span::before {
@@ -497,8 +510,8 @@
 .pl-shell-head h1 {
   margin: 0;
   color: var(--text-strong);
-  font-size: 20px;
-  font-weight: 650;
+  font-size: var(--fs-title);
+  font-weight: 600;
   letter-spacing: -0.015em;
   line-height: 1.3;
 }
@@ -619,8 +632,8 @@
   min-width: 0;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
 }
 
 .pl-plan-content {
@@ -651,7 +664,7 @@
   box-shadow: none;
   font: inherit;
   font-size: var(--fs-md);
-  font-weight: 550;
+  font-weight: 500;
   white-space: nowrap;
 }
 
@@ -664,7 +677,7 @@
 .pl-tabs [role="tab"].is-active,
 .pl-tabs [role="tab"].is-active:hover {
   color: var(--text-strong);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .pl-tabs [role="tab"].is-active::after {
@@ -802,7 +815,7 @@
   margin: 0;
   color: var(--text-tertiary);
   font-size: var(--fs-2xs);
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
@@ -817,7 +830,7 @@
   box-shadow: none;
   font: inherit;
   font-size: var(--fs-sm);
-  font-weight: 550;
+  font-weight: 500;
   cursor: pointer;
 }
 
@@ -923,7 +936,7 @@
   width: fit-content;
   color: var(--text-secondary);
   font-size: var(--fs-sm);
-  font-weight: 550;
+  font-weight: 500;
   cursor: pointer;
   list-style: none;
 }
@@ -1053,7 +1066,7 @@ button.pl-answer-link:focus-visible {
   margin: 1.25rem 0 0.5rem;
   color: var(--text-strong);
   font-size: var(--fs-md);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .pl-phase:first-child h3 {
@@ -1098,7 +1111,7 @@ button.pl-answer-link:focus-visible {
 
 .pl-item.is-selected {
   background: var(--accent-soft);
-  box-shadow: inset 3px 0 0 var(--accent);
+  box-shadow: none;
 }
 
 .pl-row-head {
@@ -1129,7 +1142,7 @@ button.pl-answer-link:focus-visible {
   min-width: 0;
   color: var(--text-strong);
   font-size: var(--fs-base);
-  font-weight: 550;
+  font-weight: 500;
   line-height: 1.45;
 }
 
@@ -1435,14 +1448,14 @@ a.pl-flag-action:focus-visible {
 
 .pl-history {
   padding: 0.85rem 1.25rem;
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
 }
 
 .pl-history summary {
   color: var(--text-strong);
   font-size: var(--fs-md);
-  font-weight: 650;
+  font-weight: 600;
   cursor: pointer;
 }
 
@@ -1586,7 +1599,7 @@ a.pl-flag-action:focus-visible {
 .pl-release-phase button.is-active:hover {
   color: var(--text);
   background: var(--surface);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-xs);
 }
 
 .pl-release-phase .pl-noun {
@@ -1643,8 +1656,8 @@ a.pl-flag-action:focus-visible {
   padding: 1rem 1.35rem 1.1rem;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
 }
 
 .pl-strip-head {
@@ -1658,7 +1671,7 @@ a.pl-flag-action:focus-visible {
   margin: 0;
   color: var(--text-strong);
   font-size: var(--fs-md);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .pl-strip-head p {
@@ -1707,7 +1720,7 @@ a.pl-flag-action:focus-visible {
 
 .pl-strip-track .is-released { --pl-seg: var(--accent); }
 .pl-strip-track .is-complete { --pl-seg: var(--success); }
-.pl-strip-track .is-ready { --pl-seg: #e0a020; }
+.pl-strip-track .is-ready { --pl-seg: var(--warning); }
 
 .pl-strip-track .is-ready small {
   color: var(--warning);
@@ -1992,7 +2005,7 @@ a.pl-flag-action:focus-visible {
 .pl-approve .pl-approve-note {
   height: auto;
   padding: 0.1rem 0.25rem;
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 500;
 }
 
@@ -2049,8 +2062,8 @@ a.pl-flag-action:focus-visible {
   height: 1.15rem;
   padding: 0 0.3rem;
   color: var(--warning);
-  font-size: 11px;
-  font-weight: 700;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
   background: var(--warning-soft);
   border-radius: 999px;
 }
@@ -2078,7 +2091,7 @@ a.pl-flag-action:focus-visible {
   gap: 0.4rem;
   margin: 0;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 600;
 }
 
@@ -2098,7 +2111,7 @@ a.pl-flag-action:focus-visible {
   justify-content: space-between;
   gap: 0.5rem;
   color: var(--text-secondary);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
 }
 
 .pl-progress-line strong {
@@ -2124,7 +2137,7 @@ a.pl-flag-action:focus-visible {
 .pl-progress-bar span {
   display: block;
   height: 100%;
-  background: linear-gradient(90deg, var(--accent), var(--success));
+  background: var(--accent);
   border-radius: inherit;
   transition: width 220ms ease;
 }
@@ -2145,23 +2158,21 @@ a.pl-flag-action:focus-visible {
   padding: 0.9rem 1rem;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: 0 1px 2px rgb(15 17 21 / 4%);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
   transition:
-    border-color 160ms ease,
-    background 160ms ease;
+    border-color 150ms ease,
+    background 150ms ease;
 }
 
 .pl-q:focus-within {
-  border-color: var(--accent-border);
-  box-shadow:
-    0 1px 2px rgb(15 17 21 / 4%),
-    0 0 0 3px var(--accent-soft);
+  border-color: var(--border-strong);
 }
 
+/* Answered: the tick mark says so; the card stays flat. */
 .pl-q.is-done {
-  background: linear-gradient(180deg, var(--success-soft), var(--surface) 60%);
-  border-color: var(--success-border);
+  background: var(--surface);
+  border-color: var(--border);
 }
 
 .pl-q-mark {
@@ -2171,7 +2182,7 @@ a.pl-flag-action:focus-visible {
   height: 24px;
   margin-top: 0.05rem;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   background: var(--surface-sunken);
   border: 1px solid var(--border);
@@ -2195,7 +2206,7 @@ a.pl-flag-action:focus-visible {
 
 .pl-q-title {
   color: var(--text);
-  font-size: 14px;
+  font-size: var(--fs-md);
   font-weight: 600;
   line-height: 1.4;
 }
@@ -2204,7 +2215,7 @@ a.pl-flag-action:focus-visible {
   justify-self: start;
   padding: 0.05rem 0.5rem;
   color: var(--warning);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   font-weight: 600;
   background: var(--warning-soft);
   border: 1px solid var(--warning-border);
@@ -2214,7 +2225,7 @@ a.pl-flag-action:focus-visible {
 .confirm-dialog-body p.pl-q-hint {
   margin: -0.15rem 0 0.1rem;
   color: var(--text-tertiary);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   line-height: 1.45;
 }
 
@@ -2222,7 +2233,7 @@ a.pl-flag-action:focus-visible {
   height: 38px;
   padding: 0 0.75rem;
   background-color: var(--surface);
-  border-radius: 9px;
+  border-radius: var(--radius);
 }
 
 .pl-q-controls {
@@ -2231,7 +2242,7 @@ a.pl-flag-action:focus-visible {
   align-items: center;
   gap: 0.3rem;
   color: var(--text-tertiary);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
 }
 
 .pl-q-control {
@@ -2242,17 +2253,17 @@ a.pl-flag-action:focus-visible {
   max-width: 100%;
   padding: 0.15rem 0.55rem;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   background: var(--surface-sunken);
   border: 1px solid var(--border);
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
 }
 
 .pl-q-control-ref {
   flex: 0 0 auto;
   color: var(--text);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   font-weight: 600;
 }
 
@@ -2287,7 +2298,7 @@ a.pl-flag-action:focus-visible {
   gap: 0.35rem;
   margin: 0;
   color: var(--text-tertiary);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .confirm-dialog-body p.pl-q-others.is-done {
@@ -2319,7 +2330,7 @@ a.pl-flag-action:focus-visible {
 .pl-q-apply-label {
   margin-right: 0.1rem;
   color: var(--text-tertiary);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
 }
 
 button.pl-q-system {
@@ -2331,7 +2342,7 @@ button.pl-q-system {
   min-height: 24px;
   padding: 0.1rem 0.55rem;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 500;
   line-height: 1.3;
   white-space: normal;
@@ -2352,13 +2363,13 @@ button.pl-q-system:hover {
 }
 
 button.pl-q-system[aria-pressed="true"] {
-  color: var(--success);
-  background: var(--success-soft);
-  border-color: var(--success-border);
+  color: var(--text-strong);
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
 }
 
 button.pl-q-system[aria-pressed="true"] svg {
-  color: var(--success);
+  color: var(--text-strong);
 }
 
 button.pl-q-system.is-all {
@@ -2452,9 +2463,9 @@ a.pl-step:hover,
   gap: 0.5rem;
   margin: 0 0 1rem;
   padding: 0.85rem 1rem;
-  background: var(--warning-soft, #fff8eb);
-  border: 1px solid var(--warning-border, #f3d9a4);
-  border-radius: var(--radius-lg, 10px);
+  background: var(--warning-soft);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-lg);
 }
 
 .pl-since h2 {
@@ -2464,7 +2475,7 @@ a.pl-step:hover,
   margin: 0;
   color: var(--text-strong);
   font-size: var(--fs-base);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .pl-since-lead {
@@ -2516,7 +2527,7 @@ button.pl-since-code {
   border-radius: var(--radius-sm);
   box-shadow: none;
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   font-weight: 600;
   line-height: 1.5;
 }
@@ -2670,7 +2681,7 @@ button.pl-since-code:hover {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   font-weight: 600;
 }
 
@@ -2701,7 +2712,7 @@ button.pl-since-code:hover {
   padding: 0.8rem 0.6rem 0.75rem;
   color: var(--text-secondary);
   font-size: var(--fs-md);
-  font-weight: 550;
+  font-weight: 500;
   text-decoration: none;
   white-space: nowrap;
 }
@@ -2712,12 +2723,12 @@ button.pl-since-code:hover {
 
 .tv-tabs a[aria-current="page"] {
   color: var(--text-strong);
-  font-weight: 650;
+  font-weight: 600;
   box-shadow: inset 0 -2px 0 var(--text-strong);
 }
 
 .tv-tabs a small {
-  color: var(--text-muted);
+  color: var(--text-tertiary);
   font-weight: 500;
 }
 
@@ -2764,7 +2775,7 @@ button.pl-since-code:hover {
 }
 
 .tv-chips small {
-  color: var(--text-muted);
+  color: var(--text-tertiary);
 }
 
 .tv-search {
@@ -2788,7 +2799,7 @@ button.pl-since-code:hover {
 
 .tv-sub {
   display: block;
-  color: var(--text-muted);
+  color: var(--text-tertiary);
   font-size: var(--fs-sm);
 }
 
@@ -2804,7 +2815,7 @@ button.pl-since-code:hover {
 
 .tv-empty {
   padding: 1.5rem 1.1rem;
-  color: var(--text-muted);
+  color: var(--text-tertiary);
 }
 
 /* At phone width the tables fold to cards: the control, its status, whose it is and
@@ -2835,7 +2846,7 @@ button.pl-since-code:hover {
     gap: 0.35rem;
     padding: 0.75rem;
     border: 1px solid var(--border);
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-xl);
   }
 
   .tv-card-head {
@@ -2874,7 +2885,7 @@ button.pl-since-code:hover {
   }
 
   .tv-more dt {
-    color: var(--text-muted);
+    color: var(--text-tertiary);
   }
 
   .tv-more dd {
@@ -2920,8 +2931,8 @@ button.pl-since-code:hover {
 
 .destination-title {
   margin: 0.15rem 0 0.25rem;
-  font-size: var(--fs-2xl, 1.5rem);
-  font-weight: 650;
+  font-size: var(--fs-title);
+  font-weight: 600;
   color: var(--text-strong);
 }
 
@@ -3025,6 +3036,11 @@ button.pl-since-code:hover {
   color: var(--warning);
 }
 
+/* A count of nothing takes no status colour (17 November 2026). */
+.cp-count.is-zero strong {
+  color: var(--text-tertiary);
+}
+
 .cp-done {
   animation: cp-rise 220ms ease-out;
 }
@@ -3082,11 +3098,11 @@ details.cp-group[open] > summary svg {
 }
 
 .cp-group.is-together .cp-group-head {
-  box-shadow: inset 3px 0 0 var(--accent);
+  box-shadow: none;
 }
 
 .cp-group.is-separate .cp-group-head {
-  box-shadow: inset 3px 0 0 var(--warning);
+  box-shadow: none;
 }
 
 .cp-rows {
@@ -3185,7 +3201,7 @@ details.cp-group[open] > summary svg {
   gap: 0.3rem;
   color: var(--success);
   font-size: var(--fs-sm);
-  font-weight: 550;
+  font-weight: 500;
 }
 
 .cp-summary p {
@@ -3228,7 +3244,7 @@ details.cp-group[open] > summary svg {
   z-index: 60;
   display: flex;
   justify-content: flex-end;
-  background: rgb(15 23 42 / 0.4);
+  background: var(--backdrop);
   animation: cp-fade 200ms ease-out;
 }
 
@@ -3239,7 +3255,7 @@ details.cp-group[open] > summary svg {
   height: 100%;
   background: var(--surface);
   border-left: 1px solid var(--border);
-  box-shadow: -24px 0 64px rgb(15 23 42 / 0.18);
+  box-shadow: var(--shadow-lg);
   animation: cp-slide 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
   outline: none;
 }
@@ -3332,7 +3348,7 @@ details.cp-group[open] > summary svg {
   gap: 0.25rem 0.45rem;
   color: var(--text-strong);
   font-size: var(--fs-base);
-  font-weight: 550;
+  font-weight: 500;
 }
 
 .cp-impl-name svg {
@@ -3373,7 +3389,7 @@ button.cp-add-unit {
   border: 0;
   box-shadow: none;
   font-size: var(--fs-sm);
-  font-weight: 550;
+  font-weight: 500;
 }
 
 button.cp-toggle:hover,
@@ -3415,7 +3431,7 @@ button.cp-add-unit:focus-visible {
   padding: 0.45rem 0;
   color: var(--text);
   font-size: var(--fs-sm);
-  font-weight: 550;
+  font-weight: 500;
   cursor: pointer;
 }
 
@@ -3507,7 +3523,7 @@ button.cp-add-unit:focus-visible {
   gap: 0.3rem;
   color: var(--text-strong);
   font-size: var(--fs-sm);
-  font-weight: 550;
+  font-weight: 500;
 }
 
 .cp-comment small {

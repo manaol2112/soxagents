@@ -521,3 +521,56 @@ describe("keepSelected", () => {
     assert.equal(same, current);
   });
 });
+
+describe("the Evidence page before any request (design review, 17 November 2026)", () => {
+  it("says where each phase's requests come from", async () => {
+    const { NO_REQUESTS_YET } = await import(
+      "../apps/web/src/evidence-center-model.ts"
+    );
+    // Old: "No evidence requests yet. They are drafted from each control's approved test
+    // plan." Wrong for D&I: its requests are drafted once the control's D&I list is accepted
+    // (phase_release.settle_design); OE's follow the approved test plan.
+    assert.equal(
+      NO_REQUESTS_YET,
+      "No evidence requests yet. D&I requests are drafted once a control's D&I list is accepted; OE requests follow its approved test plan.",
+    );
+    assert.doesNotMatch(NO_REQUESTS_YET, /They are drafted from/);
+  });
+});
+
+describe("the Evidence page's ways on before any request (design review, 17 November 2026)", () => {
+  it("leads to Controls, where the D&I lists are accepted, then to Planning", async () => {
+    const { noRequestsLinks } = await import(
+      "../apps/web/src/evidence-center-model.ts"
+    );
+    // Old: "Go to Planning" alone, beside a line that says D&I requests are drafted once a
+    // control's D&I list is accepted. New: both places the line names, in its order.
+    assert.deepEqual(
+      noRequestsLinks({
+        controlsHref: "/workspace?section=register",
+        planningHref: "/workspace?section=planning",
+      }),
+      [
+        { label: "Go to Controls", href: "/workspace?section=register" },
+        { label: "Go to Planning", href: "/workspace?section=planning" },
+      ],
+    );
+    assert.deepEqual(
+      noRequestsLinks({ controlsHref: null, planningHref: "/p" }),
+      [{ label: "Go to Planning", href: "/p" }],
+    );
+    assert.deepEqual(
+      noRequestsLinks({ controlsHref: null, planningHref: null }),
+      [],
+    );
+  });
+
+  it("is given the Controls register's address by the workspace", async () => {
+    const { readFileSync } = await import("node:fs");
+    const source = readFileSync(
+      new URL("../apps/web/src/workspace-view.tsx", import.meta.url),
+      "utf8",
+    );
+    assert.match(source, /controlsHref=\{sectionHref\(model, "register"\)\}/);
+  });
+});

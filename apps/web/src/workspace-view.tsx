@@ -183,7 +183,6 @@ import {
   evidenceFileFor,
   type InboundReply,
   latestOutbound,
-  type MailboxMode,
   pendingApprovals,
   type ReminderStep,
   readyToSend,
@@ -293,17 +292,19 @@ const NAV_GROUPS: ReadonlyArray<{ label: string; items: NavItem[] }> = [
 
 const NAV = NAV_GROUPS.flatMap((group) => group.items);
 
-type Tone = "neutral" | "info" | "success" | "warning" | "danger";
+type Tone = "neutral" | "info" | "success" | "warning" | "danger" | "ai";
 
+// The colour meaning map (product owner, 17 November 2026): green is done, amber waits on
+// a person, red is a problem, violet is an agent at work (a RUNNING task is an agent run,
+// agent-avatar-model.ts), blue is in progress, everything else neutral. An active
+// engagement is in progress, blue everywhere (design review, 17 November 2026).
 const STATUS_TONES: Record<string, Tone> = {
-  ACTIVE: "success",
-  COMPLETED: "info",
+  ACTIVE: "info",
+  COMPLETED: "success",
   SUCCEEDED: "success",
-  READY: "info",
-  QUEUED: "info",
-  RUNNING: "info",
-  WAITING: "info",
-  REVIEW: "info",
+  RUNNING: "ai",
+  WAITING: "warning",
+  REVIEW: "warning",
   PAUSED: "warning",
   HIGH: "warning",
   MODERATE: "warning",
@@ -482,12 +483,6 @@ export function WorkspaceView({
         ) : (
           <p className="sidebar-note">Navigation appears after sign-in.</p>
         )}
-        {model.status === "ready" ? (
-          <SidebarControls
-            waiting={waiting}
-            mailboxMode={workflow.mailboxMode}
-          />
-        ) : null}
       </aside>
       <div className="workspace">
         <header className="topbar">
@@ -615,40 +610,6 @@ export function WorkspaceView({
   );
 }
 
-function SidebarControls({
-  waiting,
-  mailboxMode,
-}: {
-  waiting: number | null;
-  mailboxMode: MailboxMode | null;
-}) {
-  return (
-    <section className="sidebar-foot" aria-label="Safeguards">
-      {waiting === null ? null : (
-        <div className="guard-row">
-          <span>Approvals</span>
-          <span
-            className={`pill pill-dot ${waiting > 0 ? "tone-warning" : "tone-success"}`}
-          >
-            {waiting === 0 ? "Clear" : `${waiting} waiting`}
-          </span>
-        </div>
-      )}
-      {mailboxMode === "live" || mailboxMode === "test" ? (
-        <div className="guard-row">
-          <span>Live email</span>
-          <span
-            className={`pill pill-dot ${mailboxMode === "live" ? "tone-warning" : ""}`}
-          >
-            {mailboxMode === "live" ? "On" : "Off"}
-          </span>
-        </div>
-      ) : null}
-      <p>Agents propose. People approve every sensitive action.</p>
-    </section>
-  );
-}
-
 /** The free trial's standing, beside the notifications, leading to its usage (Step 6)
  * while it runs and to the plans once it has ended. */
 function TrialBadgeLink({
@@ -756,7 +717,7 @@ function WorkspaceControls({
       <div className="topbar-actions">
         {navEntry !== null ? (
           <a
-            className={`demo-nav${navEntry.kind === "back" ? " is-back" : ""}`}
+            className="btn btn-secondary btn-sm demo-nav"
             href={navEntry.href}
             aria-label={navEntry.label}
           >
@@ -1871,7 +1832,9 @@ function ReportsStatus({
                     Download <UiIcon name="arrow" size={13} />
                   </a>
                 ) : (
-                  <span className="report-meta">Expired; make it again</span>
+                  <span className="report-meta">
+                    Expired. Generate it again in the agent console.
+                  </span>
                 )}
               </li>
             ))}
@@ -2113,13 +2076,13 @@ function EvidenceMain({
     <div className="page evidence-page">
       <PageHeader
         context={project.name}
-        title="Evidence Management"
-        description="Manage evidence requests, submissions from the organization, and AI-powered validation across the engagement."
+        title="Evidence"
+        description="Requests, submissions from the organization, and their review across the engagement."
         actions={
           <span className="ec-head-actions">
             {canCreate ? (
               <a
-                className="btn btn-sm"
+                className="btn btn-secondary"
                 href={centerHref(ids, query, { creating: true, request: null })}
               >
                 <UiIcon name="plus" size={13} />
@@ -2224,6 +2187,8 @@ function EvidenceMain({
               )
             }
             setupHref={portalHref}
+            planningHref={sectionHref(model, "planning")}
+            controlsHref={sectionHref(model, "register")}
             coordinatorMissing={
               workflow.evidenceContacts !== null &&
               workflow.evidenceContacts.coordinatorEmail === ""
@@ -2736,7 +2701,7 @@ function ReplyItem({
         >
           {hidden}
           <input type="hidden" name="intent" value="review" />
-          <button type="submit" className="btn-sm">
+          <button type="submit" className="btn-secondary btn-sm">
             <UiIcon name="check" size={14} /> Mark reviewed
           </button>
           <small>The request status stays as it is.</small>
@@ -2785,7 +2750,7 @@ function ReplyItem({
                   placeholder="Why this reply belongs to the request"
                 />
               </label>
-              <button type="submit" className="btn-sm">
+              <button type="submit" className="btn-secondary btn-sm">
                 Assign
               </button>
             </form>
@@ -3249,7 +3214,12 @@ function ProjectsMain({
       <PageHeader
         context={model.organization.name}
         title="Engagements"
-        description={portfolioLine(model.projects)}
+        // What the page is for; the counts are the tiles' (design review, 17 November 2026).
+        description={
+          model.projects.length === 0
+            ? portfolioLine(model.projects)
+            : "The firm's audit engagements, each opening on where its work stands."
+        }
         actions={
           model.canManageProjects ? (
             <a className="btn" href={createEngagementHref(model)}>
@@ -3286,7 +3256,10 @@ function ProjectsMain({
               title="No organizations yet"
               detail="An organization is added with its first engagement."
               action={
-                <a className="btn" href={createEngagementHref(model)}>
+                <a
+                  className="btn btn-secondary"
+                  href={createEngagementHref(model)}
+                >
                   New engagement
                   <UiIcon name="arrow" size={15} />
                 </a>
@@ -3309,7 +3282,10 @@ function ProjectsMain({
             detail="Create the first audit for this firm. Scope, work, evidence, and decisions will live on it."
             action={
               model.canManageProjects ? (
-                <a className="btn" href={createEngagementHref(model)}>
+                <a
+                  className="btn btn-secondary"
+                  href={createEngagementHref(model)}
+                >
                   New engagement
                   <UiIcon name="arrow" size={15} />
                 </a>

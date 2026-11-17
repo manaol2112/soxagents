@@ -1,7 +1,14 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useId, useMemo, useState, useTransition } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
 import { createPortal } from "react-dom";
 import { AddSystemWizard } from "./add-system-wizard";
 import { SYSTEM_SAVED_EVENT } from "./controls-guide-model";
@@ -30,6 +37,7 @@ import {
 } from "./onboarding-model";
 import { SocAssessment, SocReports, SocUpload } from "./soc-view";
 import { UiIcon } from "./ui-icon";
+import { isTopmostDialog, useFocusTrap } from "./use-focus-trap";
 
 type Props = {
   organizationId: string;
@@ -136,6 +144,9 @@ function Wizard({
 }: Props & { onClose: () => void }) {
   const router = useRouter();
   const id = useId();
+  const box = useRef<HTMLElement>(null);
+  // Tab stays inside the wizard; Escape closes only the topmost dialog.
+  useFocusTrap(box);
   const [, startTransition] = useTransition();
   const [step, setStep] = useState<Step>(existing === undefined ? 1 : 2);
   const [systemId, setSystemId] = useState<string | null>(existing?.id ?? null);
@@ -201,7 +212,11 @@ function Wizard({
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && busy === "") {
+      if (
+        event.key === "Escape" &&
+        busy === "" &&
+        isTopmostDialog(box.current)
+      ) {
         void cancel();
       }
     };
@@ -363,6 +378,7 @@ function Wizard({
       }}
     >
       <section
+        ref={box}
         className="sw"
         role="dialog"
         aria-modal="true"

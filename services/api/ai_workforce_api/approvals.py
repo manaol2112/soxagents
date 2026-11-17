@@ -306,6 +306,17 @@ def _decide(
     body: ApprovalDecision,
 ) -> ApprovalBody:
     reason = body.reason.strip()
+    # The caller is on the engagement before anything about the approval is read or told
+    # (security sweep, 17 November 2026): before, someone outside the firm learned from a
+    # 409 that an approval existed and was decided, or was their own. The permission to
+    # decide depends on the approval's action, so it is checked again once it is read.
+    authorize(
+        connection,
+        principal=principal,
+        action=Action.TASK_READ,
+        organization_id=organization_id,
+        project_id=project_id,
+    )
     with transaction(connection) as cursor:
         current = _lock(cursor, organization_id, project_id, approval_id)
         if current is None:

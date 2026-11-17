@@ -35,6 +35,7 @@ from ai_workforce_api.control_instances import (
 )
 from ai_workforce_api.evidence_withdrawn import in_force
 from ai_workforce_api.models import ChatTool
+from ai_workforce_api.prompt_data import neutral
 from ai_workforce_api.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -277,6 +278,10 @@ class FileArgs(BaseModel):
 
 
 class SamplesArgs(ControlArgs, Pinned):
+    pass
+
+
+class RetestArgs(ControlArgs, Pinned):
     pass
 
 
@@ -767,7 +772,7 @@ def _read_evidence(context: ToolContext, args: EvidenceArgs) -> dict[str, Any]:
     chunk = text[args.offset : args.offset + EVIDENCE_CHARS]
     first = args.offset == 0
     return {
-        "file_name": row[0],
+        "file_name": neutral(str(row[0])),
         "application": _file_applications(context, [args.evidence_file_id]).get(
             args.evidence_file_id, "not known"
         ),
@@ -789,7 +794,9 @@ def _read_evidence(context: ToolContext, args: EvidenceArgs) -> dict[str, Any]:
         }
         if first and row[9] is not None
         else None,
-        "text": f"<client_evidence>\n{chunk}\n</client_evidence>",
+        # The file's words cannot close the block and speak as the console (prompt_data;
+        # security review, 17 November 2026).
+        "text": f"<client_evidence>\n{neutral(chunk)}\n</client_evidence>",
     }
 
 
@@ -1347,7 +1354,7 @@ def _draft_workpapers(context: ToolContext, args: ControlArgs) -> dict[str, Any]
     return {"control": ref, "drafting": len(queued)}
 
 
-def _retest(context: ToolContext, args: ControlArgs) -> dict[str, Any]:
+def _retest(context: ToolContext, args: RetestArgs) -> dict[str, Any]:
     from ai_workforce_api.test_sheets import retest_work
 
     sheet_id, sheet = _sheet_for(context, args.control_ref)
@@ -1614,6 +1621,26 @@ def _approval_summary(context: ToolContext, args: ApprovalArgs) -> str | None:
     if subject:
         text += f", subject \u201c{_short(subject, 140)}\u201d"
     return f"{text}. Reason: {_short(args.reason, 150)}"
+
+
+def _retest_summary(context: ToolContext, args: RetestArgs) -> str:
+    """What a retest clears: the results a person set on the sheet, counted, so the person
+    confirming knows those judgments are decided again (security review, 17 November 2026)."""
+    summary = f"Test {args.control_ref} again"
+    try:
+        sheet_id, _sheet = _sheet_for(context, args.control_ref)
+    except ToolFailed:
+        return summary
+    row = context.connection.execute(
+        "SELECT coalesce(sum(jsonb_array_length(overrides)), 0) FROM test_items "
+        "WHERE test_sheet_id = %s AND jsonb_typeof(overrides) = 'array'",
+        (sheet_id,),
+    ).fetchone()
+    cleared = 0 if row is None else int(row[0])
+    if cleared == 0:
+        return f"{summary}; no result set by a person is cleared"
+    noun = "result" if cleared == 1 else "results"
+    return f"{summary}, clearing {cleared} {noun} set by a person"
 
 
 # Pins: the record a step decides on, as "kind:id@version".
@@ -2170,9 +2197,14 @@ TOOLS: tuple[Tool, ...] = (
          "have the agent draft their narratives with citations. Sections a person wrote stay.",
          "ROUTINE", ControlArgs, _draft_workpapers,
          lambda a: f"Draft workpapers for {a.control_ref}"),
+    # A retest replaces every result and the overrides a person set on them, so it is a
+    # person's call (security review, 17 November 2026). Before, it ran at once as a
+    # routine step, so a model's call alone could clear a person's judgments.
     Tool("retest_control", "Test again",
-         "Ask the control's tester to place its evidence and test every item again.",
-         "ROUTINE", ControlArgs, _retest, lambda a: f"Test {a.control_ref} again"),
+         "Ask the control's tester to place its evidence and test every item again. Every "
+         "result a person set on the sheet is cleared and decided again.",
+         "CONFIRM", RetestArgs, _retest, lambda a: f"Test {a.control_ref} again",
+         pin=_pin_sheet),
     Tool("override_test_result", "Set a test result",
          "Set one result on a control's test sheet (pass, exception, unable, not applicable) "
          "with the reason, for example after checking the evidence.",
@@ -2268,6 +2300,8 @@ def describe(tool: Tool, arguments: BaseModel, context: ToolContext) -> str:
     file_id = getattr(arguments, "evidence_file_id", None)
     if isinstance(arguments, ApprovalArgs):
         summary = _approval_summary(context, arguments) or summary
+    elif isinstance(arguments, RetestArgs):
+        summary = _retest_summary(context, arguments)
     elif request_id is not None:
         row = context.connection.execute(
             "SELECT control_ref, left(evidence_description, 80) FROM pbc_requests "

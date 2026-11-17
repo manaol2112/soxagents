@@ -215,7 +215,11 @@ export const PROGRESS = [
 export type Progress = (typeof PROGRESS)[number];
 
 export const PROGRESS_LABELS: Record<Progress, string> = {
-  PLAN_TO_APPROVE: "Test plan to approve",
+  // Old "Test plan to approve", new "Plan to approve" (design review, 17 November 2026): the
+  // control header read it beside the workflow node, the Scope & Sampling pill and the
+  // register's "Plan to approve" (control-workflow-model.ts PLAN_TO_APPROVE, controls-page-
+  // model.ts PLAN_LABEL.PENDING): one status, one wording.
+  PLAN_TO_APPROVE: "Plan to approve",
   TO_REQUEST: "Not yet requested",
   AWAITING_EVIDENCE: "Awaiting evidence",
   EVIDENCE_RECEIVED: "Evidence received",

@@ -516,31 +516,31 @@ export function toPageRow(
 
 /** What a control's card shows in its one status pill: what it needs next (product
  * owner, 2 November 2026, card reference). A plan awaiting approval first; then the
- * testing, once it has started; else that it is in scope. */
+ * testing, once it has started; else that it is in scope. The calm badge's dot carries
+ * the status colour, so the pill has no icon (design review, 17 November 2026). */
 export function cardStatus(row: PageRow): {
   label: string;
   tone: "is-success" | "is-warning" | "is-info" | "is-danger" | "is-muted";
-  icon: "check" | "clock" | "activity" | "risk" | "minus" | "compose";
 } {
   if (!row.included) {
-    return { label: "Out of scope", tone: "is-muted", icon: "minus" };
+    return { label: "Out of scope", tone: "is-muted" };
   }
   if (row.plan === "PENDING") {
-    return { label: "Plan to approve", tone: "is-warning", icon: "clock" };
+    return { label: "Plan to approve", tone: "is-warning" };
   }
   if (row.plan === "DRAFT") {
-    return { label: "Plan in draft", tone: "is-muted", icon: "compose" };
+    return { label: "Plan in draft", tone: "is-muted" };
   }
   if (row.testing === "EXCEPTIONS") {
-    return { label: "With exceptions", tone: "is-danger", icon: "risk" };
+    return { label: "With exceptions", tone: "is-danger" };
   }
   if (row.testing === "IN_PROGRESS") {
-    return { label: "Testing in progress", tone: "is-info", icon: "activity" };
+    return { label: "Testing in progress", tone: "is-info" };
   }
   if (row.testing === "COMPLETED") {
-    return { label: "Testing completed", tone: "is-success", icon: "check" };
+    return { label: "Testing completed", tone: "is-success" };
   }
-  return { label: "In scope", tone: "is-success", icon: "check" };
+  return { label: "In scope", tone: "is-success" };
 }
 
 /** The icon on a control's card, from what the control is about; the area's when

@@ -1,4 +1,4 @@
-import { Inter, Source_Serif_4 } from "next/font/google";
+import { Geist } from "next/font/google";
 import { cookies } from "next/headers";
 import type { ReactNode } from "react";
 
@@ -43,20 +43,15 @@ import "./glass.css";
 
 import { parseTheme, THEME_COOKIE } from "../src/theme";
 
-const inter = Inter({
+/** The workspace's one typeface (shadcn/ui, product owner, 17 November 2026). */
+const sans = Geist({
   subsets: ["latin"],
   display: "swap",
-  variable: "--font-inter",
+  variable: "--font-sans",
 });
 
-/** A display serif for the few headlines the owner's references set in one (the setup
- * introduction, 2 November 2026). */
-const serif = Source_Serif_4({
-  subsets: ["latin"],
-  weight: ["600", "700"],
-  display: "swap",
-  variable: "--font-serif",
-});
+// The serif is retired in the workspace (shadcn/ui, 17 November 2026). The public landing
+// page loads its own (app/welcome/page.tsx), so no workspace page downloads it.
 
 export const metadata = {
   title: "AI Employee Workforce",
@@ -73,7 +68,7 @@ export default async function RootLayout({
   return (
     <html
       lang="en"
-      className={`${inter.variable} ${serif.variable}`}
+      className={sans.variable}
       data-theme={theme}
     >
       <body>{children}</body>

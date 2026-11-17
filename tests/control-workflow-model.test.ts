@@ -554,6 +554,37 @@ describe("the control's workflow", () => {
     assert.ok(planning.find((step) => step.key === "testdesign")?.next);
   });
 
+  // Regression (design review, 17 November 2026): a plan that existed and was not approved
+  // read "Plan being drafted" while the header and the register said "Plan to approve" and
+  // the panel offered Approve plan. Only a plan being drawn up or returned is drafted.
+  it("says a plan waiting on approval is to approve, never being drafted", () => {
+    const base = { setup: understood, attributes: settled };
+    const at = (plan: WorkflowInput["plan"]) =>
+      state(workflowOf(fresh({ ...base, plan })), "testdesign");
+    // Neither pending review nor drafting (a revised plan, or open questions): to approve.
+    assert.deepEqual(
+      at({ exists: true, approved: false, pendingReview: false }),
+      ["attention", "Plan to approve"],
+    );
+    assert.deepEqual(
+      at({ exists: true, approved: false, pendingReview: true }),
+      ["attention", "Plan to approve"],
+    );
+    // The planner drawing it up, or returned to the preparer: being drafted.
+    assert.deepEqual(
+      at({ exists: false, approved: false, pendingReview: false, drafting: true }),
+      ["active", "Plan being drafted"],
+    );
+    assert.deepEqual(
+      at({ exists: true, approved: false, pendingReview: false, drafting: true }),
+      ["active", "Plan being drafted"],
+    );
+    assert.deepEqual(
+      at({ exists: false, approved: false, pendingReview: false }),
+      ["idle", "Not started"],
+    );
+  });
+
   // Rewritten 8 November 2026 (B2). Before: OE work done before a design found not effective
   // showed as done. Now it is kept and named "Not relied on": never "not performed", which would
   // hide work on record, and never done, since the conclusion does not rest on it.

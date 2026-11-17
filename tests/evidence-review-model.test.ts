@@ -2096,9 +2096,12 @@ describe("the screen's own files, for the review", () => {
       wizard.indexOf('<li className="wz-review">') <
         wizard.indexOf("{item.attributes.map((row, at) => ("),
     );
+    // Rewritten 17 November 2026 (product owner: the shadcn/ui design language across the
+    // workspace; no coloured stripes). Old: a 3px agent-violet stripe. New: a neutral 2px
+    // edge; the review is still the agent's, said by its own label.
     assert.match(
       wizardCss,
-      /\.wz-review \{[^}]*border-left: 3px solid var\(--ai-border\);/,
+      /\.wz-review \{[^}]*border-left: 2px solid var\(--border-strong\);/,
     );
   });
 });

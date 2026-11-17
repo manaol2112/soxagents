@@ -9,6 +9,8 @@ from test_onboarding import _new_engagement
 from test_outbound import migrated
 from test_planning_gate import _control, _launched, _project
 
+from ai_workforce_api.next_steps import evidence_summary
+
 __all__ = ["migrated"]
 
 
@@ -22,6 +24,14 @@ def _next(team: dict[str, Any], client: Any = None) -> dict[str, Any]:
 def _stage(body: dict[str, Any], key: str) -> dict[str, Any]:
     found: dict[str, Any] = next(item for item in body["stages"] if item["key"] == key)
     return found
+
+
+def test_the_evidence_stage_says_none_requested_yet_before_any_request() -> None:
+    # Added 17 November 2026 (design review): the stage line read "0 of 0 requests
+    # received" before any request; it now says so in words, and counts once there are some.
+    assert evidence_summary(0, 0) == "None requested yet"
+    assert evidence_summary(0, 3) == "0 of 3 requests received"
+    assert evidence_summary(2, 3) == "2 of 3 requests received"
 
 
 def test_an_engagement_being_set_up_points_to_its_setup(migrated: Database) -> None:

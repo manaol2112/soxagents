@@ -102,7 +102,7 @@
 }
 
 .aa-cheek {
-  fill: #ff9fc4;
+  fill: var(--gray-300);
   opacity: 0.38;
 }
 
@@ -132,11 +132,11 @@
 }
 
 .aa-spark.is-2 {
-  fill: #5ee7ff;
+  fill: var(--gray-400);
 }
 
 .aa-spark.is-3 {
-  fill: #ff9fc4;
+  fill: var(--gray-300);
 }
 
 /* Working: a scan crosses the visor inside a turning ring; the eyes narrow to read. */
@@ -515,7 +515,7 @@
   white-space: normal;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   box-shadow: var(--shadow-lg);
   opacity: 0;
   pointer-events: none;
@@ -623,3 +623,22 @@
     transition: none;
   }
 }
+
+/* shadcn/ui sweep (17 November 2026): the agent's mark in zinc, like every other icon; its
+   shape, motion and states are unchanged. */
+.aa {
+  --aa-accent: var(--gray-400);
+  --aa-eye: var(--gray-200);
+  --aa-eye-deep: var(--gray-400);
+}
+
+.aa [id*="shell"] stop:nth-child(1) { stop-color: var(--gray-50) !important; }
+.aa [id*="shell"] stop:nth-child(2) { stop-color: var(--gray-100) !important; }
+.aa [id*="shell"] stop:nth-child(3) { stop-color: var(--gray-300) !important; }
+.aa [id*="shell"] stop:nth-child(4) { stop-color: var(--gray-400) !important; }
+.aa [id*="rim"] stop:nth-child(2) { stop-color: var(--gray-500) !important; }
+.aa [id*="ear"] stop:nth-child(1) { stop-color: var(--gray-300) !important; }
+.aa [id*="ear"] stop:nth-child(2) { stop-color: var(--gray-500) !important; }
+.aa [id*="visor"] stop:nth-child(1) { stop-color: var(--gray-700) !important; }
+.aa [id*="visor"] stop:nth-child(2) { stop-color: var(--gray-900) !important; }
+.aa [id*="visor"] stop:nth-child(3) { stop-color: var(--gray-950) !important; }

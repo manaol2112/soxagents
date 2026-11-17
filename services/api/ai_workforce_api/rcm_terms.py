@@ -21,7 +21,7 @@ from psycopg.types.json import Json
 from pydantic import BaseModel, Field, ValidationError
 
 from ai_workforce_api.controls import DOMAIN_LABELS
-from ai_workforce_api.db import independent_steps, transaction
+from ai_workforce_api.db import hold_claim, independent_steps, transaction
 from ai_workforce_api.model_providers import fallback_note
 from ai_workforce_api.models import ModelProvider, ModelRequest
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
@@ -211,6 +211,11 @@ def run_terms(
             """,
             (LEASE_MINUTES, import_id, MAX_ATTEMPTS),
         ).fetchone()
+        if claimed is not None:
+            hold_claim(
+                cursor, "rcm_imports", "id", import_id, "terms_status",
+                attempts_column="terms_attempts", lease_column="terms_lease_until",
+            )  # fmt: skip
     if claimed is None:
         return "SKIPPED"
     organization_id, project_id, requester, sheets, sheet_index, header_row, fields, mode = claimed

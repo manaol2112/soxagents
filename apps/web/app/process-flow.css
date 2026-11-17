@@ -100,28 +100,10 @@
   border-radius: var(--radius-lg);
 }
 
-.pf-lane.is-accent {
-  --lane: var(--accent-text);
-  --lane-soft: color-mix(in srgb, var(--accent-soft) 55%, transparent);
-  --lane-border: var(--accent-border);
-}
-
-.pf-lane.is-success {
-  --lane: var(--success);
-  --lane-soft: color-mix(in srgb, var(--success-soft) 55%, transparent);
-  --lane-border: var(--success-border);
-}
-
-.pf-lane.is-ai {
-  --lane: var(--ai);
-  --lane-soft: color-mix(in srgb, var(--ai-soft) 55%, transparent);
-  --lane-border: var(--ai-border);
-}
-
-.pf-lane.is-warning {
-  --lane: var(--warning);
-  --lane-soft: color-mix(in srgb, var(--warning-soft) 55%, transparent);
-  --lane-border: var(--warning-border);
+.pf-lane {
+  --lane: var(--text-secondary);
+  --lane-soft: var(--surface-muted);
+  --lane-border: var(--border);
 }
 
 .pf-lane-label {
@@ -146,7 +128,7 @@
 .pf-lane-label strong {
   color: var(--text-strong);
   font-size: var(--fs-md);
-  font-weight: 650;
+  font-weight: 600;
   line-height: 1.3;
 }
 
@@ -227,35 +209,18 @@
   cursor: pointer;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-top: 3px solid var(--card-tone, var(--accent));
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-xs);
   transition:
     box-shadow 140ms ease,
     border-color 140ms ease;
 }
 
-.pf-card.is-accent {
-  --card-tone: var(--accent);
-}
-
-.pf-card.is-success {
-  --card-tone: var(--success);
-}
-
-.pf-card.is-ai {
-  --card-tone: var(--ai);
-}
-
-.pf-card.is-warning {
-  --card-tone: var(--warning);
-}
-
 .pf-card:hover {
   color: var(--text);
   background: var(--surface);
-  border-color: var(--accent-border);
-  box-shadow: var(--shadow-lg);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-xs);
 }
 
 .pf-card.is-selected {
@@ -282,14 +247,9 @@
   place-items: center;
   width: 32px;
   height: 32px;
-  color: var(--accent-text);
-  background: var(--accent-soft);
+  color: var(--text-secondary);
+  background: var(--surface-muted);
   border-radius: var(--radius);
-}
-
-.pf-icon.is-control {
-  color: var(--success);
-  background: var(--success-soft);
 }
 
 .pf-card-titles {
@@ -307,7 +267,7 @@
   overflow: hidden;
   color: var(--text-strong);
   font-size: var(--fs-sm);
-  font-weight: 650;
+  font-weight: 600;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
@@ -379,18 +339,18 @@
 .pf-diamond-shape {
   position: absolute;
   inset: 14%;
-  background: var(--ai-soft);
-  border: 1.5px solid var(--ai-border);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-xs);
   transform: rotate(45deg);
   transition: box-shadow 140ms ease;
 }
 
 .pf-diamond:hover .pf-diamond-shape,
 .pf-diamond[aria-pressed="true"] .pf-diamond-shape {
-  border-color: var(--ai);
-  box-shadow: var(--shadow-lg);
+  border-color: var(--text-strong);
+  box-shadow: var(--shadow-xs);
 }
 
 .pf-diamond-text {
@@ -406,7 +366,7 @@
 }
 
 .pf-diamond-text svg {
-  color: var(--ai);
+  color: var(--text-secondary);
 }
 
 /* Zoom and the hint, over the canvas's corners. */
@@ -468,7 +428,7 @@
   margin: 0;
   color: var(--text-strong);
   font-size: var(--fs-md);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .pf-detail-title {
@@ -483,24 +443,9 @@
   place-items: center;
   width: 44px;
   height: 44px;
-  color: var(--accent-text);
-  background: var(--accent-soft);
+  color: var(--text-secondary);
+  background: var(--surface-muted);
   border-radius: 50%;
-}
-
-.pf-detail-icon.is-success {
-  color: var(--success);
-  background: var(--success-soft);
-}
-
-.pf-detail-icon.is-ai {
-  color: var(--ai);
-  background: var(--ai-soft);
-}
-
-.pf-detail-icon.is-warning {
-  color: var(--warning);
-  background: var(--warning-soft);
 }
 
 .pf-detail-title > span {
@@ -511,7 +456,7 @@
 .pf-detail-title strong {
   color: var(--text-strong);
   font-size: var(--fs-md);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .pf-detail-title small {

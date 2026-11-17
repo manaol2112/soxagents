@@ -79,6 +79,14 @@ class NextStepsBody(BaseModel):
     steps: list[StepBody]
 
 
+def evidence_summary(received: int, requested: int) -> str:
+    """The Evidence stage's line: nothing requested yet reads as such, never "0 of 0"
+    (design review, 17 November 2026)."""
+    if requested == 0:
+        return "None requested yet"
+    return f"{received} of {requested} requests received"
+
+
 def _plural(count: int, one: str, many: str | None = None) -> str:
     return f"{count} {one if count == 1 else (many or one + 's')}"
 
@@ -218,7 +226,7 @@ def next_steps(
     figures: dict[StageKey, tuple[int, int, str]] = {
         "SETUP": (1 if launched else 0, 1, "Launched" if launched else "Not launched yet"),
         "PLANS": (approved, in_scope, f"{approved} of {in_scope} approved"),
-        "EVIDENCE": (received, requested, f"{received} of {requested} requests received"),
+        "EVIDENCE": (received, requested, evidence_summary(received, requested)),
         "TESTING": (concluded, in_scope, f"{concluded} of {in_scope} concluded"),
         "REVIEW": (signed, in_scope, f"{signed} of {in_scope} signed off"),
         "CLOSE": (1 if closed else 0, 1, "Completed" if closed else "Not completed"),

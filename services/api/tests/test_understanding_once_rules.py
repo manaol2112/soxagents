@@ -43,7 +43,7 @@ from ai_workforce_api.models import _mismatch
 from ai_workforce_api.understanding_authority import PRECEDENCE
 
 ROOT = Path(ai_workforce_api.__file__).parent
-MIGRATION = ROOT.parent.parent.parent / "migrations" / "0172_understanding_once.sql"
+MIGRATION = ROOT.parent.parent.parent / "migrations" / "0173_understanding_once.sql"
 # The attribute agent's system prompt as attributes/5 had it (git show 66ac960:services/api/
 # ai_workforce_api/control_attributes.py), by its SHA-256: every rule of it stands word for
 # word in /6, which adds two rules before the last one.

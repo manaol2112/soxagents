@@ -1976,6 +1976,7 @@ function ScopeControls({
       initial={initial}
       editable={editable}
       notices={notices}
+      context={onboarding.projectName}
     />
   );
 }
@@ -2112,9 +2113,8 @@ export function ScopePage({
               {controls.length === 1 ? " is" : "s are"} in scope. Test plans are
               prepared and approved in Planning.
             </span>
-            <a className="btn btn-sm" href={sectionHref(model, "planning")}>
+            <a className="text-link" href={sectionHref(model, "planning")}>
               Go to Planning
-              <UiIcon name="arrow" size={14} />
             </a>
           </span>
         </Banner>

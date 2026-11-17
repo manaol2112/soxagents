@@ -49,7 +49,7 @@ from ai_workforce_api.understanding_review import (
 )
 
 ROOT = Path(ai_workforce_api.__file__).parent
-MIGRATION = ROOT.parent.parent.parent / "migrations" / "0173_understanding_review.sql"
+MIGRATION = ROOT.parent.parent.parent / "migrations" / "0174_understanding_review.sql"
 UNITS = [Unit("A1", "A1", "The change is approved before it is applied."),
          Unit("A2", "A2", "The change is tested.")]  # fmt: skip
 W1 = Parent("W1", question_key="wt-change-approver")
@@ -1097,7 +1097,7 @@ def test_a_chain_of_follow_on_runs_is_bounded_as_the_durable_workflow() -> None:
     from ai_workforce_api.evidence_plans import PLAN_RUN_FOLLOWS
 
     assert PLAN_RUN_FOLLOWS + 1 == PLAN_FOLLOWS
-    migration = ROOT.parent.parent.parent / "migrations" / "0174_plan_run_follows.sql"
+    migration = ROOT.parent.parent.parent / "migrations" / "0175_plan_run_follows.sql"
     sql = migration.read_text(encoding="utf-8")
     assert "ADD COLUMN run_follows integer NOT NULL DEFAULT 0" in sql
     # Every queue that is not a requeue starts the chain again.

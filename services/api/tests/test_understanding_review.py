@@ -1203,7 +1203,7 @@ def test_the_backfill_completes_a_control_accepted_before_the_release(migrated: 
     _accepted_by_owner(migrated, team, control)
     assert _completed_at(migrated, control) is None
     sql = (review.__file__.rsplit("/services/", 1)[0] + "/migrations/"
-           "0173_understanding_review.sql")  # fmt: skip
+           "0174_understanding_review.sql")  # fmt: skip
     with open(sql, encoding="utf-8") as handle:
         text = handle.read()
     # Only this control: the database is shared with the other tests of the module.

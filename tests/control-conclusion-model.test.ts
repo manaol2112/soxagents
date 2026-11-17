@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import {
   conclusionNoticeFor,
   parseControlConclusion,
+  phaseRow,
   rateWrite,
   ratingState,
 } from "../apps/web/src/control-conclusion-model.ts";
@@ -174,6 +175,42 @@ describe("the control's conclusion", () => {
     }
   });
 
+  // Design review, 17 November 2026: "Interim testing / Not started" carried a "Not
+  // started" badge too. The line under a phase's name is left out when it repeats the
+  // badge; a concluded or retested phase keeps its line.
+  it("drops a phase's line when it only repeats the badge", () => {
+    const phase = {
+      phase: "INTERIM" as const,
+      label: "Interim testing",
+      conclusion: null,
+      retested: false,
+    };
+    assert.deepEqual(phaseRow({ ...phase, state: "NOT_STARTED" }), {
+      badge: "Not started",
+      line: "",
+    });
+    assert.deepEqual(phaseRow({ ...phase, state: "IN_PROGRESS" }), {
+      badge: "In progress",
+      line: "",
+    });
+    assert.deepEqual(
+      phaseRow({ ...phase, state: "SIGNED_OFF", conclusion: "NOT_EFFECTIVE" }),
+      { badge: "Not effective", line: "Signed off" },
+    );
+    assert.deepEqual(
+      phaseRow({
+        ...phase,
+        state: "SIGNED_OFF",
+        conclusion: "EFFECTIVE",
+        retested: true,
+      }),
+      {
+        badge: "Effective after retest",
+        line: "Exceptions found; retested effective after remediation",
+      },
+    );
+  });
+
   it("shows success only once the API confirms it", () => {
     assert.equal(conclusionNoticeFor(200, false), "cc-rated");
     assert.equal(conclusionNoticeFor(200, true), "cc-review");
@@ -181,5 +218,30 @@ describe("the control's conclusion", () => {
     assert.equal(conclusionNoticeFor(402, false), "cc-trial-ended");
     assert.equal(conclusionNoticeFor(422, false), "cc-invalid");
     assert.equal(conclusionNoticeFor(0, false), "cc-unavailable");
+  });
+});
+
+describe("the conclusion card says it once (design review, 17 November 2026)", () => {
+  it("has no kicker before there is a verdict, and names whose verdict it is after", async () => {
+    const { verdictKicker } = await import(
+      "../apps/web/src/control-conclusion-model.ts"
+    );
+    // Old: "Not ready to conclude" over "Not concluded" and "Waits until the D&I conclusion
+    // is signed off", under the header's "Waiting on D&I conclusion": three times. New: no
+    // kicker while not ready; the verdict word and the wait say it.
+    const waiting = parseControlConclusion(
+      body({
+        status: "NOT_READY",
+        proposed: null,
+        waiting: ["the D&I conclusion is signed off"],
+      }),
+    );
+    assert.ok(waiting !== null);
+    assert.equal(verdictKicker(waiting.status), null);
+    assert.equal(verdictKicker("PROPOSED"), "The agent's proposed conclusion");
+    assert.equal(verdictKicker("FINAL"), "Concluded at the independent review");
+    for (const status of ["NOT_READY", "PROPOSED", "FINAL"] as const) {
+      assert.doesNotMatch(verdictKicker(status) ?? "", /not ready/i);
+    }
   });
 });

@@ -41,6 +41,28 @@ export const KPIS = [
 ] as const;
 export type Kpi = (typeof KPIS)[number];
 
+/** The list before any request exists. Rewritten 17 November 2026 (design review): "They
+ * are drafted from each control's approved test plan" was wrong for D&I, whose requests are
+ * drafted once the control's D&I list is accepted (phase_release.settle_design); OE's follow
+ * the approved test plan. */
+export const NO_REQUESTS_YET =
+  "No evidence requests yet. D&I requests are drafted once a control's D&I list is accepted; OE requests follow its approved test plan.";
+
+/** The ways on from the empty list, in the line's order (design review, 17 November 2026):
+ * the Controls register, where each control's D&I list is accepted, then Planning, where
+ * the test plans are approved. A link with no address is left out. */
+export function noRequestsLinks(hrefs: {
+  controlsHref: string | null;
+  planningHref: string | null;
+}): Array<{ label: string; href: string }> {
+  return [
+    { label: "Go to Controls", href: hrefs.controlsHref },
+    { label: "Go to Planning", href: hrefs.planningHref },
+  ].filter(
+    (item): item is { label: string; href: string } => item.href !== null,
+  );
+}
+
 export const KPI_LABELS: Record<Kpi, string> = {
   needs_assignment: "Needs assignment",
   awaiting_approval: "Awaiting approval",
@@ -69,7 +91,7 @@ export type Stage =
 
 export const STAGE_TONES: Record<Stage, string> = {
   DRAFT: "neutral",
-  READY_FOR_REVIEW: "info",
+  READY_FOR_REVIEW: "warning",
   APPROVED: "info",
   SENT: "info",
   AWAITING_EVIDENCE: "info",

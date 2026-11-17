@@ -64,6 +64,11 @@ NOT_REVIEWED = (
     "not reviewed."
 )
 MAX_FINDINGS = 8
+# The reviewer's output allowance (16 November 2026). It asked for none, so it had the
+# provider's default of 4,096, the allowance the attribute drafter's answer was cut off at
+# (control_attributes.ATTRIBUTE_TOKENS). Its answer is shorter, a verdict per attribute and
+# at most eight findings; this is the question reviewer's allowance and time.
+REVIEW_TOKENS, REVIEW_SECONDS = 8000, 180
 Verdict = Literal["OK", "REVISED", "CONCERN"]
 
 SYSTEM_PROMPT = (
@@ -795,7 +800,8 @@ def review_set(
             ),
             output_schema=SCHEMA,
             allowed_tool_ids=(),
-            timeout_seconds=120,
+            max_tokens=REVIEW_TOKENS,
+            timeout_seconds=REVIEW_SECONDS,
             cancelled=False,
             system=SYSTEM_PROMPT,
         ),

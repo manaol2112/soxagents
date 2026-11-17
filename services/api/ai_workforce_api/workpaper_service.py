@@ -25,6 +25,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field, ValidationError
 
+from ai_workforce_api import prompt_data
 from ai_workforce_api.agent_runs import (
     CancelState,
     RunState,
@@ -43,7 +44,13 @@ from ai_workforce_api.authorization import (
     authorize,
 )
 from ai_workforce_api.console_citations import resolve
-from ai_workforce_api.db import connect, independent_steps, transaction
+from ai_workforce_api.db import (
+    connect,
+    hold_claim,
+    independent_steps,
+    releasing_claims,
+    transaction,
+)
 from ai_workforce_api.inbound import clean_line, clean_text
 from ai_workforce_api.model_providers import fallback_note, live_model, provider_for
 from ai_workforce_api.models import ModelProvider, ModelRequest
@@ -183,10 +190,20 @@ class WorkpaperScheduler(Protocol):
 def schedule_drafts(scheduler: Any, workpaper_ids: list[UUID]) -> None:
     if not isinstance(scheduler, WorkpaperScheduler) or not workpaper_ids:
         return
-    try:
-        scheduler.schedule_workpaper_drafts(workpaper_ids)
-    except Exception:
-        logger.warning("workpaper drafts could not be scheduled; they will resume on restart")
+    ids = list(workpaper_ids)
+
+    def hand_over() -> None:
+        try:
+            scheduler.schedule_workpaper_drafts(ids)
+        except Exception:
+            logger.warning("workpaper drafts could not be scheduled; they will resume on restart")
+
+    # Inside a request the handoff waits until the request has committed (after_commit.py):
+    # handed over before, the worker's claim saw the rows as they were and skipped them.
+    # Outside one (a worker, a script) it is made at once, as before.
+    from ai_workforce_api.after_commit import after_commit
+
+    after_commit(hand_over)
 
 
 class WorkpaperState(Exception):
@@ -305,7 +322,8 @@ def draft_runner(settings: Settings, provider: ModelProvider | None = None) -> D
     use_model = provider is not None or live_model(settings)
 
     def run(workpaper_id: UUID) -> str:
-        with connect(settings.database_url) as connection:
+        # A run that raises gives its claim back, so the retry drafts it (db.Claim).
+        with releasing_claims(settings.database_url), connect(settings.database_url) as connection:
             return run_draft(connection, model if use_model else None, workpaper_id, settings)
 
     return run
@@ -340,14 +358,9 @@ RECORD_LIMIT = 60_000
 
 # The prompt's own tags. No text from the engagement (a file's name, text, summary or
 # review feedback, the control's facts, a template's wording, a person's reason) can
-# write one: `inert` and `data_json`.
+# write one: `inert` and `data_json`. Every one of them is among the tags the shared
+# neutraliser makes inert (prompt_data.PROMPT_TAGS; security review, 17 November 2026).
 PROMPT_TAGS = ("workpaper_facts", RECORD_TAG, "evidence", "file")
-# The angle bracket and its look-alikes (fullwidth, small, CJK and mathematical angle
-# brackets, and the HTML entity), as evidence_assurance.neutral reads them.
-_DELIMITER = re.compile(
-    r"(?:<|&lt;|\uff1c|\ufe64|\u3008|\u2329|\u27e8)(\s*/?\s*)(" + "|".join(PROMPT_TAGS) + r")\b",
-    re.I,
-)
 # In a JSON block every angle bracket, its look-alikes and the ampersand (of an HTML
 # entity) are written as JSON escapes: the same value when parsed, and never a tag.
 _JSON_ESCAPES = {
@@ -362,7 +375,7 @@ def inert(text: str) -> str:
     <file, whatever the spacing, the case or the look-alike bracket), so that no file can
     close its element or the evidence, or open a block of its own. Everything else is as
     it is in the file, so a citation of it still matches."""
-    return _DELIMITER.sub(lambda found: "‹" + found.group(1) + found.group(2), text)
+    return prompt_data.neutral(text)
 
 
 def data_json(value: Any) -> str:
@@ -864,6 +877,8 @@ def _draft_once(
             """,
             (LEASE_MINUTES, workpaper_id, MAX_ATTEMPTS),
         ).fetchone()
+        if claimed is not None:
+            hold_claim(cursor, "workpapers", "id", workpaper_id, "draft_status")
     if claimed is None:
         return "SKIPPED"
     (

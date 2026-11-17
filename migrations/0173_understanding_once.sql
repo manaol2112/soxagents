@@ -68,7 +68,7 @@
 -- COLUMN run_codes, DROP COLUMN run_cause; ALTER TABLE engagement_controls DROP COLUMN
 -- understanding_completed_at; delete the audit events whose action starts with
 -- 'attribute_assumption.' only if the firm's retention allows it (they are otherwise kept:
--- they name no table); delete the '0172_understanding_once' row from schema_migrations. A
+-- they name no table); delete the '0173_understanding_once' row from schema_migrations. A
 -- rollback loses the earlier criteria, the assumptions and the people's answers to them (the
 -- audit events keep each decision), and every control's understanding reads as not
 -- completed again, so the agents may ask on it once more.

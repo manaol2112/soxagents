@@ -2,6 +2,17 @@
 
 The workspace (everything behind sign-in) uses one design system. The public landing and sign-in pages keep their own marketing styles (`welcome.css`, `sign-in.css`).
 
+## Design language: shadcn/ui (product owner, 17 November 2026)
+
+The workspace follows the shadcn/ui design language ("I like shadcn/ui. Please implement that across.", chosen from six framework options). It is built on the tokens below, not on Tailwind or a component library: the token names stay, their values are shadcn's.
+
+- **Colour:** zinc neutrals; the primary fill is near-black (#18181b) in light and near-white (#fafafa) in dark, with `--text-on-accent` flipping to match; links are neutral text (`--accent-text`, which is the text colour now), underlined on hover and with a quiet underline inside running text; blue (`--info*`) is kept for information status only, never for references, selection or labels; status and agent colours are unchanged. The meaning map: green is done or a recorded decision, amber waits on a person, red is a problem or blocked, violet is agent work, everything else neutral. Status badges are calm: a neutral outline with a small dot in the status colour (the rule at the end of `glass.css`); full fills are kept for danger and blocked, and for agent marks.
+- **Surfaces:** flat and solid. The glass layer (`glass.css`, decided 26 October 2026) is retired by the same decision: its tokens are now solid surfaces and its glow is transparent, and `glass.css` sets panels to `--surface`, a 1px `--border` and `--shadow-xs`, menus to `--shadow-lg`, and the top bar and sidebar to solid surfaces, with no blur. A modal's backdrop is `--backdrop`, with no blur.
+- **Type:** one typeface, Geist (`--font-sans`, loaded in `layout.tsx`); the serif is retired in the workspace (`--font-display` is the UI font). Sizes come only from the `--fs-*` scale; weights are 400 (text), 500 (labels, buttons, badges) and 600 (headings).
+- **Shape:** corners come only from the radius scale: 6px badges, 8px buttons and fields, 10px small panels, 12px cards and dialogs; a hairline under 4px and a full pill are the exceptions.
+- **Enforced:** `tests/design-tokens.test.ts` fails on a hand-typed font size, a weight outside 400/500/600, a corner off the scale, or a serif in any workspace stylesheet, and on any new hand-typed colour outside `globals.css`: hex (at most 113) and `rgb()`/`rgba()` (at most 18), older ones to be moved onto tokens. The corner check reads px, rem and em. The public landing and sign-in pages keep their own marketing styles.
+- **Reviewed:** every change to what a person sees passes the `ui-reviewer` agent (AGENTS.md).
+
 ## Where it lives
 
 - **Tokens:** the `:root` block at the top of `apps/web/app/globals.css`. It is the only place a color, type size, radius, or shadow value is defined.
@@ -17,7 +28,7 @@ The workspace is dark by default, with a light theme chosen in the account menu 
 - A page whose root carries `.theme-light` stays light whatever the choice: the client portal (`.pt`), the landing page, and sign-in. Client-facing pages are not themed.
 - A rule never assumes the background is white or the text dark: `--surface` rather than `white`, a status token rather than a dark brown or red.
 - Two things stay white in both themes on purpose: the brand mark and a rendered PDF page, which is the client's document.
-- **Glass** (`apps/web/app/glass.css`, loaded last; decided by the product owner): the workspace's panels are translucent over a soft fixed glow with a light edge and sheen (`--glass-panel`, `--glass-sheen`, `--glass-edge`, `--glow-*`); the top bar and sidebar are frosted (`--glass-chrome`, `--glass-sidebar`); menus, popovers, and dialogs stay opaque (`--glass-strong`) so nothing behind them competes. A new panel class joins the list in `glass.css`. `prefers-reduced-transparency: reduce` returns every surface to solid.
+- **Surfaces layer** (`apps/web/app/glass.css`, loaded last). The glass look (26 October 2026) is retired by the shadcn/ui decision (17 November 2026): panels, the top bar, the sidebar, menus and dialogs are solid, with no glow, sheen, translucency or blur. A new panel class joins the list in `glass.css`, and a new status-badge family joins the calm-badge rule at its end.
 
 ## Tokens
 
@@ -26,11 +37,11 @@ The workspace is dark by default, with a light theme chosen in the account menu 
 | Surfaces | `--canvas`, `--surface`, `--surface-muted`, `--surface-sunken`, `--surface-hover`, `--surface-glass` | Page background, cards, table headers, wells, row hover, translucent bars |
 | Text | `--text-strong`, `--text`, `--text-secondary`, `--text-tertiary`, `--text-disabled` | Headings, body, supporting copy, metadata, disabled. All but disabled meet WCAG 2.2 AA (4.5:1) in both themes on every ground (`--canvas`, `--surface`, `--surface-hover`, `--surface-muted`) and every tint (`--accent-soft`, `--success-soft`, `--warning-soft`, `--danger-soft`, `--ai-soft`), and each status colour on its own tint; `tests/theme.test.ts` checks it. Text in the accent colour uses `--accent-text`, never `--accent` (a fill: 3.4:1 as text on dark) |
 | Lines | `--border`, `--border-strong`, `--border-subtle`, `--border-control` | Card edges and dividers inside cards; `--border-control` is every form field's edge (text field, dropdown, text area, or the box drawing a search field), at 3:1 on every surface (WCAG 1.4.11), set over the components' own field borders by one rule at the end of `globals.css` |
-| Primary | `--accent`, `--accent-hover`, `--accent-text`, `--accent-strong`, `--accent-soft`, `--accent-border` | The one primary action per area (`--accent` is the fill, `--accent-hover` its hover), accent-colored text and links (`--accent-text`, `--accent-strong`), selection, focus |
+| Primary | `--accent`, `--accent-hover`, `--accent-text`, `--accent-strong`, `--accent-soft`, `--accent-border` | The one primary action per area (`--accent` is the fill, `--accent-hover` its hover), link text (`--accent-text`, `--accent-strong`: the neutral text colour), selection, focus |
 | Status | `--success*`, `--warning*`, `--danger*`, `--info*`, `--neutral*`, `--text-on-status`, `--highlight` | Each has a strong tone (text, icons), `-soft` (fill), and `-border`; text on a solid status fill uses `--text-on-status`; a quoted passage is marked with `--highlight` |
 | Agent output | `--ai`, `--ai-soft`, `--ai-border` | Something an agent proposed that no person has decided yet |
 | Type | `--fs-2xs` 11px to `--fs-display` 28px | Labels and metadata up to page and record titles |
-| Shape | `--radius-sm` 6, `--radius` 8, `--radius-lg` 10, `--radius-xl` 14 | Badges; buttons and inputs; cards; dialogs and the composer |
+| Shape | `--radius-sm` 6, `--radius` 8, `--radius-lg` 10, `--radius-xl` 12 | Badges; buttons and inputs; cards; dialogs and the composer |
 | Elevation | `--shadow-xs`, `--shadow-sm`, `--shadow-lg`, `--shadow-pop`, `--ring` | Controls, cards, raised panels, popovers, keyboard focus |
 
 ## Components
@@ -38,7 +49,7 @@ The workspace is dark by default, with a light theme chosen in the account menu 
 - **Page header.** Every page uses `PageHeader`: an uppercase eyebrow naming where you are (the engagement or the firm; shown only below 821px, where the top-bar breadcrumb is cut short), the page title, one line on what the page is for, and the page's actions on the right. KPIs go in a `kpis` strip under the header, not inside it.
 - **Buttons.** `.btn` or `<button>` is the primary action (accent, 32px), and an area has one. `.btn-secondary` is for the rest, `.btn-ghost` for quiet actions in rows and toolbars, and `.btn-danger` for what cannot be undone. `.btn-sm` is 28px. A link styled as a button behaves like one.
 - **Badges.** `.pill` with a tone: `tone-success`, `tone-warning`, `tone-danger`, `tone-info`, `tone-neutral`, `tone-ai`. A badge always names its state in words; the dot and the color repeat it and never replace it.
-- **Links to other pages.** `.text-link` is accent text with a chevron. Add `.is-plain` when the link does not lead on, such as Close.
+- **Links to other pages.** `.text-link` is neutral text with a chevron, underlined on hover. Add `.is-plain` when the link does not lead on, such as Close.
 - **Cards.** `.card` with `CardHeader` (title, one-line description, an aside for a count or a `.text-link`). `.card-disclosure` is a settled section that opens on request.
 - **Tables.** Wrap them in `.table-wrap` or `.grid-scroll`: they scroll sideways inside the card and never widen the page. In a fixed grid, a `.cell-sub` with a `title` truncates with an ellipsis.
 - **Agent presence.** The console orb and agent avatars use the agent tokens (violet on a soft fill), not gradients. Nothing about an agent is decorative: it marks who produced something.

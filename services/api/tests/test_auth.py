@@ -8,9 +8,12 @@ from support import Database
 from ai_workforce_api.auth import token_hash
 from ai_workforce_api.db import connect, transaction
 from ai_workforce_api.entra import (
+    EntraConfigurationError,
     EntraIdentityProvider,
     authority_from_issuer,
+    build_entra_provider,
     identity_from_claims,
+    require_usable_tenant,
     tenant_from_issuer,
 )
 from ai_workforce_api.identity import AuthStart, Identity, IdentityError
@@ -36,6 +39,9 @@ class FakeProvider:
         return self.identity
 
 
+TENANT = "0f8fad5b-d9cb-469f-a165-70867728950e"
+
+
 class FakeMsal:
     def initiate_auth_code_flow(
         self, scopes: list[str], redirect_uri: str | None = None
@@ -56,7 +62,11 @@ class FakeMsal:
     ) -> dict[str, Any]:
         assert auth_code_flow["code_verifier"] == "verifier-secret"
         return {
-            "id_token_claims": {"sub": "subject-1", "preferred_username": "owner@example.com"},
+            "id_token_claims": {
+                "sub": "subject-1",
+                "preferred_username": "owner@example.com",
+                "tid": TENANT,
+            },
             "access_token": "access-token-secret",
         }
 
@@ -191,7 +201,11 @@ def test_entra_provider_drops_tokens_and_uses_the_tenant_host() -> None:
     # Rewritten 9 November 2026 (security sweep): the provider is built with its authority's
     # tenant, as build_entra_provider does. Before, it took no tenant and trusted the user
     # name as the email whatever the authority; a tenant-specific authority still does.
-    provider = EntraIdentityProvider(FakeMsal(), tenant="tenant")
+    # Rewritten 17 November 2026 (security sweep): a tenant-specific authority names its
+    # tenant by its directory id and every token carries that `tid`. The old expectation, a
+    # tenant called "tenant" accepting a token with no `tid`, is the gap that was closed:
+    # such a tenant is now refused (test_a_tenant_specific_authority_checks_every_token).
+    provider = EntraIdentityProvider(FakeMsal(), tenant=TENANT)
     started = provider.begin(redirect_uri="https://api.example.test/auth/callback")
     if "verifier-secret" in started.authorization_url:
         raise AssertionError("pkce verifier appeared in the authorization url")
@@ -277,6 +291,47 @@ def test_a_multi_tenant_entra_email_links_only_when_its_domain_is_verified() -> 
         "organizations"
     )
     assert tenant_from_issuer("https://login.microsoftonline.com") is None
+
+
+def test_a_tenant_specific_authority_checks_every_token() -> None:
+    """Security sweep, 17 November 2026: a tenant named by a domain was let through with no
+    `tid` comparison, and with a tenant-specific authority the `email` claim (the mutable
+    `mail` attribute) was taken as the address an account links by."""
+    # A domain-named tenant is refused when the provider is built, and signs no one in.
+    with pytest.raises(EntraConfigurationError, match="directory id"):
+        require_usable_tenant(
+            tenant_from_issuer("https://login.microsoftonline.com/contoso.onmicrosoft.com/v2.0")
+        )
+    for usable in (TENANT, TENANT.upper(), "organizations", "common", None):
+        require_usable_tenant(usable)
+    claims = {"sub": "subject-1", "preferred_username": "owner@example.com", "tid": TENANT}
+    with pytest.raises(IdentityError):
+        identity_from_claims(claims, tenant="contoso.onmicrosoft.com")
+    # The tenant's own token is accepted; another tenant's, or one without a tid, is not.
+    assert identity_from_claims(claims, tenant=TENANT).email == "owner@example.com"
+    for tid in ("1b4e28ba-2fa1-11d2-883f-0016d3cca427", "", None):
+        with pytest.raises(IdentityError):
+            identity_from_claims({**claims, "tid": tid}, tenant=TENANT)
+    # The email claim alone never names the account: the user name does.
+    spoofed = {**claims, "email": "partner@victim.example"}
+    assert identity_from_claims(spoofed, tenant=TENANT).email == "owner@example.com"
+    with pytest.raises(IdentityError):
+        identity_from_claims(
+            {"sub": "subject-1", "email": "partner@victim.example", "tid": TENANT},
+            tenant=TENANT,
+        )
+    # With the domain verified by its owner (xms_edov), the email claim is used.
+    verified = identity_from_claims({**spoofed, "xms_edov": True}, tenant=TENANT)
+    assert verified.email == "partner@victim.example"
+
+
+def test_building_the_provider_refuses_a_domain_named_tenant() -> None:
+    with pytest.raises(EntraConfigurationError):
+        build_entra_provider(
+            issuer="https://login.microsoftonline.com/contoso.com/v2.0",
+            client_id="client",
+            client_secret="secret",
+        )
 
 
 def test_issuer_authority_strips_the_v2_suffix() -> None:

@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import {
   type FormEvent,
+  Fragment,
   type ReactNode,
   useCallback,
   useEffect,
@@ -39,10 +40,13 @@ import {
   confirmsByProposal,
   copyChoices,
   copyTargetLine,
+  countsOpen,
+  courseWhere,
   draftedFrom,
   draftText,
   drivesLine,
   extendInterview,
+  foldChip,
   followUpShown,
   type Interview,
   ignoredNote,
@@ -61,6 +65,10 @@ import {
   notesSummary,
   OTHER_MAX,
   OTHER_RULE,
+  openFeeding,
+  openQuestionsLine,
+  openStepKeys,
+  optionalOpen,
   otherSystemLabel,
   otherText,
   parseNotes,
@@ -71,6 +79,7 @@ import {
   proposedPick,
   type Review,
   readyLines,
+  readyWithOpen,
   restartInterview,
   reviewGroups,
   START_NONE,
@@ -92,6 +101,7 @@ import {
   topicSave,
   topicShown,
   topicStep,
+  understoodLede,
   WALKTHROUGH_TEXT_MAX,
   type WalkthroughAnswer,
   type WalkthroughTopic,
@@ -100,6 +110,13 @@ import {
   withConfirmed,
   withOther,
 } from "./understanding-chat-model";
+import {
+  carriedFromLastYear,
+  type DocView,
+  documentMeta,
+  factLabel,
+  sectionCount,
+} from "./understanding-document-model";
 import {
   addedForAttributes,
   CHECKING_LINE,
@@ -238,7 +255,10 @@ export function UnderstandingReview({
   const [unticked, setUnticked] = useState<Record<string, boolean>>({});
   // On record: an answer being changed in place.
   const [editing, setEditing] = useState<Record<string, boolean>>({});
-  const [recordOpen, setRecordOpen] = useState(false);
+  // The understanding as a narrative, or as its facts and their sources (17 November 2026).
+  const [docView, setDocView] = useState<DocView>("narrative");
+  // Answers on record opened to change: asked in the course, never counted as its steps.
+  const [changing, setChanging] = useState<readonly string[]>([]);
   // On a phone the understanding folds above the question.
   const [docOpen, setDocOpen] = useState(false);
   // The gates are read again after a save: their lines show as updating until then.
@@ -646,21 +666,32 @@ export function UnderstandingReview({
         ) : null}
         {why}
         {foot(
-          <button
-            type="submit"
-            className="btn btn-primary"
-            disabled={!canAct || busy || answer === ""}
-          >
-            {saving === need.key ? (
-              <span className="spinner small" aria-hidden="true" />
+          <>
+            {/* Why Save is off (design review, 17 November 2026): said, never only greyed. */}
+            {canAct && !busy && answer === "" ? (
+              <span className="ur-foot-hint" id="ur-choose-hint">
+                Choose an answer
+              </span>
             ) : null}
-            {saving === need.key
-              ? "Saving…"
-              : unchanged
-                ? "Continue"
-                : "Save & continue"}
-            <UiIcon name="arrow" size={14} />
-          </button>,
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={!canAct || busy || answer === ""}
+              aria-describedby={
+                canAct && !busy && answer === "" ? "ur-choose-hint" : undefined
+              }
+            >
+              {saving === need.key ? (
+                <span className="spinner small" aria-hidden="true" />
+              ) : null}
+              {saving === need.key
+                ? "Saving…"
+                : unchanged
+                  ? "Continue"
+                  : "Save & continue"}
+              <UiIcon name="arrow" size={14} />
+            </button>
+          </>,
           true,
         )}
       </form>
@@ -1144,10 +1175,21 @@ export function UnderstandingReview({
   // A question left as not known (B1l point 1) is never counted as confirmed.
   const progress = interviewProgress(
     review,
-    courseWithout(interview, closedRef.current),
+    courseWithout(interview, new Set([...closedRef.current, ...changing])),
   );
   const plan = interview.plan;
   const step = at < plan.length ? (plan[at] ?? null) : null;
+  // The questions still open (design review, 17 November 2026): the header, the fold's chip
+  // and the checklist never read as all on record while one is.
+  // One count for all of them and the footer: every open step the course pages through.
+  const openKeys = openStepKeys(review, interview, changing);
+  const openOptional = optionalOpen(review, interview, openKeys);
+  const openForEvidence = openFeeding(review, interview, "EVIDENCE");
+  const countingOpen = countsOpen({
+    progress,
+    done: status.done,
+    complete,
+  });
   const topic = step === null ? null : stepTopic(step);
   const current =
     step !== null && step !== CARRIED && topic === null
@@ -1195,6 +1237,10 @@ export function UnderstandingReview({
       return;
     }
     const course = { ...interview, plan: [...plan, target] };
+    // A topic opened to change an answer on record is a change, not a step of the course.
+    if (need.status === "CONFIRMED") {
+      setChanging((was) => [...was, target]);
+    }
     setCourse(course);
     go(course.plan.length - 1);
   }
@@ -1206,17 +1252,6 @@ export function UnderstandingReview({
       openTopic(slot);
       return;
     }
-    if (byKey.get(key)?.kind === "AUTH" && interview !== null) {
-      const known = plan.indexOf(key);
-      if (known >= 0) {
-        go(known);
-        return;
-      }
-      const course = { ...interview, plan: [...plan, key] };
-      setCourse(course);
-      go(course.plan.length - 1);
-      return;
-    }
     const index = plan.indexOf(key);
     if (index >= 0) {
       go(index);
@@ -1226,8 +1261,20 @@ export function UnderstandingReview({
       go(plan.indexOf(CARRIED));
       return;
     }
-    setRecordOpen(true);
-    setEditing((was) => ({ ...was, [key]: true }));
+    // A point on record is changed where every point is asked: in the course, one at a
+    // time (17 November 2026: an editor opened inside the facts table was cramped, and
+    // several could be open at once).
+    const kind = byKey.get(key)?.kind;
+    if ((kind === "AUTH" || kind === "ANSWER") && interview !== null) {
+      const course = { ...interview, plan: [...plan, key] };
+      setChanging((was) => [...was, key]);
+      setCourse(course);
+      go(course.plan.length - 1);
+      return;
+    }
+    // Without a course, in place, and one at a time.
+    setDocView("facts");
+    setEditing({ [key]: true });
     setDocOpen(true);
   }
 
@@ -1470,108 +1517,303 @@ export function UnderstandingReview({
     />
   );
 
-  // The left pane: the understanding as it reads now, what it is ready for, and the scope.
+  // The left pane (prototype approved 17 November 2026): the understanding as it reads
+  // now, as a narrative or as its facts and sources, what it is ready for, and the scope.
+  const view: DocView = recordCount > 0 ? docView : "narrative";
+  const meta = documentMeta(once.completedAt ?? null, recordCount);
+  /** An answer in the document: an inline phrase that opens its point. */
+  const docSlot = (
+    need: Need,
+    text: string,
+    className: string,
+    label: string,
+    key: number,
+  ) => (
+    // biome-ignore lint/a11y/useSemanticElements: an inline phrase of the sentence that wraps across lines, which a button cannot
+    <span
+      key={key}
+      role="button"
+      tabIndex={0}
+      className={className}
+      title={need.question || need.label}
+      aria-label={label}
+      onClick={() => openSlot(need.key)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          openSlot(need.key);
+        }
+      }}
+    >
+      {text}
+    </span>
+  );
   const documentPane = (
     <>
       <div className="ur-doc-head">
         <p className="ur-label">The understanding</p>
-        {review.system !== "" ? (
-          <span className="ur-chip">{review.system}</span>
-        ) : null}
-      </div>
-      <p className="ur-statement">
-        {review.statement.map((part, index) => {
-          const need = part.key === null ? undefined : byKey.get(part.key);
-          if (need === undefined) {
-            // biome-ignore lint/suspicious/noArrayIndexKey: the statement's parts in order
-            return <span key={index}>{part.text}</span>;
-          }
-          const filled = need.status === "CONFIRMED";
-          return (
-            // biome-ignore lint/a11y/useSemanticElements: an inline phrase of the sentence that wraps across lines, which a button cannot
-            <span
-              // biome-ignore lint/suspicious/noArrayIndexKey: the statement's parts in order
-              key={index}
-              role="button"
-              tabIndex={0}
-              className={`ur-slot ${filled ? "is-filled" : need.status === "PROPOSED" ? "is-proposed" : "is-empty"}${need.key === step ? " is-current" : ""}`}
-              title={need.label}
-              aria-label={`${need.label}: ${filled ? need.value || part.text : "not confirmed"}`}
-              onClick={() => openSlot(need.key)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  openSlot(need.key);
-                }
-              }}
-            >
-              {filled
-                ? part.text
-                : draftText(
-                    need.label,
-                    review.statement[index - 1]?.text ?? "",
-                    true,
-                  )}
+        <div className="ud-meta">
+          {review.system !== "" ? (
+            <span className="ur-chip">{review.system}</span>
+          ) : null}
+          {meta.confirmed !== "" ? (
+            <span className="ud-confirmed" suppressHydrationWarning>
+              <UiIcon name="check" size={12} />
+              {meta.confirmed}
             </span>
-          );
-        })}
-      </p>
+          ) : null}
+          {meta.answers !== "" ? <span>{meta.answers}</span> : null}
+        </div>
+      </div>
+      {recordCount > 0 ? (
+        <fieldset className="ud-views">
+          <legend className="sr-only">How the understanding is shown</legend>
+          <button
+            type="button"
+            aria-pressed={view === "narrative"}
+            onClick={() => setDocView("narrative")}
+          >
+            Narrative
+          </button>
+          <button
+            type="button"
+            aria-pressed={view === "facts"}
+            onClick={() => setDocView("facts")}
+          >
+            Facts &amp; sources
+          </button>
+        </fieldset>
+      ) : null}
 
-      {review.narrative.length > 0 || wtSaving ? (
-        <section
-          className={`ur-narrative${narrativeUpdating ? " is-updating" : ""}`}
-          aria-label="The walkthrough, as answered"
-          aria-busy={narrativeUpdating}
-        >
-          {review.narrative.length === 0 ? (
-            <p className="ur-narrative-label" role="status">
-              <small>Updating…</small>
+      {view === "narrative" ? (
+        <>
+          <p className="ur-statement">
+            {review.statement.map((part, index) => {
+              const need = part.key === null ? undefined : byKey.get(part.key);
+              if (need === undefined) {
+                // biome-ignore lint/suspicious/noArrayIndexKey: the statement's parts in order
+                return <span key={index}>{part.text}</span>;
+              }
+              const filled = need.status === "CONFIRMED";
+              return docSlot(
+                need,
+                filled
+                  ? part.text
+                  : draftText(
+                      need.label,
+                      review.statement[index - 1]?.text ?? "",
+                      true,
+                    ),
+                `ur-slot ${filled ? "is-filled" : need.status === "PROPOSED" ? "is-proposed" : "is-empty"}${filled && carriedFromLastYear(need) ? " is-prior" : ""}${need.key === step ? " is-current" : ""}`,
+                `${need.label}: ${filled ? need.value || part.text : "not confirmed"}${filled && carriedFromLastYear(need) ? " (carried from last year)" : ""}`,
+                index,
+              );
+            })}
+          </p>
+
+          {recordCount > 0 && canAct ? (
+            <p className="ud-hint">
+              Select any answer in the text to change it.
             </p>
           ) : null}
-          {review.narrative.map((paragraph, index) => (
-            <div key={paragraph.topic} className="ur-narrative-topic">
-              <p className="ur-narrative-label">
-                <span>{paragraph.label}</span>
-                {index === 0 && narrativeUpdating ? (
-                  <small role="status">Updating…</small>
-                ) : null}
-              </p>
-              <p className="ur-narrative-text">
-                {paragraph.parts.map((part, at) => {
-                  const need =
-                    part.key === null ? undefined : byKey.get(part.key);
-                  if (need === undefined) {
-                    // biome-ignore lint/suspicious/noArrayIndexKey: the paragraph's parts in order
-                    return <span key={at}>{part.text}</span>;
+          {review.narrative.length > 0 || wtSaving ? (
+            <section
+              className={`ur-narrative ud-sections${narrativeUpdating ? " is-updating" : ""}`}
+              aria-label="The walkthrough, as answered"
+              aria-busy={narrativeUpdating}
+            >
+              {review.narrative.length === 0 ? (
+                <p className="ud-section-label" role="status">
+                  <small>Updating…</small>
+                </p>
+              ) : null}
+              {review.narrative.map((paragraph, index) => (
+                <details
+                  key={paragraph.topic}
+                  className="ud-topic"
+                  // The topic being changed on the right is open.
+                  open={
+                    step === topicStep(paragraph.topic) ||
+                    paragraph.parts.some((part) => part.key === step) ||
+                    undefined
                   }
-                  const question = need.question || need.label;
-                  return (
-                    // biome-ignore lint/a11y/useSemanticElements: an inline phrase of the sentence that wraps across lines, which a button cannot
-                    <span
-                      // biome-ignore lint/suspicious/noArrayIndexKey: the paragraph's parts in order
-                      key={at}
-                      role="button"
-                      tabIndex={0}
-                      className="ur-slot is-filled"
-                      title={question}
-                      aria-label={`${canAct ? "Change" : "Show"}: ${question}`}
-                      onClick={() => openSlot(need.key)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          openSlot(need.key);
-                        }
-                      }}
+                >
+                  <summary>
+                    <UiIcon name="chevron" size={13} />
+                    <span>{paragraph.label}</span>
+                    {index === 0 && narrativeUpdating ? (
+                      <small role="status">Updating…</small>
+                    ) : sectionCount(paragraph) !== "" ? (
+                      <small>{sectionCount(paragraph)}</small>
+                    ) : null}
+                  </summary>
+                  <p className="ur-narrative-text">
+                    {paragraph.parts.map((part, at) => {
+                      const need =
+                        part.key === null ? undefined : byKey.get(part.key);
+                      if (need === undefined) {
+                        // biome-ignore lint/suspicious/noArrayIndexKey: the paragraph's parts in order
+                        return <span key={at}>{part.text}</span>;
+                      }
+                      return docSlot(
+                        need,
+                        part.text,
+                        `ur-slot is-filled${carriedFromLastYear(need) ? " is-prior" : ""}`,
+                        `${canAct ? "Change" : "Show"}: ${need.question || need.label}${carriedFromLastYear(need) ? " (carried from last year)" : ""}`,
+                        at,
+                      );
+                    })}
+                  </p>
+                </details>
+              ))}
+            </section>
+          ) : null}
+
+        </>
+      ) : (
+        <div className="ud-table-wrap">
+          <table className="ud-table">
+            <caption className="sr-only">
+              The answers on record, with where each came from
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">Point</th>
+                <th scope="col">Answer</th>
+                <th scope="col">Source</th>
+                <th scope="col">
+                  <span className="sr-only">Edit</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {onRecord.length > 0 ? (
+                <tr className="ud-group">
+                  <th scope="colgroup" colSpan={4}>
+                    The control's record
+                  </th>
+                </tr>
+              ) : null}
+              {onRecord.map((need) => (
+                <tr
+                  key={need.key}
+                  className={need.key === step ? "is-open" : undefined}
+                >
+                  <td>{factLabel(need.label)}</td>
+                  <td className="ud-answer">
+                    {editing[need.key] === true && need.kind === "ANSWER" ? (
+                      recordEditor(need)
+                    ) : (
+                      <strong>{need.value || "Not given"}</strong>
+                    )}
+                  </td>
+                  <td>
+                    {SOURCE_WORDS[need.source] !== "" ? (
+                      <span
+                        className={`ud-source${carriedFromLastYear(need) ? " is-prior" : ""}`}
+                      >
+                        {SOURCE_WORDS[need.source]}
+                      </span>
+                    ) : null}
+                  </td>
+                  <td
+                    className="ud-change"
+                    title={
+                      need.kind === "RCM"
+                        ? "Changed in RCM / Control Setup"
+                        : undefined
+                    }
+                  >
+                    {canAct &&
+                    editing[need.key] !== true &&
+                    (need.kind === "ANSWER" || need.kind === "AUTH") ? (
+                      <button
+                        type="button"
+                        className="ud-edit"
+                        aria-label={`Edit: ${factLabel(need.label)}`}
+                        onClick={() => openSlot(need.key)}
+                      >
+                        <UiIcon name="compose" size={13} />
+                        <span aria-hidden="true">Edit</span>
+                      </button>
+                    ) : null}
+                  </td>
+                </tr>
+              ))}
+              {wtRecord.map((group) => (
+                <Fragment key={group.topic}>
+                  <tr className="ud-group">
+                    <th scope="colgroup" colSpan={4}>
+                      {group.label}
+                    </th>
+                  </tr>
+                  {group.needs.map((need) => (
+                    <tr
+                      key={need.key}
+                      className={
+                        need.key === step ||
+                        (wtReopened[need.key] === true &&
+                          step === topicStep(group.topic))
+                          ? "is-open"
+                          : undefined
+                      }
                     >
-                      {part.text}
-                    </span>
-                  );
-                })}
-              </p>
-            </div>
-          ))}
-        </section>
-      ) : null}
+                      <td>{need.question || need.label}</td>
+                      <td className="ud-answer">
+                        <strong>
+                          {answerDisplay(need) || "Not applicable"}
+                        </strong>
+                      </td>
+                      <td>
+                        {SOURCE_WORDS[need.source] !== "" ? (
+                          <span
+                            className={`ud-source${carriedFromLastYear(need) ? " is-prior" : ""}`}
+                          >
+                            {SOURCE_WORDS[need.source]}
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className="ud-change">
+                        {canAct ? (
+                          <button
+                            type="button"
+                            className="ud-edit"
+                            aria-label={`Edit: ${need.question || need.label}`}
+                            onClick={() => openTopic(need)}
+                          >
+                            <UiIcon name="compose" size={13} />
+                            <span aria-hidden="true">Edit</span>
+                          </button>
+                        ) : null}
+                      </td>
+                    </tr>
+                  ))}
+                </Fragment>
+              ))}
+              {/* B1l point 1: what a person left as not known yet stays on record as theirs,
+                  never as an answer; in the table that replaced the "On record" fold. */}
+              {leftNotKnownList.length > 0 ? (
+                <tr className="ud-group">
+                  <th scope="colgroup" colSpan={4}>
+                    Left as not known yet
+                  </th>
+                </tr>
+              ) : null}
+              {leftNotKnownList.map((item) => (
+                <tr key={item.key}>
+                  <td>{item.question}</td>
+                  <td className="ud-answer">
+                    <strong>Not known yet</strong>
+                    {item.note !== "" ? <small>{item.note}</small> : null}
+                  </td>
+                  <td />
+                  <td className="ud-change" />
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* B1k: the IT audit specialist's review of the questions asked, under the
           understanding, in the narrative's own form. */}
@@ -1593,14 +1835,18 @@ export function UnderstandingReview({
       >
         {/* The attributes first, then the D&I evidence requested against them (product
             owner, 11 November 2026). */}
-        {heldByFailedReview(
-          readyOnceComplete(
-            readyLines(review),
-            complete,
-            review.attributesProposed,
-            end === "checking",
+        {readyWithOpen(
+          heldByFailedReview(
+            readyOnceComplete(
+              readyLines(review),
+              complete,
+              review.attributesProposed,
+              end === "checking",
+            ),
+            end === "failed",
           ),
-          end === "failed",
+          openForEvidence,
+          openKeys.length,
         ).map((line) => (
           <li key={line.key} className={line.ready ? "is-ok" : ""}>
             <span className="ur-check" aria-hidden="true">
@@ -1658,110 +1904,6 @@ export function UnderstandingReview({
           </ul>
         </fieldset>
       ) : null}
-
-      {recordCount > 0 ? (
-        <details
-          className="ur-record"
-          open={recordOpen}
-          onToggle={(event) => setRecordOpen(event.currentTarget.open)}
-        >
-          <summary>
-            On record <span className="ur-count">{recordCount}</span>
-            <UiIcon name="chevron" size={14} />
-          </summary>
-          <ul>
-            {onRecord.map((need) => (
-              <li key={need.key}>
-                <span className="ur-record-q">{need.label}</span>
-                {editing[need.key] === true && need.kind === "ANSWER" ? (
-                  recordEditor(need)
-                ) : (
-                  <span className="ur-record-a">
-                    <strong>{need.value || "Not given"}</strong>
-                    {SOURCE_WORDS[need.source] !== "" ? (
-                      <small>{SOURCE_WORDS[need.source]}</small>
-                    ) : null}
-                    {canAct && need.kind === "ANSWER" ? (
-                      <button
-                        type="button"
-                        className="cs-link"
-                        onClick={() =>
-                          setEditing((was) => ({ ...was, [need.key]: true }))
-                        }
-                      >
-                        Change
-                      </button>
-                    ) : canAct && need.kind === "AUTH" ? (
-                      <button
-                        type="button"
-                        className="cs-link"
-                        onClick={() => openSlot(need.key)}
-                      >
-                        Change
-                      </button>
-                    ) : null}
-                  </span>
-                )}
-              </li>
-            ))}
-          </ul>
-          {/* The walkthrough's answers, by topic (11 November 2026). */}
-          {wtRecord.map((group) => (
-            <section
-              key={group.topic}
-              className="ur-record-topic"
-              aria-labelledby={`ur-record-${group.topic}`}
-            >
-              <h4 id={`ur-record-${group.topic}`}>{group.label}</h4>
-              <ul>
-                {group.needs.map((need) => (
-                  <li key={need.key}>
-                    <span className="ur-record-q">
-                      {need.question || need.label}
-                    </span>
-                    <span className="ur-record-a">
-                      <strong>{answerDisplay(need) || "Not applicable"}</strong>
-                      {SOURCE_WORDS[need.source] !== "" ? (
-                        <small>{SOURCE_WORDS[need.source]}</small>
-                      ) : null}
-                      {canAct ? (
-                        <button
-                          type="button"
-                          className="cs-link"
-                          onClick={() => openTopic(need)}
-                        >
-                          Change
-                        </button>
-                      ) : null}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ))}
-          {leftNotKnownList.length > 0 ? (
-            <section
-              className="ur-record-topic"
-              aria-labelledby={`ur-record-not-known-${ids.controlId}`}
-            >
-              <h4 id={`ur-record-not-known-${ids.controlId}`}>
-                Left as not known yet
-              </h4>
-              <ul>
-                {leftNotKnownList.map((item) => (
-                  <li key={item.key}>
-                    <span className="ur-record-q">{item.question}</span>
-                    <span className="ur-record-a">
-                      <strong>Not known yet</strong>
-                      {item.note !== "" ? <small>{item.note}</small> : null}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ) : null}
-        </details>
-      ) : null}
     </>
   );
 
@@ -1781,7 +1923,14 @@ export function UnderstandingReview({
       <>
         <div className="ur-foot">
           <p className="ur-foot-where">
-            {plan.length > 1 ? `Step ${at + 1} of ${plan.length}` : null}
+            {/* The same open steps the header and the chip count, while they count them. */}
+            {courseWhere({
+              plan,
+              changing,
+              at,
+              open: openKeys,
+              settled: countingOpen,
+            })}
             {skip ? (
               <button
                 type="button"
@@ -1800,14 +1949,18 @@ export function UnderstandingReview({
             ) : null}
           </p>
           <div className="ur-foot-actions">
-            <button
-              type="button"
-              className="btn btn-secondary"
-              disabled={busy || at === 0}
-              onClick={() => go(Math.max(0, at - 1))}
-            >
-              <UiIcon name="back" size={14} /> Back
-            </button>
+            {/* No Back on the first question: there is nowhere to go back to (design
+                review, 17 November 2026). */}
+            {at > 0 ? (
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={busy}
+                onClick={() => go(Math.max(0, at - 1))}
+              >
+                <UiIcon name="back" size={14} /> Back
+              </button>
+            ) : null}
             {primary}
           </div>
         </div>
@@ -1958,7 +2111,11 @@ export function UnderstandingReview({
           <span className="ur-chip is-accent">{otherSystemLabel(need)}</span>
         ) : null}
         {onFile ? <span className="ur-chip is-ok">On record</span> : null}
-        {!need.required ? <span className="ur-chip">Optional</span> : null}
+        {/* An optional point says what it is used for ("Used for D&I evidence"); "Optional"
+            only where nothing names a use. */}
+        {!need.required && forLine === "" ? (
+          <span className="ur-chip">Optional</span>
+        ) : null}
         {forLine !== "" ? <span className="ur-chip">{forLine}</span> : null}
       </div>
     );
@@ -2180,21 +2337,32 @@ export function UnderstandingReview({
         ) : null}
         {why}
         {foot(
-          <button
-            type="submit"
-            className="btn btn-primary"
-            disabled={!canAct || busy || answer === ""}
-          >
-            {saving === need.key ? (
-              <span className="spinner small" aria-hidden="true" />
+          <>
+            {/* Why Save is off (design review, 17 November 2026): said, never only greyed. */}
+            {canAct && !busy && answer === "" ? (
+              <span className="ur-foot-hint" id="ur-choose-hint">
+                Choose an answer
+              </span>
             ) : null}
-            {saving === need.key
-              ? "Saving…"
-              : unchanged
-                ? "Continue"
-                : "Save & continue"}
-            <UiIcon name="arrow" size={14} />
-          </button>,
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={!canAct || busy || answer === ""}
+              aria-describedby={
+                canAct && !busy && answer === "" ? "ur-choose-hint" : undefined
+              }
+            >
+              {saving === need.key ? (
+                <span className="spinner small" aria-hidden="true" />
+              ) : null}
+              {saving === need.key
+                ? "Saving…"
+                : unchanged
+                  ? "Continue"
+                  : "Save & continue"}
+              <UiIcon name="arrow" size={14} />
+            </button>
+          </>,
           !onFile,
           asked,
         )}
@@ -2426,7 +2594,11 @@ export function UnderstandingReview({
             {need.question || need.label}
           </p>
           <span className="ur-wt-tags">
-            {!need.required ? <span className="ur-chip">Optional</span> : null}
+            {/* What an optional question is used for ("Used for D&I evidence"), else
+                "Optional" (design review, 17 November 2026). */}
+            {!need.required ? (
+              <span className="ur-chip">{neededForLine(need) || "Optional"}</span>
+            ) : null}
             {onFile ? <span className="ur-chip is-ok">On record</span> : null}
             {reason !== "" ? (
               <button
@@ -2573,7 +2745,7 @@ export function UnderstandingReview({
               type="button"
               className="cs-link"
               onClick={() => {
-                setRecordOpen(true);
+                setDocView("facts");
                 setDocOpen(true);
               }}
             >
@@ -2617,15 +2789,21 @@ export function UnderstandingReview({
     );
   };
 
-  // What still holds the understanding back: a walkthrough topic with only optional
-  // questions left is not listed.
+  // The open steps, as the header, the chip and the footer count them (design review, 17
+  // November 2026): listed on the completed understanding's last step.
   const openSteps = plan
     .map((key, index) => ({ key, index }))
+    .filter((item) => openKeys.includes(item.key));
+  // What still holds the understanding back, before it reads understood: a walkthrough
+  // topic with only optional questions left is not listed, as the header's "x of y
+  // confirmed" does not count it.
+  const heldSteps = plan
+    .map((key, index) => ({ key, index }))
     .filter((item) => stepRequired(review, interview, item.key));
-  const leftList =
-    openSteps.length > 0 ? (
+  const leftListOf = (items: ReadonlyArray<{ key: string; index: number }>) =>
+    items.length > 0 ? (
       <ul className="ur-left">
-        {openSteps.map((item) => {
+        {items.map((item) => {
           const need = byKey.get(item.key);
           return (
             <li key={item.key}>
@@ -2656,7 +2834,7 @@ export function UnderstandingReview({
         <span className="ur-seal" aria-hidden="true">
           <UiIcon name="check" size={22} />
         </span>
-        <h3 className="ur-q">{review.controlRef} is understood</h3>
+        <h3 className="ur-q">Next: review the attributes</h3>
         <div className="ur-complete">
           <p role="status">
             <UiIcon name="check" size={15} />
@@ -2677,24 +2855,11 @@ export function UnderstandingReview({
         {openSteps.length > 0 ? (
           <>
             <p className="ur-hint">
-              {openSteps.length === 1
-                ? "1 question is open here. It does not hold the attributes."
-                : `${openSteps.length} questions are open here. They do not hold the attributes.`}
+              {/* The header's count and words (design review, 17 November 2026). */}
+              {openQuestionsLine(openSteps.length, openOptional, false, "here")}
             </p>
-            {leftList}
+            {leftListOf(openSteps)}
           </>
-        ) : null}
-        {groups.confirmed.some((need) => need.kind === "ANSWER") ? (
-          <dl className="ur-answers">
-            {groups.confirmed
-              .filter((need) => need.kind === "ANSWER")
-              .map((need) => (
-                <div key={need.key}>
-                  <dt>{need.label}</dt>
-                  <dd>{need.value}</dd>
-                </div>
-              ))}
-          </dl>
         ) : null}
         <div className="ur-foot-actions">
           {plan.length > 0 ? (
@@ -2769,20 +2934,8 @@ export function UnderstandingReview({
         <span className="ur-seal" aria-hidden="true">
           <UiIcon name="check" size={22} />
         </span>
-        <h3 className="ur-q">{review.controlRef} is understood</h3>
+        <h3 className="ur-q">Next: review the attributes</h3>
         <p className="ur-hint">{status.text}</p>
-        {groups.confirmed.some((need) => need.kind === "ANSWER") ? (
-          <dl className="ur-answers">
-            {groups.confirmed
-              .filter((need) => need.kind === "ANSWER")
-              .map((need) => (
-                <div key={need.key}>
-                  <dt>{need.label}</dt>
-                  <dd>{need.value}</dd>
-                </div>
-              ))}
-          </dl>
-        ) : null}
         <div className="ur-foot-actions">
           {plan.length > 0 ? (
             <button
@@ -2807,12 +2960,12 @@ export function UnderstandingReview({
     ) : (
       <div className="ur-end">
         <h3 className="ur-q">
-          {openSteps.length === 0
+          {heldSteps.length === 0
             ? "Waiting for the understanding to be read again"
-            : `${openSteps.length} ${openSteps.length === 1 ? "point is" : "points are"} still open`}
+            : `${heldSteps.length} ${heldSteps.length === 1 ? "point is" : "points are"} still open`}
         </h3>
         <p className="ur-hint">{status.text}</p>
-        {leftList}
+        {leftListOf(heldSteps)}
       </div>
     );
 
@@ -2891,16 +3044,26 @@ export function UnderstandingReview({
           <p className="ur-lede">
             {complete ? (
               <span suppressHydrationWarning>
-                {status.done
-                  ? `${completeLine(once.completedAt ?? "")}. Every point the evidence and the attributes rely on is on record.`
-                  : `${completeLine(once.completedAt ?? "")}. A question raised since is open below; it does not hold the attributes.`}
+                {understoodLede({
+                  done: status.done,
+                  completeLine: completeLine(once.completedAt ?? ""),
+                  open: openKeys.length,
+                  optional: openOptional,
+                  statusText: status.text,
+                })}
               </span>
             ) : end === "checking" ? (
               `${draftedFrom(groups, interview)}. The agents are checking what else the attributes need: anything they ask is added here, not later.`
             ) : end === "failed" ? (
               `${draftedFrom(groups, interview)}. The review of the questions asked could not run: run it again, or proceed without it.`
             ) : status.done ? (
-              "Every point the evidence and the attributes rely on is on record."
+              understoodLede({
+                done: true,
+                completeLine: null,
+                open: openKeys.length,
+                optional: openOptional,
+                statusText: status.text,
+              })
             ) : (
               `${draftedFrom(groups, interview)}. Confirm it, so the D&I evidence can be requested and the attributes finalized.`
             )}
@@ -2925,7 +3088,7 @@ export function UnderstandingReview({
           ) : null}
         </div>
         {banner !== null ? startBanner(banner) : null}
-        {progress.total > 0 ? (
+        {progress.total > 0 && !status.done && !complete ? (
           <div className="ur-progress">
             <div className="ur-segments" aria-hidden="true">
               {progress.marks.map((done, index) => (
@@ -2959,11 +3122,12 @@ export function UnderstandingReview({
         >
           <span className="ur-label">The understanding</span>
           <span className="ur-chip">
-            {progress.total > 0
-              ? `${progress.done} of ${progress.total}`
-              : status.done
-                ? "Confirmed"
-                : "Draft"}
+            {foldChip({
+              progress,
+              done: status.done,
+              complete,
+              open: openKeys.length,
+            })}
           </span>
           <UiIcon name="chevron" size={16} />
         </button>

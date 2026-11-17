@@ -6,8 +6,10 @@ import {
   ACCEPT_FIRST,
   ACCEPT_MAX,
   ADD_KINDS,
+  coverageComplete,
   type DesignRequestsState,
   DRAFTING_WINDOW_MS,
+  decideLine,
   EXCEPTION_REASON_MAX,
   EXCEPTION_REASON_MIN,
   firstToAccept,
@@ -205,9 +207,12 @@ describe("the D&I requests list: rows", () => {
     assert.equal(view.rows[0]?.addresses, "addresses attribute B");
     assert.equal(view.rows[1]?.addresses, "addresses attributes A and C");
     assert.equal(view.rows[0]?.shows, "How access is meant to be approved.");
+    // Rewritten 17 November 2026 (design review of the shadcn/ui sweep): the same state read
+    // amber in the step's header and violet on the row. Old: tone "ai". New: "warning",
+    // the header's; violet is kept for agent work.
     assert.deepEqual(REQUEST_CHIPS.TO_ACCEPT, {
       label: "To accept",
-      tone: "ai",
+      tone: "warning",
     });
     assert.deepEqual(REQUEST_CHIPS.ACCEPTED, {
       label: "Accepted",
@@ -2219,5 +2224,107 @@ describe("the D&I requests list: actions", () => {
       ),
       false,
     );
+  });
+});
+
+// Product owner, 17 November 2026, on a D&I Evidence screen that said "Drafted 2 requests"
+// above "Not drafted yet": "Need you to make sure that things like this will never show up in
+// my app." What the requests list says at one time is read together here, for each mix, and
+// must not contradict itself: the coverage mark agrees with the coverage line, the decision
+// line with the chips, and a settled list asks for nothing.
+describe("the D&I requests list never contradicts itself", () => {
+  const reason = {
+    attributeId: D,
+    reason: "Tested on each operating-effectiveness sample.",
+    recordedBy: "Dana Reyes",
+    recordedAt: "2026-11-12T09:45:00Z",
+  };
+  const views = {
+    "no request yet": listOf(
+      requestsView(
+        input({
+          requirements: [],
+          summary: summary({ toAccept: 0, uncovered: [A, B, C, D] }),
+        }),
+      ),
+    ),
+    "one attribute not addressed": listOf(requestsView(input())),
+    "one attribute with a recorded reason": listOf(
+      requestsView(
+        input({ summary: summary({ uncovered: [], exceptions: [reason] }) }),
+      ),
+    ),
+    "every attribute addressed": listOf(
+      requestsView(
+        input({
+          requirements: [policy, { ...walkthrough, attributeIds: [A, C, D] }],
+          summary: summary({ uncovered: [] }),
+        }),
+      ),
+    ),
+  };
+  for (const [name, view] of Object.entries(views)) {
+    it(`marks coverage complete only when no chip is unaddressed: ${name}`, () => {
+      const open = view.coverage.filter((chip) => chip.state === "UNCOVERED");
+      assert.equal(
+        coverageComplete(view),
+        open.length === 0,
+        view.coverageLine,
+      );
+      const addressed = view.coverage.filter(
+        (chip) => chip.state === "COVERED",
+      ).length;
+      assert.match(
+        view.coverageLine,
+        new RegExp(`^${addressed} of ${view.attributes.length} `),
+      );
+    });
+    it(`says "all" attributes only when a request addresses each: ${name}`, () => {
+      const line = decideLine(view);
+      const all = view.coverage.every((chip) => chip.state === "COVERED");
+      assert.equal(
+        /address all /.test(line),
+        all && view.attributes.length > 0,
+        line,
+      );
+    });
+  }
+  it("checks nothing beside 0 of 4 attributes addressed", () => {
+    const empty = views["no request yet"];
+    assert.equal(empty.coverageLine, "0 of 4 attributes addressed");
+    assert.equal(coverageComplete(empty), false);
+  });
+  it("counts a recorded reason apart from the requests", () => {
+    assert.equal(
+      decideLine(views["one attribute with a recorded reason"]),
+      "Together they address 3 of 4 attributes; the other has a recorded reason. Each request is still approved before it is sent.",
+    );
+  });
+  it("asks nothing over a settled list, even after the rules planned it", () => {
+    const settled = listOf(
+      requestsView(
+        input({
+          requirements: [
+            {
+              ...policy,
+              accepted: true,
+              toAccept: false,
+              attributeIds: [A, B],
+            },
+            { ...walkthrough, attributeIds: [C, D] },
+          ],
+          summary: summary({ toAccept: 0, uncovered: [], settled: true }),
+          plan: { source: "FALLBACK", status: "PROPOSED" },
+        }),
+      ),
+    );
+    assert.equal(settled.settled, true);
+    assert.equal(settled.header.status, REQUESTS_STATUS.accepted);
+    assert.equal(settled.failure, null);
+    // Not settled: the same plan still says what happened, with the way on.
+    const open = listOf(
+      requestsView(input({ plan: { source: "FALLBACK", status: "PROPOSED" } })),
+    );
+    assert.match(open.failure ?? "", /^The planner did not answer/);
   });
 });

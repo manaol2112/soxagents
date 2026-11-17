@@ -54,10 +54,12 @@ POSTGRES_USER=postgres
 POSTGRES_PASSWORD=<generated>
 POSTGRES_DB=ai_workforce
 POSTGRES_PORT=5432
-DATABASE_URL=postgresql://postgres:<generated>@localhost:5432/ai_workforce
+DATABASE_URL=postgresql://postgres:<generated>@127.0.0.1:5432/ai_workforce
 ```
 
 If port 5432 is already taken on the machine, pick a free host port and use that same port in `POSTGRES_PORT` and `DATABASE_URL`.
+
+Use `127.0.0.1`, not `localhost`, as the host. Compose publishes PostgreSQL on 127.0.0.1 only, and on Windows `localhost` is tried as `::1` first, which made every connection take several seconds and signed-in pages show "Workspace unavailable". The API and the tests point a `localhost` URL at 127.0.0.1 themselves (`loopback_database_url` in `services/api/ai_workforce_api/settings.py`), so an older `.env` keeps working.
 
 Leave the other placeholders empty. `EMAIL_LIVE_SEND_ENABLED` stays `false`.
 
@@ -75,7 +77,7 @@ make test
 
 `GET /auth/login` starts Microsoft Entra ID login when `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, and `OIDC_REDIRECT_URL` are all set. Leave them empty locally. The API then reports that login is not configured and does not call Microsoft. A successful callback sets the `HttpOnly` cookie `aw_session`. Other routes require that cookie. `POST /auth/logout` revokes the session. Organization and project routes then check the caller's active membership. See [authorization.md](authorization.md). `SESSION_COOKIE_SECURE` defaults to true; local HTTP tests set it to false. Do not put a client secret in the repository.
 
-A sign-in finishes only in the browser that started it: the start sets the short-lived `HttpOnly` cookie `aw_login` (path `/auth`), whose hash the login attempt keeps, and a callback without it is refused. Because a sign-in links to the account already on file for its email, a Microsoft email must be one Microsoft vouches for. With a tenant-specific `OIDC_ISSUER_URL` (`https://login.microsoftonline.com/<tenant id>/v2.0`), the token must come from that tenant. With a multi-tenant one (`common`, `organizations`, `consumers`), the token must carry the `email` claim with the optional claim `xms_edov` true, so add `email` and `xms_edov` as optional ID-token claims in the app registration; the user name is never taken as the email there.
+A sign-in finishes only in the browser that started it: the start sets the short-lived `HttpOnly` cookie `aw_login` (path `/auth`), whose hash the login attempt keeps, and a callback without it is refused. Because a sign-in links to the account already on file for its email, a Microsoft email must be one Microsoft vouches for. With a tenant-specific `OIDC_ISSUER_URL` (`https://login.microsoftonline.com/<tenant id>/v2.0`), the token must come from that tenant (its `tid`), and the email is the user name (`preferred_username`), or the `email` claim only with `xms_edov` true. The tenant must be named by its directory id: a domain-named tenant (`contoso.onmicrosoft.com`) is refused when the API starts. With a multi-tenant one (`common`, `organizations`, `consumers`), the token must carry the `email` claim with the optional claim `xms_edov` true, so add `email` and `xms_edov` as optional ID-token claims in the app registration; the user name is never taken as the email there.
 
 `GET /auth/google/login` starts Google sign-in when `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `GOOGLE_REDIRECT_URL` are all set (`/auth/google/callback` on the API). The flow uses PKCE and a nonce, and the ID token is verified against Google's published keys; only an address Google reports as verified can sign in. `GET /auth/providers` lists the providers that are configured, and the web app's `/sign-in` page shows a button for each. The first time a person signs in through either provider and belongs to no organization, the API creates a workspace for them and makes them its owner: named after the email domain ("Firm" for `dana@firm.example`), or "Dana's workspace" for a personal mailbox. The same verified email through Google and Microsoft is one user (table `user_identities`); a second account from the same provider for that email is refused. A failed sign-in returns to `/sign-in?notice=...` when `APP_BASE_URL` is set. See [decisions/0009-google-sign-in.md](decisions/0009-google-sign-in.md).
 

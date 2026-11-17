@@ -140,7 +140,7 @@ export const PHASE_STATE_TONES: Record<PhaseState, string> = {
   OUTSTANDING: "tone-info",
   RECEIVED_NOT_VALIDATED: "tone-warning",
   AWAITING_DEPENDENCY: "tone-info",
-  EVIDENCE_ACCEPTED: "tone-info",
+  EVIDENCE_ACCEPTED: "tone-success",
   COMPLETE: "tone-success",
 };
 
@@ -231,7 +231,7 @@ export const REQUIREMENT_STATE_TONES: Record<RequirementState, string> = {
   AWAITING_DEPENDENCY: "",
   DRAFT: "",
   READY_FOR_REVIEW: "",
-  APPROVAL_PENDING: "tone-info",
+  APPROVAL_PENDING: "tone-warning",
   SENT: "tone-info",
   OVERDUE: "tone-danger",
   PARTIALLY_RECEIVED: "tone-warning",

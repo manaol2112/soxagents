@@ -296,10 +296,7 @@ function GroupRow({
       <details>
         <summary className="home-step-copy">
           {lead ? <span className="home-step-start">Start here</span> : null}
-          <strong>
-            {title}
-            <span className="home-step-ref"> {groupCount(items)}</span>
-          </strong>
+          <strong>{title}</strong>
           {causes.length > 0 ? (
             <small>
               Held by{" "}
@@ -314,8 +311,10 @@ function GroupRow({
         <GroupItems items={items} href={href} verb={() => "Open"} />
       </details>
       {action !== null ? (
+        // An outline button: the page header carries the one primary action for the same
+        // work (shadcn/ui sweep, 17 November 2026: one primary per view).
         <a
-          className={`btn btn-sm queue-group-action${lead ? "" : " btn-secondary"}`}
+          className="btn btn-sm btn-secondary queue-group-action"
           href={action.href}
         >
           {action.label}

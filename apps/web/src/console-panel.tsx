@@ -24,6 +24,27 @@ function waitingWords(item: WaitingItem): string {
 
 type Tab = "chats" | "waiting" | "activity";
 
+const TAB_ORDER: Tab[] = ["chats", "waiting", "activity"];
+
+/** The tab an arrow, Home or End key moves to; null for any other key. */
+function nextTab(current: Tab, key: string): Tab | null {
+  const at = TAB_ORDER.indexOf(current);
+  const count = TAB_ORDER.length;
+  if (key === "ArrowRight") {
+    return TAB_ORDER[(at + 1) % count] ?? null;
+  }
+  if (key === "ArrowLeft") {
+    return TAB_ORDER[(at - 1 + count) % count] ?? null;
+  }
+  if (key === "Home") {
+    return TAB_ORDER[0] ?? null;
+  }
+  if (key === "End") {
+    return TAB_ORDER[count - 1] ?? null;
+  }
+  return null;
+}
+
 const PANEL_KEY = "aw-console-panel";
 // Wide enough for the conversation and the panel side by side; narrower, the panel slides over.
 const WIDE = "(min-width: 1101px)";
@@ -136,15 +157,28 @@ export function ConsoleShell({
             <UiIcon name="x" size={15} />
           </button>
         </div>
-        <div className="cv-panel-tabs" role="tablist">
+        <div className="cv-panel-tabs" role="tablist" aria-label="Side panel">
           {tabs.map(([key, label, count]) => (
             <button
               key={key}
+              id={`cv-tab-${key}`}
               type="button"
               role="tab"
               aria-selected={tab === key}
+              aria-controls="cv-panel-body"
+              tabIndex={tab === key ? 0 : -1}
               className={tab === key ? "is-on" : undefined}
               onClick={() => setTab(key)}
+              onKeyDown={(event) => {
+                // The arrow keys move between the tabs (WAI-ARIA tabs pattern).
+                const next = nextTab(tab, event.key);
+                if (next === null) {
+                  return;
+                }
+                event.preventDefault();
+                setTab(next);
+                document.getElementById(`cv-tab-${next}`)?.focus();
+              }}
             >
               {label}
               {count > 0 ? (
@@ -153,7 +187,12 @@ export function ConsoleShell({
             </button>
           ))}
         </div>
-        <div className="cv-panel-body">
+        <div
+          id="cv-panel-body"
+          className="cv-panel-body"
+          role="tabpanel"
+          aria-labelledby={`cv-tab-${tab}`}
+        >
           {tab === "chats" ? (
             threads.length === 0 ? (
               <p className="cv-panel-empty">Your conversations appear here.</p>

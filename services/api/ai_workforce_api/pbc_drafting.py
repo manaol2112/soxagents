@@ -1909,10 +1909,20 @@ def schedule(scheduler: DraftScheduler | None, draft_ids: list[UUID]) -> None:
     """Hand drafts to the background. If that fails, they stay pending and resume later."""
     if scheduler is None or not draft_ids:
         return
-    try:
-        scheduler.schedule_drafts(draft_ids)
-    except Exception:
-        logger.warning("drafts could not be scheduled; they will resume on restart")
+    ids = list(draft_ids)
+
+    def hand_over() -> None:
+        try:
+            scheduler.schedule_drafts(ids)
+        except Exception:
+            logger.warning("drafts could not be scheduled; they will resume on restart")
+
+    # Inside a request the handoff waits until the request has committed (after_commit.py):
+    # handed over before, the worker's claim saw the rows as they were and skipped them.
+    # Outside one (a worker, a script) it is made at once, as before.
+    from ai_workforce_api.after_commit import after_commit
+
+    after_commit(hand_over)
 
 
 _DRAFT_COLUMNS = """

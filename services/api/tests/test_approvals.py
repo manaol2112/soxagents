@@ -86,6 +86,56 @@ def test_an_approval_is_bound_to_the_exact_parameters(migrated: Database) -> Non
     assert "first@example.com" in str(first.json()["parameters"])
 
 
+def test_a_decision_tells_nothing_to_someone_outside_the_engagement(
+    migrated: Database,
+) -> None:
+    """Security sweep, 17 November 2026: the decision route read the approval before it
+    checked the caller, so someone outside the firm learned from a 409 ("already decided",
+    "requester cannot approve") that an approval existed. Now they get 404 like any other
+    record they cannot see, and nothing changes."""
+    seeded, project_id, client = _ready(migrated, "decided-leak")
+    with connect(migrated.url) as connection:
+        manager = _add_user(
+            connection, seeded["organization_id"], "decider@example.com", "PROJECT_MANAGER"
+        )
+        _add_project_member(connection, seeded["organization_id"], project_id, manager)
+        # In the firm, but not on this engagement's team.
+        outsider = _add_user(
+            connection, seeded["organization_id"], "off-team@example.com", "CONTRIBUTOR"
+        )
+        stranger = _seed_org(connection, "decided-stranger")["user_id"]
+    routine = client.post(_approvals(seeded, project_id), json=_pbc())
+    pending = client.post(_approvals(seeded, project_id), json=_external("x@example.com"))
+    decided = _client(migrated, manager).post(
+        _decision(seeded, project_id, routine.json()["id"]),
+        json={"decision": "APPROVED", "reason": "Routine request"},
+    )
+    assert decided.status_code == 200, decided.text
+    for caller in (stranger, outsider):
+        probe = _client(migrated, caller)
+        for approval in (routine.json()["id"], pending.json()["id"]):
+            answer = probe.post(
+                _decision(seeded, project_id, approval),
+                json={"decision": "REJECTED", "reason": "Probe"},
+            )
+            assert answer.status_code == 404, (caller, answer.text)
+            assert answer.json() == {"detail": "not found"}
+    assert (
+        client.get(f"{_approvals(seeded, project_id)}/{routine.json()['id']}").json()["decision"]
+        == "APPROVED"
+    )
+    assert (
+        client.get(f"{_approvals(seeded, project_id)}/{pending.json()['id']}").json()["decision"]
+        == "PENDING"
+    )
+    # On the team, the rules answer as before.
+    again = _client(migrated, manager).post(
+        _decision(seeded, project_id, routine.json()["id"]),
+        json={"decision": "APPROVED", "reason": "Twice"},
+    )
+    assert again.status_code == 409
+
+
 def test_denied_secret_and_expired_requests_are_not_usable(migrated: Database) -> None:
     seeded, project_id, client = _ready(migrated, "closed")
     with connect(migrated.url) as connection:

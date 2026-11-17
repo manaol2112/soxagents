@@ -110,7 +110,7 @@ function actionOf(
           : `Start: ${step.title}`,
     flag:
       kind === "agent"
-        ? "Being prepared"
+        ? "Agent working"
         : kind === "flag"
           ? "Needs attention"
           : waits

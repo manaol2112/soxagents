@@ -431,9 +431,12 @@ describe("nothing is set as HTML, and the words are the product's", () => {
         rule.selectors,
       );
     }
+    // Rewritten 17 November 2026 (product owner: the shadcn/ui design language across the
+    // workspace; state is marked with fill and border, never a coloured stripe). Old: the
+    // proposal carried a 3px accent stripe. New: a neutral 2px edge, as a quoted passage.
     assert.match(
       css,
-      /\.se-proposal \{[^}]*border-left: 3px solid var\(--accent\);/,
+      /\.se-proposal \{[^}]*border-left: 2px solid var\(--border-strong\);/,
     );
   });
 });

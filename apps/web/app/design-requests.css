@@ -23,13 +23,13 @@
 }
 
 .dq .tar:first-child {
-  border-top-left-radius: 11px;
-  border-top-right-radius: 11px;
+  border-top-left-radius: var(--radius-lg);
+  border-top-right-radius: var(--radius-lg);
 }
 
 .dq .tar:last-child {
-  border-bottom-right-radius: 11px;
-  border-bottom-left-radius: 11px;
+  border-bottom-right-radius: var(--radius-lg);
+  border-bottom-left-radius: var(--radius-lg);
 }
 
 .dq .tar.has-menu {
@@ -93,9 +93,9 @@ button.tar-head.dq-head {
   display: grid;
   gap: 0.35rem;
   padding: 0.55rem 0.7rem;
-  background: color-mix(in srgb, var(--ai-soft) 50%, var(--surface));
+  background: var(--ai-soft);
   border: 1px solid var(--ai-border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 .dq-addressed {
@@ -119,6 +119,38 @@ button.tar-head.dq-head {
   gap: 0.5rem;
   min-width: 0;
   margin-top: 0.25rem;
+}
+
+/* With a gap: one callout, the coverage line (with Show coverage) heading the attributes no
+   request addresses (design review, 17 November 2026). */
+.dq-coverage.has-gap {
+  gap: 0;
+  background: color-mix(in srgb, var(--warning-soft) 55%, var(--surface));
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-lg);
+}
+
+.dq-coverage.has-gap > .dq-cov-fold {
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--warning-border);
+  border-radius: 0;
+}
+
+.dq-coverage.has-gap > .dq-cov-fold > summary {
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+
+.dq-coverage.has-gap .dq-grid-wrap {
+  background: var(--surface);
+  border-top: 1px solid var(--warning-border);
+  padding-top: 8px;
+}
+
+.dq-coverage.has-gap > .dq-gaps {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
 }
 
 .dq-cov-head {
@@ -150,14 +182,14 @@ button.tar-head.dq-head {
   height: 24px;
   padding: 0 0.55rem;
   font-size: var(--fs-2xs);
-  font-weight: 650;
+  font-weight: 600;
   white-space: nowrap;
   border: 1px solid transparent;
   border-radius: 999px;
 }
 
 .dq-cov-letter {
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .dq-cov-state {
@@ -165,22 +197,10 @@ button.tar-head.dq-head {
   align-items: center;
 }
 
-.dq-cov.is-covered {
-  color: var(--success);
-  background: var(--success-soft);
-  border-color: var(--success-border);
-}
-
 .dq-cov.is-exception {
   color: var(--neutral);
   background: var(--neutral-soft);
   border-color: var(--neutral-border);
-}
-
-.dq-cov.is-uncovered {
-  color: var(--warning);
-  background: var(--warning-soft);
-  border-color: var(--warning-border);
 }
 
 /* The attributes no request addresses: one block, a row each. */
@@ -190,7 +210,7 @@ button.tar-head.dq-head {
   padding: 0;
   background: color-mix(in srgb, var(--warning-soft) 55%, var(--surface));
   border: 1px solid var(--warning-border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   list-style: none;
 }
 
@@ -310,7 +330,7 @@ button.tar-head.dq-head {
   padding: 0;
   color: var(--text-strong);
   font-size: var(--fs-md);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .dq-choice {
@@ -322,7 +342,7 @@ button.tar-head.dq-head {
   font-size: var(--fs-sm);
   line-height: 1.45;
   border: 1px solid var(--border-subtle);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   cursor: pointer;
   transition:
     background-color 120ms ease,
@@ -409,5 +429,330 @@ button.tar-head.dq-head {
 @media (prefers-reduced-motion: reduce) {
   .dq-choice {
     transition: none;
+  }
+}
+
+/* The requests list made calm (prototype approved 17 November 2026): one decision on top,
+   each request one line until opened, and the attributes' coverage once, as a grid on
+   request. */
+.dq-decide {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  margin-bottom: 14px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
+}
+
+.dq-decide-text {
+  flex: 1;
+  min-width: 220px;
+}
+
+.dq-decide-text strong {
+  color: var(--text-strong);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+
+.dq-decide-text p {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
+}
+
+.dq-decide-acts {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.dq .dr-code.is-off {
+  color: var(--text-tertiary);
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--border);
+  opacity: 0.5;
+}
+
+.dq .tar-source {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.dq-ask {
+  max-width: 72ch;
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-md);
+  line-height: 1.6;
+}
+
+.dq-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin: 8px 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+.dq-facts b {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.dq-cov-fold {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+}
+
+.dq-cov-fold > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 16px;
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+  list-style: none;
+  cursor: pointer;
+  border-radius: var(--radius-xl);
+}
+
+.dq-cov-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.dq-cov-fold > summary:focus-visible {
+  outline: 0;
+  box-shadow: var(--ring);
+}
+
+.dq-cov-mark {
+  display: inline-flex;
+}
+
+.dq-cov-mark.is-ok {
+  color: var(--success);
+}
+
+.dq-cov-mark.is-gap {
+  color: var(--warning);
+}
+
+.dq-cov-fold .dq-cov-line strong {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.dq-cov-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+.dq-cov-more svg {
+  transition: transform 180ms ease;
+}
+
+.dq-cov-fold[open] .dq-cov-more svg {
+  transform: rotate(90deg);
+}
+
+.dq-cov-hide,
+.dq-cov-fold[open] .dq-cov-show {
+  display: none;
+}
+
+.dq-cov-fold[open] .dq-cov-hide {
+  display: inline;
+}
+
+.dq-grid-wrap {
+  overflow-x: auto;
+  padding: 0 16px 14px;
+}
+
+.dq-grid {
+  width: 100%;
+  font-size: var(--fs-base);
+  border-collapse: collapse;
+}
+
+.dq-grid thead th {
+  padding: 8px 10px;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-align: center;
+  text-transform: uppercase;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border);
+}
+
+.dq-grid thead th:first-child {
+  text-align: left;
+}
+
+.dq-grid tbody th {
+  padding: 8px 10px;
+  color: var(--text);
+  font-weight: 400;
+  text-align: left;
+}
+
+.dq-grid tbody tr + tr > * {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.dq-grid td {
+  width: 110px;
+  padding: 8px 10px;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.dq-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  background: var(--accent);
+  border-radius: 999px;
+}
+
+.dq-grid-attr {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 8px;
+}
+
+.dq-grid-note {
+  display: block;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.dq-grid-note.is-gap {
+  color: var(--warning);
+  font-weight: 500;
+}
+
+@media (max-width: 560px) {
+  .dq-decide-acts {
+    width: 100%;
+  }
+
+  .dq-decide-acts .btn-primary {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .dq-grid td {
+    width: 64px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dq-cov-more svg {
+    transition: none;
+  }
+}
+
+/* Design review, 17 November 2026: the coverage never widens the pane; on a narrow pane the
+   grid becomes one block per attribute, each request that addresses it a chip; the open row
+   is tinted as a whole; a request's title wraps in full on a phone. */
+.dq-coverage,
+.dq-cov-fold {
+  min-width: 0;
+}
+
+.dq-grid-wrap {
+  max-width: 100%;
+}
+
+.dq .tar.is-open > button.tar-head,
+.dq .tar.is-open > button.tar-head:hover {
+  background: transparent;
+}
+
+@media (max-width: 560px) {
+  .dq .tar-text {
+    display: block;
+    -webkit-line-clamp: unset;
+    line-clamp: unset;
+  }
+
+  .dq-grid,
+  .dq-grid tbody {
+    display: block;
+  }
+
+  .dq-grid thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .dq-grid tbody tr {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 10px 0;
+  }
+
+  .dq-grid tbody tr + tr {
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .dq-grid tbody tr + tr > * {
+    border-top: 0;
+  }
+
+  .dq-grid tbody th {
+    flex-basis: 100%;
+    padding: 0;
+  }
+
+  .dq-grid td {
+    display: none;
+    width: auto;
+    padding: 0;
+  }
+
+  .dq-grid td.is-covering {
+    display: inline-flex;
+    margin-left: 28px;
+  }
+
+  .dq-grid td.is-covering + td.is-covering {
+    margin-left: 0;
+  }
+
+  .dq-grid td.is-covering .dq-dot {
+    display: none;
+  }
+
+  .dq-grid td.is-covering::before {
+    padding: 1px 8px;
+    color: var(--text-secondary);
+    font-size: var(--fs-xs);
+    font-weight: 500;
+    content: attr(data-label);
+    background: var(--surface-sunken);
+    border-radius: 999px;
   }
 }

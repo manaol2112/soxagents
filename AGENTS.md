@@ -38,6 +38,7 @@ Apply to every feature, for every control type (ITGC, ITAC, business process, MR
 - Motion is purposeful and short (hover 100–150 ms, expand 150–250 ms, dialogs 200–300 ms, page 150–250 ms) and off under reduced motion.
 - Reuse the existing components and tokens. No new UI framework, state library, or animation dependency without a demonstrated need, and no redesign of unrelated screens.
 - A feature is complete only when it meets the UI acceptance checklist in `docs/design-system.md`.
+- Every change to what a person sees passes an independent design review before it is reported as done (product owner, 17 November 2026). Screenshot the real screen on synthetic data (light and dark, 1440 and 390 wide, every state the change can show, including editing, empty, and odd or long content), give the screenshots and the changed files to the `ui-reviewer` agent (`.claude/agents/ui-reviewer.md`), fix every blocking defect, and review again until its verdict is SHIP. Report the verdict and what was fixed. The builder never reviews its own UI.
 
 ## Milestone closeout
 

@@ -102,6 +102,13 @@ REVIEW_PROMPT_VERSION = "attribute-review/4"
 # and the independent reviewer of its drafts.
 ATTRIBUTE_AGENT = "engagement-planner"
 DRAFT_REVIEWER = "independent-reviewer"
+# The output allowance of the drafter and of the reviewer of its drafts: each writes the
+# attributes out in full, with their criteria. Neither asked for one before, so both had the
+# provider's default of 4,096, and on a control with a long record the drafter's answer was
+# cut off there twice (16 November 2026: 4,096 of 4,096 output tokens on prompts of 9,210 and
+# 12,904; "The attribute agent could not finish"); its correction had the same allowance.
+# The planner's allowance and time, which its plans have not reached (evidence_plans).
+ATTRIBUTE_TOKENS, ATTRIBUTE_SECONDS = 16000, 300
 # An approved attribute's criteria are tailored to the control and owned by a person (product
 # owner, 11 November 2026: the agents judge evidence against criteria "tailored on the control
 # environment but still guided by the requirements of the attributes"): a person wrote them,
@@ -1155,7 +1162,8 @@ def generate(
             ),
             output_schema=ATTRIBUTES_SCHEMA,
             allowed_tool_ids=(),
-            timeout_seconds=90,
+            max_tokens=ATTRIBUTE_TOKENS,
+            timeout_seconds=ATTRIBUTE_SECONDS,
             cancelled=False,
             system=SYSTEM_PROMPT,
         ),
@@ -1977,7 +1985,8 @@ def _review(
             ),
             output_schema=REVIEW_SCHEMA,
             allowed_tool_ids=(),
-            timeout_seconds=90,
+            max_tokens=ATTRIBUTE_TOKENS,
+            timeout_seconds=ATTRIBUTE_SECONDS,
             cancelled=False,
             system=REVIEW_PROMPT,
         ),

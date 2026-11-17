@@ -200,3 +200,40 @@ def test_a_preparer_made_reviewer_never_decides_or_clears_a_note_on_their_own_wo
     )
     assert cleared.status_code == 200, cleared.text
     assert next(n for n in cleared.json()["notes"] if n["id"] == note["id"])["status"] == "CLEARED"
+
+
+@pytest.mark.parametrize("environment", ["development", "dev", "local", "test", " Development "])
+def test_independence_switches_off_only_in_a_development_environment(environment: str) -> None:
+    independence.configure(False, environment)
+    assert independence.required() is False
+
+
+@pytest.mark.parametrize("environment", ["", "   ", "staging", "prod", "qa", "developer"])
+def test_any_other_environment_keeps_independence_on(environment: str) -> None:
+    """Security sweep, 17 November 2026: an empty or unknown APP_ENV used to let the
+    switch through with a warning; segregation of duties now stays enforced."""
+    independence.configure(False, environment)
+    assert independence.required() is True
+
+
+def test_production_refuses_to_start_with_independence_off() -> None:
+    with pytest.raises(independence.IndependenceOff):
+        independence.configure(False, "Production")
+    assert independence.required() is True
+
+
+def test_an_app_without_a_development_environment_enforces_independence(
+    migrated: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Built from settings as the API is: APP_ENV empty with the switch off starts with
+    the rules on; APP_ENV=local lets the switch through."""
+    from ai_workforce_api.main import create_app
+    from ai_workforce_api.settings import Settings
+
+    monkeypatch.setenv("APP_ENV", "")
+    create_app(Settings(database_url=migrated.url, review_independence_required=False))
+    assert independence.required() is True
+    create_app(
+        Settings(database_url=migrated.url, app_env="local", review_independence_required=False)
+    )
+    assert independence.required() is False

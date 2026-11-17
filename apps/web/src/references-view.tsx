@@ -657,7 +657,7 @@ function ConfirmRemove({
             </button>
             <button
               type="button"
-              className="btn as-discard"
+              className="btn btn-danger"
               disabled={busy}
               onClick={async () => {
                 setBusy(true);

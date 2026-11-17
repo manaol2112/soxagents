@@ -18,6 +18,7 @@ import psycopg
 from fastapi import FastAPI, HTTPException, Request
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from ai_workforce_api.authorization import (
     Action,
@@ -76,6 +77,7 @@ from ai_workforce_api.system_review_queue import (
     schedule_system_reviews,
     track_reviews_for_project,
 )
+from ai_workforce_api.upload_body import read_body
 from ai_workforce_api.workpapers import default_template
 
 logger = logging.getLogger(__name__)
@@ -285,15 +287,18 @@ def register_rcm_uploads(
     async def upload(
         organization_id: UUID, project_id: UUID, file_name: str, request: Request
     ) -> ImportBody:
-        content = await request.body()
-        if len(content) > MAX_BYTES:
-            raise HTTPException(status_code=413, detail="file is too large")
-        body = run(
-            request,
-            lambda c, p: _upload(c, p, organization_id, project_id, file_name, content),
-        )
-        _scan(scans, body)
-        return body
+        content = await read_body(request, MAX_BYTES, "file is too large")
+
+        def stored() -> ImportBody:
+            body = run(
+                request,
+                lambda c, p: _upload(c, p, organization_id, project_id, file_name, content),
+            )
+            _scan(scans, body)
+            return body
+
+        # Reading the workbook and storing it run off the event loop (upload_body).
+        return await run_in_threadpool(stored)
 
     @app.get(f"{base}/rcm/uploads/{{import_id}}")
     def read(

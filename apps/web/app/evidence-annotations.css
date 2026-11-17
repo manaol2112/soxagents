@@ -164,7 +164,7 @@ button.ea-box {
   padding: 2px;
   background: color-mix(in srgb, var(--ea-mark) 8%, transparent);
   border: 2px solid var(--ea-mark);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   box-shadow: 0 0 0 1.5px var(--mark-paper);
   cursor: pointer;
   transition:
@@ -193,7 +193,7 @@ button.ea-box.is-cited {
 
 button.ea-box.is-cited .ea-tick,
 .ea-num.is-cited {
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
 }
 
 button.ea-box:focus-visible:not(:disabled) {
@@ -215,8 +215,8 @@ button.ea-box:focus-visible:not(:disabled) {
   background: var(--ea-mark);
   border-radius: 50%;
   box-shadow: 0 0 0 2px var(--mark-paper);
-  font-size: 12px;
-  font-weight: 700;
+  font-size: var(--fs-sm);
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   line-height: 1;
   pointer-events: none;
@@ -231,7 +231,7 @@ button.ea-box:focus-visible:not(:disabled) {
   padding: 2px;
   background: color-mix(in srgb, var(--ea-mark) 14%, transparent);
   border: 2px solid var(--ea-mark);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   box-shadow:
     0 0 0 1.5px var(--mark-paper),
     0 0 0 5px color-mix(in srgb, var(--ea-mark) 26%, transparent);
@@ -323,7 +323,7 @@ button.ea-handle:focus-visible:not(:disabled) {
   position: absolute;
   background: color-mix(in srgb, var(--mark-info) 12%, transparent);
   border: 2px dashed var(--mark-info);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   box-shadow: 0 0 0 1.5px var(--mark-paper);
 }
 
@@ -336,7 +336,7 @@ button.ea-handle:focus-visible:not(:disabled) {
   width: min(440px, 100%);
   padding: 0.75rem 0.875rem;
   color: var(--text);
-  background: var(--glass-strong);
+  background: var(--surface);
   border: 1px solid var(--border-strong);
   border-left: 3px solid var(--ea-c);
   border-radius: var(--radius-lg);
@@ -362,7 +362,7 @@ button.ea-handle:focus-visible:not(:disabled) {
   width: 14px;
   height: 14px;
   margin-top: -7px;
-  background: var(--glass-strong);
+  background: var(--surface);
   border-bottom: 1px solid var(--border-strong);
   border-left: 3px solid var(--ea-c);
   border-radius: 0 0 0 2px;
@@ -415,7 +415,7 @@ button.ea-handle:focus-visible:not(:disabled) {
   align-items: center;
   gap: 0.4rem;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .ea-kind {
@@ -448,8 +448,8 @@ button.ea-close {
   color: var(--text-on-status);
   background: var(--ea-c);
   border-radius: 50%;
-  font-size: 12px;
-  font-weight: 700;
+  font-size: var(--fs-sm);
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   line-height: 1;
 }
@@ -463,9 +463,9 @@ button.ea-close {
   place-items: center;
   color: var(--accent-text);
   background: var(--accent-soft);
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   font-size: var(--fs-xs);
-  font-weight: 700;
+  font-weight: 600;
   line-height: 1;
 }
 
@@ -486,7 +486,7 @@ button.ea-close {
   border-left: 3px solid var(--ea-c);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   line-height: 1.4;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
@@ -497,7 +497,7 @@ button.ea-close {
   gap: 0.3rem;
   margin: 0.45rem 0 0;
   color: var(--success);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 600;
 }
 
@@ -513,7 +513,7 @@ button.ea-close {
   color: var(--text-secondary);
   background: var(--surface-muted);
   border-radius: var(--radius-sm);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .ea-acts {
@@ -538,7 +538,7 @@ button.ea-close {
 
 .ea-at {
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-variant-numeric: tabular-nums;
 }
 
@@ -550,7 +550,7 @@ button.ea-step {
 .ea-ask {
   color: var(--text);
   font-size: var(--fs-sm);
-  font-weight: 550;
+  font-weight: 500;
 }
 
 .ea-kbd {
@@ -559,9 +559,9 @@ button.ea-step {
   background: var(--surface);
   border: 1px solid var(--border-strong);
   border-bottom-width: 2px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   line-height: 1.3;
 }
 
@@ -576,7 +576,7 @@ button.ea-step {
   margin: 0.5rem 0 0;
   color: var(--danger);
   font-size: var(--fs-sm);
-  font-weight: 550;
+  font-weight: 500;
 }
 
 /* Editing in the callout. */
@@ -589,7 +589,7 @@ button.ea-step {
   padding: 0;
   color: var(--text-secondary);
   font-size: var(--fs-xs);
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -622,10 +622,10 @@ button.ea-chip {
   color: var(--text-secondary);
   background: var(--surface);
   border: 1px solid var(--border-control);
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   box-shadow: none;
   font-size: var(--fs-xs);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 button.ea-chip:hover {
@@ -644,7 +644,7 @@ button.ea-chip.is-on {
 .ea-tip {
   margin: 0.5rem 0 0;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .ea-attrs .ea-tip {
@@ -676,7 +676,7 @@ button.ea-chip.is-on {
   margin: 0 0 0.5rem;
   color: var(--text-tertiary);
   font-size: var(--fs-xs);
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
@@ -684,8 +684,8 @@ button.ea-chip.is-on {
 .ea-sec h3 small {
   margin-left: auto;
   color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 550;
+  font-size: var(--fs-sm);
+  font-weight: 500;
   letter-spacing: 0;
   text-transform: none;
 }
@@ -740,8 +740,8 @@ button.ea-ref {
   border: 0;
   border-radius: 50%;
   box-shadow: none;
-  font-size: 10.5px;
-  font-weight: 700;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
@@ -793,14 +793,14 @@ button.ea-chip:focus-visible:not(:disabled) {
 .ea-what {
   overflow: hidden;
   color: var(--text-strong);
-  font-weight: 550;
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .ea-what span {
   color: var(--text-tertiary);
-  font-weight: 450;
+  font-weight: 400;
 }
 
 .ea-letters {
@@ -816,8 +816,8 @@ button.ea-chip:focus-visible:not(:disabled) {
   height: 16px;
   place-items: center;
   border-radius: 50%;
-  font-size: 10px;
-  font-weight: 700;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
   line-height: 1;
 }
 
@@ -880,7 +880,7 @@ button.ea-chip:focus-visible:not(:disabled) {
 
 .ea-foot small {
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .ea-foot p {
@@ -893,24 +893,33 @@ button.ea-chip:focus-visible:not(:disabled) {
   gap: 0.3rem;
   color: var(--success);
   font-size: var(--fs-sm);
-  font-weight: 550;
+  font-weight: 500;
 }
 
 .ea-done:empty {
   display: none;
 }
 
-/* The side panel's two tabs (section 5b): the legend, and "About this file". */
-.ea-tabs {
+/* The side panel's two tabs (section 5b): the legend, and "About this file". A bar that
+   stays at the top, holding the shared segmented control (a muted track, the chosen tab a
+   raised chip). */
+.ea-tabs-bar {
   position: sticky;
   top: 0;
   z-index: 2;
-  display: flex;
-  gap: 2px;
   margin: 0;
   padding: 0.5rem 1rem;
   background: var(--surface);
   border-bottom: 1px solid var(--border-subtle);
+}
+
+.ea-tabs {
+  display: flex;
+  gap: 2px;
+  margin: 0;
+  padding: 2px;
+  background: var(--surface-sunken);
+  border-radius: var(--radius);
 }
 
 button.ea-tab {
@@ -919,11 +928,11 @@ button.ea-tab {
   padding: 0 0.625rem;
   color: var(--text-secondary);
   background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius);
+  border: 0;
+  border-radius: var(--radius-sm);
   box-shadow: none;
   font-size: var(--fs-sm);
-  font-weight: 550;
+  font-weight: 500;
   transition:
     background 120ms ease,
     color 120ms ease,
@@ -932,14 +941,14 @@ button.ea-tab {
 
 button.ea-tab:hover {
   color: var(--text-strong);
-  background: var(--surface-hover);
+  background: transparent;
   border-color: transparent;
 }
 
 button.ea-tab.is-on {
   color: var(--text-strong);
-  background: var(--surface-muted);
-  border-color: var(--border-strong);
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
 }
 
 button.ea-tab:focus-visible:not(:disabled) {
@@ -1116,7 +1125,7 @@ p.ea-about-read {
   gap: 0.5rem;
   color: var(--text-tertiary);
   font-size: var(--fs-xs);
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   list-style: none;
@@ -1144,7 +1153,7 @@ p.ea-about-read {
 
 .ea-about-more > summary small {
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   letter-spacing: 0;
   text-transform: none;
 }
@@ -1188,7 +1197,7 @@ p.ea-about-read {
 .ea-data-head strong {
   color: var(--text-strong);
   font-size: var(--fs-md);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 /* While the annotations are read: the panel's shape. */
@@ -1291,7 +1300,7 @@ p.ea-about-read {
     width: 16px;
     height: 16px;
     box-shadow: 0 0 0 1.5px var(--mark-paper);
-    font-size: 10px;
+    font-size: var(--fs-2xs);
   }
 
   /* The annotated file's actions, and the file switcher, take their own line under its

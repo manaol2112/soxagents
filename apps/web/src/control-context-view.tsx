@@ -1548,7 +1548,7 @@ export function AttributesPanel({
                 {approvable.length > 0 ? (
                   <button
                     type="button"
-                    className="btn btn-sm"
+                    className="btn btn-secondary btn-sm"
                     disabled={action.pending || updating}
                     title={
                       approvable.length < plan.proposals.length

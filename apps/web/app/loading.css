@@ -9,23 +9,6 @@
   animation: boot-in 360ms ease-out 180ms forwards;
 }
 
-.boot-glow {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 260px;
-  height: 260px;
-  margin: -170px 0 0 -130px;
-  background: radial-gradient(
-    closest-side,
-    rgb(91 118 240 / 16%),
-    transparent
-  );
-  border-radius: 50%;
-  pointer-events: none;
-  animation: boot-pulse 2.4s ease-in-out infinite;
-}
-
 .boot-center {
   position: relative;
   display: grid;
@@ -39,19 +22,16 @@
   width: 104px;
   height: 104px;
   place-items: center;
-  background: var(--surface-glass);
-  border: 1px solid rgb(59 91 219 / 14%);
-  border-radius: 30px;
-  box-shadow:
-    0 1px 2px rgb(16 24 40 / 5%),
-    0 18px 40px -12px rgb(59 91 219 / 35%);
-  backdrop-filter: blur(8px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
 }
 
 .boot-hex,
 .boot-check {
   fill: none;
-  stroke: url(#boot-stroke);
+  stroke: var(--text-strong);
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-dasharray: 1;
@@ -71,7 +51,7 @@
 .boot-orbit {
   position: absolute;
   inset: -14px;
-  border: 1px dashed rgb(59 91 219 / 18%);
+  border: 1px dashed var(--border-strong);
   border-radius: 50%;
   animation: boot-spin 6s linear infinite;
 }
@@ -83,10 +63,9 @@
   width: 9px;
   height: 9px;
   margin: -4.5px;
-  background: var(--accent);
+  background: var(--text-tertiary);
   border: 2px solid var(--surface);
   border-radius: 50%;
-  box-shadow: 0 2px 6px rgb(59 91 219 / 40%);
 }
 
 .boot-dot:nth-child(1) {
@@ -94,20 +73,18 @@
 }
 
 .boot-dot:nth-child(2) {
-  background: var(--ai);
   transform: rotate(120deg) translateX(66px);
 }
 
 .boot-dot:nth-child(3) {
-  background: #22a3d8;
   transform: rotate(240deg) translateX(66px);
 }
 
 .boot-name {
   margin: 0.75rem 0 0;
   color: var(--text-strong);
-  font-size: 19px;
-  font-weight: 650;
+  font-size: var(--fs-title);
+  font-weight: 600;
   letter-spacing: -0.02em;
 }
 
@@ -123,7 +100,7 @@
   position: absolute;
   inset: 0;
   color: var(--text-secondary);
-  font-size: 13.5px;
+  font-size: var(--fs-md);
   opacity: 0;
   animation: boot-step 8s ease-in-out infinite;
 }
@@ -146,7 +123,7 @@
   height: 3px;
   margin-top: 0.25rem;
   overflow: hidden;
-  background: rgb(59 91 219 / 12%);
+  background: var(--surface-sunken);
   border-radius: 999px;
 }
 
@@ -156,7 +133,7 @@
   left: 0;
   width: 40%;
   height: 100%;
-  background: linear-gradient(90deg, transparent, var(--accent), var(--ai), transparent);
+  background: var(--accent);
   border-radius: 999px;
   animation: boot-sweep 1.4s ease-in-out infinite;
 }
@@ -226,16 +203,8 @@
   }
 }
 
-@keyframes boot-pulse {
-  50% {
-    transform: scale(1.12);
-    opacity: 0.7;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .boot,
-  .boot-glow,
   .boot-orbit,
   .boot-bar span,
   .boot-steps span {

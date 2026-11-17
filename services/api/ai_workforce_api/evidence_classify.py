@@ -19,6 +19,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
+from ai_workforce_api import prompt_data
 from ai_workforce_api.inbound import clean_line
 
 EvidenceKind = Literal[
@@ -407,16 +408,10 @@ def _date(year: int, month: int, day: int) -> date:
         return date.min
 
 
-_DELIMITER = re.compile(
-    r"(?:<|&lt;|＜|﹤|〈|〈|⟨)(\s*/?\s*)(request_and_file|evidence_excerpt)\b",
-    re.I,
-)
-
-
 def _neutral(text: str) -> str:
     """Text with the reader prompt's delimiters made inert (‹evidence_excerpt instead of
-    <evidence_excerpt)."""
-    return _DELIMITER.sub(lambda found: "‹" + found.group(1) + found.group(2), text)
+    <evidence_excerpt), by the one neutraliser every prompt uses (prompt_data)."""
+    return prompt_data.neutral(text)
 
 
 def prompt_for(context: ClassifyContext) -> str:

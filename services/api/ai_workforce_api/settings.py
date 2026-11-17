@@ -1,13 +1,47 @@
 """Process settings. Secrets come from the environment, never from defaults."""
 
-from pydantic import Field
+from ipaddress import IPv4Network, IPv6Network, ip_network
+from typing import Self
+from urllib.parse import urlsplit, urlunsplit
+
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def loopback_database_url(url: str) -> str:
+    """A database URL whose host is `localhost`, pointed at 127.0.0.1 instead.
+
+    Compose publishes PostgreSQL on 127.0.0.1 only. On Windows, `localhost` is tried as ::1
+    first, and a refused connection there is retried for seconds before the IPv4 address is
+    tried, so every connection took longer than the web app's three seconds per request and
+    signed-in pages showed "Workspace unavailable" (16 November 2026). 127.0.0.1 is the same
+    machine, reached at once. Any other host, and a URL that cannot be read as one, is
+    returned unchanged."""
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+        port = parts.port
+    except ValueError:
+        return url
+    if not parts.scheme.startswith("postgres") or host is None or host.lower() != "localhost":
+        return url
+    user_info, _, _ = parts.netloc.rpartition("@")
+    netloc = "127.0.0.1" if port is None else f"127.0.0.1:{port}"
+    if user_info != "":
+        netloc = f"{user_info}@{netloc}"
+    return urlunsplit(parts._replace(netloc=netloc))
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore", env_file=None)
 
     database_url: str = ""
+
+    @field_validator("database_url")
+    @classmethod
+    def _loopback(cls, value: str) -> str:
+        return loopback_database_url(value)
+
     email_live_send_enabled: bool = False
     email_provider: str = ""
     email_allowed_recipient_domains: str = ""
@@ -50,10 +84,48 @@ class Settings(BaseSettings):
     session_ttl_seconds: int = Field(default=28800, ge=60)
     login_attempt_ttl_seconds: int = Field(default=600, ge=60)
     session_cookie_secure: bool = True
+    # The local sign-in without an identity provider. Refused in production (below).
     preview_login_enabled: bool = False
     # Where the process runs: "production" for real engagements. Development switches,
-    # like turning the independence rules off, are refused there.
+    # like turning the independence rules off or the preview sign-in on, are refused there.
     app_env: str = ""
+    # The proxies in front of the API whose X-Forwarded-For is believed, comma-separated
+    # addresses or networks (TRUSTED_PROXIES, such as "127.0.0.1" or "10.0.0.0/8"). Empty
+    # believes none: the caller's address is the socket's peer (rate_limit.client_address;
+    # security review, 17 November 2026).
+    trusted_proxies: str = ""
+
+    @field_validator("trusted_proxies")
+    @classmethod
+    def _proxies(cls, value: str) -> str:
+        for entry in value.split(","):
+            if entry.strip():
+                try:
+                    ip_network(entry.strip(), strict=False)
+                except ValueError:
+                    raise ValueError(
+                        f"TRUSTED_PROXIES holds {entry.strip()!r}, which is not an address "
+                        "or a network"
+                    ) from None
+        return value
+
+    def trusted_proxy_networks(self) -> tuple[IPv4Network | IPv6Network, ...]:
+        """The trusted proxies as networks (a single address is a network of one)."""
+        return tuple(
+            ip_network(entry.strip(), strict=False)
+            for entry in self.trusted_proxies.split(",")
+            if entry.strip()
+        )
+
+    @model_validator(mode="after")
+    def _no_preview_in_production(self) -> Self:
+        # The preview sign-in opens an owner's session with no identity provider: a
+        # development switch, never on where real engagements run (security review,
+        # 17 November 2026).
+        if self.preview_login_enabled and self.app_env.strip().lower() == "production":
+            raise ValueError("PREVIEW_LOGIN_ENABLED cannot be true when APP_ENV is production")
+        return self
+
     # The independent-review rules (see independence.py). Leave true for real engagements.
     review_independence_required: bool = True
     workflow_provider: str = ""
