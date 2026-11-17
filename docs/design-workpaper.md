@@ -756,6 +756,58 @@ One stands per workpaper and point key.
 - Superseded matters tests are rewritten for the points, each with the old and new
   expectation recorded.
 
+## 3.10 The understanding written as a formal design narrative (product owner, 16 November 2026)
+
+"Revisit how that understanding is being written and make sure that covers the design of
+the control … Not on a bullet format but a narrative format just like how formal
+documentation is done." Three causes were found in the drafter (`workpaper_service.py`):
+
+- It was never given the confirmed Control Understanding: the walkthrough answers, the
+  control's values and the answers to earlier questions (`understanding_authority`). It was
+  also never given the approved process narrative. So it could not say who approves, on
+  what criteria, how duties are segregated or how exceptions are handled, even where the
+  team had confirmed them.
+- It let a citation carry a sentence's content ("states the approval rule as: [cite]").
+  When the quoted words were not found in the file, the citation was removed and the
+  sentence was left broken.
+- One rule served every section: "under 250 words", in the past tense.
+
+Changed (prompt `workpaper-preparer/4`):
+
+- **The inputs.** A design draft is given `confirmed_understanding` and
+  `approved_process_narrative` inside the facts block. Each is data, never instructions,
+  with the same precedence the planning agents follow: the confirmed understanding wins
+  over the RCM record and the files.
+- **The standard.** The understanding is a formal design narrative in connected
+  paragraphs, third person, with no headings, labels or lists. The design is described in
+  the present tense and what was done or seen in the past tense. It covers, in order:
+  - the objective, the risk and the systems;
+  - the trigger, frequency and population;
+  - the owner and the performers;
+  - the steps and their systems;
+  - the rule, in the narrative's own words, with its policy, version and period;
+  - what the approver examines and how precisely;
+  - what a system enforces, and so what the control depends on;
+  - the reports used and their completeness and accuracy;
+  - segregation of duties;
+  - exceptions;
+  - the evidence of performance;
+  - related activities not relied on.
+
+  It closes with a paragraph on whether the design addresses the risk. An element not
+  established is said to be so in one sentence, with who is to confirm it, never filled
+  in. Under 600 words.
+- **Citations.** Every fact is stated in the narrative's own words, and a sentence reads
+  complete without its citation. Where a citation is removed, the draft's version note
+  says so for that section.
+- **The default template's guidance** for the section says the same in short. A workpaper
+  that has started keeps its template; the standard in the prompt applies to every
+  design draft.
+
+Queued after 3.9: the Document view's order becomes Objective, risk and control;
+Procedures performed; Understanding of the control (the result of the procedures);
+Walkthrough; Attributes; Information produced by the entity; Conclusion.
+
 ## 4. Tests
 
 Server: the assembly from synthetic records (each attribute state, the evidence numbering
