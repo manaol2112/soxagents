@@ -40,7 +40,7 @@ from test_attributes_follow_understanding import (
 from test_outbound import migrated
 from test_planning_gate import _rows
 
-from ai_workforce_api import attribute_review, control_attributes, models
+from ai_workforce_api import attribute_review, control_attributes, models, understanding_review
 from ai_workforce_api import process_narrative as narrative_module
 from ai_workforce_api.agent_answers import notes_for
 from ai_workforce_api.context_routes import attributes_failure_note
@@ -392,6 +392,12 @@ class _Script:
 
     def complete(self, request: ModelRequest, config: ModelConfig) -> ModelRaw:
         del config
+        if request.system == understanding_review.SYSTEM_PROMPT:
+            # B1k (16 November 2026): the IT audit specialist reviews the questions asked
+            # before the attributes; here it finds every attribute established, so the run
+            # goes on to the agents these tests are about, whose calls are listed alone.
+            given = understanding_review.inputs_of(request.prompt)
+            return ModelRaw(understanding_review.established(given), (), 100, 100)
         who = self.WHO.get(request.system, "other")
         self.calls.append(who)
         self.prompts.setdefault(who, []).append(request.prompt)

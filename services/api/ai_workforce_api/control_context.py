@@ -253,6 +253,21 @@ def check_quote(sources: list[Source], source: str, quote: str) -> Citation | No
 
 # Issues
 
+AskedFact = Literal[
+    "PERFORMER", "APPROVER", "SYSTEM", "RECORD", "TIMING", "POPULATION", "EXCEPTION", "OTHER"
+]  # fmt: skip
+
+
+class AsksBody(BaseModel):
+    """What a question asks (B1l point 4, migration 0173): the attribute (its code, or its
+    definition key for a control not tailored yet; null for a control with no attributes),
+    the kind of fact, and, for a follow-up of an earlier question, that question. All null
+    for a question that is not the specialist's."""
+
+    attribute_code: str | None = None
+    fact: AskedFact | None = None
+    parent_issue_id: UUID | None = None
+
 
 class IssueBody(BaseModel):
     id: UUID
@@ -264,7 +279,9 @@ class IssueBody(BaseModel):
     resolve: str
     quotes: list[dict[str, str]]
     raised_by: Literal["AGENT", "RULES"]
-    status: Literal["OPEN", "RESOLVED", "DISMISSED", "SUPERSEDED"]
+    # NOT_KNOWN (B1l point 1): a person's "Not known yet, proceed". Closed, never an answer,
+    # and never read by an agent as a fact.
+    status: Literal["OPEN", "RESOLVED", "DISMISSED", "SUPERSEDED", "NOT_KNOWN"]
     resolution_note: str
     version: int
     # A question the narrative's agents need the client to answer, and the answers the
@@ -289,6 +306,13 @@ class IssueBody(BaseModel):
     interview: list[dict[str, Any]] = []
     # The reviewer agent is still checking its wording (WORDING_PENDING_SQL): not shown yet.
     wording_pending: bool = False
+    # B1k (16 November 2026): a question of the IT audit specialist's review of the questions
+    # asked, its read (1, the review; 2, the one follow-up read), what it asks, and the
+    # attribute criterion or evidence request it blocks ("" for other questions).
+    from_review: bool = False
+    review_round: int | None = None
+    asks: AsksBody = AsksBody()
+    blocks: str = ""
 
 
 @dataclass(frozen=True)
@@ -565,6 +589,14 @@ def issues_for(connection: psycopg.Connection[Any], control_id: UUID) -> list[Is
             if isinstance(row[21], list)
             else [],
             wording_pending=bool(row[22]),
+            from_review=bool(row[23]),
+            review_round=None if row[24] is None else int(row[24]),
+            asks=AsksBody(
+                attribute_code=None if row[25] is None else str(row[25]),
+                fact=row[26],
+                parent_issue_id=row[27],
+            ),
+            blocks=str(row[28] or ""),
         )
         for row in connection.execute(
             """
@@ -573,7 +605,7 @@ def issues_for(connection: psycopg.Connection[Any], control_id: UUID) -> list[Is
                    narrative_section, attribute_codes, point_round, point_kind, proposal_basis,
                    wording_reviewed, interview, """
             + WORDING_PENDING_SQL
-            + """
+            + """, from_review, review_round, asks_code, asks_fact, asks_parent_id, blocks
             FROM control_context_issues i
             WHERE engagement_control_id = %s AND status <> 'SUPERSEDED'
             ORDER BY CASE status WHEN 'OPEN' THEN 0 ELSE 1 END, created_at

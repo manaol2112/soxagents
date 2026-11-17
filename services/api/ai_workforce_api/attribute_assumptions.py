@@ -21,6 +21,17 @@ Change...:
   not a fact of the understanding.
 - SUPERSEDED (`supersede_gone`): nothing it names is approved any more.
 
+B1k and B1l (16 November 2026). A question a person leaves as "Not known yet, proceed" is
+closed as not known and becomes an assumption on the attributes it bears on (kind NOT_KNOWN,
+its source question kept), and a question the specialist's review did not ask (beyond the
+seven, or after its second read) becomes one keyed as the question would have been (asks_code,
+asks_fact), so it is assumed once. A CONFLICT holds its attributes' acceptance until a person
+decides it (understanding_review.held_codes): it is never accepted with its attribute. One
+accepted with its attribute is a point of the D&I workpaper to settle before the preparer
+signs (design_points, kind ASSUMPTION), settled by That's right or Change... (once more,
+keeping who had accepted it) or by a consideration with a reason. The API says each one's
+`kind`: ASSUMPTION (a missing or unclear fact), CONFLICT or NOT_KNOWN (migration 0173).
+
 Agent output is never a person's: an assumption is the agent's (its model call) until a
 person confirms or changes it. A matter is assumed once on a control, whatever became of it,
 and never when it was asked as a question there. Everything an agent wrote here is data:
@@ -41,7 +52,9 @@ from ai_workforce_api.actions import contains_secret
 from ai_workforce_api.control_context import ContextState, Issue, line, matter_key
 
 AssumptionStatus = Literal["OPEN", "CONFIRMED", "CHANGED", "ACCEPTED_WITH_ATTRIBUTE", "SUPERSEDED"]
-AssumptionKind = Literal["MISSING", "AMBIGUOUS", "CONFLICT"]
+AssumptionKind = Literal["MISSING", "AMBIGUOUS", "CONFLICT", "NOT_KNOWN"]
+# What the API calls a kind (B1l): a missing or unclear fact is an ASSUMPTION.
+ShownKind = Literal["ASSUMPTION", "CONFLICT", "NOT_KNOWN"]
 
 MATTER_LIMIT = 300
 ASSUMED_LIMIT = 500
@@ -77,6 +90,18 @@ class AssumptionBody(BaseModel):
     decided_at: datetime | None
     attribute_codes: list[str]
     version: int
+    # B1l (16 November 2026): ASSUMPTION, CONFLICT (holds its attributes' acceptance until
+    # decided) or NOT_KNOWN (from a question a person left as not known).
+    kind: ShownKind = "ASSUMPTION"
+
+
+def shown_kind(kind: str) -> ShownKind:
+    """The API's kind of a recorded one: MISSING and AMBIGUOUS read as ASSUMPTION."""
+    if kind == "CONFLICT":
+        return "CONFLICT"
+    if kind == "NOT_KNOWN":
+        return "NOT_KNOWN"
+    return "ASSUMPTION"
 
 
 class ConfirmBody(BaseModel):
@@ -96,6 +121,11 @@ class Draft:
     matter: str
     assumed: str
     codes: tuple[str, ...] = ()
+    # B1l: the key of a question the specialist did not ask, and the question a person left
+    # as not known (migration 0173).
+    asks_code: str | None = None
+    asks_fact: str | None = None
+    source_issue: UUID | None = None
 
 
 def drafted(
@@ -146,6 +176,9 @@ def shaped(drafts: list[Draft | None], approved_codes: set[str]) -> list[Draft]:
                 draft.matter,
                 draft.assumed,
                 tuple(code for code in draft.codes if code in approved_codes),
+                draft.asks_code,
+                draft.asks_fact,
+                draft.source_issue,
             )
         )
     return found
@@ -175,7 +208,9 @@ def record(
 ) -> int:
     """Record what an agent assumed, OPEN, as the agent's (its model call). A matter already
     assumed on the control (whatever its status) or already asked there as a question (any
-    issue's topic, whatever its status) is not recorded again: the asked-once rule.
+    issue's topic, whatever its status) is not recorded again: the asked-once rule. Since B1l
+    a keyed one (asks_fact) is recorded once per key, and one from a question left as not
+    known once per question, whose own topic it carries (migration 0173's indexes).
     Returns how many were recorded."""
     asked = {
         matter_key(str(row[0]))
@@ -186,20 +221,25 @@ def record(
     }
     recorded = 0
     for draft in shaped(drafts, approved_codes(cursor, control_id)):
-        if matter_key(draft.matter) in asked:
+        if draft.source_issue is None and matter_key(draft.matter) in asked:
+            continue
+        if (draft.kind == "NOT_KNOWN") != (draft.source_issue is not None):
             continue
         row = cursor.execute(
             """
             INSERT INTO attribute_assumptions (
                 organization_id, project_id, engagement_control_id, matter, assumed, kind,
-                attribute_codes, raised_by_agent, model_call_id
+                attribute_codes, raised_by_agent, model_call_id, asks_code, asks_fact,
+                source_issue_id
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT DO NOTHING
             RETURNING id
             """,
             (organization_id, project_id, control_id, draft.matter, draft.assumed, draft.kind,
-             Json(list(draft.codes)), line(agent, 60) or "agent", call_id),
+             Json(list(draft.codes)), line(agent, 60) or "agent", call_id,
+             None if draft.asks_code is None else line(draft.asks_code, 80) or None,
+             draft.asks_fact, draft.source_issue),
         ).fetchone()  # fmt: skip
         if row is not None:
             recorded += 1
@@ -221,6 +261,7 @@ def _bodies(rows: list[Any]) -> list[AssumptionBody]:
             decided_at=row[7],
             attribute_codes=[str(code) for code in (row[8] or []) if isinstance(code, str)],
             version=int(row[9]),
+            kind=shown_kind(str(row[10])),
         )
         for row in rows
     ]
@@ -235,11 +276,11 @@ def shown(
     rows = connection.execute(
         f"""
         SELECT s.id, s.matter, s.assumed, s.status, s.answer, s.decided_by, u.display_name,
-               s.decided_at, s.attribute_codes, s.version
+               s.decided_at, s.attribute_codes, s.version, s.kind
         FROM attribute_assumptions s
         LEFT JOIN users u ON u.id = s.decided_by
         WHERE s.engagement_control_id = %s
-          AND (s.status = 'OPEN'
+          AND (s.status IN ('OPEN', 'ACCEPTED_WITH_ATTRIBUTE')
                OR s.decided_at >= clock_timestamp() - interval '{SHOWN_DAYS} days')
         ORDER BY s.created_at DESC, s.id DESC
         """,
@@ -269,12 +310,20 @@ def arranged(
 
 # A person's decision
 
+# Who had accepted it with its attribute, and when, kept beside a later confirmation or change
+# (migration 0173's guard requires it): the right-hand side reads the row as it was.
+_KEEP_ACCEPTANCE = (
+    "accepted_by = CASE WHEN status = 'ACCEPTED_WITH_ATTRIBUTE' THEN decided_by END, "
+    "accepted_at = CASE WHEN status = 'ACCEPTED_WITH_ATTRIBUTE' THEN decided_at END"
+)
+
 
 def _open_one(
     cursor: psycopg.Cursor[Any], control_id: UUID, assumption_id: UUID, version: int
 ) -> tuple[str, str, list[str]]:
     """The assumption a person decides, locked: its matter, what it assumed and its codes.
-    404 when it is not this control's; 409 when it is decided or changed."""
+    404 when it is not this control's; 409 when it is decided or changed. One accepted with
+    its attribute may still be confirmed or changed, once (B1l: the D&I workpaper's point)."""
     from ai_workforce_api.authorization import NotVisible
 
     row = cursor.execute(
@@ -284,7 +333,7 @@ def _open_one(
     ).fetchone()
     if row is None:
         raise NotVisible()
-    if str(row[0]) != "OPEN":
+    if str(row[0]) not in ("OPEN", "ACCEPTED_WITH_ATTRIBUTE"):
         raise ContextState(DECIDED)
     if int(row[1]) != version:
         raise ContextState(STALE)
@@ -307,8 +356,9 @@ def confirm(
     with transaction(connection) as cursor:
         matter, _assumed, codes = _open_one(cursor, control_id, assumption_id, body.version)
         cursor.execute(
-            "UPDATE attribute_assumptions SET status = 'CONFIRMED', decided_by = %s, "
-            "decided_at = clock_timestamp(), version = version + 1 WHERE id = %s",
+            f"UPDATE attribute_assumptions SET status = 'CONFIRMED', {_KEEP_ACCEPTANCE}, "
+            "decided_by = %s, decided_at = clock_timestamp(), version = version + 1 "
+            "WHERE id = %s",
             (actor, assumption_id),
         )
         _audit(cursor, organization_id, project_id, actor, "attribute_assumption.confirmed",
@@ -339,8 +389,8 @@ def change(
         matter, _assumed, codes = _open_one(cursor, control_id, assumption_id, body.version)
         cursor.execute(
             "UPDATE attribute_assumptions SET status = 'CHANGED', answer = %s, "
-            "decided_by = %s, decided_at = clock_timestamp(), version = version + 1 "
-            "WHERE id = %s",
+            f"{_KEEP_ACCEPTANCE}, decided_by = %s, decided_at = clock_timestamp(), "
+            "version = version + 1 WHERE id = %s",
             (answer, actor, assumption_id),
         )
         # The person's words stay in their row: the audit record keeps how long they were.
@@ -362,12 +412,14 @@ def accept_with(
 ) -> int:
     """A person accepted an attribute (its code) while assumptions naming it were open, or,
     with no code, the whole set while the set's assumptions were open: each is recorded as
-    accepted with the attribute, never as the person's own answer. Returns how many."""
+    accepted with the attribute, never as the person's own answer. Returns how many. A
+    CONFLICT is never accepted with its attribute (B1l point 6): it holds the attribute's
+    acceptance until a person decides it."""
     if code is None:
         rows = cursor.execute(
             "UPDATE attribute_assumptions SET status = 'ACCEPTED_WITH_ATTRIBUTE', "
             "decided_by = %s, decided_at = clock_timestamp(), version = version + 1 "
-            "WHERE engagement_control_id = %s AND status = 'OPEN' "
+            "WHERE engagement_control_id = %s AND status = 'OPEN' AND kind <> 'CONFLICT' "
             "AND attribute_codes = '[]'::jsonb RETURNING id",
             (actor, control_id),
         ).fetchall()
@@ -375,7 +427,7 @@ def accept_with(
         rows = cursor.execute(
             "UPDATE attribute_assumptions SET status = 'ACCEPTED_WITH_ATTRIBUTE', "
             "decided_by = %s, decided_at = clock_timestamp(), version = version + 1 "
-            "WHERE engagement_control_id = %s AND status = 'OPEN' "
+            "WHERE engagement_control_id = %s AND status = 'OPEN' AND kind <> 'CONFLICT' "
             "AND attribute_codes ? %s RETURNING id",
             (actor, control_id, code),
         ).fetchall()

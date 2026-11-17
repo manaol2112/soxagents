@@ -167,6 +167,10 @@ class AttributeBody(BaseModel):
     # How many earlier versions of the criteria are kept (criteria_history; GET
     # .../attributes/{id}/criteria-history).
     criteria_versions: int = 0
+    # B1l point 6 (16 November 2026): an open CONFLICT assumption holds this attribute's
+    # acceptance (for a proposal, that of the attribute it changes or retires) until a person
+    # decides it; "Accept all" leaves it out.
+    held_by_conflict: bool = False
 
 
 class AttributesBody(BaseModel):
@@ -290,11 +294,18 @@ def attributes(connection: psycopg.Connection[Any], control_id: UUID) -> Attribu
         body.review = marks.get(body.id)
     by_code, _for_set = attribute_assumptions.shown(connection, control_id)
     versions = criteria_counts(connection, control_id)
+    from ai_workforce_api.understanding_review import held_codes
+
+    held = held_codes(connection, control_id)
+    code_of = {row[0]: str(row[29] or "") for row in rows}
     for body, row in zip(bodies, rows, strict=True):
         body.criteria_updated_from = str(row[30] or "")
         body.criteria_versions = versions.get(body.id, 0)
         if body.status == "APPROVED" and row[29]:
             body.assumptions = by_code.get(str(row[29]), [])
+            body.held_by_conflict = str(row[29]) in held
+        elif body.status == "PROPOSED" and body.replaces_id is not None:
+            body.held_by_conflict = code_of.get(body.replaces_id, "") in held
     return AttributesBody(
         approved=[item for item in bodies if item.status == "APPROVED"],
         proposed=[item for item in bodies if item.status == "PROPOSED"],
@@ -525,6 +536,25 @@ def close_questions_once_accepted(
     return [str(r[0]) for r in rows]
 
 
+def _not_held(cursor: psycopg.Cursor[Any], control_id: UUID, attribute_ids: list[Any]) -> None:
+    """409 when an open CONFLICT assumption holds one of these approved attributes (B1l
+    point 6): a conflict on it is decided first, by That's right or Change..."""
+    from ai_workforce_api.understanding_review import HELD_BY_CONFLICT, held_codes
+
+    if not attribute_ids:
+        return
+    held = held_codes(cursor, control_id)
+    if not held:
+        return
+    named = cursor.execute(
+        "SELECT code FROM control_attributes WHERE engagement_control_id = %s AND id = ANY(%s) "
+        "AND code IS NOT NULL",
+        (control_id, attribute_ids),
+    ).fetchall()
+    if any(str(row[0]) in held for row in named):
+        raise ContextState(HELD_BY_CONFLICT)
+
+
 def decide(
     connection: psycopg.Connection[Any],
     organization_id: UUID,
@@ -546,6 +576,8 @@ def decide(
         if current is None or int(current[2]) != body.version:
             raise ContextState("attribute changed")
         proposal, replaces = str(current[0] or "ADD"), current[1]
+        if body.decision == "APPROVE" and replaces is not None:
+            _not_held(cursor, control_id, [replaces])
         if body.decision == "REJECT":
             cursor.execute(
                 "UPDATE control_attributes SET status = 'REJECTED', decided_by = %s, "
@@ -687,6 +719,14 @@ def accept_many(
         }
         if len(found) != len(chosen):
             raise ContextState("attribute changed")
+        # An attribute an open conflict holds is decided first (B1l point 6): the call names
+        # none of them, or nothing is accepted.
+        _not_held(
+            cursor,
+            control_id,
+            [item.attribute_id for item in body.items
+             if found[item.attribute_id][0] == "APPROVED"],
+        )  # fmt: skip
 
         def order(item: AttributeAccepted) -> int:
             status, proposal = found[item.attribute_id]
@@ -1003,9 +1043,16 @@ def generate(
     package: dict[str, Any],
     sources: list[Source],
     only: tuple[str, ...] = (),
+    asks: bool = True,
 ) -> tuple[int, str]:
     """Ask the agent for attribute proposals and issues. Returns how many proposals were
     kept and a note for the team. Without a model, nothing is proposed.
+
+    B1k (16 November 2026): in a run (`asks` False: the run's ATTRIBUTES stage, and the
+    approved narrative's planning run) the attribute agent asks nothing, before completion
+    too: the IT audit specialist's review is the question pass, and the two question sources
+    never run together. What it would have asked is its assumption, as once the
+    understanding is completed.
 
     B1j (16 November 2026). Once the control's understanding is completed the agent asks
     nothing: what it would have asked, and what it says it assumed, is recorded as its
@@ -1386,8 +1433,9 @@ def generate(
                 for item in raisable
             ]  # fmt: skip
             raisable, late = [], []
-        elif completed:
-            # Once the understanding is completed nothing is asked (B1j): what the agent
+        elif completed or not asks:
+            # Once the understanding is completed nothing is asked (B1j), nor in a run (B1k:
+            # the specialist's review asks before completion): what the agent
             # would have asked, the late points included, is its assumption on the set, and
             # what it says it assumed is stated on the attributes it names.
             assumed = [
@@ -1432,7 +1480,7 @@ def generate(
             proposed_payload["other_attributes_left_out"] = only_left_out
         if recorded_assumptions:
             proposed_payload["assumptions_recorded"] = recorded_assumptions
-        if not completed and answer.assumptions:
+        if not completed and asks and answer.assumptions:
             # Before the understanding is completed a gap is asked, never assumed.
             proposed_payload["assumptions_not_kept"] = len(answer.assumptions)
         _audit(

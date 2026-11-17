@@ -29,6 +29,7 @@ from ai_workforce_api import (
     process_understanding,
     understanding_chat,
     understanding_once,
+    understanding_review,
     walkthrough_answers,
 )
 from ai_workforce_api.actions import contains_secret
@@ -141,10 +142,13 @@ class ContextBody(BaseModel):
     # B1j (16 November 2026): when the control's Control Understanding was completed, once
     # (understanding_once); null until then. From then on no agent reopens it.
     understanding_completed_at: datetime | None = None
-    # The agents' question pass: WAITING while the required walkthrough answers or values
-    # are not in; CHECKING while its run is queued or at work and the understanding is not
-    # completed; DONE once it ran, or once the understanding is completed.
+    # The question pass, since B1k the IT audit specialist's review of the questions asked
+    # (understanding_review.pass_state): WAITING while what it reads is not in; CHECKING while
+    # a read waits or works; DONE once read or once the understanding is completed; FAILED
+    # when the last read could not be used (the page offers Run again and Proceed without it).
     question_pass: understanding_once.QuestionPass = "WAITING"
+    # The latest review of the control's questions (understanding_review.body), or null.
+    review: understanding_review.ReviewBody | None = None
     # What the agents assumed on the set as a whole (assumptions that name no attribute):
     # the open ones and those decided in the last 30 days, newest first, at most 10.
     set_assumptions: list[attribute_assumptions.AssumptionBody] = []
@@ -245,10 +249,18 @@ def register_control_context(
     def changed(
         connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID, actor: UUID
     ) -> None:
-        # The save may complete the understanding (B1j): its question pass ran, nothing in
-        # it is open now, and no agent run is at work. Recorded once, before anything is
-        # queued, so the run that follows asks nothing.
-        understanding_once.complete(connection, project_id, control_id)
+        # The save may complete the understanding (B1j, B1k): the specialist's review was read
+        # on its budget, nothing in it is still to answer, and no agent run is at work; with
+        # no model or no worker to run the review, by the rules; a control whose attributes
+        # are accepted counts as completed. Recorded once, before anything is queued, so the
+        # run that follows asks nothing.
+        understanding_once.complete(
+            connection,
+            project_id,
+            control_id,
+            reviewing=getattr(scheduler, "schedule_plan_runs", None) is not None
+            and model() is not None,
+        )
         sheets = resume_testing(connection, project_id, control_id)
         _after_commit(lambda: schedule_runs(scheduler, sheets))
         # The assurance chain's runs rest on the approved attributes and their criteria:
@@ -504,6 +516,67 @@ def register_control_context(
                 planned = queue_assumption_update(c, project_id, control_id, codes, matter)
                 if planned is not None:
                     _after_commit(lambda: plans([planned]))
+            changed(c, project_id, control_id, p.id)
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    # Control Understanding's review by the IT audit specialist (B1k, B1l): "Not known yet,
+    # proceed" on any question, "Run again" or "Review again", and "Proceed without it". Who
+    # may answer the understanding may do each.
+
+    @app.post(f"{control}/issues/{{issue_id}}/not-known")
+    def issue_not_known(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        issue_id: UUID,
+        body: understanding_review.NotKnownBody,
+        request: Request,
+    ) -> ContextBody:
+        """The question is closed as the person's "not known", never as an answer, and the
+        matter becomes an assumption on the attributes it bears on."""
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            understanding_review.not_known(
+                c, organization_id, project_id, control_id, issue_id, p.id, body
+            )
+            changed(c, project_id, control_id, p.id)
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    @app.post(f"{control}/understanding/review/run", status_code=202)
+    def review_run(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> ContextBody:
+        """A person asks the specialist to read: Run again after a read that could not be
+        used, or Review again after completion (its findings become assumptions). In the
+        background, on the control's plan run; with no worker or no model, refused."""
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            plans = getattr(scheduler, "schedule_plan_runs", None)
+            if plans is None or model() is None:
+                raise ContextState(understanding_review.NO_MODEL)
+            planned = understanding_review.request_run(c, project_id, control_id, p.id)
+            if planned is not None:
+                _after_commit(lambda: plans([planned]))
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    @app.post(f"{control}/understanding/review/proceed")
+    def review_proceed(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> ContextBody:
+        """Proceed without a review that could not be used: the understanding completes by
+        the rules, and the attributes follow it."""
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            understanding_review.proceed(c, project_id, control_id, p.id)
             changed(c, project_id, control_id, p.id)
             return _body(c, project_id, control_id)
 
@@ -1272,7 +1345,10 @@ def _generate(
     control_id: UUID,
     actor: UUID,
     only: tuple[str, ...] = (),
+    asks: bool = True,
 ) -> str:
+    """The attribute agent's proposals for the control. `asks` False (a run's ATTRIBUTES
+    stage, B1k): the agent asks nothing; what it would ask is its assumption."""
     context = load_context(connection, project_id, control_id)
     found = _classes(connection, control_id, context)
     sources = sources_for(connection, project_id, control_id, context)
@@ -1315,6 +1391,7 @@ def _generate(
         package,
         sources,
         only,
+        asks,
     )
     if not note and kept == 0:
         note = "The agent found nothing to add: the approved attributes cover the sources."
@@ -1483,6 +1560,7 @@ def _body(
         ),
         understanding_completed_at=understanding_once.completed_at(connection, control_id),
         question_pass=understanding_once.question_pass(connection, project_id, control_id),
+        review=understanding_review.body(connection, control_id),
         set_assumptions=for_set,
         note=note,
     )

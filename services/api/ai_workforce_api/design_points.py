@@ -8,7 +8,10 @@ each read from the same records (`points_of`, the open branches of the former ma
   (NOT_CONCLUDED), an attribute shown only on files not relied on (NOT_RELIED), an
   attribute one request shows and another that asks for it does not (CONFLICT), a file held
   out of the check not by purpose (HELD), each sentence of a check's completeness review
-  (COMPLETENESS) and each follow-up of a check (FOLLOW_UP).
+  (COMPLETENESS) and each follow-up of a check (FOLLOW_UP). Since 16 November 2026 (B1l
+  point 6, migration 0173) also each assumption an agent stated that a person accepted with
+  its attribute without confirming it (ASSUMPTION): confirmed there, changed there (That's
+  right, Change...), or considered with a reason.
 - Each has a `key` (the first 32 hexadecimal characters of the SHA-256 of its kind and of
   the identity of what it is about), a `place` where the view shows it, the existing
   actions that settle it (`settle`, CONSIDER always last) and the person's consideration
@@ -75,9 +78,10 @@ logger = logging.getLogger(__name__)
 
 PointKind = Literal[
     "STALE", "FINDING", "NOT_CONCLUDED", "NOT_RELIED", "CONFLICT", "HELD", "COMPLETENESS",
-    "FOLLOW_UP",
+    "FOLLOW_UP", "ASSUMPTION",
 ]  # fmt: skip
-SettleAction = Literal["RELIABILITY", "TICKMARK", "RERUN", "FINDING", "CONSIDER"]
+# ASSUMPTION: That's right or Change... on the assumption (the attribute assumptions' routes).
+SettleAction = Literal["RELIABILITY", "TICKMARK", "RERUN", "FINDING", "ASSUMPTION", "CONSIDER"]
 PlaceAt = Literal["ATTRIBUTE", "FILE", "REQUEST"]
 
 KEY_PATTERN = r"^[0-9a-f]{32}$"
@@ -152,6 +156,52 @@ class ObservationBody(BaseModel):
 # --- The points (pure) -------------------------------------------------------------------
 
 
+class AssumedRecord(BaseModel):
+    """An assumption a person accepted with its attribute, not confirmed
+    (attribute_assumptions, status ACCEPTED_WITH_ATTRIBUTE): what the agent assumed and the
+    attribute codes it names (none: the set as a whole)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: UUID
+    assumed: str
+    codes: tuple[str, ...] = ()
+
+
+def assumption_points(
+    assumptions: Sequence[AssumedRecord], attributes: Sequence[AttributeRecord]
+) -> list[PointBody]:
+    """Each assumption accepted with its attribute, not confirmed, is a point to settle before
+    the preparer signs (B1l point 6, design-workpaper.md 3.9): at the first attribute it names
+    that the workpaper concludes on (the set's: at the first attribute), settled by That's
+    right or Change... on it, or considered with a reason. Its key is the assumption's own.
+    One whose attributes are all gone is not a point: nothing rests on it."""
+    by_code = {attribute.code: attribute for attribute in attributes}
+    found: list[PointBody] = []
+    for item in assumptions:
+        named = [by_code[code] for code in item.codes if code in by_code]
+        if item.codes and not named:
+            continue
+        on = named[0] if named else (attributes[0] if attributes else None)
+        if on is None:
+            continue
+        assumed = _sentence(item.assumed, 500).rstrip(" .")
+        accepted_with = f"attribute {named[0].code}" if named else "the attributes"
+        found.append(
+            PointBody(
+                key=point_key("ASSUMPTION", item.id),
+                kind="ASSUMPTION",
+                text=_sentence(
+                    f"The agent assumed: {assumed}. It was accepted with {accepted_with}, "
+                    "not confirmed."
+                ),
+                place=PlaceBody(at="ATTRIBUTE", attribute_id=on.id),
+                settle=_settle("ASSUMPTION"),
+            )
+        )
+    return found
+
+
 def point_key(kind: PointKind, *identity: object) -> str:
     """A point's key: the first 32 hexadecimal characters of the SHA-256 of its kind and of
     the identity of what it is about, the same on every read while the point is the same."""
@@ -182,6 +232,7 @@ def points_of(
     evidence: Sequence[EvidenceBody],
     decisions: Sequence[FileDecision] = (),
     closed: Mapping[UUID, frozenset[UUID]] | None = None,
+    assumptions: Sequence[AssumedRecord] = (),
 ) -> list[PointBody]:
     """Everything that waits on a person, from the records, in the order a reviewer needs
     it: each check out of date, the open findings, the attributes a check leaves to a
@@ -413,6 +464,9 @@ def points_of(
                     settle=_settle("TICKMARK") if follow_up.attribute_ids else _settle(),
                 )
             )  # fmt: skip
+    # The agents' assumptions a person accepted with an attribute, not confirmed (B1l).
+    for point in assumption_points(assumptions, attributes):
+        add(point)
     return found
 
 
@@ -529,6 +583,30 @@ def considerations_standing(
     return _tolerant(connection, read, {})
 
 
+def accepted_assumptions(
+    connection: psycopg.Connection[Any], control_id: UUID
+) -> list[AssumedRecord]:
+    """The control's assumptions accepted with an attribute and not confirmed since, oldest
+    first. Nothing when migration 0173 is not applied."""
+
+    def read() -> list[AssumedRecord]:
+        return [
+            AssumedRecord(
+                id=UUID(str(row[0])),
+                assumed=str(row[1]),
+                codes=tuple(str(code) for code in (row[2] or []) if isinstance(code, str)),
+            )
+            for row in connection.execute(
+                "SELECT id, assumed, attribute_codes FROM attribute_assumptions "
+                "WHERE engagement_control_id = %s AND status = 'ACCEPTED_WITH_ATTRIBUTE' "
+                "ORDER BY created_at, id",
+                (control_id,),
+            ).fetchall()
+        ]
+
+    return _tolerant(connection, read, [])
+
+
 def points_now(
     connection: psycopg.Connection[Any],
     project_id: UUID,
@@ -561,6 +639,7 @@ def points_now(
     points = points_of(
         records.requests, records.checks, records.attributes, readings, findings, evidence,
         records.decisions, view.closed_by_tickmark(applying),
+        accepted_assumptions(connection, control_id),
     )  # fmt: skip
     return with_considerations(points, considerations_standing(connection, workpaper_id))
 
@@ -856,10 +935,13 @@ def register_design_points(
 
 
 __all__ = [
+    "AssumedRecord",
     "ConsideredBody",
     "ObservationBody",
     "PlaceBody",
     "PointBody",
+    "accepted_assumptions",
+    "assumption_points",
     "considerations_standing",
     "consider",
     "observations_of",

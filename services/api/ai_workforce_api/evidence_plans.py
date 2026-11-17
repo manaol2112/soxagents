@@ -2594,17 +2594,41 @@ def queue_for_understanding(
     approved narrative's, which does the same), and not over a failed run, which a person
     starts again. Returns the plan to run.
 
-    Since B1j (16 November 2026) the same run is also the question pass
-    (understanding_once.pass_due): once the walkthrough's required answers and the
-    statement's values are in, and before the understanding is completed, the attribute
-    agent checks what else it needs, so its questions join the same Control Understanding
-    course instead of reopening it later; the run stops after its ATTRIBUTES stage when that
-    stage asked anything (_plan_pass)."""
-    from ai_workforce_api.understanding_once import pass_due
+    Rewritten for B1k and B1l (16 November 2026). Before, B1j made the same run the question
+    pass: once the walkthrough's required answers and the statement's values were in, the
+    attribute agent's ATTRIBUTES stage could ask, and the run stopped there when it did. Now,
+    before the understanding is completed, what is queued is the IT audit specialist's read of
+    the questions asked (understanding_review.due_round: the review, or its one follow-up
+    read), on the same run, recorded PENDING with it (CHECKING on the page); the attributes
+    follow in that run only once the read completes the understanding. Nothing is queued on a
+    control whose attributes are accepted (B1l point 2). Once completed, the run follows the
+    understanding as before (understanding_due), except that an answer changed after
+    completion re-tailors only the attributes its question informs
+    (understanding_review.informed_update, the one limited update of B1j)."""
+    from ai_workforce_api import understanding_review as review
+    from ai_workforce_api.control_context import understanding_completed
 
-    if not pass_due(connection, project_id, control_id) and not understanding_due(
-        connection, project_id, control_id
-    ):
+    if not understanding_completed(connection.cursor(), control_id):
+        state = review.standing(connection, project_id, control_id)
+        due = review.due_round(state)
+        if due is None:
+            return None
+        with transaction(connection) as cursor:
+            row = cursor.execute(
+                f"""
+                UPDATE evidence_plans p
+                SET run_status = 'PENDING', run_attempts = 0, run_lease_until = NULL,
+                    run_note = '', run_stage = 'ATTRIBUTES', run_codes = '{{}}', run_cause = ''
+                WHERE p.project_id = %s AND p.engagement_control_id = %s
+                  AND p.run_status = 'IDLE' AND NOT {_AGENTS_AT_WORK_SQL}
+                RETURNING p.id
+                """,
+                (project_id, control_id),
+            ).fetchone()
+            if row is not None:
+                review.queue_due(cursor, project_id, control_id, due)
+        return None if row is None else UUID(str(row[0]))
+    if not understanding_due(connection, project_id, control_id):
         return None
     # A run that kept the plan because the planner's answer could not be used (generate)
     # leaves the plan as generated before, so the understanding still reads as due. It is
@@ -2612,17 +2636,19 @@ def queue_for_understanding(
     # since that run (run_tried). A person's "Run again" is not held by this.
     if _tried_the_same(connection, control_id):
         return None
+    limited = review.informed_update(connection, control_id)
+    codes, cause = ([], "") if limited is None else limited
     with transaction(connection) as cursor:
         row = cursor.execute(
             f"""
             UPDATE evidence_plans p
             SET run_status = 'PENDING', run_attempts = 0, run_lease_until = NULL,
-                run_note = '', run_stage = 'ATTRIBUTES', run_codes = '{{}}', run_cause = ''
+                run_note = '', run_stage = 'ATTRIBUTES', run_codes = %s, run_cause = %s
             WHERE p.project_id = %s AND p.engagement_control_id = %s
               AND p.run_status = 'IDLE' AND NOT {_AGENTS_AT_WORK_SQL}
             RETURNING p.id
             """,
-            (project_id, control_id),
+            (codes, cause[:300], project_id, control_id),
         ).fetchone()
     return None if row is None else UUID(str(row[0]))
 
@@ -2847,10 +2873,13 @@ def attributes_run(
         if status == "PENDING":
             return "PENDING", "", ""
         if status == "WORKING" and live:
+            # QUESTIONS (B1k): the specialist reads the questions asked; the attributes
+            # follow the understanding it completes.
             return (
                 "WORKING",
                 "ATTRIBUTES" if stage == "ATTRIBUTES"
                 else "CRITERIA" if stage == "CRITERIA"
+                else "UNDERSTANDING" if stage == "QUESTIONS"
                 else "REVIEW",
                 "",
             )  # fmt: skip
@@ -2941,9 +2970,17 @@ def run_plan(
     # What the agents read at the start of the run's last pass, and whether that pass
     # finished its work: kept on the plan for attributes_rerun_useful and the queues (0154).
     read, finished = "", False
+    from ai_workforce_api.understanding_once import complete, completed_at
+
     if provider is None:
         if str(row[3]) == "PROPOSED":
             note = "The rules' plan stands and waits for a person to approve it."
+        # Without a model the review is not run (B1k): a read left waiting ends FAILED with
+        # its sentence, and the understanding completes by the rules.
+        from ai_workforce_api.understanding_review import NO_MODEL_SENTENCE, end_pending
+
+        with transaction(connection) as cursor:
+            end_pending(cursor, control_id, NO_MODEL_SENTENCE)
     else:
         requester = UUID(str(row[4]))
         # A complete understanding the planner has not read: the attributes follow it
@@ -2956,7 +2993,33 @@ def run_plan(
         # what it follows (B1j, queue_assumption_update); any other run names none.
         only = tuple(str(code) for code in (row[6] or []))
         cause = str(row[7] or "")
-        if follows or str(row[3]) == "PROPOSED":
+        # B1k (16 November 2026): before the understanding is completed, the specialist's
+        # read of the questions asked comes first (understanding_review.perform), and no
+        # attribute is drafted until it completes the understanding: a read that asked,
+        # failed, or found something still to answer ends the run there. A "Review again"
+        # after completion (stage QUESTIONS) is the read alone.
+        from ai_workforce_api.understanding_review import perform
+
+        # A control whose attributes are accepted counts as completed (B1l point 2): recorded
+        # before anything else, so no read is made on it.
+        complete(connection, project_id, control_id, reviewing=True, in_run=True)
+        was_completed = completed_at(connection, control_id) is not None
+        reviewed = perform(
+            connection, provider, organization_id, project_id, control_id, requester,
+            create=str(row[5]) != "",
+        )  # fmt: skip
+        completed = completed_at(connection, control_id) is not None
+        if reviewed.status != "NONE":
+            follows = completed and not was_completed
+        elif str(row[5]) == "QUESTIONS":
+            follows = False
+        elif not completed:
+            # Not completed and no read due (its answers are not in): only a person's
+            # explicit run drafts the attributes; their agent asks nothing.
+            follows = str(row[5]) != ""
+        if reviewed.status != "NONE" and not follows:
+            note = reviewed.note
+        elif follows or (str(row[3]) == "PROPOSED" and reviewed.status == "NONE"):
             began = _now(connection)
             read = agents_read(connection, project_id, control_id)
             note, finished = _plan_pass(
@@ -2992,11 +3055,10 @@ def run_plan(
         # run that changed or added anything left it to accept, so nothing is released.
         # Never fails the run, which is done.
         settle_after_run(cursor.connection, control_id, "PLAN_RUN")
-    # The run's end may complete the understanding: its question pass ran, nothing in it is
-    # open, and no run is left at work (B1j, understanding_once.complete).
-    from ai_workforce_api.understanding_once import complete
-
-    complete(connection, project_id, control_id)
+    # The run's end may complete the understanding: its review was read, nothing in it is
+    # still to answer, and no run is left at work (B1j and B1k, understanding_once.complete);
+    # without a model, by the rules.
+    complete(connection, project_id, control_id, reviewing=provider is not None)
     return "DONE"
 
 
@@ -3026,14 +3088,14 @@ def _plan_pass(
     used (the plan was neither kept nor planned by the rules in its place) and no other
     agent's last call in the pass failed.
 
-    B1j (16 November 2026). The ATTRIBUTES stage is the question pass while the
-    understanding is not completed: once the attribute agent has answered, the pass is
-    recorded (understanding_once.record_pass), and when the stage raised questions (its own,
-    or late points for the narrative) the run stops there: no criteria are tailored and no
-    set review runs until they are answered. The run that follows the
-    answers tailors them. Every criteria write of the pass carries what it follows (`cause`,
-    else the matters of the answers given since the plan was last generated), and the one
-    update a changed assumption starts changes only the attributes it names (`only`;
+    B1j (16 November 2026), rewritten for B1k. Before, the ATTRIBUTES stage was the
+    question pass while the understanding was not completed, and the run stopped there when
+    it asked. Now the specialist's review is the pass (run_plan reads it first), and the
+    attribute agent asks nothing in a run: what it would ask is its assumption on the
+    attributes (control_attributes.generate with asks=False). Every criteria write of the
+    pass carries what it follows (`cause`, else the matters of the answers given since the
+    plan was last generated), and the one update a changed assumption or an answer changed
+    after completion starts changes only the attributes it names (`only`;
     criteria_history.run_settings)."""
     began = _now(connection)
     if not attributes_first:
@@ -3093,22 +3155,12 @@ def _staged_pass(
     """The three stages of a pass that follows the understanding (see _plan_pass)."""
     from ai_workforce_api.attribute_review import review_set
     from ai_workforce_api.context_routes import _generate
-    from ai_workforce_api.understanding_once import asked_since, completed_at, record_pass
 
     _run_stage(connection, control_id, "ATTRIBUTES")
-    stage_began = _now(connection)
     attribute_note = _generate(
-        connection, provider, organization_id, project_id, control_id, requester, only
-    )
-    answered = _agents_answered(connection, control_id, stage_began)
-    if answered:
-        record_pass(connection, control_id, stage_began)
-    if completed_at(connection, control_id) is None and asked_since(
-        connection, control_id, stage_began
-    ):
-        # The question pass asked: what the agents need is asked in Control Understanding,
-        # and the rest of the run waits for the answers.
-        return attribute_note, answered
+        connection, provider, organization_id, project_id, control_id, requester, only,
+        asks=False,
+    )  # fmt: skip
     _run_stage(connection, control_id, "CRITERIA")
     _, _drafts, note = generate(
         connection, provider, organization_id, project_id, control_id, requester
@@ -3255,6 +3307,11 @@ def fail_plan_run(connection: psycopg.Connection[Any], plan_id: UUID) -> None:
         )
         failed = cursor.fetchone()
         if failed is not None:
+            # The specialist's read the run carried ends FAILED with it (B1l point 7): the
+            # page offers Run again and Proceed without it.
+            from ai_workforce_api.understanding_review import STOPPED_SENTENCE, end_pending
+
+            end_pending(cursor, UUID(str(failed[0])), STOPPED_SENTENCE)
             # A failed run changed nothing on the list: like a finished one, its end may be
             # the last thing a list a person had completed waited for.
             from ai_workforce_api.phase_release import settle_after_run

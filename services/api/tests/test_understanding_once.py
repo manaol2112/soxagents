@@ -38,7 +38,12 @@ from test_outbound import _session, migrated
 from test_planning_gate import _rows
 from test_projects import _edit
 
-from ai_workforce_api import attribute_assumptions, control_attributes, process_narrative
+from ai_workforce_api import (
+    attribute_assumptions,
+    control_attributes,
+    process_narrative,
+    understanding_review,
+)
 from ai_workforce_api.attribute_assumptions import DECIDED, STALE, drafted
 from ai_workforce_api.context_routes import NO_NARRATIVE, _classes, generate_reviewed
 from ai_workforce_api.control_context import (
@@ -78,6 +83,36 @@ class _Assuming(_Agents):
                 (), 100, 100,
             )  # fmt: skip
         return super().complete(request, config)
+
+
+def _asking(
+    given: dict[str, Any], topic: str, fact: str = "RECORD", text: str = "",
+    follow_ups: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:  # fmt: skip
+    """The IT audit specialist's answer (B1k): the first unit not established, with one
+    question on `topic`; every other unit established."""
+    units = [str(unit["key"]) for unit in given["units"]]
+    answer = understanding_review.established(
+        given,
+        f"The questions answered establish how the control runs. They do not yet establish "
+        f"{topic.lower()}, on which {units[0]} depends. This is asked now.",
+    )
+    answer["marked"] = [topic.lower()]
+    answer["verdicts"][0] = {
+        "attribute": units[0],
+        "verdict": "NOT_ESTABLISHED",
+        "rests_on": [],
+        "question": {
+            "topic": topic,
+            "text": text or f"{topic}?",
+            "fact": fact,
+            "blocks": f"The criteria of {units[0]} cannot name the record without it.",
+            "suggested": "The ServiceNow ticket records it.",
+            "options": ["The ServiceNow ticket records it.", "A spreadsheet records it."],
+        },
+    }
+    answer["follow_ups"] = follow_ups or []
+    return answer
 
 
 def _context(team: dict[str, Any], control: str, client: TestClient | None = None) -> Any:
@@ -183,13 +218,19 @@ def test_the_question_pass_asks_in_one_go_and_the_understanding_then_stays_compl
     plan_id, status, stage = _plan_run(migrated, control)
     assert (status, stage) == ("PENDING", "ATTRIBUTES") and scheduler.plans == [plan_id]
     assert _context(team, control, client)["question_pass"] == "CHECKING"
-    # The pass: the attribute agent asks one question. Nothing else runs: no criteria are
-    # tailored and the set is not reviewed until it is answered.
+    # Rewritten for B1k (16 November 2026: the question pass is the IT audit specialist's
+    # review of the questions asked, and the attribute agent never asks before completion).
+    # Old expectation: the attribute agent's ATTRIBUTES stage asked one question and the run
+    # stopped there (questions_checked_at recorded). New: the specialist asks it, before any
+    # attribute is drafted: no attribute agent, planner or set reviewer runs, and the
+    # attribute agent's own question is never raised.
     agents = _Agents(migrated, team, control)
     agents.issues = [_GRANT_RECORD]
+    agents.specialist = lambda given: _asking(given, _GRANT_RECORD["topic"])
     with connect(migrated.url) as connection:
         assert run_plan(connection, agents, plan_id) == "DONE"
-    assert [who for who in agents.calls if who != "other"] == ["attributes"]
+    assert [who for who in agents.calls if who != "other"] == []
+    assert len(agents.specialist_given) == 1
     assert all(row[2] is None for row in _approved(migrated, control)), "no criteria tailored"
     [question] = _open_issues(migrated, control)
     assert (question[1], question[2], question[3]) == (
@@ -197,22 +238,23 @@ def test_the_question_pass_asks_in_one_go_and_the_understanding_then_stays_compl
         "ATTRIBUTES",
         "AGENT",
     )
-    assert _rows(
-        migrated,
-        "SELECT questions_checked_at IS NOT NULL, run_status, run_stage FROM evidence_plans "
-        "WHERE id = %s",
-        plan_id,
-    ) == [(True, "IDLE", "")]
+    assert _rows(migrated, "SELECT run_status, run_stage FROM evidence_plans WHERE id = %s",
+                 plan_id) == [("IDLE", "")]  # fmt: skip
     body = _context(team, control, client)
     assert (body["question_pass"], body["understanding_completed_at"]) == ("DONE", None)
-    # The answer completes the understanding, once, and the attributes follow it.
+    assert body["review"]["status"] == "READY" and body["review"]["open_questions"] == 1
+    [asked] = [item for item in body["issues"] if item["status"] == "OPEN"]
+    assert (asked["from_review"], asked["review_round"], asked["asks"]["fact"]) == (
+        True, 1, "RECORD",
+    )  # fmt: skip
+    # The answer starts the one follow-up read (old: it completed the understanding at once).
     answered = client.post(
         f"{_path(team, control)}/issues/{question[0]}/resolve",
         json={"status": "RESOLVED", "note": GRANT_ANSWER, "version": question[4]},
     )
     assert answered.status_code == 200, answered.text
-    completed = answered.json()["understanding_completed_at"]
-    assert completed is not None and answered.json()["question_pass"] == "DONE"
+    assert answered.json()["understanding_completed_at"] is None
+    assert answered.json()["question_pass"] == "CHECKING"
     assert scheduler.plans == [plan_id, plan_id]
     assert _plan_run(migrated, control)[1:] == ("PENDING", "ATTRIBUTES")
     with connect(migrated.url) as connection:
@@ -233,6 +275,14 @@ def test_the_question_pass_asks_in_one_go_and_the_understanding_then_stays_compl
     ]  # fmt: skip
     with connect(migrated.url) as connection:
         assert run_plan(connection, followed, plan_id) == "DONE"
+    # The follow-up read (round 2) finds everything established: the understanding is
+    # completed, once, in the run, and the attributes follow it in the same run.
+    [second] = followed.specialist_given
+    assert second["round"] == 2 and [item["answer"] for item in second["round_one_questions"]] == [
+        GRANT_ANSWER
+    ]
+    completed = _context(team, control, client)["understanding_completed_at"]
+    assert completed is not None
     assert [who for who in followed.calls if who != "other"] == [
         "attributes", "planner", "set-review",
     ]  # fmt: skip
@@ -527,13 +577,30 @@ def test_accepting_an_attribute_accepts_its_open_assumptions_never_as_an_answer(
         ("ACCEPTED_WITH_ATTRIBUTE",)
     ]
     # Accepted with the attribute is never a person's answer: not a fact of the
-    # understanding, and no longer open to confirm.
+    # understanding.
     with connect(migrated.url) as connection:
         assert not [
             f for f in facts(connection, UUID(control)) if f.key in (str(on_a1), str(on_set))
         ]
-    refused = client.post(
+    # Rewritten for B1l point 6 (16 November 2026: an assumption accepted with its
+    # attribute, not confirmed, is a point of the D&I workpaper, "confirmed there, changed
+    # there, or considered with a reason"). Old expectation: once accepted it could no longer
+    # be confirmed (409, DECIDED). New: it is confirmed once more, at its version, keeping
+    # who had accepted it; after that it is decided.
+    stale = client.post(f"{_path(team, control)}/assumptions/{on_a1}/confirm", json={"version": 1})
+    assert (stale.status_code, stale.json()["detail"]) == (409, STALE)
+    settled = client.post(
         f"{_path(team, control)}/assumptions/{on_a1}/confirm", json={"version": 2}
+    )
+    assert settled.status_code == 200, settled.text
+    assert _rows(
+        migrated,
+        "SELECT status, decided_by, accepted_by, accepted_at IS NOT NULL, version "
+        "FROM attribute_assumptions WHERE id = %s",
+        on_a1,
+    ) == [("CONFIRMED", team["owner_id"], team["owner_id"], True, 3)]
+    refused = client.post(
+        f"{_path(team, control)}/assumptions/{on_a1}/confirm", json={"version": 3}
     )
     assert (refused.status_code, refused.json()["detail"]) == (409, DECIDED)
 

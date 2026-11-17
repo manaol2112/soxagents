@@ -526,30 +526,30 @@ def _plan_from_narrative(
     updates a plan still being drafted and, on an approved plan, proposes each change for a
     person to accept. Nothing approved changes without a person."""
     from ai_workforce_api.context_routes import _generate
-    from ai_workforce_api.evidence_plans import _agents_answered, _now
     from ai_workforce_api.evidence_plans import generate as plan_evidence
-    from ai_workforce_api.understanding_once import asked_since, completed_at, record_pass
+    from ai_workforce_api.understanding_once import completed_at
+    from ai_workforce_api.understanding_review import awaits_review
 
-    _stage(connection, control_id, "ATTRIBUTES", 0)
-    stage_began = _now(connection)
-    attribute_note = _generate(
-        connection, provider, organization_id, project_id, control_id, requester
-    )
-    # As the run that follows the understanding (B1j, evidence_plans._plan_pass): while the
-    # understanding is not completed this stage is a question pass, and when it raised
-    # questions (the late points for the narrative, or a conflict) nothing is planned or
-    # reviewed until a person answers.
-    if _agents_answered(connection, control_id, stage_began):
-        record_pass(connection, control_id, stage_began)
-    if completed_at(connection, control_id) is None and asked_since(
-        connection, control_id, stage_began
+    # Rewritten for B1k (16 November 2026). Before, B1j made this stage a question pass
+    # while the understanding was not completed, and the run stopped when it asked. Now the
+    # IT audit specialist reads the questions asked once the process understanding is
+    # confirmed, before any attribute is drafted: while that read waits or is due, this run
+    # drafts nothing, and the plan run that carries the read follows the understanding it
+    # completes (understanding_once.after_agents queues it at this run's end). Otherwise the
+    # attribute agent asks nothing here: what it would ask is its assumption.
+    if completed_at(connection, control_id) is None and (
+        provider is not None and awaits_review(connection, project_id, control_id)
     ):
         return _plan_outcome(
             connection, organization_id, project_id, control_id, requester,
             {"evidence_fallback": False, "attributes": _proposed(connection, control_id),
-             "evidence": 0, "evidence_proposed": 0, "waits_for_answers": True,
-             "note": line(attribute_note, 600)},
+             "evidence": 0, "evidence_proposed": 0, "waits_for_review": True, "note": ""},
+            provider is not None,
         )  # fmt: skip
+    _stage(connection, control_id, "ATTRIBUTES", 0)
+    attribute_note = _generate(
+        connection, provider, organization_id, project_id, control_id, requester, asks=False
+    )
     _stage(connection, control_id, "EVIDENCE", 0)
     changes, _drafts, evidence_note = plan_evidence(
         connection, provider, organization_id, project_id, control_id, requester
@@ -576,7 +576,10 @@ def _plan_from_narrative(
             " ".join(part for part in (attribute_note, evidence_note, review_note) if part), 600
         ),
     }
-    return _plan_outcome(connection, organization_id, project_id, control_id, requester, outcome)
+    return _plan_outcome(
+        connection, organization_id, project_id, control_id, requester, outcome,
+        provider is not None,
+    )  # fmt: skip
 
 
 def _proposed(connection: psycopg.Connection[Any], control_id: UUID) -> int:
@@ -595,9 +598,11 @@ def _plan_outcome(
     control_id: UUID,
     requester: UUID,
     outcome: dict[str, Any],
+    reviewing: bool = True,
 ) -> str:
     """The approved narrative's planning run ends: its outcome is kept on the run and the
-    audit trail, and the understanding may be completed now (understanding_once.complete)."""
+    audit trail, and the understanding may be completed now (understanding_once.complete;
+    without a model, by the rules)."""
     with transaction(connection) as cursor:
         cursor.execute(
             """
@@ -615,7 +620,7 @@ def _plan_outcome(
         )  # fmt: skip
     from ai_workforce_api.understanding_once import complete
 
-    complete(connection, project_id, control_id)
+    complete(connection, project_id, control_id, reviewing=reviewing)
     return "PLANNED"
 
 
@@ -808,10 +813,11 @@ def run_narrative(
              "questions": len(questions), "findings": len(findings),
              "incomplete": incomplete},
         )  # fmt: skip
-    # The run's end may complete the understanding (B1j, understanding_once.complete).
+    # The run's end may complete the understanding (B1j, understanding_once.complete;
+    # without a model, by the rules).
     from ai_workforce_api.understanding_once import complete
 
-    complete(connection, project_id, control_id)
+    complete(connection, project_id, control_id, reviewing=provider is not None)
     return "PASSED" if passed else "REVIEWED"
 
 

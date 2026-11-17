@@ -15,6 +15,7 @@ import pytest
 import ai_workforce_api
 from ai_workforce_api import attribute_assumptions, control_attributes, criteria_history
 from ai_workforce_api import understanding_once as once
+from ai_workforce_api import understanding_review as review
 from ai_workforce_api.attribute_assumptions import (
     AssumptionBody,
     Draft,
@@ -68,62 +69,73 @@ DATA_RULE = (
 
 
 # The question pass and completion
+#
+# Rewritten for B1k and B1l (16 November 2026): the question pass is the IT audit specialist's
+# review of the questions asked (understanding_review), no longer the attribute agent's first
+# run. Old expectations: pass_state(completed, waiting, ran, live) read DONE once the
+# attribute agent's pass "ran" (questions_checked_at at or after the latest answer), and
+# may_complete(waits, ran, live, completed) completed when that pass ran and nothing was
+# open. New: the same states are read from the specialist's reads (Standing), with FAILED
+# added (the page offers Run again and Proceed without it), and completion needs the latest
+# read READY on its budget, or accepted attributes, or no model; what holds of both is kept:
+# completed reads DONE whatever else holds, the answers not in read WAITING, a read at work
+# reads CHECKING, nothing open and no run at work are needed, and it is recorded once.
 
 
 @pytest.mark.parametrize(
-    ("completed", "waiting", "ran", "live", "expected"),
+    ("state", "expected"),
     [
         # Completed: done, whatever else holds.
-        (True, True, False, True, "DONE"),
-        (True, False, False, False, "DONE"),
+        (review.Standing(completed=True, waiting=True, latest="PENDING"), "DONE"),
+        (review.Standing(completed=True), "DONE"),
         # The required walkthrough answers or values are not in.
-        (False, True, False, False, "WAITING"),
-        (False, True, True, True, "WAITING"),
-        # The pass ran on the answers as they stand.
-        (False, False, True, False, "DONE"),
-        (False, False, True, True, "DONE"),
-        # Its run is queued or at work.
-        (False, False, False, True, "CHECKING"),
-        # Nothing checks: no run yet, or one that stopped before the agent answered.
-        (False, False, False, False, "WAITING"),
+        (review.Standing(waiting=True), "WAITING"),
+        # The review was read on the answers.
+        (review.Standing(latest="READY", reads=1, latest_round=1), "DONE"),
+        # A read is queued or at work.
+        (review.Standing(latest="PENDING"), "CHECKING"),
+        # A read that could not be used, or that stopped with no run at work on it.
+        (review.Standing(latest="FAILED"), "FAILED"),
+        (review.Standing(latest="PENDING", stale=True), "FAILED"),
+        # Nothing checks: no read yet.
+        (review.Standing(), "WAITING"),
     ],
 )
-def test_the_question_pass_reads_waiting_checking_or_done(
-    completed: bool, waiting: bool, ran: bool, live: bool, expected: str
+def test_the_question_pass_reads_waiting_checking_done_or_failed(
+    state: review.Standing, expected: str
 ) -> None:
-    assert once.pass_state(completed, waiting, ran, live) == expected
+    assert review.pass_state(state) == expected
 
 
 @pytest.mark.parametrize(
-    ("waits", "ran", "live", "completed", "expected"),
+    ("state", "reviewing", "expected"),
     [
-        (False, True, False, False, True),
-        # Something in Control Understanding is open.
-        (True, True, False, False, False),
-        # The question pass has not read the answers as they stand.
-        (False, False, False, False, False),
+        # The review asked nothing, and nothing is still to answer.
+        (review.Standing(latest="READY", latest_round=1, reads=1), True, True),
+        # Something in Control Understanding is still to answer.
+        (review.Standing(latest="READY", reads=1, still_asked=True), True, False),
+        # No read on the answers yet.
+        (review.Standing(), True, False),
         # An attribute run or a narrative run is queued or at work.
-        (False, True, True, False, False),
+        (review.Standing(latest="READY", reads=1, live=True), True, False),
         # Recorded once: never again, never moved.
-        (False, True, False, True, False),
+        (review.Standing(completed=True, latest="READY", reads=1), True, False),
     ],
 )
 def test_the_understanding_is_completed_once_and_only_when_nothing_is_open(
-    waits: bool, ran: bool, live: bool, completed: bool, expected: bool
+    state: review.Standing, reviewing: bool, expected: bool
 ) -> None:
-    assert once.may_complete(waits, ran, live, completed) is expected
+    assert review.may_complete(state, reviewing) is expected
 
 
-def test_the_pass_reads_the_values_and_walkthrough_answers_and_a_live_run_only() -> None:
-    # The pass has run when it began after the latest value or confirmed walkthrough answer;
-    # an answer to a question does not make it stale (it is what the pass asked for).
-    assert "control_parameters" in once.ANSWERS_CHANGED_SQL
-    assert "control_walkthrough_answers" in once.ANSWERS_CHANGED_SQL
-    assert "control_context_issues" not in once.ANSWERS_CHANGED_SQL
-    assert "p.questions_checked_at >=" in once.PASS_RAN_SQL
-    # A plain plan run (no stage) is not an attribute run; a narrative run is a run.
+def test_a_run_at_work_is_an_attribute_run_or_a_narrative_run_only() -> None:
+    # Old (B1j): the pass had run when it began after the latest value or confirmed
+    # walkthrough answer (ANSWERS_CHANGED_SQL, PASS_RAN_SQL). New (B1k): the pass is the
+    # specialist's read, recorded in understanding_reviews; what counts as a run at work is
+    # unchanged. A plain plan run (no stage) is not an attribute run; a narrative run is a run.
     assert "p.run_stage <> ''" in once.RUN_LIVE_SQL
     assert "process_narrative_runs" in once.RUN_LIVE_SQL
+    assert not hasattr(once, "PASS_RAN_SQL")
 
 
 def test_an_answer_and_a_changed_assumption_are_changes_to_the_understanding() -> None:

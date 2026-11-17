@@ -24,7 +24,12 @@ from test_outbound import _session, migrated
 from test_planning_gate import _control, _launched, _project, _rows
 from test_walkthrough_answers import _values_and_questions_answered
 
-from ai_workforce_api import attribute_review, control_attributes, process_narrative
+from ai_workforce_api import (
+    attribute_review,
+    control_attributes,
+    process_narrative,
+    understanding_review,
+)
 from ai_workforce_api.auth import token_hash
 from ai_workforce_api.context_routes import generate_reviewed, review_control
 from ai_workforce_api.db import connect
@@ -203,6 +208,12 @@ class _Agents:
         self.plan: Any = None
         # The drafts as their reviewer returns them, when it corrects them.
         self.drafts: Any = None
+        # B1k (16 November 2026): the IT audit specialist's review of the questions asked
+        # comes before the attributes. Its answer, from what it was given (by default every
+        # attribute established, nothing asked), and what it was given. Its calls are kept
+        # apart from `calls`, which name the run's attribute agents in their order.
+        self.specialist: Any = understanding_review.established
+        self.specialist_given: list[dict[str, Any]] = []
 
     def _note(self, who: str) -> None:
         self.calls.append(who)
@@ -211,6 +222,10 @@ class _Agents:
 
     def complete(self, request: ModelRequest, config: ModelConfig) -> ModelRaw:
         del config
+        if request.system == understanding_review.SYSTEM_PROMPT:
+            given = understanding_review.inputs_of(request.prompt)
+            self.specialist_given.append(given)
+            return ModelRaw(self.specialist(given), (), 100, 100)
         self.prompts.append(request.prompt)
         if request.system == control_attributes.SYSTEM_PROMPT:
             self._note("attributes")
@@ -1747,7 +1762,24 @@ def test_accepting_the_attributes_closes_the_questions_still_open(migrated: Data
     _answer_required(migrated, team, control, client)
     plan_id = _plan_run(migrated, control)[0]
     agents = _Agents(migrated, team, control)
-    agents.issues = [_GRANT_RECORD]
+    # Rewritten for B1k (16 November 2026: the IT audit specialist's review is the question
+    # pass, and the attribute agent never asks before completion). Old: the attribute
+    # agent's run asked the question. New: the specialist's review asks it, in Control
+    # Understanding, before any attribute is drafted; what this test is about holds: a
+    # question still open when the attributes are accepted is closed by the acceptance.
+
+    def asking(given: dict[str, Any]) -> dict[str, Any]:
+        answer = understanding_review.established(given)
+        unit = str(given["units"][0]["key"])
+        answer["verdicts"][0] = {
+            "attribute": unit, "verdict": "NOT_ESTABLISHED", "rests_on": [],
+            "question": {"topic": _GRANT_RECORD["topic"], "text": "Which record shows it?",
+                         "fact": "RECORD", "blocks": f"The criteria of {unit} need it.",
+                         "suggested": "The ServiceNow ticket.", "options": []},
+        }  # fmt: skip
+        return answer
+
+    agents.specialist = asking
     with connect(migrated.url) as connection:
         assert run_plan(connection, agents, plan_id) == "DONE"
     # Asked while the attributes wait on a person.
