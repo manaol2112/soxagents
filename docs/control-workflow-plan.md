@@ -310,6 +310,24 @@ Migration 0172 adds:
 - `attribute_criteria_versions` and its trigger;
 - the asked-matters check, as a column or view if needed.
 
+**B1k. Control Understanding ends with a review by an IT audit specialist, before the attributes. Proposed 16 November 2026, to be built after B1j.** Asked for by the product owner, the same day: "Just make sure that the questions to understand the control are all being asked in control understanding. Maybe run a quick check as an IT auditor specialist to validate all questions has been asked before moving to attributes? Right now that happens in attribute so why not check all while still in control understanding? Like a review before moving to attributes." Prototype: scratchpad brief-proto/ureview.png. It is the question pass of B1j point 1, done by a reviewer of the understanding instead of the attribute agent.
+
+- **When.** Once the walkthrough's required answers and the statement's values are in, and, for a business process control, its process understanding, the review runs before any attribute is drafted. Control Understanding shows "Checking what else the agents need…" meanwhile.
+- **Who.** A registered agent run: `independent-reviewer`, prompt `understanding-review/1`, under the existing safeguards (budgets, the run record, untrusted text as data).
+- **What it reads, as data.** The control: its statement, risk, activity, frequency, nature and system. The attributes it is tested on, with the needs of their criteria (the approved ones, or the library's for a control not yet tailored). The D&I evidence those attributes need. The confirmed understanding: walkthrough answers, values and answered questions. The summaries of the linked documents.
+- **What it returns: the coverage.** 5 to 12 areas a senior IT auditor checks for this control. Each is covered (naming the answers that cover it) or not covered (one question). At most 5 questions, each with:
+  - why it is needed (the attribute or the evidence it bears on);
+  - a suggested answer and options, so it is never an essay question (27 October).
+- **Asked once.** No matter already asked is asked again: answered, dismissed, superseded or closed (B1j point 4).
+- **On screen.** At the end of the Control Understanding course, "Review before the attributes" lists the areas, each "your answers" or "1 question". Its questions join the same course, labelled "From the review · for the attributes".
+- **Completion.** The understanding is complete when the review has run on the latest inputs and its questions are answered. A question answered is a confirmed fact (B1e). The review, its areas and the time are kept (`understanding_reviews`) and shown as "reviewed <when> · N of N areas covered".
+- **One round.**
+  - Answering the review's questions does not start a second review.
+  - The attribute agent never asks in the pass: everything it finds afterwards is an assumption on the attribute (B1j point 3).
+  - A person who changes an answer after completion keeps the understanding complete. The attributes follow (B1d), and any new gap is an assumption.
+- **Without a model.** The review is not run and says so in one line. Completion follows the rules as today.
+- **The question banks.** The walkthrough bank for patching (`change-patching`) asks who applies patches to production, how a patch is linked to its change record, and how emergency patches are approved. These are the three questions ITGC-CM-06 needed later. The other banks are checked for the same kind of gap, so the review has less to ask.
+
 ## The step panels (built 8 November 2026)
 
 The product owner: the panels "look like a traditional view which does not align with my new workflow and design". Decided: a decision-first layout for every panel, an agent strip in each panel, the agent proposes the conclusion and a person rates, and everything built at once.
