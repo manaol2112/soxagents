@@ -14,6 +14,10 @@ removed-quotation sentence of section 3.10. Nothing in the workpaper changes: no
 content, its versions or its counters. Only the person's own save of the section
 (workpaper_service._edit, with `proposal_id`) makes a version, whose note says it began as
 the agent's draft and whose audit event names the proposal; the proposal then ends USED.
+Agent output is never recorded as a person's: the person's working copy of the section
+(workpaper_drafts) names the proposal its text came from, so a save after leaving and
+returning still says so, and a save from a proposal a newer request superseded is still
+accepted and still says so (the proposal stays SUPERSEDED: it is never rewritten).
 
 One proposal stands per workpaper, section and person who asked, and only that person reads
 it. It ends once: USED, KEPT_MINE, or SUPERSEDED (a newer request, a version of the section
@@ -132,11 +136,13 @@ class ProposalEnvelope(BaseModel):
 @dataclass(frozen=True)
 class UsedProposal:
     """The proposal a section's save began from: its id, its citations (the marks of its
-    text), and the sentence the version's note adds."""
+    text), the sentence the version's note adds, and whether it still stands (it then ends
+    USED) or a newer request or version superseded it (it then stays SUPERSEDED)."""
 
     id: UUID
     citations: list[dict[str, Any]]
     note: str
+    standing: bool = True
 
 
 @runtime_checkable
@@ -250,29 +256,79 @@ def supersede(
         logger.warning(NOT_MIGRATED)
 
 
+def text_from(
+    status: str, ready_at: datetime | None, ended_at: datetime | None, ended_as: str | None
+) -> bool:
+    """Whether a text taken from the proposal ("Use the draft") may still be kept in a
+    working copy or saved as from it: the agent finished it (READY), and it stands or a
+    newer request or a version saved on another basis superseded it (the text still came
+    from it). Not one the person kept their own text over (KEPT_MINE), and not one a save
+    already used (USED)."""
+    if status != "READY" or ready_at is None:
+        return False
+    if ended_as is None:
+        return ended_at is None
+    return ended_at is not None and ended_as == "SUPERSEDED"
+
+
+def _proposal_row(
+    cursor: psycopg.Cursor[Any],
+    workpaper_id: UUID,
+    key: str,
+    person: UUID,
+    proposal_id: UUID,
+    *,
+    lock: bool,
+) -> tuple[Any, ...] | None:
+    """The person's own proposal for this section of this workpaper (locked until the
+    caller's transaction ends, where asked), or None. Where migration 0170 is not applied
+    there is none: the savepoint leaves the caller's transaction as it was."""
+    statement = (
+        "SELECT id, citations, status, ready_at, ended_at, ended_as "
+        "FROM workpaper_section_proposals "
+        "WHERE id = %s AND workpaper_id = %s AND section_key = %s AND requested_by = %s"
+    )
+    try:
+        with cursor.connection.transaction():
+            row = cursor.execute(
+                statement + (" FOR UPDATE" if lock else ""),
+                (proposal_id, workpaper_id, key, person),
+            ).fetchone()
+    except psycopg.errors.UndefinedTable:
+        logger.warning(NOT_MIGRATED)
+        return None
+    return None if row is None else tuple(row)
+
+
 def use_proposal(
     cursor: psycopg.Cursor[Any], workpaper_id: UUID, key: str, person: UUID, proposal_id: UUID
 ) -> UsedProposal:
-    """The proposal a save of the section begins from: the person's own, standing and READY,
-    for this section of this workpaper, locked until the save commits; refused otherwise
-    with one sentence."""
-    row = cursor.execute(
-        """
-        SELECT id, citations, ready_at FROM workpaper_section_proposals
-        WHERE id = %s AND workpaper_id = %s AND section_key = %s AND requested_by = %s
-          AND status = 'READY' AND ended_at IS NULL
-        FOR UPDATE
-        """,
-        (proposal_id, workpaper_id, key, person),
-    ).fetchone()
-    if row is None or row[2] is None:
+    """The proposal a save of the section begins from: the person's own READY one for this
+    section of this workpaper, standing or superseded (text_from), locked until the save
+    commits; refused otherwise with one sentence."""
+    row = _proposal_row(cursor, workpaper_id, key, person, proposal_id, lock=True)
+    if row is None or not text_from(row[2], row[3], row[4], row[5]):
         raise WorkpaperState(PROPOSAL_CHANGED)
     citations = row[1] if isinstance(row[1], list) else []
     return UsedProposal(
         id=UUID(str(row[0])),
         citations=[c for c in citations if isinstance(c, dict)],
-        note=f"From the agent's draft of {when(row[2])}.",
+        note=f"From the agent's draft of {when(row[3])}.",
+        standing=row[4] is None,
     )
+
+
+def copy_from(
+    cursor: psycopg.Cursor[Any], workpaper_id: UUID, key: str, person: UUID, proposal_id: UUID
+) -> UUID:
+    """The proposal a working copy of the section says its text came from: as for a save
+    (text_from), the person's own READY one for this section, standing or superseded;
+    refused otherwise with one sentence. Read under the workpaper's lock the caller holds,
+    as a save and "Keep mine" take it, so none of them passes the others."""
+    row = _proposal_row(cursor, workpaper_id, key, person, proposal_id, lock=False)
+    if row is None or not text_from(row[2], row[3], row[4], row[5]):
+        raise WorkpaperState(PROPOSAL_CHANGED)
+    return UUID(str(row[0]))
 
 
 # The routes' work

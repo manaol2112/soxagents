@@ -435,6 +435,155 @@ def test_one_proposal_stands_and_a_newer_request_or_another_version_supersedes_i
     assert colleague_id != bench.team["owner_id"]
 
 
+def test_the_working_copy_names_the_agents_draft_and_the_save_after_returning_says_so(
+    migrated: Database,
+) -> None:
+    """After "Use the draft", "Leave without saving", and back: the working copy names the
+    proposal its text came from, so the save still says "From the agent's draft of <when>"
+    and its audit event names it, even where a newer request superseded it meanwhile (the
+    proposal then stays SUPERSEDED, never rewritten). Agent output is never recorded as a
+    person's."""
+    bench = _Bench(migrated, "rd-copy")
+    owner = bench.team["owner_id"]
+    colleague_id, colleague = bench.member("CONTRIBUTOR")
+    proposal = bench.asked()
+    drafted = (
+        f'The IT manager approves each request. [cite:{bench.file_id} "Approved by the IT manager"]'
+    )
+    assert bench.run(proposal["id"], _Provider([bench.answer(drafted)])) == "READY"
+    ready = bench.mine()
+    current = bench.current
+
+    def keep(key: str, client: TestClient | None = None, **body: Any) -> Any:
+        body.setdefault("based_on", current)
+        body.setdefault("text", ready["text"])
+        return (client or bench.owner).put(f"{bench.url(key)}/draft", json=body)
+
+    def copies(client: TestClient | None = None) -> dict[str, dict[str, Any]]:
+        answer = (client or bench.owner).get(f"{bench.base}/{bench.paper_id}/drafts")
+        assert answer.status_code == 200, answer.text
+        return {copy["section"]: copy for copy in answer.json()}
+
+    def stored() -> list[Any]:
+        return [
+            row[0]
+            for row in bench.rows(
+                "SELECT content FROM workpaper_section_drafts WHERE workpaper_id = %s "
+                "ORDER BY section_key, user_id",
+                bench.paper_id,
+            )
+        ]
+
+    # "Use the draft": the working copy is kept with the proposal it came from, and read
+    # back with it. Nothing of the workpaper changes.
+    before = bench.workpaper()
+    kept = keep(bench.key, proposal_id=ready["id"])
+    assert kept.status_code == 200, kept.text
+    assert copies()[bench.key]["proposal_id"] == ready["id"]
+    assert copies()[bench.key]["text"] == ready["text"]
+    assert stored() == [{"text": ready["text"], "proposal_id": ready["id"]}]
+    assert bench.workpaper() == before
+
+    # Refused, one sentence, and the copy kept as it was: a proposal there is not, mine
+    # for another section, a colleague's, one still drafting, and mine kept by a colleague.
+    theirs = bench.asked(client=colleague)
+    assert bench.run(theirs["id"], _Provider([bench.answer("Theirs, drafted.")])) == "READY"
+    pending = bench.asked(bench.other)
+    for key, client, named in (
+        (bench.key, None, str(uuid4())),
+        (bench.other, None, ready["id"]),
+        (bench.key, None, theirs["id"]),
+        (bench.other, None, pending["id"]),
+        (bench.key, colleague, ready["id"]),
+    ):
+        refused = keep(key, client, proposal_id=named)
+        assert (refused.status_code, refused.json()["detail"]) == (409, redraft.PROPOSAL_CHANGED)
+    assert stored() == [{"text": ready["text"], "proposal_id": ready["id"]}]
+    assert copies(colleague) == {}
+    # A working copy kept before the proposal was named (or typed by the person) reads as
+    # naming none.
+    assert keep(bench.other, text="Typed by the person.").status_code == 200
+    assert copies()[bench.other]["proposal_id"] is None
+
+    # Meanwhile a newer request supersedes the proposal. The text in the working copy
+    # still came from it: it is kept with its name again ("Leave without saving" sends it
+    # as the page goes), and the save from it says so.
+    newer = bench.asked()
+    assert bench.ended(ready["id"]) == ("READY", "SUPERSEDED", owner)
+    again = keep(bench.key, proposal_id=ready["id"])
+    assert again.status_code == 200, again.text
+    restored = copies()[bench.key]
+    assert (restored["text"], restored["proposal_id"]) == (ready["text"], ready["id"])
+    # Not by a colleague, though it is superseded.
+    taken = bench.edit(
+        bench.key, colleague, based_on=current, text=restored["text"], proposal_id=ready["id"]
+    )
+    assert (taken.status_code, taken.json()["detail"]) == (409, redraft.PROPOSAL_CHANGED)
+
+    saved = bench.edit(
+        bench.key, based_on=current, text=restored["text"], proposal_id=restored["proposal_id"]
+    )
+    assert saved.status_code == 200, saved.text
+    [newest, *_older] = saved.json()["versions"]
+    stamp = redraft.when(
+        bench.rows("SELECT ready_at FROM workpaper_section_proposals WHERE id = %s", ready["id"])[
+            0
+        ][0]
+    )
+    assert newest["source"] == "PERSON"
+    assert newest["note"] == (
+        f"Edited {bench.key.replace('-', ' ')}. From the agent's draft of {stamp}."
+    )
+    section = bench.section(bench.key)
+    assert section["text"] == clean_text(ready["text"], 12_000).text
+    assert section["citations"] == ready["citations"] and "[^1]" in section["text"]
+    action, payload, actor, agent = bench.audited()[-1]
+    assert (action, payload, actor, agent) == (
+        "workpaper.edited",
+        {"section": bench.key, "proposal_id": ready["id"], "proposal_ended_as": "SUPERSEDED"},
+        owner, None,
+    )  # fmt: skip
+    # The proposal used stays SUPERSEDED, as it ended (never rewritten); the newer one,
+    # standing, is superseded by this version, as any save of the section supersedes it.
+    assert bench.ended(ready["id"]) == ("READY", "SUPERSEDED", owner)
+    assert bench.ended(newer["id"]) == ("PENDING", "SUPERSEDED", owner)
+    assert bench.ended(theirs["id"]) == ("READY", "SUPERSEDED", owner)
+    # Saved: that working copy is done with; the other section's is not.
+    assert list(copies()) == [bench.other]
+    assert colleague_id != owner
+
+    # Used: the proposal a save ended USED is not named again, by a working copy or a save.
+    current = bench.current
+    used = bench.asked()
+    assert bench.run(used["id"], _Provider([bench.answer("Used once.")])) == "READY"
+    used_text = bench.mine()["text"]
+    assert keep(bench.key, text=used_text, proposal_id=used["id"]).status_code == 200
+    first = bench.edit(bench.key, based_on=current, text=used_text, proposal_id=used["id"])
+    assert first.status_code == 200, first.text
+    assert bench.ended(used["id"]) == ("READY", "USED", owner)
+    assert bench.audited()[-1][1] == {"section": bench.key, "proposal_id": used["id"]}
+    current = bench.current
+    for answer in (
+        keep(bench.key, text=used_text, proposal_id=used["id"]),
+        bench.edit(bench.key, based_on=current, text=used_text, proposal_id=used["id"]),
+    ):
+        assert (answer.status_code, answer.json()["detail"]) == (409, redraft.PROPOSAL_CHANGED)
+
+    # Kept mine: the person chose their own text over it; it is not named again either.
+    mine = bench.asked()
+    assert bench.run(mine["id"], _Provider([bench.answer("Not chosen.")])) == "READY"
+    mine_text = bench.mine()["text"]
+    assert keep(bench.key, text=mine_text, proposal_id=mine["id"]).status_code == 200
+    assert bench.keep_mine(mine["id"]).status_code == 200
+    for answer in (
+        keep(bench.key, text=mine_text, proposal_id=mine["id"]),
+        bench.edit(bench.key, based_on=current, text=mine_text, proposal_id=mine["id"]),
+    ):
+        assert (answer.status_code, answer.json()["detail"]) == (409, redraft.PROPOSAL_CHANGED)
+    assert bench.current == current
+    assert bench.ended(mine["id"]) == ("READY", "KEPT_MINE", owner)
+
+
 def test_a_proposal_ended_while_the_agent_drafts_is_not_written(migrated: Database) -> None:
     bench = _Bench(migrated, "rd-cancel")
     proposal = bench.asked()

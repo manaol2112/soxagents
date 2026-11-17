@@ -2,7 +2,9 @@
 pure parts. The preparer's current text is given to the agent inside the facts as inert
 data, never as a block or an instruction; a normal draft's prompt and facts are as they
 were; the sections that may be redrafted are exactly those the agent drafts, whoever
-wrote them last. Synthetic data only; no database.
+wrote them last. A text taken from the agent's draft stays named as the agent's, in the
+working copy and the save, until it is saved or set aside. Synthetic data only; no
+database.
 """
 
 import json
@@ -12,6 +14,10 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
 
+import pytest
+from pydantic import ValidationError
+
+from ai_workforce_api import workpaper_drafts as drafts
 from ai_workforce_api import workpaper_redraft as redraft
 from ai_workforce_api import workpaper_service
 from ai_workforce_api.workpaper_fill import Content, Section
@@ -196,3 +202,55 @@ def test_each_refusal_and_failure_is_one_plain_sentence() -> None:
         assert "client" not in sentence.lower(), sentence
     assert redraft.NOT_DRAFTED == "The agent does not draft this section."
     assert redraft.PROPOSAL_CHANGED == "The agent's draft changed; read it again."
+
+
+def test_a_text_from_the_agents_draft_stays_named_until_it_is_saved_or_set_aside() -> None:
+    """Agent output is never recorded as a person's: a text taken from a proposal may be
+    kept in a working copy, and saved, as from it while the proposal stands or after a
+    newer request or version superseded it (the text still came from it); never once the
+    person kept their own text over it, a save used it, or before the agent finished."""
+    at = datetime(2026, 11, 16, 10, 42, tzinfo=UTC)
+    later = at + timedelta(minutes=5)
+    assert redraft.text_from("READY", at, None, None)
+    assert redraft.text_from("READY", at, later, "SUPERSEDED")
+    assert not redraft.text_from("READY", at, later, "KEPT_MINE")
+    assert not redraft.text_from("READY", at, later, "USED")
+    assert not redraft.text_from("READY", at, later, "GONE")
+    # Not finished: nothing of the agent's was in the editor.
+    for status in ("PENDING", "FAILED"):
+        assert not redraft.text_from(status, None, None, None)
+        assert not redraft.text_from(status, None, later, "SUPERSEDED")
+    assert not redraft.text_from("READY", None, None, None)
+    # A row ended in one of its two columns only is not read as standing or superseded.
+    assert not redraft.text_from("READY", at, later, None)
+    assert not redraft.text_from("READY", at, None, "SUPERSEDED")
+
+
+def test_a_working_copy_names_the_agents_draft_of_a_text_only() -> None:
+    named = UUID(int=7)
+    kept = drafts.KeepBody.model_validate({"based_on": 2, "text": "x", "proposal_id": str(named)})
+    assert kept.proposal_id == named
+    assert drafts.KeepBody.model_validate({"based_on": 2, "text": "x"}).proposal_id is None
+    nulled = drafts.KeepBody.model_validate({"based_on": 2, "text": "x", "proposal_id": None})
+    assert nulled.proposal_id is None
+    for body in (
+        {"based_on": 2, "rows": [["x"]], "proposal_id": str(named)},
+        {"based_on": 2, "text": "x", "proposal_id": "not an id"},
+        {"based_on": 2, "text": "x", "proposal_id": 7},
+    ):
+        with pytest.raises(ValidationError):
+            drafts.KeepBody.model_validate(body)
+    # As stored: a copy kept before the name was recorded reads as naming none.
+    assert drafts._Stored.model_validate({"text": "x"}).proposal_id is None
+    stored = drafts._Stored.model_validate({"text": "x", "proposal_id": str(named)})
+    assert stored.proposal_id == named
+    with pytest.raises(ValidationError):
+        drafts._Stored.model_validate({"rows": [["x"]], "proposal_id": str(named)})
+    # Read back as the page reads it: the id as a string, or null.
+    copy = drafts.WorkingCopyBody(
+        section="s", based_on=1, text="x", rows=None, proposal_id=named,
+        updated_at=datetime(2026, 11, 16, tzinfo=UTC),
+    )  # fmt: skip
+    assert copy.model_dump(mode="json")["proposal_id"] == str(named)
+    unnamed = copy.model_copy(update={"proposal_id": None})
+    assert unnamed.model_dump(mode="json")["proposal_id"] is None

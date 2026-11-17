@@ -1298,7 +1298,8 @@ class EditBody(BaseModel):
     rows: list[list[str]] | None = Field(default=None, max_length=300)
     fields: list[dict[str, str]] | None = Field(default=None, max_length=60)
     # The agent's draft the text began from ("Use the draft", docs/design-workpaper.md,
-    # section 3.11): the caller's own standing READY proposal for the section.
+    # section 3.11): the caller's own READY proposal for the section, standing, or
+    # superseded since the text was taken from it (workpaper_redraft.text_from).
     proposal_id: UUID | None = None
 
 
@@ -1628,8 +1629,9 @@ def _edit(
         content = _content(connection, workpaper_id, int(current))
         if content is None:
             raise WorkpaperState("the workpaper has no draft yet")
-        # Saved from the agent's draft: it is the caller's own standing READY proposal for
-        # this section, or the save is refused (section 3.11).
+        # Saved from the agent's draft: it is the caller's own READY proposal for this
+        # section, standing or superseded since the text was taken from it, or the save is
+        # refused (section 3.11). One kept mine over, or already used, is refused.
         used: UsedProposal | None = None
         if body.proposal_id is not None:
             used = use_proposal(cursor, workpaper_id, key, principal.id, body.proposal_id)
@@ -1692,11 +1694,17 @@ def _edit(
         edited: dict[str, Any] = {"section": key}
         if used is not None:
             edited["proposal_id"] = str(used.id)
+            if not used.standing:
+                # The text came from a proposal a newer request or version superseded: the
+                # event says so, and the proposal stays as it ended.
+                edited["proposal_ended_as"] = "SUPERSEDED"
         _audit(cursor, organization_id, project_id, principal.id, workpaper_id,
                "workpaper.edited", edited)  # fmt: skip
-        # The proposal used ends USED; every other one standing for the section, anyone's,
-        # is superseded by this version.
-        supersede(cursor, workpaper_id, [key], principal.id, used=None if used is None else used.id)
+        # The proposal used ends USED where it still stands (a superseded one is never
+        # rewritten); every other one standing for the section, anyone's, is superseded by
+        # this version.
+        ending = None if used is None or not used.standing else used.id
+        supersede(cursor, workpaper_id, [key], principal.id, used=ending)
         # Saved: the person's own working copy of the section is done with (section 3.4).
         discard_working_copy(cursor, workpaper_id, key, principal.id)
     return _body(connection, project_id, workpaper_id)

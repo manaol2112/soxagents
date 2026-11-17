@@ -161,12 +161,18 @@ def test_a_working_copy_is_kept_replaced_and_read_back_and_changes_nothing_of_th
     first = desk.keep(desk.text, based_on=current, text="HR records each **termination**.")
     assert first.status_code == 200, first.text
     assert set(first.json()) == {"updated_at"}
+    # Rewritten 16 November 2026 (docs/design-workpaper.md, section 3.11: agent output is
+    # never recorded as a person's). Old: a working copy read back as {section, based_on,
+    # text, rows, updated_at}. New: it also says which agent's draft its text came from,
+    # `proposal_id`, None for text the person typed (test_workpaper_redraft covers one
+    # that names a draft). Every other field is as before.
     assert desk.mine().json() == [
         {
             "section": desk.text,
             "based_on": current,
             "text": "HR records each **termination**.",
             "rows": None,
+            "proposal_id": None,
             "updated_at": first.json()["updated_at"],
         }
     ]
@@ -237,6 +243,9 @@ def test_a_working_copy_is_kept_replaced_and_read_back_and_changes_nothing_of_th
         {"text": "x"},
         {"based_on": current, "rows": "not rows"},
         {"based_on": current, "rows": [[1, 2]]},
+        # The agent's draft a text came from: an id, and never beside rows.
+        {"based_on": current, "text": "x", "proposal_id": "not an id"},
+        {"based_on": current, "rows": [["x"]], "proposal_id": str(uuid4())},
     ):
         refused = desk.owner.put(desk.url(desk.text), json=body)
         assert refused.status_code == 422, (body.keys(), refused.text)
@@ -248,6 +257,9 @@ def test_a_working_copy_is_kept_replaced_and_read_back_and_changes_nothing_of_th
         (desk.fields, {"based_on": current, "text": "x"}, "a fields section keeps no working copy"),
         (desk.fields, {"based_on": current, "rows": [["x"]]},
          "a fields section keeps no working copy"),
+        # An agent's draft there is not (test_workpaper_redraft covers the others).
+        (desk.text, {"based_on": current, "text": "x", "proposal_id": str(uuid4())},
+         "The agent's draft changed; read it again."),
     ):  # fmt: skip
         refused = desk.owner.put(desk.url(key), json=body)
         assert (refused.status_code, refused.json()["detail"]) == (409, sentence)
@@ -514,10 +526,27 @@ def test_the_table_holds_one_shaped_working_copy_per_section_and_person_and_goes
         "text",
         {"text": "a" * 12_001},
         {"rows": [["r"]] * 301},
+        # A text may name the agent's draft it came from (migration 0171): a uuid as a
+        # string, beside a text only, and nothing else beside it.
+        {"proposal_id": str(uuid4())},
+        {"text": "x", "proposal_id": None},
+        {"text": "x", "proposal_id": 1},
+        {"text": "x", "proposal_id": "not an id"},
+        {"text": "x", "proposal_id": str(uuid4()).upper()},
+        {"text": "x", "proposal_id": str(uuid4()), "note": "z"},
+        {"text": 1, "proposal_id": str(uuid4())},
+        {"text": "a" * 12_001, "proposal_id": str(uuid4())},
+        {"rows": [["y"]], "proposal_id": str(uuid4())},
     )
     for content in shapes:
         with pytest.raises(psycopg.errors.CheckViolation, match="workpaper_section_drafts_content"):
             insert(content)
+    # A text that names one is kept, and read back with it.
+    named = str(uuid4())
+    insert({"text": "From the agent.", "proposal_id": named})
+    named_in = {copy["section"]: copy["proposal_id"] for copy in desk.mine().json()}
+    assert named_in == {desk.text: None, "another-section": named}
+    assert desk.discard("another-section").status_code == 204
     with pytest.raises(psycopg.errors.CheckViolation, match="workpaper_section_drafts_based_on"):
         insert({"text": "x"}, based_on=0)
     for key in ("", "k" * 61):

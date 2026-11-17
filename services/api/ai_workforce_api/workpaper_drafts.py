@@ -17,6 +17,13 @@ work, an open engagement (the closed-engagement middleware refuses every change 
 completed or archived one, and the table refuses a write to an archived one), a draft
 workpaper the agent is not drafting, and a section of the kind the body is for. What is
 stored is cleaned as an edit cleans what it stores.
+
+A text taken from the agent's draft ("Use the draft", section 3.11) is the agent's until a
+person saves it, and is never recorded as a person's: its working copy names the proposal
+it came from (`proposal_id`), so that the save after leaving and returning still says
+"From the agent's draft of <when>". The proposal named must be the person's own READY one
+for the section, standing or superseded since (workpaper_redraft.text_from); one kept mine
+over or already used is refused with "The agent's draft changed; read it again."
 """
 
 import logging
@@ -43,16 +50,20 @@ NOT_MIGRATED = "working copies are not on record: migration 0164 is not applied"
 
 class KeepBody(BaseModel):
     """The body a save of the section would send: the version it was started from, and
-    the section's text or its rows (exactly one)."""
+    the section's text or its rows (exactly one), and the agent's draft the text came from,
+    where it did ("Use the draft"; a text section's only)."""
 
     based_on: int = Field(ge=1)
     text: str | None = Field(default=None, max_length=12_000)
     rows: list[list[str]] | None = Field(default=None, max_length=300)
+    proposal_id: UUID | None = None
 
     @model_validator(mode="after")
     def _one_of(self) -> KeepBody:
         if (self.text is None) == (self.rows is None):
             raise ValueError("send the section's text or its rows, one of the two")
+        if self.proposal_id is not None and self.text is None:
+            raise ValueError("the agent drafts a section's text, never its rows")
         return self
 
 
@@ -66,6 +77,9 @@ class WorkingCopyBody(BaseModel):
     # Exactly one of the two is given, as it was kept.
     text: str | None
     rows: list[list[str]] | None
+    # The agent's draft the text came from, or None (also for a copy kept before it was
+    # recorded): a save of this text sends it as the save's `proposal_id`.
+    proposal_id: UUID | None
     updated_at: datetime
 
 
@@ -74,11 +88,14 @@ class _Stored(BaseModel):
 
     text: str | None = None
     rows: list[list[str]] | None = None
+    proposal_id: UUID | None = None
 
     @model_validator(mode="after")
     def _one_of(self) -> _Stored:
         if (self.text is None) == (self.rows is None):
             raise ValueError("neither a text nor rows")
+        if self.proposal_id is not None and self.text is None:
+            raise ValueError("rows from the agent's draft")
         return self
 
 
@@ -129,6 +146,7 @@ def mine(
                 based_on=int(based_on),
                 text=stored.text,
                 rows=stored.rows,
+                proposal_id=stored.proposal_id,
                 updated_at=updated_at,
             )
         )
@@ -145,7 +163,10 @@ def keep(
     body: KeepBody,
 ) -> KeptBody:
     """Keep (insert or replace) the caller's working copy of one section. Nothing of the
-    workpaper changes, and no audit event is written."""
+    workpaper changes, and no audit event is written. A copy that names the agent's draft
+    its text came from keeps that name, once checked (workpaper_redraft.copy_from)."""
+    from ai_workforce_api.workpaper_redraft import copy_from
+
     _person(connection, principal, organization_id, project_id, Action.TASK_UPDATE)
     with transaction(connection) as cursor:
         # The workpaper's row is locked as an edit locks it, so a working copy is never
@@ -187,6 +208,12 @@ def keep(
             Section.model_validate({**section.model_dump(), **kept})
         except ValidationError as error:
             raise WorkpaperState("the section is too long") from error
+        if body.proposal_id is not None:
+            # The person's own READY proposal for this section, standing or superseded
+            # since: the text still came from it. Read under the workpaper's lock, held
+            # above, which a save and "Keep mine" also take.
+            proposal = copy_from(cursor, workpaper_id, section.key, principal.id, body.proposal_id)
+            kept["proposal_id"] = str(proposal)
         row = cursor.execute(
             """
             INSERT INTO workpaper_section_drafts (
