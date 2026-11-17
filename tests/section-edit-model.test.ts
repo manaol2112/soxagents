@@ -56,6 +56,7 @@ const section = (over: Partial<WorkpaperSection>): WorkpaperSection => ({
   columns: [],
   rows: [],
   source: "AGENT",
+  narrative: false,
   tab: "design",
   period: "design",
   review: null,

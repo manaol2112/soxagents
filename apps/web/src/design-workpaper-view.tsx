@@ -156,6 +156,16 @@ import {
   sendSection,
   useRecordsRefresh,
 } from "./section-editor";
+import {
+  draftChanged,
+  draftUsed,
+  namedDraft,
+  type Proposal,
+  redraftable,
+  type UsedDraft,
+  usedAfter,
+  withProposal,
+} from "./section-redraft-model";
 import { useFocusSide } from "./step-focus";
 import { type IconName, UiIcon } from "./ui-icon";
 import { useKeeping, useWorkingCopies } from "./working-copy";
@@ -540,6 +550,13 @@ export function DesignWorkpaper({
   const sending = useRef(false);
   // The section whose editor was given the focus when it opened.
   const focused = useRef<EditableSection | null>(null);
+  // The agent's draft the open editor holds, not saved yet (section 3.11): the editor it
+  // was put in, so it is never named by a save of another editor. Read again: the count
+  // the editor's proposal is read again by.
+  const [used, setUsed] = useState<
+    (UsedDraft & { editor: SectionEditor }) | null
+  >(null);
+  const [proposalRead, setProposalRead] = useState(0);
   // Another control is another mount: an answer for the last one is dropped.
   const mounted = useRef(true);
   const refreshRecords = useRecordsRefresh();
@@ -1000,12 +1017,45 @@ export function DesignWorkpaper({
     [selection],
   );
 
-  const redraft = (draft: Draft) =>
+  // The agent's draft the open editor holds, if it does: never one put in another editor.
+  const usedNow =
+    used !== null && editing !== null && used.editor === editing.editor
+      ? used
+      : null;
+  const redraft = (draft: Draft) => {
     setEditing((before) =>
       before === null || before.phase !== "editing"
         ? before
         : { ...before, draft },
     );
+    // Back to what it held before "Use the draft" (an undo), a save no longer names the
+    // agent's draft; back to the draft, it does again (section 3.11).
+    if (draft.kind === "text") {
+      setUsed((before) => usedAfter(before, draft.text));
+    }
+  };
+  /** "Use the draft" (section 3.11): the agent's text replaces what the editor holds, as
+   * the editor writes it back. It is an unsaved change like any other: kept as a working
+   * copy, asked about on leaving, and only the person's Save makes it a version, which
+   * then names the proposal. */
+  const takeProposal = (proposal: Proposal) => {
+    const open = editing;
+    if (
+      open === null ||
+      open.phase !== "editing" ||
+      open.draft.kind !== "text" ||
+      proposal.status !== "READY"
+    ) {
+      return;
+    }
+    const made = draftUsed(proposal, open.draft.text);
+    setEditing({
+      ...open,
+      draft: { kind: "text", text: made.text },
+      refusal: "",
+    });
+    setUsed({ ...made, editor: open.editor });
+  };
   /** "Cancel", and Escape inside the editor: what was typed is given up only if the
    * person says so. */
   const cancel = () => {
@@ -1049,6 +1099,8 @@ export function DesignWorkpaper({
       refusal: "",
     });
     keeper.discard(scope, open.source.workpaperId, open.editor.key, true);
+    // Everything is replaced again: the agent's draft is no longer what it holds.
+    setUsed(null);
   };
   /** "Use them" over a working copy found after the editor opened: the editor takes it up,
    * asked first where that gives up a change; keeping goes on from it. */
@@ -1072,6 +1124,8 @@ export function DesignWorkpaper({
       known: KNOWN,
       refusal: "",
     });
+    // Everything is replaced again: the agent's draft is no longer what it holds.
+    setUsed(null);
   };
   /** "Discard them" over a working copy found after the editor opened: it is discarded,
    * and what the editor holds stays; keeping goes on from it, after the discard. */
@@ -1107,7 +1161,11 @@ export function DesignWorkpaper({
     // The keeps out as the save goes: one that lands after it is discarded after it.
     const atSave = keeper.mark();
     const answer = await sendSection(
-      saveRequest(scope, open.source, open.editor, open.draft),
+      // Where the editor holds the agent's draft, the save names it (section 3.11).
+      withProposal(
+        saveRequest(scope, open.source, open.editor, open.draft),
+        namedDraft(usedNow),
+      ),
     );
     sending.current = false;
     const refusal = saveProblem(answer.status, answer.detail);
@@ -1141,6 +1199,13 @@ export function DesignWorkpaper({
         refreshRecords();
         setAttempt((count) => count + 1);
       }
+      // The agent's draft the save named is no longer the one standing (section 3.11):
+      // the server's sentence is said, the editor keeps its text, no longer named as the
+      // draft, and the proposal is read again.
+      if (draftChanged(answer.status, answer.detail)) {
+        setUsed(null);
+        setProposalRead((count) => count + 1);
+      }
       return;
     }
     // The server deleted this section's working copy with the save (section 3.4).
@@ -1155,6 +1220,32 @@ export function DesignWorkpaper({
     // The views read the workpaper again: the read that shows the save closes the editor.
     setAttempt((count) => count + 1);
   };
+
+  // "Redraft with the agent" (section 3.11): in the editor of a text section the agent
+  // drafts, at the version the editor was opened on (the workpaper's current version,
+  // which the server checks as a save's `based_on`).
+  const storedSection =
+    editing === null
+      ? undefined
+      : editing.source.sections.find((item) => item.key === editing.editor.key);
+  const workpaperVersion = editing?.source.basedOn ?? 0;
+  const redraftOffer =
+    editing !== null &&
+    editing.editor.kind === "text" &&
+    workpaperVersion >= 1 &&
+    redraftable(storedSection, "DESIGN")
+      ? {
+          scope,
+          place: {
+            workpaperId: editing.source.workpaperId,
+            sectionKey: editing.editor.key,
+          },
+          workpaperVersion,
+          used: usedNow === null || usedNow.off ? null : usedNow.id,
+          reread: proposalRead,
+          onUse: takeProposal,
+        }
+      : null;
 
   const actions: Actions = {
     onRef: (chip, from = "", element) => {
@@ -1260,6 +1351,7 @@ export function DesignWorkpaper({
                       stale: copyIsStale(editing.restored, editing.source),
                       onDiscard: discardRestored,
                     },
+            redraft: redraftOffer,
           },
     saved,
     copied,

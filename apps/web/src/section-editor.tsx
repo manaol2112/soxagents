@@ -30,6 +30,13 @@ import {
   setCell,
   UNSAVED,
 } from "./section-edit-model";
+import {
+  RedraftAnnouncer,
+  RedraftButton,
+  RedraftCard,
+  type RedraftOffer,
+  useSectionRedraft,
+} from "./section-redraft";
 import { UiIcon } from "./ui-icon";
 import {
   DISCARD_COPY,
@@ -68,6 +75,9 @@ export type EditorProps = {
   /** The editor opened with a working copy: what it says, until it closes or the copy is
    * discarded; null otherwise. */
   restored: Restored | null;
+  /** "Redraft with the agent" (section 3.11), for a text section the agent drafts; null
+   * for any other. */
+  redraft: RedraftOffer | null;
 };
 
 /** Over an editor that opened with the person's working copy (section 3.4). */
@@ -488,6 +498,9 @@ export function SectionEditorPanel({
   const { editor, draft, phase, restored, onChange, onCancel } = props;
   const busy = phase !== "editing";
   const hint = editor.guidance !== "" ? `${uid}-hint` : undefined;
+  // Only a text section's editor offers the redraft (section 3.11); its owner says which.
+  const offer = editor.kind === "text" ? props.redraft : null;
+  const redraft = useSectionRedraft(offer);
   return (
     <Frame title={editor.title} phase={phase} onCancel={onCancel}>
       {heading !== undefined ? <h6 className="se-heading">{heading}</h6> : null}
@@ -504,6 +517,15 @@ export function SectionEditorPanel({
           readOnly={busy}
           describedBy={hint}
           onChange={(text) => onChange({ kind: "text", text })}
+          aside={
+            offer === null ? undefined : (
+              <RedraftButton
+                redraft={redraft}
+                busy={busy}
+                used={offer.used !== null}
+              />
+            )
+          }
         />
       ) : editor.kind === "grid" && draft.kind === "grid" ? (
         <GridBox
@@ -514,6 +536,17 @@ export function SectionEditorPanel({
         />
       ) : null}
       <EditorBar {...props} />
+      {offer === null ? null : (
+        <>
+          <RedraftCard
+            key={redraft.proposal?.id ?? "none"}
+            redraft={redraft}
+            offer={offer}
+            busy={busy}
+          />
+          <RedraftAnnouncer redraft={redraft} />
+        </>
+      )}
     </Frame>
   );
 }

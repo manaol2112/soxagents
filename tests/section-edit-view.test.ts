@@ -276,9 +276,15 @@ describe("saving", () => {
     );
     // What is sent is the model's request, on the workpaper the editor was opened on:
     // its version is what the server checks, so a newer one is never written over.
+    // Rewritten for redrafting a section a person has edited (product owner, 16 November
+    // 2026, docs/design-workpaper.md section 3.11). Old expectation: the model's request is
+    // sent as it is. New expectation: the same request, which names the agent's draft the
+    // editor holds (withProposal, namedDraft: none where it holds none or is back to the
+    // person's own text), so the version's note and audit event say the text began as the
+    // agent's and a person saved it.
     assert.match(
       body,
-      /const answer = await sendSection\(\s*saveRequest\(scope, open\.source, open\.editor, open\.draft\),\s*\);/,
+      /const answer = await sendSection\(\s*(?:\/\/ [^\n]*\n\s*)?withProposal\(\s*saveRequest\(scope, open\.source, open\.editor, open\.draft\),\s*namedDraft\(usedNow\),\s*\),\s*\);/,
     );
     assert.equal(count(view, /sendSection\(/g), 1);
     assert.match(model, /based_on: source\.basedOn,/);
@@ -334,9 +340,14 @@ describe("saving", () => {
     // refusal is set straight after the mounted check. New expectation: a way out taken
     // while the save was out is taken up first (`afterSave`), and on a refusal the dialog
     // opens with it; the editor and what was typed stay as before.
+    // Rewritten again for redrafting (product owner, 16 November 2026, section 3.11). Old
+    // expectation: after a 409 the records and the views are read again, and nothing else.
+    // New expectation: the same, and where the 409 says the agent's draft the save named
+    // changed, the editor keeps its text, no longer named as that draft, and the proposal
+    // is read again.
     assert.match(
       body,
-      /sending\.current = false;\s*const refusal = saveProblem\(answer\.status, answer\.detail\);[\s\S]{0,420}if \(!mounted\.current\) \{\s*return;\s*\}\s*(?:\/\/ [^\n]*\n\s*)+const then = afterSave\.current;\s*afterSave\.current = null;\s*if \(refusal !== ""\) \{\s*setEditing\(\(before\) =>\s*before === null \? before : \{ \.\.\.before, phase: "editing", refusal \},\s*\);\s*if \(then !== null\) \{\s*(?:\/\/ [^\n]*\n\s*)+proceed\.current = then;\s*setWaited\(false\);\s*setAsking\(true\);\s*\}\s*if \(answer\.status === 409\) \{\s*(?:\/\/ [^\n]*\n\s*)+refreshRecords\(\);\s*setAttempt\(\(count\) => count \+ 1\);\s*\}\s*return;\s*\}/,
+      /sending\.current = false;\s*const refusal = saveProblem\(answer\.status, answer\.detail\);[\s\S]{0,420}if \(!mounted\.current\) \{\s*return;\s*\}\s*(?:\/\/ [^\n]*\n\s*)+const then = afterSave\.current;\s*afterSave\.current = null;\s*if \(refusal !== ""\) \{\s*setEditing\(\(before\) =>\s*before === null \? before : \{ \.\.\.before, phase: "editing", refusal \},\s*\);\s*if \(then !== null\) \{\s*(?:\/\/ [^\n]*\n\s*)+proceed\.current = then;\s*setWaited\(false\);\s*setAsking\(true\);\s*\}\s*if \(answer\.status === 409\) \{\s*(?:\/\/ [^\n]*\n\s*)+refreshRecords\(\);\s*setAttempt\(\(count\) => count \+ 1\);\s*\}\s*(?:\/\/ [^\n]*\n\s*)+if \(draftChanged\(answer\.status, answer\.detail\)\) \{\s*setUsed\(null\);\s*setProposalRead\(\(count\) => count \+ 1\);\s*\}\s*return;\s*\}/,
     );
     const bar = component(editor, "EditorBar");
     assert.match(

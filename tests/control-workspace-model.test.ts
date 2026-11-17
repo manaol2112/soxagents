@@ -427,6 +427,7 @@ function section(
     columns: [],
     rows: [],
     source,
+    narrative: true,
     tab: "interim",
     period: "",
     review: null,

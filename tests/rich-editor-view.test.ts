@@ -356,9 +356,15 @@ describe("the toolbar", () => {
 describe("where the formatted box is used", () => {
   it("is the text section's box, and only that", () => {
     assert.match(editors, /import \{ RichTextBox \} from "\.\/rich-editor";/);
+    // Rewritten for redrafting a section a person has edited (product owner, 16 November
+    // 2026, docs/design-workpaper.md section 3.11). Old expectation: the box is given the
+    // label, the text, read-only, the hint and onChange, and nothing else. New
+    // expectation: the same, and "Redraft with the agent" at the right of its formatting
+    // bar (`aside`) where the editor's owner offers the redraft; the box itself stays the
+    // same box, and the draft's text reaches it as any other text its owner gives.
     assert.match(
       component(editors, "SectionEditorPanel"),
-      /\{editor\.kind === "text" && draft\.kind === "text" \? \(\s*<RichTextBox\s+label=\{editor\.title\}\s+value=\{draft\.text\}\s+readOnly=\{busy\}\s+describedBy=\{hint\}\s+onChange=\{\(text\) => onChange\(\{ kind: "text", text \}\)\}\s*\/>\s*\) : editor\.kind === "grid" && draft\.kind === "grid" \? \(\s*<GridBox/,
+      /\{editor\.kind === "text" && draft\.kind === "text" \? \(\s*<RichTextBox\s+label=\{editor\.title\}\s+value=\{draft\.text\}\s+readOnly=\{busy\}\s+describedBy=\{hint\}\s+onChange=\{\(text\) => onChange\(\{ kind: "text", text \}\)\}\s+aside=\{\s*offer === null \? undefined : \(\s*<RedraftButton\s+redraft=\{redraft\}\s+busy=\{busy\}\s+used=\{offer\.used !== null\}\s*\/>\s*\)\s*\}\s*\/>\s*\) : editor\.kind === "grid" && draft\.kind === "grid" \? \(\s*<GridBox/,
     );
     assert.equal(count(editors, /<RichTextBox\b/g), 1);
     // A cell and a note stay one plain line.

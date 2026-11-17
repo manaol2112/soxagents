@@ -297,6 +297,7 @@ export function RichTextBox({
   describedBy,
   readOnly,
   onChange,
+  aside,
 }: {
   /** The section's text as stored, marks included. */
   value: string;
@@ -306,6 +307,11 @@ export function RichTextBox({
   readOnly: boolean;
   /** What is typed, as the text that is stored. */
   onChange: (value: string) => void;
+  /** What stands at the right of the formatting bar, outside it (its own stop for the Tab
+   * key): "Redraft with the agent" (docs/design-workpaper.md, section 3.11). A text the
+   * owner puts in the box from it comes in as any other the owner gives: as the model's
+   * document, one step of its own to undo. */
+  aside?: ReactNode;
 }) {
   const [start] = useState(() => {
     const doc = docFromText(value);
@@ -416,13 +422,23 @@ export function RichTextBox({
     }
   };
 
+  const tools = (
+    <Tools
+      key={editor === null ? "waiting" : "made"}
+      editor={editor}
+      readOnly={readOnly}
+    />
+  );
   return (
     <div className="se-rich-box">
-      <Tools
-        key={editor === null ? "waiting" : "made"}
-        editor={editor}
-        readOnly={readOnly}
-      />
+      {aside === undefined ? (
+        tools
+      ) : (
+        <div className="se-tools-row">
+          {tools}
+          <div className="se-tools-aside">{aside}</div>
+        </div>
+      )}
       {editor === null ? (
         // biome-ignore lint/a11y/useSemanticElements: the text as it reads, in the box's place, until the editor is made.
         <div

@@ -29,6 +29,9 @@ export type WorkpaperSection = {
   rows: string[][];
   /** FALLBACK: the agent failed and the records' plain words stand in. */
   source: "RECORDS" | "AGENT" | "PERSON" | "FALLBACK" | "SEEDED";
+  /** A narrative the agent drafts and a person completes (workpaper_fill.Section): with
+   * its kind and stage, what may be redrafted (docs/design-workpaper.md, section 3.11). */
+  narrative: boolean;
   /** The template tab the section is on; empty for a workpaper drafted before tabs. */
   tab: string;
   period: string;
@@ -139,7 +142,7 @@ const str = (value: unknown): string =>
 const num = (value: unknown): number => (typeof value === "number" ? value : 0);
 
 /** A section's checked sources, as the console stores them. */
-function parseCitations(value: unknown): Citation[] {
+export function parseCitations(value: unknown): Citation[] {
   return (Array.isArray(value) ? value : [])
     .filter(isRecord)
     .filter(
@@ -186,6 +189,7 @@ function parseSection(value: unknown): WorkpaperSection | null {
       value.source === "SEEDED"
         ? value.source
         : "RECORDS",
+    narrative: value.narrative === true,
     tab: str(value.tab),
     period: str(value.period),
     review:

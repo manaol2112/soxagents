@@ -215,7 +215,8 @@ export type CopyWrite =
  */
 export function copyWrite(fields: Record<string, unknown>): CopyWrite {
   if (fields.intent === "keep") {
-    const { intent: _intent, ...rest } = fields;
+    // A working copy never names the agent's draft (section 3.11): only a save does.
+    const { intent: _intent, proposal_id: _proposal, ...rest } = fields;
     const write = sectionWrite(rest);
     return "error" in write
       ? write

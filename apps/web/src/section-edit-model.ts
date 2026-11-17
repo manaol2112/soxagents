@@ -9,6 +9,7 @@ import {
   type EditableSection,
   sectionKeyFor,
 } from "./design-workpaper-model.ts";
+import { proposalIdOf } from "./section-redraft-model.ts";
 import {
   CREDENTIAL,
   type Workpaper,
@@ -485,17 +486,24 @@ export type SectionWrite =
   | { error: "invalid" }
   | {
       path: string;
-      body:
+      body: (
         | { based_on: number; text: string }
-        | { based_on: number; rows: string[][] };
+        | { based_on: number; rows: string[][] }
+      ) & { proposal_id?: string };
     };
 
 /**
  * The API call for a section's save, from what the page posted: three ids, the section's
  * key, the version it is based on, and either the text or the rows, within the server's
- * limits and never a credential. Anything else is refused here and never sent.
+ * limits and never a credential; and, where the editor holds the agent's draft (section
+ * 3.11), the id of that proposal. Anything else is refused here and never sent.
  */
 export function sectionWrite(fields: Record<string, unknown>): SectionWrite {
+  const proposal = proposalIdOf(fields.proposal_id);
+  if (proposal === "invalid") {
+    return { error: "invalid" };
+  }
+  const named = proposal === null ? {} : { proposal_id: proposal };
   const id = (name: string) => {
     const value = fields[name];
     return typeof value === "string" && UUID.test(value) ? value : null;
@@ -522,7 +530,7 @@ export function sectionWrite(fields: Record<string, unknown>): SectionWrite {
   if (typeof text === "string" && rows === undefined) {
     return text.length > EDIT_LIMITS.text || CREDENTIAL.test(text)
       ? { error: "invalid" }
-      : { path, body: { based_on: basedOn, text } };
+      : { path, body: { based_on: basedOn, text, ...named } };
   }
   if (!Array.isArray(rows) || text !== undefined) {
     return { error: "invalid" };
@@ -547,7 +555,7 @@ export function sectionWrite(fields: Record<string, unknown>): SectionWrite {
     }
     sent.push(row.map(cleanCell));
   }
-  return { path, body: { based_on: basedOn, rows: sent } };
+  return { path, body: { based_on: basedOn, rows: sent, ...named } };
 }
 
 /* What the editor says ------------------------------------------------------------------- */
@@ -572,6 +580,11 @@ export function saveProblem(status: number, detail: string): string {
   }
   if (status === 409) {
     const said = detail.trim();
+    // The agent's draft the save named is no longer the one standing (section 3.11): the
+    // server's own sentence, before "changed" is read as the workpaper's.
+    if (/\bagent's draft\b/i.test(said)) {
+      return said;
+    }
     if (/changed/i.test(said)) {
       return "Not saved: the workpaper changed after you opened this editor. Copy what you typed, cancel, and edit the latest version.";
     }
