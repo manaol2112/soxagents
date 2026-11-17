@@ -1098,11 +1098,15 @@ def test_the_drafter_is_given_the_results_and_the_tickmarks_and_a_reason_stays_d
     # no longer writable by a file, so the version moved on). Rewritten again (product
     # owner, 16 November 2026; docs/design-workpaper.md, 3.10): it was
     # "workpaper-preparer/3"; the understanding is now a formal design narrative written
-    # from the confirmed understanding, so the calls are recorded under /4.
+    # from the confirmed understanding, so the calls are recorded under /4. Rewritten
+    # again (product owner, 16 November 2026; docs/design-workpaper.md, 3.11): old
+    # "workpaper-preparer/4", new /5; one line was added for a redraft of a section a
+    # person edited (preparer_current_text), every line of /4 stands, so a draft's calls
+    # are recorded under /5.
     assert bench.rows(
         "SELECT prompt_version FROM model_calls WHERE prompt_version LIKE %s",
         "workpaper-preparer/%",
-    ) == [("workpaper-preparer/4",)]
+    ) == [("workpaper-preparer/5",)]
     # Each of the prompt's tags is written once (and one file element per file).
     for tag in ("<workpaper_facts>", "</workpaper_facts>", "<evidence>", "</evidence>"):
         assert prompt.count(tag) == 1, tag

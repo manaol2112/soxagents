@@ -1140,6 +1140,7 @@ class LocalDraftScheduler:
         narrative: Callable[[UUID], str] | None = None,
         policy: Callable[[UUID], str] | None = None,
         assess: Callable[[UUID], str] | None = None,
+        redraft: Callable[[UUID], str] | None = None,
     ) -> None:
         from ai_workforce_api.console import console_runner
         from ai_workforce_api.evidence_analysis import analysis_runner
@@ -1186,6 +1187,9 @@ class LocalDraftScheduler:
         from ai_workforce_api.evidence_assurance import assessment_runner
 
         self._assess = assess if assess is not None else assessment_runner(settings)
+        from ai_workforce_api.workpaper_redraft import redraft_runner
+
+        self._redraft = redraft if redraft is not None else redraft_runner(settings)
         self._pool = ThreadPoolExecutor(
             max_workers=settings.local_worker_threads, thread_name_prefix="pbc-draft"
         )
@@ -1247,6 +1251,24 @@ class LocalDraftScheduler:
     def schedule_workpaper_drafts(self, workpaper_ids: list[UUID]) -> None:
         for workpaper_id in workpaper_ids:
             self._pool.submit(self._attempt_workpaper, workpaper_id)
+
+    def schedule_workpaper_redrafts(self, proposal_ids: list[UUID]) -> None:
+        """Redrafts of one section a person asked for (docs/design-workpaper.md, 3.11)."""
+        for proposal_id in proposal_ids:
+            self._pool.submit(self._attempt_redraft, proposal_id)
+
+    def _attempt_redraft(self, proposal_id: UUID) -> None:
+        from ai_workforce_api.workpaper_redraft import fail_redraft
+
+        for _ in range(MAX_ATTEMPTS):
+            try:
+                # A proposal stays PENDING until its run ends it, so a retry runs it again.
+                self._redraft(proposal_id)
+                return
+            except Exception:
+                logger.warning("a section redraft failed; retrying")
+        with connect(self._settings.database_url) as connection:
+            fail_redraft(connection, proposal_id)
 
     def schedule_reviews(self, review_ids: list[UUID]) -> None:
         for review_id in review_ids:
@@ -1580,6 +1602,7 @@ class LocalDraftScheduler:
         from ai_workforce_api.setup_drafting import open_drafts as open_setups
         from ai_workforce_api.system_review_queue import open_reviews as open_scopings
         from ai_workforce_api.testing_engine import open_runs
+        from ai_workforce_api.workpaper_redraft import open_redrafts
         from ai_workforce_api.workpaper_service import open_drafts as open_workpapers
 
         with connect(self._settings.database_url) as connection:
@@ -1589,6 +1612,7 @@ class LocalDraftScheduler:
             turns = open_turns(connection)
             tests = open_runs(connection)
             workpapers = open_workpapers(connection)
+            redrafts = open_redrafts(connection)
             setups = open_setups(connection)
             reviews = open_reperformances(connection)
             scopings = open_scopings(connection)
@@ -1615,6 +1639,7 @@ class LocalDraftScheduler:
         self.schedule_system_reviews(scopings)
         self.schedule_reviews(reviews)
         self.schedule_workpaper_drafts(workpapers)
+        self.schedule_workpaper_redrafts(redrafts)
         self.schedule_setup_drafts(setups)
         self.schedule_test_runs(tests)
         self.schedule_system_scans(scans)
@@ -1627,6 +1652,7 @@ class LocalDraftScheduler:
             + len(turns)
             + len(tests)
             + len(workpapers)
+            + len(redrafts)
             + len(setups)
             + len(reviews)
             + len(scopings)

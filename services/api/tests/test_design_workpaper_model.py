@@ -1975,7 +1975,10 @@ def test_the_auditors_record_is_one_bounded_data_block_that_a_reason_cannot_leav
     # Rewritten again (product owner, 16 November 2026; docs/design-workpaper.md, 3.10):
     # it was "workpaper-preparer/3"; the understanding is now a formal design narrative,
     # so the calls are recorded under /4. Every sentence of /3 asserted here still stands.
-    assert workpaper_service.PROMPT_VERSION == "workpaper-preparer/4"
+    # Rewritten again (product owner, 16 November 2026; docs/design-workpaper.md, 3.11):
+    # old "workpaper-preparer/4", new /5; one line was added for a redraft's
+    # preparer_current_text, and every sentence asserted here still stands.
+    assert workpaper_service.PROMPT_VERSION == "workpaper-preparer/5"
     assert "at most one such block" in system and "before the <evidence> block" in system
     assert "client" not in block.lower()
 

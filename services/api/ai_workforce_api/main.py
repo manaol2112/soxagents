@@ -340,6 +340,7 @@ def _lifespan(
         from ai_workforce_api.policy_evidence import policy_evidence_runner
         from ai_workforce_api.prior_year import prior_year_runner
         from ai_workforce_api.process_narrative import narrative_runner
+        from ai_workforce_api.workpaper_redraft import redraft_runner
 
         async with serve(
             settings.workflow_address,
@@ -358,6 +359,7 @@ def _lifespan(
             narrative_runner(settings),
             policy_evidence_runner(settings),
             assessment_runner(settings),
+            redraft_runner(settings),
         ):
             yield
 

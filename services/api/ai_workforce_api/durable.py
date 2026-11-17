@@ -39,6 +39,7 @@ from ai_workforce_api.durable_workflow import (
     PriorYearRequest,
     PriorYearWorkflow,
     RcmSystemScanWorkflow,
+    RedraftRequest,
     ReviewRequest,
     ScanRequest,
     SetupDraftRequest,
@@ -48,6 +49,7 @@ from ai_workforce_api.durable_workflow import (
     TestRunRequest,
     TurnRequest,
     WorkpaperDraftWorkflow,
+    WorkpaperRedraftWorkflow,
     WorkpaperRequest,
 )
 from ai_workforce_api.evidence_analysis import fail_analysis, open_analyses
@@ -60,6 +62,7 @@ from ai_workforce_api.system_review_queue import fail_review as fail_scoping
 from ai_workforce_api.system_review_queue import open_reviews as open_scopings
 from ai_workforce_api.testing_engine import fail_run, open_runs
 from ai_workforce_api.workflow import DurableUnavailable, WorkflowRunBody
+from ai_workforce_api.workpaper_redraft import fail_redraft, open_redrafts
 from ai_workforce_api.workpaper_service import fail_draft as fail_workpaper
 from ai_workforce_api.workpaper_service import open_drafts as open_workpapers
 
@@ -144,6 +147,12 @@ class TemporalAdapter:
         except Exception as error:
             raise DurableUnavailable() from error
 
+    def schedule_workpaper_redrafts(self, proposal_ids: list[UUID]) -> None:
+        try:
+            asyncio.run(_schedule_redrafts(self._address, proposal_ids))
+        except Exception as error:
+            raise DurableUnavailable() from error
+
     def schedule_system_reviews(self, application_ids: list[UUID]) -> None:
         try:
             asyncio.run(_schedule_scopings(self._address, application_ids))
@@ -205,6 +214,7 @@ async def serve(
     narrative: Callable[[UUID], str] | None = None,
     policy: Callable[[UUID], str] | None = None,
     assess: Callable[[UUID], str] | None = None,
+    redraft: Callable[[UUID], str] | None = None,
 ) -> AsyncIterator[None]:
     client = await Client.connect(address)
     worker = Worker(
@@ -219,6 +229,7 @@ async def serve(
             ConsoleTurnWorkflow,
             ControlTestingWorkflow,
             WorkpaperDraftWorkflow,
+            WorkpaperRedraftWorkflow,
             SetupDraftWorkflow,
             ControlReviewWorkflow,
             SystemReviewWorkflow,
@@ -245,6 +256,7 @@ async def serve(
             narrative,
             policy,
             assess,
+            redraft,
         ),
     )
     async with worker:
@@ -255,6 +267,7 @@ async def serve(
         await resume_turns(client, database_url)
         await resume_tests(client, database_url)
         await resume_workpapers(client, database_url)
+        await resume_redrafts(client, database_url)
         await resume_setups(client, database_url)
         await resume_reviews(client, database_url)
         await resume_scopings(client, database_url)
@@ -531,6 +544,37 @@ async def _schedule_workpapers(address: str, workpaper_ids: list[UUID]) -> None:
         await start_workpaper(client, workpaper_id)
 
 
+async def resume_redrafts(client: Client, database_url: str) -> int:
+    try:
+        with connect(database_url) as connection:
+            ids = open_redrafts(connection)
+        for proposal_id in ids:
+            await start_redraft(client, proposal_id)
+    except Exception:
+        logger.warning("section redrafts could not be resumed")
+        return 0
+    return len(ids)
+
+
+async def start_redraft(client: Client, proposal_id: UUID) -> None:
+    payload: RedraftRequest = {"proposal_id": str(proposal_id)}
+    try:
+        await client.start_workflow(
+            WorkpaperRedraftWorkflow.run,
+            payload,
+            id=f"workpaper-redraft:{proposal_id}",
+            task_queue=TASK_QUEUE,
+        )
+    except WorkflowAlreadyStartedError:
+        return
+
+
+async def _schedule_redrafts(address: str, proposal_ids: list[UUID]) -> None:
+    client = await Client.connect(address)
+    for proposal_id in proposal_ids:
+        await start_redraft(client, proposal_id)
+
+
 async def resume_reviews(client: Client, database_url: str) -> int:
     try:
         with connect(database_url) as connection:
@@ -776,6 +820,7 @@ def activities_for(
     narrative: Callable[[UUID], str] | None = None,
     policy: Callable[[UUID], str] | None = None,
     assess: Callable[[UUID], str] | None = None,
+    redraft: Callable[[UUID], str] | None = None,
 ) -> list[Any]:
     @activity.defn(name="record_effect")
     async def record_effect(
@@ -957,6 +1002,29 @@ def activities_for(
         def fail() -> None:
             with connect(database_url) as connection:
                 fail_workpaper(connection, UUID(workpaper_id))
+
+        await asyncio.to_thread(fail)
+
+    @activity.defn(name="redraft_workpaper_section")
+    async def redraft_workpaper_section(proposal_id: str) -> str:
+        if redraft is None:
+
+            def unavailable() -> None:
+                from ai_workforce_api.workpaper_redraft import NO_ENGINE, fail
+
+                with connect(database_url) as connection:
+                    fail(connection, UUID(proposal_id), NO_ENGINE)
+
+            await asyncio.to_thread(unavailable)
+            return "FAILED"
+        # Redrafting calls the model and the database, so it runs off the event loop.
+        return await asyncio.to_thread(redraft, UUID(proposal_id))
+
+    @activity.defn(name="fail_workpaper_redraft")
+    async def fail_workpaper_redraft(proposal_id: str) -> None:
+        def fail() -> None:
+            with connect(database_url) as connection:
+                fail_redraft(connection, UUID(proposal_id))
 
         await asyncio.to_thread(fail)
 
@@ -1146,6 +1214,8 @@ def activities_for(
         fail_narrative_run,
         draft_workpaper,
         fail_workpaper_draft,
+        redraft_workpaper_section,
+        fail_workpaper_redraft,
         draft_setup,
         fail_setup_draft,
         run_evidence_plan,

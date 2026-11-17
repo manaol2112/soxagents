@@ -233,6 +233,34 @@ class WorkpaperDraftWorkflow:
         return str(result)
 
 
+class RedraftRequest(TypedDict):
+    proposal_id: str
+
+
+@workflow.defn(name="workpaper_section_redraft")
+class WorkpaperRedraftWorkflow:
+    """The agent redrafts one section a person asked for (docs/design-workpaper.md,
+    section 3.11), with retries; a run that gives up ends its proposal FAILED."""
+
+    @workflow.run
+    async def run(self, payload: RedraftRequest) -> str:
+        try:
+            result = await workflow.execute_activity(
+                "redraft_workpaper_section",
+                args=[payload["proposal_id"]],
+                start_to_close_timeout=timedelta(minutes=10),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+        except ActivityError:
+            await workflow.execute_activity(
+                "fail_workpaper_redraft",
+                args=[payload["proposal_id"]],
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            return "FAILED"
+        return str(result)
+
+
 class ReviewRequest(TypedDict):
     review_id: str
 
