@@ -506,6 +506,29 @@ def choice_refusal(kind: str, deficiencies: int, results: Results) -> str | None
     return None
 
 
+def prepare_rule_refusal(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
+) -> str | None:
+    """Why the preparer may not sign on the conclusion that stands, read again on the
+    records as they are now (docs/design-workpaper.md, section 3.9): the rule that allowed
+    the choice (`choice_refusal`) refuses it now, for example an exception or a file not
+    relied on recorded after an Effective choice. None where it holds, where no choice
+    stands, and for Not concluded (the refusals of section 3.7 say those). Read in the
+    caller's transaction, under the workpaper's lock that preparing takes."""
+    facts = _facts(connection, project_id, control_id, assemble=True)
+    choice = facts.choice
+    if choice is None or choice.kind == "NOT_CONCLUDED":
+        return None
+    refusal = choice_refusal(choice.kind, len(facts.deficiencies), facts.results())
+    if refusal is None:
+        return None
+    return f"{NO_LONGER_FITS} {refusal}. Record it again."
+
+
+# The preparer's sign-off of a conclusion the records no longer allow (section 3.9).
+NO_LONGER_FITS = "The conclusion no longer fits the records:"
+
+
 def _deficiency_refusal(kind: str) -> str:
     """The refusal of a conclusion that a standing design deficiency rules out."""
     words = KIND_WORDS.get(kind, kind)

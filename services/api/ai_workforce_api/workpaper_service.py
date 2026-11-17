@@ -1482,6 +1482,16 @@ def prepare_in(
         refusal = design_prepare_refusal(cursor, project_id, control_id)
         if refusal is not None:
             raise WorkpaperState(refusal)
+        # The conclusion that stands is read again on the records as they are now: the
+        # rule that allowed it is applied at the sign-off too, so an exception recorded
+        # after an Effective choice is evaluated by the conclusion (section 3.9).
+        from ai_workforce_api.design_conclusions import prepare_rule_refusal
+        from ai_workforce_api.design_points import demo_seeding
+
+        if not demo_seeding(connection, project_id, principal.id):
+            refusal = prepare_rule_refusal(connection, project_id, UUID(str(control_id)))
+            if refusal is not None:
+                raise WorkpaperState(refusal)
         # Then every point of the workpaper is settled, by its own action or by a
         # consideration (section 3.9). Read under the same lock, which considering a point
         # also takes first. The demo seeding its own engagement keeps the rules it had.

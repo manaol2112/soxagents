@@ -413,6 +413,37 @@ def test_the_preparers_sign_off_waits_for_every_point(migrated: Database) -> Non
     assert prepared.json()["status"] == "PREPARED"
 
 
+def test_the_preparers_sign_off_reads_the_conclusion_again(migrated: Database) -> None:
+    """Section 3.9: the rule that allowed the conclusion is applied again when the preparer
+    signs. A design deficiency or a person's exception recorded after an Effective choice
+    no longer lets the workpaper be prepared on it, with the rule's own sentence."""
+    from test_attribute_dispositions import _record as _tickmark
+
+    case = _Points(migrated, "dpt-refit")
+    for point in case.waiting():
+        assert case.consider(point["key"]).status_code == 200
+    assert case.waiting() == []
+    # A person's exception on B after the Effective choice.
+    assert _tickmark(case.bench, case.ids["B"], "EXCEPTION").status_code == 200
+    for point in case.waiting():
+        assert case.consider(point["key"]).status_code == 200
+    paper = case.paper()
+    refused = case.bench.owner.post(
+        f"{case.bench.base}/workpapers/{paper['id']}/prepare", json={"version": paper["version"]}
+    )
+    assert refused.status_code == 409, refused.text
+    detail = refused.json()["detail"]
+    assert detail.startswith("The conclusion no longer fits the records: an exception stands on ")
+    assert detail.endswith("so the conclusion cannot be \u201cEffective\u201d. Record it again.")
+    assert case.paper()["status"] == "DRAFT"
+    # A design deficiency logged too: its rule's sentence comes first.
+    case.deficiency()
+    case.prepare_refused(
+        "The conclusion no longer fits the records: a design deficiency is logged, so the "
+        "conclusion cannot be \u201cEffective\u201d. Record it again."
+    )
+
+
 def test_a_point_settled_by_its_own_action_is_no_longer_assembled(migrated: Database) -> None:
     from test_file_reliability import _record as _decide
 
