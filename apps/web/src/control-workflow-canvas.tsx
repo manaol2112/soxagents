@@ -141,13 +141,17 @@ const StepNode = memo(function StepNode({
           <span className="wf-num">{number}</span>
         </span>
         <span className="wf-title">{step.title}</span>
-        <span className="wf-covers">{step.covers}</span>
         <span className="wf-state" title={step.status}>
           {step.agent ? (
             <span className="wf-pulse" aria-hidden="true" />
           ) : step.tone === "done" ? (
             <span className="wf-check" aria-hidden="true">
               <UiIcon name="check" size={11} />
+            </span>
+          ) : step.tone === "idle" ? (
+            // Waiting: a clock, as the node preview the product owner chose (17 November 2026).
+            <span className="wf-wait" aria-hidden="true">
+              <UiIcon name="clock" size={14} />
             </span>
           ) : (
             <span className={`wf-dot tone-${step.tone}`} aria-hidden="true" />

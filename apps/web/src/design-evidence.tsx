@@ -2853,7 +2853,7 @@ function Row({
                       <div className="tc-row-acts">
                         <button
                           type="button"
-                          className="btn btn-sm"
+                          className="btn btn-secondary btn-sm"
                           disabled={locked}
                           onClick={() => void accept()}
                         >

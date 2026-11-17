@@ -9,7 +9,6 @@ import {
   useState,
   useTransition,
 } from "react";
-import { AgentAvatar } from "./agent-avatar";
 import {
   moveOutcome,
   nextStage,
@@ -332,7 +331,7 @@ export function DemoGuide({
             )
           }
         >
-          <UiIcon name="sparkles" size={14} />
+          <UiIcon name="book" size={14} />
           <span>
             {status === "COMPLETED"
               ? "Take the tour again"
@@ -362,7 +361,7 @@ export function DemoGuide({
           aria-expanded="false"
           aria-controls="demo-guide"
         >
-          <UiIcon name="sparkles" size={14} />
+          <UiIcon name="book" size={14} />
           <span>Guided tour</span>
           <small>{progressLabel(stage)}</small>
         </button>
@@ -401,11 +400,11 @@ export function DemoGuide({
         aria-busy={busy}
       >
         <header className="dg-head">
-          <AgentAvatar
-            size={40}
-            label="Guide"
-            state={busy ? "working" : "idle"}
-          />
+          {/* The tour is the product's, not an agent's: a neutral mark, not the agent's
+              violet avatar (colour meaning map, 17 November 2026). */}
+          <span className="dg-mark" aria-hidden="true">
+            <UiIcon name="book" size={18} />
+          </span>
           <div className="dg-head-text">
             <strong>Guided tour</strong>
             <span className="dg-progress-label">{progressLabel(stage)}</span>

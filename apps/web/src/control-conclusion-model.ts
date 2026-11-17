@@ -40,6 +40,18 @@ export const VERDICT_WORDS: Record<Verdict, string> = {
   NOT_EFFECTIVE: "Not effective",
 };
 
+/** The verdict card's kicker: whose verdict it is. None before there is one (design review,
+ * 17 November 2026): "Not ready to conclude" over "Not concluded" and "Waits until the D&I
+ * conclusion is signed off", under the header's "Waiting on D&I conclusion", said it three
+ * times. */
+export function verdictKicker(status: ConclusionStatus): string | null {
+  return status === "FINAL"
+    ? "Concluded at the independent review"
+    : status === "PROPOSED"
+      ? "The agent's proposed conclusion"
+      : null;
+}
+
 export const PHASE_STATE_WORDS: Record<PhaseState, string> = {
   NOT_APPLICABLE: "Does not apply",
   NOT_PERFORMED: "Not performed",
@@ -226,6 +238,25 @@ export function ratingState(item: ConclusionDeficiency): {
     return { tone: "done", label: `Rated ${SEVERITY_LABELS[item.severity]}` };
   }
   return { tone: "attention", label: "To rate" };
+}
+
+/** A testing phase's row under "What it rests on": the badge and the line under its name.
+ * The line is left out when it would only repeat the badge ("Not started" twice; design
+ * review, 17 November 2026). */
+export function phaseRow(phase: ControlConclusion["phases"][number]): {
+  badge: string;
+  line: string;
+} {
+  const badge =
+    phase.conclusion !== null
+      ? phase.retested
+        ? "Effective after retest"
+        : VERDICT_WORDS[phase.conclusion]
+      : PHASE_STATE_WORDS[phase.state];
+  const line = phase.retested
+    ? "Exceptions found; retested effective after remediation"
+    : PHASE_STATE_WORDS[phase.state];
+  return { badge, line: line === badge ? "" : line };
 }
 
 export type RateWrite =

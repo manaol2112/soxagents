@@ -5,6 +5,7 @@ import { useEffect, useId, useRef } from "react";
 
 import { type AddedSystem, openSelectControls } from "./system-added-model";
 import { UiIcon } from "./ui-icon";
+import { isTopmostDialog, useFocusTrap } from "./use-focus-trap";
 
 /**
  * Said once a system is added (the product owner's reference, 27 October 2026): the
@@ -24,11 +25,14 @@ export function SystemAddedDialog({
   const router = useRouter();
   const id = useId();
   const primary = useRef<HTMLButtonElement>(null);
+  const box = useRef<HTMLElement>(null);
+  // Tab stays inside the dialog; Escape closes only the topmost dialog.
+  useFocusTrap(box);
 
   useEffect(() => {
     primary.current?.focus();
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && isTopmostDialog(box.current)) {
         onClose();
       }
     };
@@ -39,6 +43,7 @@ export function SystemAddedDialog({
   return (
     <div className="as-backdrop" role="presentation">
       <section
+        ref={box}
         className="sa"
         role="dialog"
         aria-modal="true"

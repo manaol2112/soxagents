@@ -41,7 +41,12 @@ export async function GET(request: Request) {
     });
     const policy = response.headers.get("content-security-policy");
     if (policy !== null) {
-      passed.set("content-security-policy", policy);
+      // The API's sandbox, kept over the app-wide policy (next.config.ts), so it also
+      // forbids framing.
+      passed.set(
+        "content-security-policy",
+        `${policy}; frame-ancestors 'none'`,
+      );
     }
     return new NextResponse(await response.arrayBuffer(), { headers: passed });
   } catch {

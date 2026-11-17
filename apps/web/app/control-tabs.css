@@ -20,8 +20,8 @@
   align-self: center;
   padding: 0.2rem 0.65rem;
   font-size: var(--fs-xs);
-  font-weight: 600;
-  border-radius: 999px;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
 }
 
 .cw-needs-badge {
@@ -30,18 +30,18 @@
   gap: 0.4rem;
   min-height: 36px;
   padding: 0 0.85rem;
-  color: var(--warning);
+  color: var(--text-strong);
   font-size: var(--fs-sm);
-  font-weight: 650;
+  font-weight: 500;
   text-decoration: none;
-  background: var(--warning-soft);
-  border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent);
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: var(--radius);
   transition: background-color 120ms ease;
 }
 
 .cw-needs-badge:hover {
-  background: color-mix(in srgb, var(--warning-soft) 70%, var(--warning) 12%);
+  background: var(--surface-hover);
 }
 
 /* Two columns where a tab keeps its side column; one elsewhere. */
@@ -134,7 +134,7 @@
   margin: 1rem 0 0.4rem;
   color: var(--text-secondary);
   font-size: var(--fs-xs);
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -173,8 +173,8 @@
   padding: 1.15rem 1.35rem;
   background: var(--surface);
   border: 1px solid var(--border-subtle, var(--border));
-  border-radius: 14px;
-  box-shadow: var(--shadow-xs, 0 1px 2px rgb(16 24 40 / 4%));
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
 }
 
 .rs-card h2 {
@@ -183,8 +183,8 @@
   gap: 0.65rem;
   margin: 0;
   color: var(--text-strong);
-  font-size: 18px;
-  font-weight: 650;
+  font-size: var(--fs-xl);
+  font-weight: 600;
 }
 
 .rs-card h2 > svg {
@@ -212,7 +212,7 @@
   font-size: var(--fs-sm);
   font-weight: 600;
   background: var(--accent-soft);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 .rs-rows dd {
@@ -245,7 +245,7 @@
 .rs-scope dt {
   color: var(--text-secondary);
   font-size: var(--fs-xs);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .rs-scope dd {
@@ -284,9 +284,9 @@
   padding: 0.45rem 0.9rem;
   color: var(--text-strong);
   font-size: var(--fs-sm);
-  font-weight: 650;
+  font-weight: 600;
   background: var(--accent-soft);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 .rs-phase > svg {

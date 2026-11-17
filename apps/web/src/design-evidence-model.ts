@@ -273,8 +273,10 @@ export const EVIDENCE_CHIPS: Record<
   INSUFFICIENT: { label: "Insufficient", tone: "danger" },
   // Its request is marked received, yet no file serves this row.
   NO_FILE: { label: "No file yet", tone: "warning" },
-  // The planner proposes a change to it: the pre-release list's own word.
-  TO_ACCEPT: { label: "To accept", tone: "ai" },
+  // The planner proposes a change to it: the pre-release list's own word, and its tone (it
+  // waits on a person: design-requests-model.ts, REQUEST_CHIPS; design audit, 17 November
+  // 2026).
+  TO_ACCEPT: { label: "To accept", tone: "warning" },
   NOT_APPLICABLE: { label: "Not applicable", tone: "neutral" },
   CANCELLED: { label: "Request cancelled", tone: "neutral" },
 };
@@ -806,7 +808,9 @@ function deliveryOf(
   if (carrier === null) {
     return {
       ...base,
-      status: "Not drafted yet",
+      // "Drafted" means one thing on this step: the message to the owner (product owner,
+      // 17 November 2026, on a screen saying "Drafted 2 requests" above "Not drafted yet").
+      status: "Message not drafted yet",
       tone: "neutral",
       canChange: false,
       out: false,
@@ -1043,7 +1047,7 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
             : state === "CANCELLED"
               ? "Its request was cancelled."
               : item.requestId === null
-                ? "It is not drafted yet, so there is no request to file evidence to."
+                ? "Its message is not drafted yet, so there is nothing to file evidence to yet."
                 : null,
       canAccept,
       judgeable,
@@ -1663,7 +1667,9 @@ function headerOf(facts: {
       n: read.filter((row) => row.proposal === key).length,
     }))
     .filter((item) => item.n > 0);
-  const drafted = `Drafted ${plural(live.length, "request")} from the control's understanding and its attributes.`;
+  // The planner plans the requests; the coordinator drafts each one's message. The agent's
+  // line says planned, so it never reads against a message not drafted yet (17 November 2026).
+  const drafted = `Planned ${plural(live.length, "request")} from the control's understanding and its attributes.`;
   const found = [
     facts.attributes > 0
       ? `${plural(live.length, "request")} against ${plural(facts.attributes, "approved attribute")}.`
@@ -1766,11 +1772,11 @@ function headerOf(facts: {
       : {
           standing: "NOT_DRAFTED",
           tone: "idle",
-          status: `${toSend} not drafted yet`,
+          status: `${plural(toSend, "message")} not drafted yet`,
           need: {
             kind: "wait",
-            title: "Not drafted yet",
-            detail: `${plural(toSend, "request")} ${toSend === 1 ? "is" : "are"} not drafted yet. Nothing is sent until you approve it.`,
+            title: toSend === 1 ? "Message not drafted yet" : "Messages not drafted yet",
+            detail: `${toSend === 1 ? "The message for 1 request is" : `The messages for ${toSend} requests are`} not drafted yet. Nothing is sent until you approve it.`,
           },
           agent: { did: drafted, found },
         };

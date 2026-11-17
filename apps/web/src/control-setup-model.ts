@@ -47,7 +47,14 @@ export type SetupInput = {
   openQuestions: number;
   documents: number;
   unreviewedDocuments: number;
-  plan: { exists: boolean; approved: boolean; pendingReview: boolean };
+  /** `drafting`: the planner is drawing the plan up, or it was returned to the preparer
+   * (control-workflow-model.ts reads it for Scope & Sampling). */
+  plan: {
+    exists: boolean;
+    approved: boolean;
+    pendingReview: boolean;
+    drafting?: boolean;
+  };
   /** A member who prepares the work (canRequestEvidence). */
   canAct: boolean;
   /** The plan's own rule for who approves it (master plan viewerCanDecide). */

@@ -1092,8 +1092,8 @@ export function statusLine(review: Review): { done: boolean; text: string } {
     return {
       done: true,
       text: review.attributesSettled
-        ? "Understood, and the attributes are settled. The D&I requests are ready to review."
-        : "Understood. Next, finalize the attributes: the D&I evidence is requested against them.",
+        ? "The attributes are settled from this understanding, and the D&I requests are ready to review."
+        : "Next, finalize the attributes: the D&I evidence is requested against them.",
     };
   }
   const plural = (count: number) => (count === 1 ? "point" : "points");
@@ -1155,12 +1155,211 @@ export function readyLines(review: Review): Array<{
   ];
 }
 
-/** Where the understanding's done step leads: the attributes until they are settled, then
- * the D&I evidence. */
-export function nextAfterUnderstanding(
+// The questions still open once the gates read understood (design review, 17 November 2026:
+// "ITGC-AC-01 is understood. Every point the evidence and the attributes rely on is on
+// record" and a fold chip "Confirmed" stood over "Step 1 of 2: Which policy sets who may
+// approve access, and to what?", tagged "Used for D&I evidence", with no answer chosen; and
+// the checklist said "D&I evidence can be requested · Ready"). The gates do not count an
+// optional point, so the header, the chip and the checklist count the open steps here.
+// One count (second review of the same day: "1 question is open below" and "1 open" over
+// "Step 1 of 2", a walkthrough topic with only optional questions left counted by the footer
+// and not by the header): every open step of the course, the ones the footer pages through,
+// optional ones included and named as such.
+
+/** The steps of the course still open, in its order: what the header, the chip, the footer
+ * and the last step's list count. An optional one is included (it is asked, and can be
+ * left); a step reopened to change an answer on record (`changing`) is not. */
+export function openStepKeys(
   review: Review,
-): "attributes" | "evidence" {
-  return review.attributesSettled ? "evidence" : "attributes";
+  interview: Interview,
+  changing: readonly string[] = [],
+): string[] {
+  return interview.plan.filter(
+    (step) => !changing.includes(step) && stepOpen(review, interview, step),
+  );
+}
+
+/** How many of `keys` (open steps) are optional: a point the gates do not count, a
+ * walkthrough topic whose required questions are all answered, last year's step whose open
+ * answers are all optional. */
+export function optionalOpen(
+  review: Review,
+  interview: Interview,
+  keys: readonly string[],
+): number {
+  const byKey = new Map(review.needs.map((need) => [need.key, need]));
+  return keys.filter((step) => {
+    if (stepTopic(step) !== null) {
+      return !stepRequired(review, interview, step);
+    }
+    if (step === CARRIED) {
+      return interview.carried
+        .filter((key) => isOpen(review, key))
+        .every((key) => byKey.get(key)?.required === false);
+    }
+    return byKey.get(step)?.required === false;
+  }).length;
+}
+
+/** The footer's place in the course. While the header counts the open questions
+ * (`settled`), it pages through those same open steps: "Step 1 of 2" beside "2 questions are
+ * open below"; on a step no longer open, no count. Before, through the whole course. */
+export function courseWhere(facts: {
+  plan: readonly string[];
+  changing: readonly string[];
+  at: number;
+  open: readonly string[];
+  settled: boolean;
+}): string | null {
+  const step = facts.plan[facts.at];
+  if (step !== undefined && facts.changing.includes(step)) {
+    return "Changing an answer on record";
+  }
+  if (facts.settled) {
+    const index = step === undefined ? -1 : facts.open.indexOf(step);
+    return facts.open.length > 1 && index >= 0
+      ? `Step ${index + 1} of ${facts.open.length}`
+      : null;
+  }
+  const total = facts.plan.length - facts.changing.length;
+  return facts.plan.length > 1
+    ? `Step ${Math.min(facts.at + 1, total)} of ${total}`
+    : null;
+}
+
+/** Whether the header counts the open questions rather than the points confirmed: the fold's
+ * chip and the footer follow the same switch. */
+export function countsOpen(facts: {
+  progress: { total: number };
+  done: boolean;
+  complete: boolean;
+}): boolean {
+  return !(facts.progress.total > 0 && !facts.done && !facts.complete);
+}
+
+/** How many of the open steps feed `what`: a point by what it is needed for, a walkthrough
+ * topic by its open questions', last year's step by its open answers'. */
+export function openFeeding(
+  review: Review,
+  interview: Interview,
+  what: NeededFor,
+): number {
+  const byKey = new Map(review.needs.map((need) => [need.key, need]));
+  const feeds = (key: string) => {
+    const need = byKey.get(key);
+    return (
+      need !== undefined &&
+      need.status !== "CONFIRMED" &&
+      need.neededFor.includes(what)
+    );
+  };
+  return openStepKeys(review, interview).filter((step) => {
+    const topic = stepTopic(step);
+    if (topic !== null) {
+      return topicQuestions(review, topic).some((need) => feeds(need.key));
+    }
+    return step === CARRIED ? interview.carried.some(feeds) : feeds(step);
+  }).length;
+}
+
+/** The open questions as the header says them: "" for none. `optional`: how many of them
+ * are optional, named ("2 questions are open below, 1 of them optional"; "2 optional
+ * questions …" when all are). `raisedSince`: the understanding is complete and a gate reads
+ * open again, so a question came after. `where`: "below" in the header, "here" on the last
+ * step, which lists them. */
+export function openQuestionsLine(
+  open: number,
+  optional = 0,
+  raisedSince = false,
+  where: "below" | "here" = "below",
+): string {
+  if (open <= 0) {
+    return "";
+  }
+  const one = open === 1;
+  const all = optional >= open;
+  const noun = `${all ? "optional " : ""}${one ? "question" : "questions"}`;
+  const some =
+    optional > 0 && !all
+      ? `, ${optional === 1 ? "1 of them" : `${optional} of them`} optional`
+      : "";
+  return `${open} ${noun}${raisedSince ? " raised since" : ""} ${one ? "is" : "are"} open ${where}${some}; ${one ? "it does" : "they do"} not hold the attributes.`;
+}
+
+/** The header's line once the gates read understood, or the understanding is complete
+ * (`completeLine` its time in words; null when not recorded complete). "Every point … is on
+ * record" only while no question is open. */
+export function understoodLede(facts: {
+  done: boolean;
+  completeLine: string | null;
+  open: number;
+  /** How many of the open questions are optional. */
+  optional?: number;
+  statusText: string;
+}): string {
+  const onRecord =
+    "Every point the evidence and the attributes rely on is on record.";
+  const rest =
+    facts.open > 0
+      ? openQuestionsLine(
+          facts.open,
+          facts.optional ?? 0,
+          facts.completeLine !== null && !facts.done,
+        )
+      : facts.done
+        ? onRecord
+        : facts.statusText;
+  return facts.completeLine === null ? rest : `${facts.completeLine}. ${rest}`;
+}
+
+/** The chip on the understanding's fold (shown at narrow widths): the header's count while
+ * the header counts, the open questions while any is open, and "Confirmed" only when none
+ * is. */
+export function foldChip(facts: {
+  progress: { done: number; total: number };
+  done: boolean;
+  complete: boolean;
+  open: number;
+}): string {
+  const { progress } = facts;
+  if (countsOpen(facts) && facts.open > 0) {
+    return `${facts.open} open`;
+  }
+  if (progress.total > 0) {
+    return `${progress.done} of ${progress.total}`;
+  }
+  return facts.done ? "Confirmed" : "Draft";
+}
+
+/** The checklist with the open questions that feed the D&I evidence: a ready line says one
+ * may still change a request (the question's own tag says "Used for D&I evidence"; an answer
+ * the agents read again can change the D&I requests, evidence_plans.queue_for_understanding).
+ * Where only some of the `open` questions feed it, the line says which share: "1 of the 2
+ * open questions may change a request", beside the header's "2 questions are open". */
+export function readyWithOpen<
+  T extends { key: "attributes" | "evidence"; ready: boolean; note: string },
+>(lines: readonly T[], evidenceOpen: number, open = evidenceOpen): T[] {
+  const share =
+    evidenceOpen < open
+      ? `${evidenceOpen} of the ${open} open questions`
+      : `${evidenceOpen} open ${evidenceOpen === 1 ? "question" : "questions"}`;
+  return lines.map((line) =>
+    line.key === "evidence" && line.ready && evidenceOpen > 0
+      ? {
+          ...line,
+          note: `${line.note} · ${share} may change a request`,
+        }
+      : line,
+  );
+}
+
+/** Where the understanding's done step leads: the Attributes step, the step that follows it,
+ * whether or not the attributes are settled (product owner, 17 November 2026: "Why is this
+ * button jumping to the D&I evidence? Next step is attributes after control understanding").
+ * Once settled, that step says so and leads on to each branch's next step. Before, a settled
+ * set of attributes sent the person past it, to the D&I evidence. */
+export function nextAfterUnderstanding(_review: Review): "attributes" {
+  return "attributes";
 }
 
 /** A statement part as the draft shows it: a label that starts a sentence is capitalized
@@ -1592,7 +1791,9 @@ export function interviewProgress(
   };
 }
 
-/** The words that say what a point is needed for. */
+/** The words that say what a point is needed for: "Used for …" where the point is optional,
+ * which never stands beside an "Optional" that contradicts a "Needed for" (design review,
+ * 17 November 2026). */
 export function neededForLine(need: Need): string {
   const words = need.neededFor.map((each) =>
     each === "EVIDENCE"
@@ -1601,7 +1802,10 @@ export function neededForLine(need: Need): string {
         ? "attributes"
         : "testing",
   );
-  return words.length === 0 ? "" : `Needed for ${words.join(" · ")}`;
+  if (words.length === 0) {
+    return "";
+  }
+  return `${need.required ? "Needed" : "Used"} for ${words.join(" · ")}`;
 }
 
 // Walkthrough notes (product owner, 9 November 2026): the planner's answers from pasted notes,

@@ -404,7 +404,9 @@ export function ConfidencePill({ about }: { about: FileAbout }) {
   const confirmed = analysis.confirmedKind != null;
   const confidence = analysis.classification.confidence;
   return (
-    <span className={`ed-confidence is-${confirmed ? "high" : confidence}`}>
+    // The agent's classification is agent output (violet) until a person confirms it
+    // (green); the words carry the confidence (design audit, 17 November 2026).
+    <span className={confirmed ? "pill pill-dot tone-success" : "pill tone-ai"}>
       {confirmed
         ? "Confirmed"
         : `${confidence.charAt(0).toUpperCase()}${confidence.slice(1)} confidence`}

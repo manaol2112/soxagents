@@ -345,6 +345,14 @@ const count = (n: number, word: string, many = `${word}s`) =>
 const GONE = ["CANCELLED", "REMOVED", "NOT_APPLICABLE"];
 const TO_DECIDE = ["PARTIALLY_RECEIVED", "RECEIVED", "UNDER_REVIEW"];
 const STALLED = ["INSUFFICIENT", "FOLLOW_UP_REQUIRED", "OVERDUE"];
+/** An item no request message is drafted for yet. */
+const UNDRAFTED = ["NOT_GENERATED", "AWAITING_DEPENDENCY"];
+
+/** A step an earlier one still holds: nothing on it is done yet, so the agent's line says
+ * what the agent does, never what it did (product owner, 17 November 2026: "Drafted 2
+ * requests" above "Not drafted yet"). */
+const holds = (step: WorkflowStep) =>
+  step.status.startsWith("Waiting on") || step.status === "Not started";
 
 /** What the agent did on a step and what it found, from the records the workflow reads:
  * the agent's strip in the step's panel. Never an instruction, and never a claim the
@@ -374,13 +382,15 @@ export function agentNote(
   };
   // Before its requests are drafted nothing is requested, so no evidence is accepted yet
   // either: the requests are drafted once a person has accepted the list.
-  const planned = (phases: readonly string[]) => {
-    const live = input.requirements.filter(
+  const live = (phases: readonly string[]) =>
+    input.requirements.filter(
       (item) => phases.includes(item.phase) && !GONE.includes(item.state),
-    ).length;
-    return live === 0
+    );
+  const planned = (phases: readonly string[]) => {
+    const n = live(phases).length;
+    return n === 0
       ? "No requests are planned yet."
-      : `${count(live, "request")} planned, drafted once the list is accepted.`;
+      : `${count(n, "request")} planned, drafted once the list is accepted.`;
   };
   const paper = (which: WorkflowInput["designPaper"], name: string) =>
     which === null
@@ -430,23 +440,36 @@ export function agentNote(
       }
       // Before its requests are drafted: while the phase is unreleased, and while the
       // requests list is still the step's work (being drafted).
-      return input.designRelease?.step === "READY" ||
+      // With nothing planned, or no message drafted, the line says what the agent does, not
+      // what it did (17 November 2026: never "Planned" over "No requests are planned yet").
+      if (
+        input.designRelease?.step === "READY" ||
         input.designRelease?.step === "WAITING" ||
         (input.designRequests ?? null) !== null
-        ? {
-            did: "Planned the D&I requests from the control's understanding, each against the attributes it addresses.",
-            found: [planned(["DESIGN"])],
-          }
-        : {
-            did: "Drafted the D&I evidence requests and read each file that came back.",
-            found: evidence(["DESIGN"]),
-          };
+      ) {
+        return {
+          did:
+            live(["DESIGN"]).length === 0
+              ? "Plans the D&I requests from the control's understanding, each against the attributes it addresses."
+              : "Planned the D&I requests from the control's understanding, each against the attributes it addresses.",
+          found: [planned(["DESIGN"])],
+        };
+      }
+      return {
+        did: live(["DESIGN"]).some((item) => !UNDRAFTED.includes(item.state))
+          ? "Drafted the D&I evidence requests and read each file that came back."
+          : "Drafts the D&I evidence requests once they are planned, and reads each file that comes back.",
+        found: evidence(["DESIGN"]),
+      };
     case "designassessment": {
       // One D&I step (section 3.8): the workpaper, then the conclusion and its sign-off.
       const drafted = paper(input.designPaper, "design workpaper");
       const said = conclusionNote(input);
+      // Not started, or still being drafted: the line says what the agent does (17 November
+      // 2026: never "Drafted" over "The design workpaper is not started.").
+      const pending = input.designPaper === null || input.designPaper.drafting;
       return {
-        did: `Drafted the design workpaper: the walkthrough of one instance and each design attribute. ${said.did}`,
+        did: `${pending ? "Drafts" : "Drafted"} the design workpaper: the walkthrough of one instance and each design attribute. ${said.did}`,
         found: [drafted, ...said.found],
       };
     }
@@ -457,8 +480,14 @@ export function agentNote(
         (input.understanding?.completedAt ?? null) !== null
           ? 0
           : (input.attributes.questions ?? 0);
+      // Held by the understanding, the line says what the agent does; with criteria still to
+      // tailor, it never claims each one is tailored (17 November 2026).
       return {
-        did: "Started from the standard's attributes, proposed what the understanding changes, and tailored each one's pass/fail criteria to this control.",
+        did: holds(step)
+          ? "Starts from the standard's attributes, proposes what the understanding changes, and tailors each one's pass/fail criteria to this control."
+          : (input.attributes.untailored ?? 0) > 0
+            ? "Started from the standard's attributes and proposed what the understanding changes."
+            : "Started from the standard's attributes, proposed what the understanding changes, and tailored each one's pass/fail criteria to this control.",
         found: [
           `${count(input.attributes.approved, "attribute")} approved${input.attributes.proposed > 0 ? `, ${input.attributes.proposed} proposed to decide` : ""}.`,
           ...(questions > 0
@@ -475,14 +504,23 @@ export function agentNote(
       };
     }
     case "testdesign":
+      // The line agrees with the node (17 November 2026): a plan being drafted never "awaits
+      // approval", one held by the attributes waits on them, and no plan is never "proposed".
       return {
-        did: "Proposed the phases, the sample and the periods from the understanding and the firm's methodology.",
+        did:
+          input.plan.exists || input.plan.approved
+            ? "Proposed the phases, the sample and the periods from the understanding and the firm's methodology."
+            : "Proposes the phases, the sample and the periods from the understanding and the firm's methodology.",
         found: [
           input.plan.approved
             ? "The test plan is approved."
-            : input.plan.exists
-              ? "The test plan awaits approval."
-              : "The test plan is not drafted yet.",
+            : input.plan.drafting === true
+              ? "The test plan is being drafted."
+              : input.plan.exists
+                ? holds(step)
+                  ? "The test plan is drafted, and is approved once the attributes are settled."
+                  : "The test plan awaits approval."
+                : "The test plan is not drafted yet.",
         ],
       };
     case "oeevidence":
@@ -508,7 +546,10 @@ export function agentNote(
         (item) => item.status !== "CLOSED",
       ).length;
       return {
-        did: "Proposed the conclusion from the D&I verdict, the OE results and the deficiencies, with a severity suggested for each.",
+        // Held by an earlier step, nothing is proposed yet (17 November 2026).
+        did: holds(step)
+          ? "Proposes the conclusion from the D&I verdict, the OE results and the deficiencies, with a severity suggested for each."
+          : "Proposed the conclusion from the D&I verdict, the OE results and the deficiencies, with a severity suggested for each.",
         found: [
           open === 0
             ? "No deficiency stands against the control."
@@ -569,7 +610,8 @@ function conclusionNote(input: WorkflowInput): {
   if (named !== undefined) {
     const signedOff = input.designConclusion?.status === "SIGNED_OFF";
     return {
-      did: `Proposed the D&I conclusion from the records; the preparer records it and sends the workpaper for review in section ${DW_SECTION.conclusion}, and a reviewer signs it off there.`,
+      // Nothing proposed yet: what the agent does, never "Proposed" (17 November 2026).
+      did: `${named.proposed === null ? "Proposes" : "Proposed"} the D&I conclusion from the records; the preparer records it and sends the workpaper for review in section ${DW_SECTION.conclusion}, and a reviewer signs it off there.`,
       found: [
         ...(held > 0 ? [holdLine] : []),
         named.standing === null
@@ -583,7 +625,12 @@ function conclusionNote(input: WorkflowInput): {
     };
   }
   return {
-    did: "Proposed the D&I verdict from the prepared design workpaper and the design deficiencies.",
+    // No verdict yet: what the agent does, never "Proposed" over "No verdict yet" (17
+    // November 2026).
+    did:
+      proposed === null
+        ? "Proposes the D&I verdict from the prepared design workpaper and the design deficiencies."
+        : "Proposed the D&I verdict from the prepared design workpaper and the design deficiencies.",
     found: [
       held > 0
         ? holdLine

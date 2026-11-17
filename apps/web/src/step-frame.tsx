@@ -67,6 +67,8 @@ export function StepFrame({
   children,
   bare = false,
   decision,
+  nextShown = true,
+  needShown = true,
 }: {
   frame: PanelFrame;
   /** The address of each step's panel, by its key. */
@@ -93,6 +95,12 @@ export function StepFrame({
   /** The step's own decision, in place of the decision row (D&I Evidence's release, 11
    * November 2026): one card with the decision's content and its one action. */
   decision?: ReactNode;
+  /** The footer's "Next" links. Off where the decision itself leads on to each next step
+   * (the Attributes step once settled, 17 November 2026), so there is one way forward. */
+  nextShown?: boolean;
+  /** The need card, off where the step's own work carries the decision (the D&I requests'
+   * "N requests to accept" card, 17 November 2026): it is said once. */
+  needShown?: boolean;
 }) {
   const minimal = takesMinimalLayout(frame.key);
   const registerAsk = useContext(StepAskContext);
@@ -140,9 +148,9 @@ export function StepFrame({
         <>
           {hasDecision ? (
             <div className="stp-decision-slot">{decision}</div>
-          ) : (
+          ) : needShown ? (
             <NeedLine need={frame.need} stepHrefs={stepHrefs} />
-          )}
+          ) : null}
           {agent !== null ? <AgentLine agent={agent} /> : null}
           <section
             className="stp-area"
@@ -179,7 +187,10 @@ export function StepFrame({
 
       {children}
 
-      <StepFooter frame={frame} stepHrefs={stepHrefs} />
+      <StepFooter
+        frame={nextShown ? frame : { ...frame, next: [] }}
+        stepHrefs={stepHrefs}
+      />
     </div>
   );
 }
@@ -286,6 +297,19 @@ function AgentLine({ agent }: { agent: { did: string; found: string[] } }) {
   );
 }
 
+/** A step's state mark where another step names it, as its node draws it: a check once it
+ * is done, else the tone's dot (design review, 17 November 2026: an empty circle beside
+ * "Understood" read as not started). */
+function StateMark({ tone }: { tone: string }) {
+  return tone === "done" ? (
+    <span className="wf-check" aria-hidden="true">
+      <UiIcon name="check" size={11} />
+    </span>
+  ) : (
+    <span className={`wf-dot tone-${tone}`} aria-hidden="true" />
+  );
+}
+
 /** The slim footer: what the step rests on, and the step that follows. */
 function StepFooter({
   frame,
@@ -305,10 +329,7 @@ function StepFooter({
         <nav className="stp-foot-based" aria-label="What this step is based on">
           <span className="stp-foot-label">Based on</span>
           <Link href={stepHrefs[based.first.key] ?? "#"} scroll={false}>
-            <span
-              className={`wf-dot tone-${based.first.tone}`}
-              aria-hidden="true"
-            />
+            <StateMark tone={based.first.tone} />
             {based.label}
           </Link>
           {based.more.length > 0 ? (
@@ -332,7 +353,8 @@ function StepFooter({
               href={stepHrefs[item.key] ?? "#"}
               scroll={false}
             >
-              {item.label} · {item.title}
+              {/* With the step's status, as "Based on" (design review, 17 November 2026). */}
+              {`${item.label} · ${item.title}${item.status !== "" ? ` · ${item.status}` : ""}`}
               <UiIcon name="arrow" size={13} />
             </Link>
           ))}
@@ -429,7 +451,7 @@ export function StepAsk({ target }: { target: StepAskTarget }) {
               type="text"
               value={question}
               maxLength={1000}
-              placeholder="What would you like to know?"
+              placeholder="Ask about this step…"
               onChange={(event) => setQuestion(event.target.value)}
             />
             <button
@@ -577,10 +599,7 @@ function OwnLayoutFrame({
             {frame.basedOn.map((item) => (
               <li key={item.key}>
                 <Link href={stepHrefs[item.key] ?? "#"} scroll={false}>
-                  <span
-                    className={`wf-dot tone-${item.tone}`}
-                    aria-hidden="true"
-                  />
+                  <StateMark tone={item.tone} />
                   <span className="stp-based-num">
                     {String(item.number).padStart(2, "0")}
                   </span>

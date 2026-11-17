@@ -49,7 +49,10 @@ export async function GET(
         "content-type": media,
         "content-disposition": "inline",
         "x-content-type-options": "nosniff",
-        "content-security-policy": "sandbox; default-src 'none'; img-src data:",
+        // Its own policy, kept over the app-wide one (next.config.ts), so it also forbids
+        // framing.
+        "content-security-policy":
+          "sandbox; default-src 'none'; img-src data:; frame-ancestors 'none'",
         "cache-control": "private, no-store",
       },
     });

@@ -307,9 +307,12 @@ describe("requests drafted: approve and send", () => {
       detail:
         "Nothing reaches the process owner until you approve. Evidence already in hand? Upload it on its row.",
     });
+    // Rewritten 17 November 2026 (product owner: "Says not yet drafted but above it says 2
+    // drafted"). Old: "Drafted 2 requests ...". New: "Planned 2 requests ...": the planner plans
+    // the requests; "drafted" is kept for the message to the owner.
     assert.equal(
       view.header.agent.did,
-      "Drafted 2 requests from the control's understanding and its attributes.",
+      "Planned 2 requests from the control's understanding and its attributes.",
     );
     assert.deepEqual(view.send, {
       show: true,
@@ -393,9 +396,11 @@ describe("requests drafted: approve and send", () => {
     });
     assert.equal(none.header.standing, "NOT_DRAFTED");
     assert.equal(none.send.show, false);
-    assert.equal(line(none)?.status, "Not drafted yet");
+    // Rewritten 17 November 2026. Old: "Not drafted yet". New: "Message not drafted yet": the
+    // word "drafted" names the message to the owner only (product owner, same day).
+    assert.equal(line(none)?.status, "Message not drafted yet");
     assert.equal(line(none)?.canChange, false);
-    assert.match(none.rows[0]?.uploadBlocked ?? "", /not drafted yet/);
+    assert.match(none.rows[0]?.uploadBlocked ?? "", /message is not drafted yet/);
   });
 });
 
@@ -1376,7 +1381,8 @@ describe("several requests: evidence in hand splits one, a follow-up is its own"
     assert.deepEqual(
       view.groups.map((group) => [group.key, group.line.status]),
       [
-        ["none", "Not drafted yet"],
+        // Rewritten 17 November 2026: "Not drafted yet" became "Message not drafted yet".
+        ["none", "Message not drafted yet"],
         [REQUEST, "Sent Nov 12, 2026"],
       ],
     );
@@ -1812,4 +1818,53 @@ describe("what the independent review found (12 November 2026)", () => {
     // One primary in the bar: the added entry is a menu item.
     assert.equal(screen.match(/<ControlSend /g)?.length, 1);
   });
+});
+
+// Product owner, 17 November 2026, on a D&I Evidence screen whose agent line said "Drafted 2
+// requests" above a request reading "Not drafted yet": "Need you to make sure that things
+// like this will never show up in my app." Everything the step says at one time is read
+// together here, for each mix of requests, and must not contradict itself.
+describe("one meaning per word on the D&I Evidence step", () => {
+  const said = (view: ReturnType<typeof list>) => [
+    view.header.status,
+    view.header.need.title,
+    view.header.need.detail,
+    view.header.agent.did,
+    ...view.groups.map((group) => group.line.status),
+    ...view.rows.map((row) => row.uploadBlocked ?? ""),
+  ];
+  const views = {
+    "every message drafted": list({}),
+    "no message drafted": list({
+      requirements: [
+        requirement({ state: "NOT_GENERATED", requestId: null }),
+        walk({ state: "NOT_GENERATED", requestId: null }),
+      ],
+      requests: [],
+    }),
+    "one drafted and sent, one not drafted": list({
+      requirements: [
+        requirement(),
+        walk({ state: "NOT_GENERATED", requestId: null }),
+      ],
+      requests: [carrier({ status: "SENT", delivery: SENT })],
+    }),
+  };
+  for (const [name, view] of Object.entries(views)) {
+    it(`says "drafted" only of a message to the owner: ${name}`, () => {
+      for (const text of said(view)) {
+        if (/drafted/i.test(text)) {
+          assert.match(text, /messages?/i, `"${text}" uses "drafted" for something other than the message`);
+        }
+      }
+    });
+    it(`never says a request is drafted and not drafted at once: ${name}`, () => {
+      const all = said(view).join(" | ");
+      assert.ok(
+        !(/Drafted \d+ requests?/.test(all) && /not drafted/i.test(all)),
+        all,
+      );
+      assert.match(view.header.agent.did, /^Planned /);
+    });
+  }
 });

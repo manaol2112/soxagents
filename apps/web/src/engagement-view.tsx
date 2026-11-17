@@ -549,11 +549,19 @@ export function EngagementDashboard({
                 />
                 <Glance
                   label="Evidence"
-                  value={`${evidence.received} of ${evidence.total}`}
+                  // Nothing requested yet reads as such, never "0 of 0" (design review,
+                  // 17 November 2026).
+                  value={
+                    evidence.total === 0
+                      ? "None"
+                      : `${evidence.received} of ${evidence.total}`
+                  }
                   detail={
-                    evidence.overdue > 0
-                      ? `received · ${evidence.overdue} overdue`
-                      : "received · none overdue"
+                    evidence.total === 0
+                      ? "requested yet"
+                      : evidence.overdue > 0
+                        ? `received · ${evidence.overdue} overdue`
+                        : "received · none overdue"
                   }
                   tone={evidence.overdue > 0 ? "risk" : "plain"}
                   href={sectionHref(model, "evidence")}

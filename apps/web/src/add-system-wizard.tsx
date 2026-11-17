@@ -430,14 +430,27 @@ export function AddSystemWizard({
                   <div className="as-field span-2">
                     <span className="as-field-head">
                       <label htmlFor={`${id}-description`}>Description</label>
+                      {/* The reason sits beside the button it explains, not under the field,
+                          where it read as the field's error (design review, 17 November 2026). */}
+                      {draft.name.trim() === "" && !drafting ? (
+                        <small id={`${id}-draft-why`} className="as-ai-why">
+                          Enter the system name first.
+                        </small>
+                      ) : null}
                       <button
                         type="button"
                         className="as-ai-btn"
                         disabled={drafting || draft.name.trim() === ""}
+                        // A disabled button says why (design review, 17 November 2026).
                         title={
                           draft.name.trim() === ""
-                            ? "Choose the system first"
+                            ? "Enter the system name first."
                             : "Draft the empty details from what is known of the system"
+                        }
+                        aria-describedby={
+                          draft.name.trim() === ""
+                            ? `${id}-draft-why`
+                            : undefined
                         }
                         onClick={() => void draftDetails()}
                       >

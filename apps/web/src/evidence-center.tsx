@@ -28,6 +28,8 @@ import {
   KPIS,
   type Kpi,
   keepSelected,
+  NO_REQUESTS_YET,
+  noRequestsLinks,
   PAGE_SIZES,
   PHASE_LABELS,
   parseBulkResult,
@@ -85,6 +87,8 @@ export function EvidenceCenter({
   ids,
   state,
   setupHref,
+  planningHref = null,
+  controlsHref = null,
   coordinatorMissing,
   delivery = null,
   groupDelivery = null,
@@ -92,6 +96,11 @@ export function EvidenceCenter({
   ids: Ids;
   state: EvidenceCenterState;
   setupHref: string;
+  /** Planning, where requests come from: offered while the engagement has none. */
+  planningHref?: string | null;
+  /** The Controls register, where each control's D&I list is accepted: offered beside
+   * Planning while the engagement has no request. */
+  controlsHref?: string | null;
   coordinatorMissing: boolean;
   /** The open request's delivery and reminders, rendered by the page. */
   delivery?: ReactNode;
@@ -130,9 +139,11 @@ export function EvidenceCenter({
     query.request === null
       ? null
       : (list.rows.find((row) => row.id === query.request) ?? null);
+  // With no request in the engagement, the figures and the filters have nothing to show.
+  const none = list.kpis.total === 0;
   return (
     <div className="ec" aria-busy={pending}>
-      <Kpis ids={ids} list={list} query={query} />
+      {none ? null : <Kpis ids={ids} list={list} query={query} />}
       {list.kpis.needs_assignment > 0 ? (
         <p className="ec-setup" role="status">
           <UiIcon name="info" size={14} />
@@ -150,21 +161,25 @@ export function EvidenceCenter({
           ) : null}
         </p>
       ) : null}
-      <Toolbar
-        ids={ids}
-        list={list}
-        query={query}
-        go={go}
-        refresh={refresh}
-        onSelectAll={
-          list.canAct && selected.size === 0 && list.total > 0
-            ? () =>
-                setSelected(
-                  new Map(list.matching.map((item) => [item.id, item.version])),
-                )
-            : null
-        }
-      />
+      {none ? null : (
+        <Toolbar
+          ids={ids}
+          list={list}
+          query={query}
+          go={go}
+          refresh={refresh}
+          onSelectAll={
+            list.canAct && selected.size === 0 && list.total > 0
+              ? () =>
+                  setSelected(
+                    new Map(
+                      list.matching.map((item) => [item.id, item.version]),
+                    ),
+                  )
+              : null
+          }
+        />
+      )}
       {selected.size > 0 ? (
         <BulkBar
           ids={ids}
@@ -196,6 +211,8 @@ export function EvidenceCenter({
         selected={selected}
         setSelected={setSelected}
         refresh={refresh}
+        planningHref={planningHref}
+        controlsHref={controlsHref}
       />
       <Pager list={list} go={go} />
       {query.request !== null ? (
@@ -595,7 +612,7 @@ function FilterMenu({
         {chosen.length > 0 ? (
           <span className="ec-filter-count">{chosen.length}</span>
         ) : null}
-        <UiIcon name="chevron" size={12} />
+        <UiIcon name="chevronDown" size={12} />
       </summary>
       <div className="ec-filter-pop">
         {facets.length === 0 ? (
@@ -648,6 +665,8 @@ function RequestTable({
   selected,
   setSelected,
   refresh,
+  planningHref,
+  controlsHref,
 }: {
   ids: Ids;
   list: CenterList;
@@ -657,16 +676,23 @@ function RequestTable({
   selected: Map<string, number>;
   setSelected: (next: Map<string, number>) => void;
   refresh: () => void;
+  planningHref: string | null;
+  controlsHref: string | null;
 }) {
   if (list.total === 0) {
+    // Nothing at all yet: one quiet line and the way to where requests come from.
+    const none = list.kpis.total === 0;
     return (
       <div className="ec-empty">
-        <UiIcon name="inbox" size={20} />
-        <p>
-          {filtered(query)
-            ? "No requests match these filters."
-            : "No evidence requests yet. Create one, or generate the planned requests for the engagement's controls."}
-        </p>
+        <UiIcon name="inbox" size={16} />
+        <p>{none ? NO_REQUESTS_YET : "No requests match these filters."}</p>
+        {none
+          ? noRequestsLinks({ controlsHref, planningHref }).map((item) => (
+              <a key={item.label} className="text-link" href={item.href}>
+                {item.label}
+              </a>
+            ))
+          : null}
       </div>
     );
   }
@@ -969,7 +995,7 @@ function OwnerCell({
         }}
       >
         {label}
-        <UiIcon name="chevron" size={11} />
+        <UiIcon name="chevronDown" size={11} />
       </button>
       {open ? (
         <div className="ec-owner-pop">

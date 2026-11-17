@@ -112,7 +112,7 @@ export function NextStepCard({
               {one.flag === "Start here" ? (
                 <span className="ns-pill is-accent">Start here</span>
               ) : one.kind === "agent" ? (
-                <span className="ns-pill">Working</span>
+                <span className="ns-pill is-ai">Agent working</span>
               ) : one.kind === "flag" ? (
                 <span className="ns-pill is-warm">Needs attention</span>
               ) : null}

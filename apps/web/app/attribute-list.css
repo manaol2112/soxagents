@@ -16,9 +16,9 @@
   align-items: start;
   gap: 0.9rem;
   padding: 1rem 1.1rem;
-  background: color-mix(in srgb, var(--accent-soft) 55%, var(--surface));
-  border: 1px solid var(--accent-border, var(--border));
-  border-radius: 14px;
+  background: var(--ai-soft);
+  border: 1px solid var(--ai-border);
+  border-radius: var(--radius-xl);
 }
 
 .ta-reco-icon {
@@ -26,14 +26,14 @@
   width: 36px;
   height: 36px;
   place-items: center;
-  color: var(--accent-text);
+  color: var(--ai);
 }
 
 .ta-reco h4 {
   margin: 0 0 0.15rem;
   color: var(--text-strong);
   font-size: var(--fs-md);
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .ta-reco p {
@@ -62,8 +62,8 @@
 .ta-waiting h4 {
   margin: 0;
   color: var(--text-strong);
-  font-size: 19px;
-  font-weight: 700;
+  font-size: var(--fs-title);
+  font-weight: 600;
 }
 
 .ta-count {
@@ -84,7 +84,7 @@
   padding: 0 1rem;
   font-size: var(--fs-md);
   font-weight: 600;
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
 }
 
 /* A selection, decided as one decision. */
@@ -97,15 +97,15 @@
   min-width: 0;
   margin: 0;
   padding: 0.6rem 0.75rem 0.6rem 1rem;
-  background: color-mix(in srgb, var(--accent-soft) 70%, var(--surface));
-  border: 1px solid var(--accent-border, var(--border));
-  border-radius: 12px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
 }
 
 .ta-bulk-count {
   color: var(--text-strong);
   font-size: var(--fs-sm);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .ta-bulk-actions {
@@ -156,7 +156,7 @@
   padding: 1rem 1rem 1rem 1.1rem;
   background: var(--surface);
   border: 1px solid var(--border-subtle, var(--border));
-  border-radius: 14px;
+  border-radius: var(--radius-xl);
   box-shadow: var(--shadow-xs);
   transition:
     border-color 120ms ease,
@@ -168,7 +168,7 @@
 }
 
 .ta-row.is-selected {
-  background: color-mix(in srgb, var(--accent-soft) 45%, var(--surface));
+  background: var(--surface);
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent);
 }
@@ -183,7 +183,7 @@
   place-items: center;
   background: var(--surface);
   border: 1.5px solid var(--border-control);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 
@@ -195,7 +195,7 @@
 :is(.ta-row, .tar, .ta-tools) .ta-check:checked::after {
   width: 10px;
   height: 6px;
-  border: solid var(--text-on-accent, #fff);
+  border: solid var(--text-on-accent);
   border-width: 0 0 2px 2px;
   transform: translateY(-1px) rotate(-45deg);
   content: "";
@@ -208,7 +208,7 @@
 
 :is(.ta-row, .tar, .ta-tools) .ta-check:disabled {
   cursor: default;
-  opacity: 0.55;
+  opacity: 0.5;
 }
 
 .ta-letter {
@@ -218,9 +218,9 @@
   place-items: center;
   color: var(--accent-text);
   font-size: var(--fs-md);
-  font-weight: 700;
+  font-weight: 600;
   background: var(--accent-soft);
-  border-radius: 9px;
+  border-radius: var(--radius);
 }
 
 .ta-row.is-proposed .ta-letter {
@@ -253,7 +253,7 @@
 
 .ta-replaces span {
   color: var(--text-strong);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 /* What the agent followed in the confirmed understanding, and what it set aside. */
@@ -275,7 +275,7 @@
 
 .ta-basis span {
   color: var(--text-strong);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .ta-quote,
@@ -299,30 +299,31 @@
   min-height: 28px;
   padding: 0 0.6rem;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-base);
   font-weight: 500;
   background: var(--surface-muted);
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 
 .ta-chip svg {
   flex: none;
 }
 
-.ta-chip.is-high {
-  color: var(--success);
-  background: var(--success-soft);
-}
-
-.ta-chip.is-moderate {
-  color: var(--accent-text);
-  background: var(--accent-soft);
-}
-
 .ta-chip.is-low,
 .ta-chip.is-inferred {
-  color: var(--warning);
-  background: var(--warning-soft);
+  color: var(--text-secondary);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.ta-chip.is-low::before,
+.ta-chip.is-inferred::before {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  content: "";
+  background: var(--warning);
+  border-radius: 999px;
 }
 
 .ta-chip.is-none {
@@ -335,14 +336,14 @@
   gap: 0.4rem;
   padding: 0.75rem 0.9rem;
   background: var(--surface-muted);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 .ta-how-title {
   margin: 0;
   color: var(--text-strong);
   font-size: var(--fs-sm);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 /* The status that opens what can change it, edit, and more. */
@@ -362,7 +363,7 @@
   font-size: var(--fs-sm);
   font-weight: 600;
   border: 1px solid transparent;
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   box-shadow: none;
 }
 
@@ -401,7 +402,7 @@
   color: var(--text-strong);
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   box-shadow: none;
 }
 
@@ -433,11 +434,10 @@
 }
 
 .ta-empty {
-  padding: 1rem;
+  padding: 0;
   color: var(--text-secondary);
   font-size: var(--fs-sm);
-  border: 1px dashed var(--border);
-  border-radius: 14px;
+  border: 0;
 }
 
 .ta-waiting {
@@ -464,12 +464,12 @@
 .tae-dialog .rd-icon {
   width: 56px;
   height: 56px;
-  border-radius: 14px;
+  border-radius: var(--radius-xl);
 }
 
 .tae-dialog .rd-head h2 {
-  font-size: 22px;
-  font-weight: 700;
+  font-size: var(--fs-title);
+  font-weight: 600;
 }
 
 .tae-dialog .rd-body {
@@ -492,7 +492,7 @@
 .tae-facts dt {
   color: var(--text-strong);
   font-size: var(--fs-md);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .tae-required {
@@ -506,7 +506,7 @@
   padding: 0.75rem 0.9rem;
   font-size: var(--fs-md);
   line-height: 1.5;
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   resize: vertical;
 }
 
@@ -540,7 +540,7 @@
   padding: 0.5rem 0.75rem;
   background: var(--surface-muted);
   border: 1px solid var(--border-subtle, var(--border));
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
 }
 
 .tae-facts .ta-chip {
@@ -564,22 +564,22 @@
 
 .tae-replaces span {
   color: var(--text-strong);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .tae-quote {
   margin: 0;
   padding: 0.6rem 0.9rem;
-  color: var(--text);
+  color: var(--text-secondary);
   font-size: var(--fs-sm);
   line-height: 1.5;
-  border-left: 3px solid var(--accent-border, var(--border));
+  border-left: 2px solid var(--border-strong);
 }
 
 .tae-how {
   background: var(--surface-muted);
   border: 1px solid var(--border-subtle, var(--border));
-  border-radius: 14px;
+  border-radius: var(--radius-xl);
 }
 
 .tae-how summary {
@@ -655,7 +655,7 @@
   min-height: 48px;
   padding: 0 1.3rem;
   font-size: var(--fs-md);
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
 }
 
 @media (max-width: 640px) {
@@ -715,7 +715,7 @@
   padding: 0.6rem 0.75rem;
   background: var(--surface-muted);
   border: 1px solid var(--border-subtle);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 .tc.is-missing {
@@ -737,8 +737,8 @@
 
 .tc-label {
   color: var(--text-tertiary);
-  font-size: 10.5px;
-  font-weight: 700;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
@@ -749,8 +749,8 @@
   gap: 0.3rem;
   height: 20px;
   padding: 0 0.5rem;
-  color: var(--success);
-  background: var(--success-soft);
+  color: var(--text-secondary);
+  background: var(--surface-muted);
   border-radius: 999px;
   font-size: var(--fs-2xs);
   font-weight: 600;
@@ -759,11 +759,6 @@
 .tc-chip.is-to_accept {
   color: var(--ai);
   background: var(--ai-soft);
-}
-
-.tc-chip.is-missing {
-  color: var(--warning);
-  background: var(--warning-soft);
 }
 
 .tc-acts {
@@ -858,7 +853,7 @@
   padding: 0.6rem 0.8rem;
   background: color-mix(in srgb, var(--ai-soft) 60%, var(--surface));
   border: 1px solid var(--ai-border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 .tc-all p {
@@ -904,8 +899,8 @@
 .ta-section-title {
   margin: 0;
   color: var(--text-tertiary);
-  font-size: 12px;
-  font-weight: 650;
+  font-size: var(--fs-sm);
+  font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
@@ -938,7 +933,7 @@ button.btn-ghost.ta-quiet,
   padding: 0.45rem 0.75rem;
   background: color-mix(in srgb, var(--ai-soft) 50%, var(--surface));
   border: 1px solid var(--ai-border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 .ta-tools .ta-check {
@@ -969,7 +964,7 @@ button.btn-ghost.ta-quiet,
   padding: 0;
   list-style: none;
   border: 1px solid var(--border-subtle);
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   overflow: hidden;
 }
 
@@ -1041,7 +1036,7 @@ button.tar-head:focus-visible:not(:disabled) {
   place-items: center;
   color: var(--accent-text);
   font-size: var(--fs-sm);
-  font-weight: 700;
+  font-weight: 600;
   background: var(--accent-soft);
   border-radius: var(--radius);
 }
@@ -1061,7 +1056,7 @@ button.tar-head:focus-visible:not(:disabled) {
   display: -webkit-box;
   overflow: hidden;
   color: var(--text-strong);
-  font-size: 14.5px;
+  font-size: var(--fs-md);
   font-weight: 500;
   overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
@@ -1135,7 +1130,7 @@ button.tar-head:focus-visible:not(:disabled) {
   height: 22px;
   padding: 0 0.55rem;
   font-size: var(--fs-2xs);
-  font-weight: 650;
+  font-weight: 600;
   white-space: nowrap;
   border: 1px solid transparent;
   border-radius: 999px;
@@ -1145,18 +1140,6 @@ button.tar-head:focus-visible:not(:disabled) {
   color: var(--ai);
   background: var(--ai-soft);
   border-color: var(--ai-border);
-}
-
-.tar-chip.tone-success {
-  color: var(--success);
-  background: var(--success-soft);
-  border-color: var(--success-border);
-}
-
-.tar-chip.tone-warning {
-  color: var(--warning);
-  background: var(--warning-soft);
-  border-color: var(--warning-border);
 }
 
 .tar-caret {
@@ -1196,7 +1179,7 @@ button.tar-head:focus-visible:not(:disabled) {
 .tar-body .ta-replaces,
 .tar-body .ta-quote,
 .tar-body .ta-why {
-  font-size: 13.5px;
+  font-size: var(--fs-md);
 }
 
 .tar-body .ta-how {
@@ -1233,11 +1216,11 @@ button.tar-head:focus-visible:not(:disabled) {
 
 .tc.is-flat .tc-rules > div {
   grid-template-columns: 4.5rem minmax(0, 1fr);
-  font-size: 13.5px;
+  font-size: var(--fs-md);
 }
 
 .tc.is-flat .tc-missing {
-  font-size: 13.5px;
+  font-size: var(--fs-md);
 }
 
 .tc-by {
@@ -1283,7 +1266,7 @@ button.tar-head:focus-visible:not(:disabled) {
   width: fit-content;
   color: var(--text-secondary);
   font-size: var(--fs-sm);
-  font-weight: 550;
+  font-weight: 500;
   list-style: none;
   cursor: pointer;
 }
@@ -1386,34 +1369,33 @@ button.tar-head:focus-visible:not(:disabled) {
   padding: 0.6rem 0.75rem;
   background: color-mix(in srgb, var(--warning-soft) 55%, var(--surface));
   border: 1px solid var(--border-subtle);
-  border-left: 3px solid var(--warning);
   border-radius: var(--radius);
 }
 
 .tas-assumed {
   margin: 0;
   color: var(--text);
-  font-size: 13.5px;
+  font-size: var(--fs-md);
   line-height: 1.5;
 }
 
 .tas-assumed strong {
   color: var(--text-strong);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 /* A conflict with a confirmed fact (B1l point 6): it holds the attribute's acceptance until a
-   person decides it, so it reads as a decision, in the danger tone only at its edge. */
+   person decides it, so it reads as a decision, in the danger tone at its edge. */
 .tas-open.is-conflict {
   background: color-mix(in srgb, var(--danger-soft) 45%, var(--surface));
-  border-left-color: var(--danger);
+  border-color: var(--danger-border);
 }
 
 .tas-kicker {
   margin: 0;
   color: var(--danger);
   font-size: var(--fs-2xs);
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }

@@ -700,12 +700,15 @@ export function plainText(content: string, use: "copy" | "speech"): string {
   return out.join(use === "copy" ? "\n\n" : " ");
 }
 
-/** Where a link in an answer may lead: the web, or a page of this app. Nothing else. */
+/**
+ * Where a link in an answer may lead: a page of this app, and nothing else. The agent's
+ * words are untrusted (a file it read may steer them), so a web address it writes is shown
+ * as text with the whole address, never as a link a click would follow (security review,
+ * 17 November 2026: a link to any web address was rendered, one click from sending what
+ * the agent had read to another site).
+ */
 export function safeHref(target: string): string | null {
   const value = target.trim();
-  if (/^https?:\/\/[^\s]+$/i.test(value)) {
-    return value;
-  }
   // A page of this app: one leading "/", and no backslash a browser would read as one.
   if (/^\/(?![/\\])[^\s\\]*$/.test(value)) {
     return value;
@@ -738,9 +741,15 @@ function inline(
       parts.push({ text: "", strong: false, cite: Number(cite) });
     } else if (label !== undefined && href !== undefined) {
       const safe = safeHref(href);
-      parts.push(
-        ...inline(label, safe === null ? style : { ...style, href: safe }),
-      );
+      if (safe !== null) {
+        parts.push(...inline(label, { ...style, href: safe }));
+      } else {
+        // Any other address stays text, written out in full, so the person sees where it
+        // points and decides for themselves.
+        const shown =
+          label.trim() === href.trim() ? href : `${label} (${href})`;
+        parts.push({ ...style, text: shown });
+      }
     } else if (strong !== undefined) {
       parts.push(...inline(strong, { ...style, strong: true }));
     } else {

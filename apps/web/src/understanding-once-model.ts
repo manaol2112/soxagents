@@ -31,9 +31,12 @@ export const FROM_REVIEW = "From the review · for the attributes";
 /** Under the completed understanding. */
 export const ONCE_COMPLETE_NOTE =
   "Once complete, no agent reopens this step. You can still change an answer here yourself.";
-/** The Attributes step before the understanding is complete (no warning, no link back). */
+/** The Attributes step before the understanding is complete (no warning, no link back).
+ * Rewritten 17 November 2026: "The attributes are drafted once …" sat over attributes
+ * already listed with "Accept all 5" (product owner, the same day: one meaning per word on
+ * a screen). What waits on the completed understanding is the agents' proposals. */
 export const DRAFTED_ONCE_COMPLETE =
-  "The attributes are drafted once the understanding is complete.";
+  "What the understanding changes in the attributes is proposed once it is complete.";
 
 const TIME = (timeZone: string | undefined) =>
   new Intl.DateTimeFormat("en-US", {

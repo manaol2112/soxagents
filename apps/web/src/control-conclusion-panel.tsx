@@ -7,12 +7,13 @@ import {
   type ConclusionDeficiency,
   type ConclusionNotice,
   type ControlConclusion,
-  PHASE_STATE_WORDS,
   parseConclusionNotice,
+  phaseRow,
   ratingState,
   SEVERITIES,
   SEVERITY_LABELS,
   VERDICT_WORDS,
+  verdictKicker,
 } from "./control-conclusion-model";
 import { formatDate } from "./format";
 import { UiIcon } from "./ui-icon";
@@ -44,6 +45,7 @@ export function ControlConclusionWork({
   const [shown, setShown] = useState<ConclusionNotice | null>(notice);
   const verdict =
     conclusion.status === "FINAL" ? conclusion.final : conclusion.proposed;
+  const kicker = verdictKicker(conclusion.status);
   return (
     <div className="cc">
       {shown !== null ? (
@@ -56,13 +58,18 @@ export function ControlConclusionWork({
         </p>
       ) : null}
       <div className={`cc-verdict is-${(verdict ?? "none").toLowerCase()}`}>
-        <p className="cc-verdict-kicker">
-          {conclusion.status === "FINAL"
-            ? "Concluded at the independent review"
-            : conclusion.status === "PROPOSED"
-              ? "The agent's proposed conclusion"
-              : "Not ready to conclude"}
-        </p>
+        {kicker !== null ? (
+          <p className="cc-verdict-kicker">
+            {/* The agent's proposal is marked as the agent's, never styled as decided. */}
+            {conclusion.status === "PROPOSED" ? (
+              <span className="ai-mark" title="Proposed by the agent">
+                <UiIcon name="sparkles" size={11} />
+                Agent
+              </span>
+            ) : null}
+            {kicker}
+          </p>
+        ) : null}
         <p className="cc-verdict-word">
           {verdict === null ? "Not concluded" : VERDICT_WORDS[verdict]}
         </p>
@@ -95,27 +102,22 @@ export function ControlConclusionWork({
               : VERDICT_WORDS[conclusion.design]}
           </span>
         </li>
-        {conclusion.phases.map((phase) => (
-          <li key={phase.phase}>
-            <span className="stp-row-main">
-              <strong>{phase.label}</strong>
-              <small>
-                {phase.retested
-                  ? "Exceptions found; retested effective after remediation"
-                  : PHASE_STATE_WORDS[phase.state]}
-              </small>
-            </span>
-            <span
-              className={`stp-chip ${phase.conclusion === "EFFECTIVE" ? "is-done" : phase.conclusion === "NOT_EFFECTIVE" ? "is-blocked" : ""}`}
-            >
-              {phase.conclusion !== null
-                ? phase.retested
-                  ? "Effective after retest"
-                  : VERDICT_WORDS[phase.conclusion]
-                : PHASE_STATE_WORDS[phase.state]}
-            </span>
-          </li>
-        ))}
+        {conclusion.phases.map((phase) => {
+          const row = phaseRow(phase);
+          return (
+            <li key={phase.phase}>
+              <span className="stp-row-main">
+                <strong>{phase.label}</strong>
+                {row.line !== "" ? <small>{row.line}</small> : null}
+              </span>
+              <span
+                className={`stp-chip ${phase.conclusion === "EFFECTIVE" ? "is-done" : phase.conclusion === "NOT_EFFECTIVE" ? "is-blocked" : ""}`}
+              >
+                {row.badge}
+              </span>
+            </li>
+          );
+        })}
       </ul>
 
       <h4 className="stp-subhead">
@@ -274,13 +276,17 @@ function DeficiencyRating({
               />
             </label>
             <div className="dc-actions">
-              <button type="submit" disabled={pending}>
+              <button
+                type="submit"
+                className="btn btn-secondary btn-sm"
+                disabled={pending}
+              >
                 {pending ? "Saving…" : "Save rating"}
               </button>
               {item.rated ? (
                 <button
                   type="button"
-                  className="btn-secondary"
+                  className="btn btn-secondary btn-sm"
                   disabled={pending}
                   onClick={() => setOpen(false)}
                 >

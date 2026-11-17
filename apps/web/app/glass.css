@@ -1,34 +1,19 @@
 /* ==========================================================================
-   Glass (decided by the product owner): the workspace's panels are translucent over a
-   soft glow, with a light edge; the top bar, the sidebar, menus, and dialogs are frosted,
-   since content passes behind them. Loaded last so it sits over the modules' own
-   surfaces. Colors are the --glass-* and --glow-* tokens (both themes); the client portal
-   and the public pages are not in the workspace shell and stay as they are. Someone who
-   asks for less transparency gets the solid surfaces.
+   The workspace's surfaces (shadcn/ui, product owner, 17 November 2026). The glass layer
+   decided on 26 October 2026 is retired: panels, the top bar, the sidebar, menus, and
+   dialogs are flat and solid (1px --border, --shadow-xs for cards, --shadow-lg for menus,
+   --shadow-pop for dialogs), with no glow, sheen, translucency or blur. The file still
+   loads last, so these surfaces sit over the modules' own, and it holds the calm status
+   badges at the end. The client portal and the public pages are not in the workspace
+   shell and stay as they are.
    ========================================================================== */
 
-/* The glow behind everything: fixed, so panels pass over it as the page scrolls. */
+/* The page: the canvas, flat. */
 .shell {
-  background:
-    radial-gradient(64rem 42rem at 92% -10%, var(--glow-a), transparent 64%),
-    radial-gradient(52rem 40rem at 8% 110%, var(--glow-b), transparent 62%),
-    radial-gradient(44rem 32rem at 55% 55%, var(--glow-c), transparent 70%),
-    var(--canvas);
-  background-attachment: fixed;
+  background: var(--canvas);
 }
 
-/* In the light theme the brightest glow sits further into the corner, under the frosted
-   top bar, so the text on the open page keeps AA contrast. */
-:root[data-theme="light"] .shell {
-  background:
-    radial-gradient(72rem 44rem at 104% -22%, var(--glow-a), transparent 66%),
-    radial-gradient(56rem 42rem at 4% 112%, var(--glow-b), transparent 62%),
-    radial-gradient(48rem 34rem at 58% 58%, var(--glow-c), transparent 70%),
-    var(--canvas);
-  background-attachment: fixed;
-}
-
-/* Panels: translucent, with a light edge and a faint shine along the top. */
+/* Panels: a solid card with a 1px edge and the smallest shadow. */
 .shell :is(
     .card,
     .kpis,
@@ -65,62 +50,52 @@
     .er-sheet,
     .first-run-step
   ) {
-  background-color: var(--glass-panel);
-  background-image: var(--glass-sheen);
-  border-color: var(--glass-edge);
-  box-shadow: var(--glass-shine), var(--shadow-sm);
-  /* Frosted: the glow behind shows through, blurred, so the text stays readable. */
-  backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+  background-color: var(--surface);
+  background-image: none;
+  border-color: var(--border);
+  box-shadow: var(--shadow-xs);
 }
 
-/* The wizards and drawers (controls-setup.css .as): a frosted pane over the page. */
+/* The wizards and drawers (controls-setup.css .as): a solid pane over the page. */
 .as {
-  background-color: var(--glass-dialog);
-  background-image: var(--glass-sheen);
-  border: 1px solid var(--glass-edge);
-  box-shadow: var(--glass-shine), 0 30px 80px -24px rgb(0 0 0 / 60%);
-  backdrop-filter: blur(calc(var(--glass-blur) * 1.6)) saturate(160%);
+  background-color: var(--surface);
+  background-image: none;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-pop);
 }
 
-/* On the light page a soft cool shadow lifts the pane; a black one would muddy it. */
-:root[data-theme="light"] .as {
-  box-shadow: var(--glass-shine), 0 30px 80px -28px rgb(30 41 82 / 32%);
-}
-
-/* A panel inside a panel would stack its tint; it stays clear instead. */
+/* A panel inside a panel would stack its surface and shadow; it stays clear instead. */
 .shell :is(.card, .cw-plan, .cr-panel, .eo-section) :is(.card, .kpis, .ctl-table-wrap) {
   background-color: transparent;
   background-image: none;
+  box-shadow: none;
 }
 
-/* Frosted chrome: what content scrolls beneath. */
+/* The chrome: solid, with a hairline where content scrolls beneath. */
 .shell .topbar {
-  background: var(--glass-chrome);
-  border-bottom-color: var(--glass-line);
-  backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  background: var(--surface);
+  border-bottom-color: var(--border);
 }
 
 .shell .sidebar {
   background: var(--glass-sidebar);
-  border-right-color: var(--glass-line);
-  backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+  border-right-color: var(--border);
 }
 
-/* The light sidebar: frosted white over the glow, like the rest of the page, in place of
-   the navy panel; the current section is a raised white tab with the accent bar. */
+/* The light sidebar: the zinc panel in place of the navy one; the current section sits
+   on the hover surface. */
 :root[data-theme="light"] .shell .sidebar {
   color: var(--text-secondary);
-  box-shadow: inset -1px 0 0 rgb(255 255 255 / 70%);
 }
 
 :root[data-theme="light"] .shell .sidebar :is(.brand, .sidebar-foot, .sidebar-foot .pill) {
-  border-color: var(--glass-line);
+  border-color: var(--border);
 }
 
 :root[data-theme="light"] .shell .sidebar .brand-mark {
-  color: #ffffff;
-  background: linear-gradient(160deg, #24407a, var(--navy));
-  box-shadow: 0 2px 6px -2px rgb(14 31 54 / 45%);
+  color: var(--text-on-accent);
+  background: var(--accent);
+  box-shadow: none;
 }
 
 :root[data-theme="light"] .shell .sidebar .brand-text strong {
@@ -141,16 +116,13 @@
 
 :root[data-theme="light"] .shell .sidebar nav a:hover {
   color: var(--text-strong);
-  background: rgb(255 255 255 / 70%);
+  background: var(--surface-hover);
 }
 
 :root[data-theme="light"] .shell .sidebar nav a[aria-current="page"] {
   color: var(--text-strong);
-  background: #ffffff;
-  box-shadow:
-    inset 3px 0 0 var(--accent),
-    0 1px 2px rgb(15 23 42 / 6%),
-    0 4px 12px -6px rgb(30 41 82 / 18%);
+  background: var(--surface-hover);
+  box-shadow: none;
 }
 
 :root[data-theme="light"] .shell .sidebar nav a[aria-current="page"] svg {
@@ -168,8 +140,8 @@
 }
 
 :root[data-theme="light"] .shell .sidebar .sidebar-foot {
-  background: rgb(255 255 255 / 55%);
-  box-shadow: var(--glass-shine), var(--shadow-xs);
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
 }
 
 :root[data-theme="light"] .shell .sidebar :is(.sidebar-foot p, .guard-row) {
@@ -178,12 +150,12 @@
 
 :root[data-theme="light"] .shell .sidebar .sidebar-foot .pill {
   color: var(--text-secondary);
-  background: #ffffff;
+  background: var(--surface);
 }
 
-/* Menus, popovers, and dialogs: opaque, with the glass edge and shine, so what is behind
-   never competes with them. (One opened from the frosted top bar cannot blur what lies
-   below the bar, so a translucent one showed the page through it.) */
+/* Menus, popovers, and dialogs: opaque, with a 1px edge, so what is behind never competes
+   with them. --shadow-lg, not --shadow-pop: the pop shadow draws its own 1px ring, which
+   doubled the border. */
 :is(
     .menu-panel,
     .row-menu-list,
@@ -195,18 +167,14 @@
     .nw-dialog,
     .confirm-dialog
   ) {
-  background-color: var(--glass-strong);
-  border: 1px solid var(--glass-edge);
-  box-shadow: var(--glass-shine), var(--shadow-pop);
-  backdrop-filter: blur(calc(var(--glass-blur) * 1.25)) saturate(150%);
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
 }
 
+/* Every surface above is already solid; someone who asks for less transparency gets the
+   same, stated once more so no module's own translucent surface shows through. */
 @media (prefers-reduced-transparency: reduce) {
-  .shell,
-  :root[data-theme="light"] .shell {
-    background: var(--canvas);
-  }
-
   .shell :is(
       .card,
       .kpis,
@@ -269,4 +237,568 @@
     background: var(--sidebar);
     backdrop-filter: none;
   }
+}
+
+/* ==========================================================================
+   Status badges, calm (product owner, 17 November 2026: "I see a lot of orange and green
+   items"): as shadcn/ui's status badges, a neutral outline with a small dot in the status's
+   colour. Done is a green dot, waiting on a person an amber one, in progress a blue one, a
+   draft or idle state a grey one; the badge itself stays grey, so a list where nearly every
+   row waits does not turn orange. Full colour is kept for a problem (danger, blocked, risk,
+   conflict, failed, none, flagged) and for agent work (violet), which no selector here
+   names. One rule for every badge family; a family that already shows its own icon (a
+   check, an info mark) gets no dot, and one with its own dot has it recoloured.
+   ========================================================================== */
+:is(
+    .pill,
+    .tar-chip,
+    .cpg-pill,
+    .st-status,
+    .wf-panel-pill,
+    .wf-chip,
+    .ur-chip,
+    .ns-pill,
+    .stp-chip,
+    .dq-cov,
+    .de-state,
+    .tc-chip,
+    .wt-status,
+    .pn-status,
+    .pn-review,
+    .bf-state,
+    .eg-status,
+    .as-tag,
+    .pp-status,
+    .cw-versions-tag,
+    .cc-badge,
+    .rr-stage,
+    .pt-pill
+  ):is(
+    .tone-success,
+    .tone-done,
+    .is-success,
+    .is-ok,
+    .is-done,
+    .is-covered,
+    .is-confirmed,
+    .is-approved,
+    .is-passed,
+    .is-same,
+    .is-owned,
+    .is-completed,
+    .is-reviewed,
+    .is-ready,
+    .tone-warning,
+    .tone-attention,
+    .is-warning,
+    .is-review,
+    .is-warm,
+    .is-attention,
+    .is-uncovered,
+    .is-inferred,
+    .is-low,
+    .is-skipped,
+    .is-held,
+    .is-replaces,
+    .is-check,
+    .is-missing,
+    .is-paused,
+    .is-question,
+    .is-changes,
+    .is-warn,
+    .tone-info,
+    .tone-active,
+    .is-info,
+    .is-working,
+    .is-accent,
+    .is-active,
+    .is-in_progress,
+    .is-in,
+    .is-draft,
+    .is-neutral,
+    .is-idle,
+    .is-muted,
+    .tone-idle,
+    .tone-neutral
+  ),
+.cs-done,
+.sc-scope,
+.ry-state:not(.is-working, .is-failed),
+.cs-waiting,
+.cw-needs-badge,
+.stp-chip {
+  --badge-dot: var(--text-tertiary);
+  gap: 6px;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border-color: var(--border);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+/* A family that draws its own 1px border takes the outline from it; the inset line above
+   is for the borderless ones, and on a bordered badge it doubled the edge. */
+:is(
+    .pill,
+    .tar-chip,
+    .cpg-pill,
+    .wf-chip,
+    .stp-chip,
+    .dq-cov,
+    .wt-status,
+    .pn-status,
+    .pn-review,
+    .eg-status,
+    .as-tag,
+    .cw-versions-tag,
+    .rr-stage,
+    .pt-pill
+  ):is(
+    .tone-success,
+    .tone-done,
+    .is-success,
+    .is-ok,
+    .is-done,
+    .is-covered,
+    .is-confirmed,
+    .is-approved,
+    .is-passed,
+    .is-same,
+    .is-owned,
+    .is-completed,
+    .is-reviewed,
+    .is-ready,
+    .tone-warning,
+    .tone-attention,
+    .is-warning,
+    .is-review,
+    .is-warm,
+    .is-attention,
+    .is-uncovered,
+    .is-inferred,
+    .is-low,
+    .is-skipped,
+    .is-held,
+    .is-replaces,
+    .is-check,
+    .is-missing,
+    .is-paused,
+    .is-question,
+    .is-changes,
+    .is-warn,
+    .tone-info,
+    .tone-active,
+    .is-info,
+    .is-working,
+    .is-accent,
+    .is-active,
+    .is-in_progress,
+    .is-in,
+    .is-draft,
+    .is-neutral,
+    .is-idle,
+    .is-muted,
+    .tone-idle,
+    .tone-neutral
+  ),
+.cw-needs-badge,
+.stp-chip {
+  border-style: solid;
+  border-width: 1px;
+  box-shadow: none;
+}
+
+/* A badge that was laid out as plain text lines its dot up with its words. */
+:is(.cw-versions-tag, .rr-stage):is(
+    .tone-success,
+    .tone-done,
+    .is-success,
+    .is-ok,
+    .is-done,
+    .is-covered,
+    .is-confirmed,
+    .is-approved,
+    .is-passed,
+    .is-same,
+    .is-owned,
+    .is-completed,
+    .is-reviewed,
+    .is-ready,
+    .tone-warning,
+    .tone-attention,
+    .is-warning,
+    .is-review,
+    .is-warm,
+    .is-attention,
+    .is-uncovered,
+    .is-inferred,
+    .is-low,
+    .is-skipped,
+    .is-held,
+    .is-replaces,
+    .is-check,
+    .is-missing,
+    .is-paused,
+    .is-question,
+    .is-changes,
+    .is-warn,
+    .tone-info,
+    .tone-active,
+    .is-info,
+    .is-working,
+    .is-accent,
+    .is-active,
+    .is-in_progress,
+    .is-in,
+    .is-draft,
+    .is-neutral,
+    .is-idle,
+    .is-muted,
+    .tone-idle,
+    .tone-neutral
+  ) {
+  display: inline-flex;
+  align-items: center;
+}
+
+:is(
+    .pill,
+    .tar-chip,
+    .cpg-pill,
+    .st-status,
+    .wf-panel-pill,
+    .wf-chip,
+    .ur-chip,
+    .ns-pill,
+    .stp-chip,
+    .dq-cov,
+    .de-state,
+    .tc-chip,
+    .wt-status,
+    .pn-status,
+    .pn-review,
+    .bf-state,
+    .eg-status,
+    .as-tag,
+    .pp-status,
+    .cw-versions-tag,
+    .cc-badge,
+    .rr-stage,
+    .pt-pill
+  ):is(
+    .tone-success,
+    .tone-done,
+    .is-success,
+    .is-ok,
+    .is-done,
+    .is-covered,
+    .is-confirmed,
+    .is-approved,
+    .is-passed,
+    .is-same,
+    .is-owned,
+    .is-completed,
+    .is-reviewed,
+    .is-ready
+  ),
+.cs-done,
+.sc-scope,
+.ry-state:not(.is-working, .is-failed) {
+  --badge-dot: var(--success);
+}
+
+:is(
+    .pill,
+    .tar-chip,
+    .cpg-pill,
+    .st-status,
+    .wf-panel-pill,
+    .wf-chip,
+    .ur-chip,
+    .ns-pill,
+    .stp-chip,
+    .dq-cov,
+    .de-state,
+    .tc-chip,
+    .wt-status,
+    .pn-status,
+    .pn-review,
+    .bf-state,
+    .eg-status,
+    .as-tag,
+    .pp-status,
+    .cw-versions-tag,
+    .cc-badge,
+    .rr-stage,
+    .pt-pill
+  ):is(
+    .tone-warning,
+    .tone-attention,
+    .is-warning,
+    .is-review,
+    .is-warm,
+    .is-attention,
+    .is-uncovered,
+    .is-inferred,
+    .is-low,
+    .is-skipped,
+    .is-held,
+    .is-replaces,
+    .is-check,
+    .is-missing,
+    .is-paused,
+    .is-question,
+    .is-changes,
+    .is-warn
+  ),
+.cs-waiting,
+.cw-needs-badge {
+  --badge-dot: var(--warning);
+}
+
+:is(
+    .pill,
+    .tar-chip,
+    .cpg-pill,
+    .st-status,
+    .wf-panel-pill,
+    .wf-chip,
+    .ur-chip,
+    .ns-pill,
+    .stp-chip,
+    .dq-cov,
+    .de-state,
+    .tc-chip,
+    .wt-status,
+    .pn-status,
+    .pn-review,
+    .bf-state,
+    .eg-status,
+    .as-tag,
+    .pp-status,
+    .cw-versions-tag,
+    .cc-badge,
+    .rr-stage,
+    .pt-pill
+  ):is(
+    .tone-info,
+    .tone-active,
+    .is-info,
+    .is-working,
+    .is-accent,
+    .is-active,
+    .is-in_progress
+  ) {
+  --badge-dot: var(--info);
+}
+
+.st-status.is-in {
+  --badge-dot: var(--success);
+}
+
+/* The dot: a badge's own dot takes the status colour; a badge without one gets one. A
+   family that shows an icon (.de-state, .tc-chip, .cs-done, .pn-status, .pn-review,
+   .as-tag, .cw-needs-badge, a covered .dq-cov, a .bf-state that is checked or replaced)
+   keeps the icon instead. */
+.pill.pill-dot:is(.tone-success, .tone-warning, .tone-info)::before,
+.wf-panel-pill .wf-panel-pill-dot,
+.st-status i,
+:is(
+    .eg-status,
+    .pp-status,
+    .pt-pill
+  ):is(
+    .tone-success,
+    .tone-done,
+    .is-success,
+    .is-ok,
+    .is-done,
+    .is-covered,
+    .is-confirmed,
+    .is-approved,
+    .is-passed,
+    .is-same,
+    .is-owned,
+    .is-completed,
+    .is-reviewed,
+    .is-ready,
+    .tone-warning,
+    .tone-attention,
+    .is-warning,
+    .is-review,
+    .is-warm,
+    .is-attention,
+    .is-uncovered,
+    .is-inferred,
+    .is-low,
+    .is-skipped,
+    .is-held,
+    .is-replaces,
+    .is-check,
+    .is-missing,
+    .is-paused,
+    .is-question,
+    .is-changes,
+    .is-warn,
+    .tone-info,
+    .tone-active,
+    .is-info,
+    .is-working,
+    .is-accent,
+    .is-active,
+    .is-in_progress,
+    .is-in,
+    .is-draft,
+    .is-neutral,
+    .is-idle,
+    .is-muted,
+    .tone-idle,
+    .tone-neutral
+  )::before {
+  background: var(--badge-dot);
+}
+
+:is(
+    .tar-chip,
+    .cpg-pill,
+    .wf-chip,
+    .ur-chip,
+    .ns-pill,
+    .stp-chip,
+    .wt-status,
+    .cw-versions-tag,
+    .rr-stage,
+    .cc-badge
+  ):is(
+    .tone-success,
+    .tone-done,
+    .is-success,
+    .is-ok,
+    .is-done,
+    .is-covered,
+    .is-confirmed,
+    .is-approved,
+    .is-passed,
+    .is-same,
+    .is-owned,
+    .is-completed,
+    .is-reviewed,
+    .is-ready,
+    .tone-warning,
+    .tone-attention,
+    .is-warning,
+    .is-review,
+    .is-warm,
+    .is-attention,
+    .is-uncovered,
+    .is-inferred,
+    .is-low,
+    .is-skipped,
+    .is-held,
+    .is-replaces,
+    .is-check,
+    .is-missing,
+    .is-paused,
+    .is-question,
+    .is-changes,
+    .is-warn,
+    .tone-info,
+    .tone-active,
+    .is-info,
+    .is-working,
+    .is-accent,
+    .is-active,
+    .is-in_progress,
+    .is-draft,
+    .is-neutral,
+    .is-idle,
+    .is-muted,
+    .tone-idle,
+    .tone-neutral
+  )::before,
+.dq-cov.is-uncovered::before,
+.bf-state.is-same::before,
+.cs-waiting::before,
+.sc-scope::before,
+.ry-state:not(.is-working, .is-failed)::before,
+.pill:not(.pill-dot):is(.tone-success, .tone-warning, .tone-info)::before {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  content: "";
+  background: var(--badge-dot);
+  border-radius: 999px;
+}
+
+.stp-chip:not(.is-blocked)::before {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  content: "";
+  background: var(--badge-dot);
+  border-radius: 999px;
+}
+
+/* A badge that shows an icon in place of the dot colours the icon (design review, 17
+   November 2026): a done check green, a waiting mark amber. */
+.wf-panel-pill.tone-done svg,
+.de-state.tone-success svg,
+.tc-chip.is-owned svg,
+.cs-done svg,
+.pn-status.is-approved svg,
+.as-tag.is-approved svg,
+.dq-cov.is-covered svg,
+.pn-review.is-passed svg {
+  color: var(--success);
+}
+
+.wf-panel-pill:is(.tone-warning, .tone-attention) svg,
+.de-state.tone-warning svg,
+.bf-state:is(.is-check, .is-replaces) svg,
+.pn-review.is-held svg,
+.cw-needs-badge svg {
+  color: var(--warning);
+}
+
+/* One geometry for every badge family (design review, 17 November 2026): 22px high, 8px
+   sides, the small type at 500, the badge corner, a 6px gap. Danger and agent badges keep
+   their fills at the same size. :not(#badge-geometry) matches every badge and lifts the
+   rule over the modules' own class selectors (one id's weight), so a family's local height,
+   padding or corner never wins; no element carries that id. It sets no display, so a
+   module that hides a badge still can. */
+:is(
+    .pill,
+    .tar-chip,
+    .cpg-pill,
+    .st-status,
+    .wf-panel-pill,
+    .wf-chip,
+    .ur-chip,
+    .ns-pill,
+    .stp-chip,
+    .dq-cov,
+    .de-state,
+    .tc-chip,
+    .wt-status,
+    .pn-status,
+    .bf-state,
+    .eg-status,
+    .as-tag,
+    .pp-status,
+    .cw-versions-tag,
+    .cc-badge,
+    .rr-stage,
+    .pt-pill,
+    .cs-done,
+    .cs-waiting,
+    .sc-scope,
+    .ry-state
+  ):not(#badge-geometry) {
+  gap: 6px;
+  height: 22px;
+  padding: 0 8px;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  border-radius: var(--radius-sm);
 }

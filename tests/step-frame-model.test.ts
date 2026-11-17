@@ -11,7 +11,7 @@ import {
 import {
   basedOnSummary,
   headLabel,
-  nextLinks,
+  nextLinks as namedNext,
   panelHeadOf,
   quietLineOf,
   statusPill,
@@ -284,6 +284,12 @@ describe("the panel's footer", () => {
 
   it("names each step that follows, with the outcome it follows on", () => {
     const steps = workflowOf(midway());
+    // Rewritten 17 November 2026 (design review: "Next · D&I Assessment" pointed to a step
+    // "Waiting on D&I evidence" that asks nothing). Old: each link was { key, label, title }.
+    // New: it also carries the step's status, checked in the test below; the names and the
+    // labels here are unchanged, so the status is set aside to compare them.
+    const nextLinks = (next: Parameters<typeof namedNext>[0]) =>
+      namedNext(next).map(({ key, label, title }) => ({ key, label, title }));
     assert.deepEqual(
       // Old: from "designconclusion". New: from D&I Assessment, whose verdict decides the
       // way on (product owner, 16 November 2026, docs/design-workpaper.md section 3.8).
@@ -315,6 +321,33 @@ describe("the panel's footer", () => {
       ["Next"],
     );
     assert.deepEqual(nextLinks(panelFrame("workpaper", steps, null).next), []);
+  });
+
+  it("names each step that follows with the status its node shows, never a bare 'Next' (design review, 17 November 2026)", () => {
+    const mixes = {
+      midway: workflowOf(midway()),
+      "nothing started": workflowOf(
+        midway({
+          attributes: { approved: 0, proposed: 0 },
+          plan: { exists: false, approved: false, pendingReview: false },
+          requirements: [],
+          designPaper: null,
+          designConclusion: null,
+          designRelease: { step: "WAITING", waitingOn: "UNDERSTANDING" },
+        }),
+      ),
+    };
+    for (const [name, steps] of Object.entries(mixes)) {
+      for (const step of steps) {
+        for (const link of namedNext(panelFrame(step.key, steps, null).next)) {
+          const shown = steps.find((each) => each.key === link.key);
+          assert.ok(shown !== undefined, `${name}: ${link.key}`);
+          // The footer says what the canvas node says, so a step that asks nothing reads so.
+          assert.equal(link.status, shown.status, `${name}: ${link.key}`);
+          assert.notEqual(link.status, "", `${name}: ${link.key}`);
+        }
+      }
+    }
   });
 });
 

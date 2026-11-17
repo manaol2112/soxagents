@@ -60,9 +60,13 @@ describe("the Attributes step never sends the person back to Control Understandi
   });
 
   it("before completion says quietly that the attributes are drafted once it is complete", () => {
+    // Rewritten 17 November 2026 (product owner's report of the same day: "drafted" meant
+    // two things on one screen). Old: "The attributes are drafted once the understanding is
+    // complete.", shown over attributes already listed to accept. New: what waits on the
+    // completed understanding, the agents' proposals.
     assert.equal(
       DRAFTED_ONCE_COMPLETE,
-      "The attributes are drafted once the understanding is complete.",
+      "What the understanding changes in the attributes is proposed once it is complete.",
     );
     const panel = read("../apps/web/src/control-context-view.tsx");
     // A quiet note, never the warning tone and never a link.

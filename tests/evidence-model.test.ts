@@ -179,9 +179,12 @@ describe("evidence register model", () => {
   });
 
   it("says what the agents made of a file", () => {
+    // Rewritten 17 November 2026 (product owner's shadcn/ui decision and the design
+    // audit). Old: tone "info". New: "ai": the agents reading a file is agent work,
+    // shown in violet; blue is kept for information alone.
     assert.deepEqual(agentStatus(parsed({ read_status: "PENDING" })), {
       label: "Reading",
-      tone: "info",
+      tone: "ai",
     });
     assert.deepEqual(agentStatus(parsed({ read_status: "FAILED" })), {
       label: "Not read",

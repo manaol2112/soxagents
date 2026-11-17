@@ -26,7 +26,7 @@ button.rn-btn {
   align-items: center;
   justify-content: center;
   gap: 0.35rem;
-  height: 30px;
+  height: 28px;
   padding: 0 0.75rem;
   color: var(--text-strong);
   background: var(--surface);
@@ -34,7 +34,7 @@ button.rn-btn {
   border-radius: var(--radius);
   box-shadow: none;
   font-size: var(--fs-sm);
-  font-weight: 550;
+  font-weight: 500;
   white-space: nowrap;
   transition:
     background 120ms ease,
@@ -90,7 +90,7 @@ button.rn-btn.is-quiet:hover:not(:disabled) {
 
 .rn-field {
   position: relative;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   transition: box-shadow 150ms ease;
 }
 
@@ -175,7 +175,7 @@ button.rn-margin-add {
   color: var(--text-secondary);
   background: var(--surface);
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: var(--radius);
   box-shadow: var(--shadow-xs);
   animation: rn-fade 120ms ease-out;
   transition:
@@ -201,9 +201,9 @@ button.rn-margin-add.is-focus {
   padding: 4px 8px;
   color: var(--surface);
   background: var(--text-strong);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   font-size: var(--fs-xs);
-  font-weight: 550;
+  font-weight: 500;
   white-space: nowrap;
   opacity: 0;
   pointer-events: none;
@@ -239,7 +239,7 @@ button.rn-marker {
   border: 1px solid var(--border-strong);
   border-radius: 999px;
   box-shadow: none;
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   font-weight: 600;
   line-height: 1;
   font-variant-numeric: tabular-nums;
@@ -331,7 +331,7 @@ button.rn-marker:focus-visible:not(:disabled) {
   margin: 0;
   color: var(--text-strong);
   font-size: var(--fs-md);
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: -0.005em;
 }
 
@@ -347,7 +347,7 @@ button.rn-icon-btn {
   color: var(--text-tertiary);
   background: transparent;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   box-shadow: none;
   line-height: 1;
   transition:
@@ -395,11 +395,11 @@ button.rn-icon-btn.is-set::after {
   align-items: center;
   gap: 6px;
   min-width: 0;
-  height: 30px;
+  height: 32px;
   padding: 0 8px;
   color: var(--text-tertiary);
-  background: var(--surface-muted);
-  border: 1px solid var(--border);
+  background: var(--surface);
+  border: 1px solid var(--border-control);
   border-radius: var(--radius);
   animation: rn-fade 150ms ease-out;
 }
@@ -445,7 +445,7 @@ fieldset.rn-tabs {
   padding: 2px;
   background: var(--surface-sunken);
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 
 button.rn-tab {
@@ -458,10 +458,10 @@ button.rn-tab {
   color: var(--text-secondary);
   background: transparent;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   box-shadow: none;
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: 500;
   white-space: nowrap;
   transition:
     background 120ms ease,
@@ -482,7 +482,7 @@ button.rn-tab[aria-pressed="true"] {
 
 .rn-tab-count {
   color: var(--text-tertiary);
-  font-weight: 550;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
 
@@ -561,7 +561,7 @@ fieldset.rn-pop {
   min-height: 30px;
   padding: 0 8px;
   color: var(--text-strong);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   font-size: var(--fs-sm);
   cursor: pointer;
 }
@@ -709,7 +709,7 @@ button.rn-card-pick:hover {
 }
 
 button.rn-card-pick:focus-visible:not(:disabled) {
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   box-shadow: inset 0 0 0 2px var(--border-control);
 }
 
@@ -738,9 +738,9 @@ button.rn-card-pick:focus-visible:not(:disabled) {
   padding: 0 5px;
   color: var(--text-secondary);
   background: var(--surface-sunken);
-  border-radius: 9px;
-  font-size: 10.5px;
-  font-weight: 650;
+  border-radius: var(--radius);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
@@ -759,7 +759,7 @@ button.rn-card-pick:focus-visible:not(:disabled) {
   place-items: center;
   width: 7px;
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
 }
 
 /* A resolved note: one faint line. */
@@ -981,7 +981,7 @@ button.rn-menu-item {
   color: var(--text-strong);
   background: transparent;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   box-shadow: none;
   font-size: var(--fs-sm);
   font-weight: 500;
@@ -1021,7 +1021,7 @@ button.rn-menu-item[aria-checked="true"] {
   padding: 2px 2px 2px 10px;
   background: var(--surface);
   border: 1px solid var(--border-strong);
-  border-radius: 9px;
+  border-radius: var(--radius);
   transition:
     border-color 120ms ease,
     box-shadow 120ms ease;
@@ -1062,7 +1062,7 @@ button.rn-send {
   color: var(--text-tertiary);
   background: var(--surface-sunken);
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   box-shadow: none;
 }
 
@@ -1156,9 +1156,9 @@ form.rn-compose:not(.rn-act) textarea.rn-reply-box {
   color: var(--text-secondary);
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--fs-2xs);
 }
 
 .rn-owner {
@@ -1179,9 +1179,9 @@ form.rn-compose:not(.rn-act) textarea.rn-reply-box {
   margin: 10px 12px 6px;
   padding: 12px;
   background: var(--surface);
-  border: 1px solid var(--border-control);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
   animation: rn-in 200ms ease-out;
 }
 
@@ -1193,7 +1193,7 @@ form.rn-compose:not(.rn-act) textarea.rn-reply-box {
   margin: 0;
   color: var(--text-strong);
   font-size: var(--fs-sm);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .rn-new .rn-card-line {
@@ -1290,7 +1290,7 @@ button.rn-whole:focus-visible:not(:disabled) {
   align-items: center;
   gap: 0.35rem;
   color: var(--text-strong);
-  font-weight: 550;
+  font-weight: 500;
 }
 
 /* All notes' pane: the same open note, in a panel of its own. */
@@ -1327,10 +1327,10 @@ button.rn-chip {
   color: var(--text-secondary);
   background: var(--surface);
   border: 1px solid var(--border-strong);
-  border-radius: 999px;
+  border-radius: var(--radius);
   box-shadow: none;
   font-size: var(--fs-sm);
-  font-weight: 550;
+  font-weight: 500;
   transition:
     border-color 120ms ease,
     color 120ms ease;
@@ -1369,7 +1369,7 @@ button.rn-chip.is-set {
   padding: 0 0.6rem;
   color: var(--text-tertiary);
   background: var(--surface);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border-control);
   border-radius: var(--radius);
 }
 
@@ -1418,7 +1418,7 @@ button.rn-chip.is-set {
   min-height: 32px;
   padding: 0 0.5rem;
   color: var(--text-strong);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   font-size: var(--fs-sm);
   cursor: pointer;
 }
@@ -1467,8 +1467,8 @@ button.rn-chip.is-set {
   background: var(--surface-muted);
   border-bottom: 1px solid var(--border);
   font-size: var(--fs-2xs);
-  font-weight: 650;
-  letter-spacing: 0.04em;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   text-align: left;
   text-transform: uppercase;
 }
@@ -1518,7 +1518,7 @@ button.rn-row-pick {
   border: 0;
   box-shadow: none;
   font-size: inherit;
-  font-weight: 550;
+  font-weight: 500;
   line-height: 1.4;
   text-align: left;
   white-space: normal;
@@ -1583,7 +1583,7 @@ button.rn-open-at {
   border: 0;
   box-shadow: none;
   font-size: var(--fs-sm);
-  font-weight: 550;
+  font-weight: 500;
 }
 
 button.rn-open-at:hover {
@@ -1771,7 +1771,7 @@ button.rn-strip-btn {
   color: var(--text-secondary);
   background: transparent;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: var(--radius);
   cursor: pointer;
   transition:
     background 120ms ease,
@@ -1804,8 +1804,8 @@ button.rn-strip-btn:focus-visible {
   height: 17px;
   padding: 0 4px;
   color: var(--surface);
-  font-size: 10px;
-  font-weight: 650;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   background: var(--text-strong);
   border: 2px solid var(--surface);
@@ -1827,7 +1827,7 @@ button.rn-strip-btn:focus-visible {
 
 .rn-strip-more {
   color: var(--text-tertiary);
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   font-variant-numeric: tabular-nums;
 }
 

@@ -785,9 +785,12 @@ describe("the header, the status and the conclusion", () => {
     const waiting = headerOf(parsed());
     assert.equal(waiting.rows[2]?.value, "Dana Lee, Nov 14, 2026");
     assert.equal(waiting.rows[3]?.value, "Not yet");
+    // Rewritten 17 November 2026 (product owner's shadcn/ui decision and the design
+    // audit). Old: tone "info". New: "warning", since it waits on a person (the
+    // reviewer); blue is kept for information alone.
     assert.deepEqual(waiting.status, {
       words: "Prepared, waiting for sign-off",
-      tone: "info",
+      tone: "warning",
     });
   });
 
@@ -1216,7 +1219,9 @@ describe("what the page holds even when an answer disagrees with itself", () => 
       ["SHOWN", "No exceptions noted", "success"],
       ["SHOWN_IN_PART", "Shown in part", "warning"],
       ["NOT_SHOWN", "Not shown", "warning"],
-      ["NOT_CONCLUDED", "Not concluded", "info"],
+      // Rewritten 17 November 2026 (product owner's shadcn/ui decision and the design
+      // audit). Old: "info". New: "neutral": not concluded is not information.
+      ["NOT_CONCLUDED", "Not concluded", "neutral"],
       ["NOT_TESTED", "Not tested yet", "neutral"],
     ] as const) {
       for (const stateWords of [
@@ -1588,9 +1593,11 @@ describe("the matrix", () => {
         "None",
       ],
     );
+    // Rewritten 17 November 2026 (product owner's shadcn/ui decision and the design
+    // audit). Old: tone "info". New: "neutral": not concluded is not information.
     assert.deepEqual(matrix.rows[3]?.state, {
       words: "Not concluded",
-      tone: "info",
+      tone: "neutral",
     });
   });
 

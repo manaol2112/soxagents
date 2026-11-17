@@ -73,17 +73,6 @@ function keepChoice(key: string, value: string): void {
   }
 }
 
-// A few soft tones for the team's avatars, the same for a name every time.
-const AVATAR_TONES = ["accent", "ai", "success", "warning"] as const;
-
-function avatarTone(name: string): string {
-  let sum = 0;
-  for (const char of name) {
-    sum += char.charCodeAt(0);
-  }
-  return AVATAR_TONES[sum % AVATAR_TONES.length] ?? "accent";
-}
-
 type MenuItem = { label: string; href: string; icon: IconName };
 
 type View = "all" | "recent" | "favorites";
@@ -265,7 +254,7 @@ export function EngagementsBoard({
       value: totals.open,
       detail: waiting.length > 0 ? waiting.join(" · ") : "None archived",
       icon: "layers",
-      tone: "accent",
+      tone: "neutral",
     },
     {
       key: "ACTIVE",
@@ -273,7 +262,7 @@ export function EngagementsBoard({
       value: totals.active,
       detail: "Fieldwork under way",
       icon: "activity",
-      tone: "info",
+      tone: "neutral",
     },
     {
       key: "COMPLETED",
@@ -281,7 +270,7 @@ export function EngagementsBoard({
       value: totals.completed,
       detail: "Fieldwork finished",
       icon: "check",
-      tone: "success",
+      tone: "neutral",
     },
     {
       key: "AT_RISK",
@@ -598,7 +587,7 @@ export function EngagementsBoard({
                             .map((name) => (
                               <span
                                 key={name}
-                                className={`eg-avatar tone-${avatarTone(name)}`}
+                                className="eg-avatar"
                                 aria-hidden="true"
                               >
                                 {initials(name)}

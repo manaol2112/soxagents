@@ -282,9 +282,13 @@ describe("wired into the panel, the shell and the notes", () => {
   const controls = read("apps/web/src/controls-view.tsx");
 
   it("the toggle sits with the arrows, only where the panel is not already full width", () => {
+    // Rewritten 17 November 2026 (owner's shadcn/ui decision and design audit). Old:
+    // `ghost={minimal}`, so Control Understanding's header kept outlined icons. New:
+    // `ghost={ghost}` (every step's header, Understanding's too, takes the quiet icons; the
+    // activity keeps the outlined ones). Kept: the toggle sits with the arrows.
     assert.match(
       panel,
-      /\{wide \? <FocusToggle on=\{chosen\} ghost=\{minimal\} \/> : null\}/,
+      /\{wide \? <FocusToggle on=\{chosen\} ghost=\{ghost\} \/> : null\}/,
     );
     assert.match(panel, /aria-keyshortcuts="Shift\+F"/);
     assert.equal(FOCUS_NARROW, "(max-width: 1100px)");

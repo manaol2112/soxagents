@@ -12,8 +12,9 @@ import { AutoRefresh } from "./auto-refresh";
 import {
   ACCEPT_FIRST,
   ADD_KINDS,
+  coverageComplete,
+  decideLine,
   EXCEPTION_REASON_MAX,
-  firstToAccept,
   POLL_EVERY_MS,
   pollingOver,
   REQUEST_CHIPS,
@@ -183,6 +184,12 @@ function DocumentsFold({
   );
 }
 
+/** A request's column in the coverage grid: its kind, numbered where two share one. */
+function gridColumn(rows: readonly RequestRow[], row: RequestRow): string {
+  const same = rows.filter((each) => each.kind === row.kind);
+  return same.length > 1 ? `${row.kind} ${same.indexOf(row) + 1}` : row.kind;
+}
+
 function RequestsPanel({
   ids,
   view,
@@ -236,9 +243,9 @@ function RequestsPanel({
 
   const locked = action.pending || view.working;
   const editable = canAct && !view.working;
-  const first = view.working ? null : firstToAccept(view.rows);
-  const opened = chosen ?? new Set(first !== null ? [first] : []);
-  const wording = new Map(view.attributes.map((item) => [item.id, item]));
+  // Each request reads as one line until it is opened (product owner, 17 November 2026:
+  // "a better way to show this that does not feel overwhelm[ing]"; prototype approved).
+  const opened = chosen ?? new Set<string>();
   const flip = (each: string) => {
     const next = new Set(opened);
     if (next.has(each)) {
@@ -350,36 +357,32 @@ function RequestsPanel({
           </span>
           <span className="tar-name">
             <span className="tar-text">{each.title}</span>
-            <span className="tar-source">
+            <span className="tar-source" title={each.shows || undefined}>
               {each.line}
-              {" · "}
               {each.change !== null ? (
-                <span className="tar-origin">{each.change.line}</span>
-              ) : each.origin === "AGENT" && waits ? (
-                <span className="tar-origin">{each.originLine}</span>
-              ) : (
-                each.originLine
-              )}
+                <>
+                  {" · "}
+                  <span className="tar-origin">{each.change.line}</span>
+                </>
+              ) : each.shows !== "" && !isOpen ? (
+                ` · ${each.shows}`
+              ) : null}
             </span>
           </span>
           <span className="dq-meta">
             <span className="dq-letters">
               <span className="sr-only">{`, ${each.addresses}, `}</span>
               {each.letters.length > 0 ? (
-                each.attributeIds.map((attributeId) => {
-                  const attribute = wording.get(attributeId);
+                view.attributes.map((attribute) => {
+                  const addressed = each.attributeIds.includes(attribute.id);
                   return (
                     <span
-                      key={attributeId}
-                      className="dr-code"
+                      key={attribute.id}
+                      className={`dr-code${addressed ? "" : " is-off"}`}
                       aria-hidden="true"
-                      title={
-                        attribute !== undefined
-                          ? `Addresses attribute ${attribute.letter}: ${attribute.text}`
-                          : undefined
-                      }
+                      title={`${addressed ? "Addresses" : "Does not address"} attribute ${attribute.letter}: ${attribute.text}`}
                     >
-                      {attribute?.letter ?? ""}
+                      {attribute.letter}
                     </span>
                   );
                 })
@@ -456,48 +459,24 @@ function RequestsPanel({
               </div>
             ) : null}
             <div className="tc is-flat">
-              <dl className="tc-rules">
-                <div>
-                  <dt>Request</dt>
-                  <dd>{each.description || "Not stated"}</dd>
-                </div>
+              <p className="dq-ask">{each.description || "Not stated"}</p>
+              <p className="dq-facts">
                 {each.shows !== "" ? (
-                  <div>
-                    <dt>Shows</dt>
-                    <dd>{each.shows}</dd>
-                  </div>
+                  <span>
+                    <b>Shows</b> {each.shows}
+                  </span>
                 ) : null}
-                <div>
-                  <dt>Addresses</dt>
-                  <dd>
-                    {each.attributeIds.length === 0 ? (
-                      "No attribute yet"
-                    ) : (
-                      <ul className="dq-addressed">
-                        {each.attributeIds.map((attributeId) => {
-                          const attribute = wording.get(attributeId);
-                          return attribute === undefined ? null : (
-                            <li key={attributeId}>
-                              <span className="dr-code">
-                                {attribute.letter}
-                              </span>
-                              <span>{attribute.text}</span>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    )}
-                  </dd>
-                </div>
-              </dl>
-              {each.state === "ACCEPTED" && each.acceptedBy !== null ? (
-                <p className="tc-by">
-                  Accepted by {each.acceptedBy}
-                  {each.acceptedAt !== null
-                    ? ` · ${formatDate(each.acceptedAt)}`
-                    : ""}
-                </p>
-              ) : null}
+                {each.state === "ACCEPTED" && each.acceptedBy !== null ? (
+                  <span>
+                    <b>Accepted by</b> {each.acceptedBy}
+                    {each.acceptedAt !== null
+                      ? ` · ${formatDate(each.acceptedAt)}`
+                      : ""}
+                  </span>
+                ) : each.originLine !== "" ? (
+                  <span>{each.originLine}</span>
+                ) : null}
+              </p>
               {canAct && !drafting ? (
                 <div className="tc-row-acts">
                   {waits ? (
@@ -556,34 +535,58 @@ function RequestsPanel({
       : null;
   return (
     <section className="dq" aria-label="D&I requests" aria-busy={locked}>
+      {canAct && !drafting && view.accept.length > 0 ? (
+        <div className="dq-decide">
+          <div className="dq-decide-text">
+            <strong>
+              {view.accept.length} request{view.accept.length === 1 ? "" : "s"}{" "}
+              to accept
+            </strong>
+            <p>{decideLine(view)}</p>
+          </div>
+          <span className="dq-decide-acts">
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm ta-quiet"
+              disabled={locked}
+              onClick={() => setDialog({ mode: "add", attributeIds: [] })}
+            >
+              <UiIcon name="plus" size={13} />
+              Add request
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={locked}
+              title="Accepts each request as it reads, each recorded on its own."
+              onClick={() =>
+                void accept(
+                  view.rows.filter((each) => each.state === "TO_ACCEPT"),
+                  "accept-all",
+                )
+              }
+            >
+              {action.busy === "accept-all"
+                ? "Accepting…"
+                : view.accept.length === 1
+                  ? "Accept"
+                  : view.accept.length === 2
+                    ? "Accept both"
+                    : `Accept all ${view.accept.length}`}
+            </button>
+          </span>
+        </div>
+      ) : null}
       <div className="ta-bar">
         <h4 className="ta-section-title">{view.title}</h4>
-        {canAct && !drafting ? (
+        {canAct && !drafting && view.accept.length === 0 ? (
           <span className="ta-bar-acts">
-            {view.accept.length > 0 ? (
-              <button
-                type="button"
-                className="btn btn-sm"
-                disabled={locked}
-                title="Accepts each request as it reads, each recorded on its own."
-                onClick={() =>
-                  void accept(
-                    view.rows.filter((each) => each.state === "TO_ACCEPT"),
-                    "accept-all",
-                  )
-                }
-              >
-                {action.busy === "accept-all"
-                  ? "Accepting…"
-                  : `Accept all ${view.accept.length}`}
-              </button>
-            ) : null}
             {/* Every request is accepted, and the server asks a person to stand behind
                 the list: the one action, on the requests as they read. */}
             {view.confirm.length > 0 ? (
               <button
                 type="button"
-                className="btn btn-sm"
+                className="btn btn-secondary btn-sm"
                 disabled={locked}
                 title="Stands behind every request as it reads, each recorded as accepted by you."
                 onClick={() => void accept(view.rows, "accept-list")}
@@ -678,36 +681,102 @@ function RequestsPanel({
       ) : null}
 
       {view.coverage.length > 0 ? (
-        <section className="dq-coverage" aria-labelledby={`${id}-coverage`}>
-          <div className="dq-cov-head">
-            <h4 className="ta-section-title" id={`${id}-coverage`}>
-              Coverage
-            </h4>
-            <span className="dq-cov-line">{view.coverageLine}</span>
-          </div>
-          <ul className="dq-cov-chips">
-            {view.coverage.map((chip) => (
-              <li
-                key={chip.attributeId}
-                className={`dq-cov is-${chip.state.toLowerCase()}`}
-                title={`${chip.label}. ${chip.text}`}
+        // With a gap, the coverage line heads the gap's own callout, so "N of M addressed"
+        // is said once (design review, 17 November 2026); Show coverage stays on it.
+        <section
+          className={`dq-coverage${coverageComplete(view) ? "" : " has-gap"}`}
+          aria-labelledby={`${id}-coverage`}
+        >
+          <details className="dq-cov-fold">
+            <summary>
+              <span
+                className={`dq-cov-mark${coverageComplete(view) ? " is-ok" : " is-gap"}`}
+                aria-hidden="true"
               >
-                <span className="sr-only">{chip.label}</span>
-                <span className="dq-cov-letter" aria-hidden="true">
-                  {chip.letter}
-                </span>
-                <span className="dq-cov-state" aria-hidden="true">
-                  {chip.state === "COVERED" ? (
-                    <UiIcon name="check" size={12} />
-                  ) : chip.state === "EXCEPTION" ? (
-                    "Reason recorded"
-                  ) : (
-                    "Not addressed"
-                  )}
-                </span>
-              </li>
-            ))}
-          </ul>
+                <UiIcon
+                  name={coverageComplete(view) ? "check" : "risk"}
+                  size={14}
+                />
+              </span>
+              <span className="dq-cov-line" id={`${id}-coverage`}>
+                <strong>{view.coverageLine}</strong>
+              </span>
+              <span className="dq-cov-more">
+                <span className="dq-cov-show">Show coverage</span>
+                <span className="dq-cov-hide">Hide coverage</span>
+                <UiIcon name="chevron" size={13} />
+              </span>
+            </summary>
+            <div className="dq-grid-wrap">
+              <table className="dq-grid">
+                <caption className="sr-only">
+                  Which request addresses each attribute
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Attribute</th>
+                    {view.rows.map((each) => (
+                      <th scope="col" key={each.id} title={each.title}>
+                        {gridColumn(view.rows, each)}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {view.coverage.map((chip) => (
+                    <tr
+                      key={chip.attributeId}
+                      className={
+                        chip.state === "UNCOVERED" ? "is-gap" : undefined
+                      }
+                    >
+                      <th scope="row">
+                        <span className="dq-grid-attr">
+                          <span className="dr-code" aria-hidden="true">
+                            {chip.letter}
+                          </span>
+                          <span>
+                            {chip.text}
+                            {chip.state === "EXCEPTION" ? (
+                              <small className="dq-grid-note">
+                                Reason recorded
+                              </small>
+                            ) : chip.state === "UNCOVERED" ? (
+                              <small className="dq-grid-note is-gap">
+                                Not addressed by a request
+                              </small>
+                            ) : null}
+                          </span>
+                        </span>
+                      </th>
+                      {view.rows.map((each) => {
+                        const covers = each.attributeIds.includes(
+                          chip.attributeId,
+                        );
+                        return (
+                          <td
+                            key={each.id}
+                            className={covers ? "is-covering" : undefined}
+                            data-label={gridColumn(view.rows, each)}
+                          >
+                            {covers ? (
+                              <span
+                                className="dq-dot"
+                                role="img"
+                                aria-label="Addressed"
+                              />
+                            ) : (
+                              <span className="sr-only">Not addressed</span>
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </details>
           {view.uncovered.length > 0 ? (
             <ul
               className="dq-gaps"

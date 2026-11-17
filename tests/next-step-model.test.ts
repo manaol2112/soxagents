@@ -123,7 +123,10 @@ describe("the control's next step (product owner, 10 November 2026)", () => {
       next.actions[0]?.title,
       "Control Understanding is being prepared",
     );
-    assert.equal(next.actions[0]?.flag, "Being prepared");
+    // Rewritten 17 November 2026 (owner's shadcn/ui decision and design audit). Old:
+    // "Being prepared". New: "Agent working", the one short word for an agent at work
+    // across the step panel, the next step card and the workflow's flag.
+    assert.equal(next.actions[0]?.flag, "Agent working");
   });
 
   // Rewritten 11 November 2026: the branches open once the attributes are settled (before:
@@ -361,5 +364,37 @@ describe("the control's next step (product owner, 10 November 2026)", () => {
       next.actions.map((each) => each.key),
       ["understanding"],
     );
+  });
+});
+
+// Product owner, 17 November 2026 ("make sure that things like this will never show up in my
+// app"): while the planner draws up the test plan, no card asks a person to approve it.
+describe("the next-step card while the planner drafts the test plan", () => {
+  it("says the agent is at work on Scope & Sampling, never Approve", () => {
+    const input = fresh({
+      setup: understood,
+      attributes: { approved: 5, proposed: 0 },
+      plan: {
+        exists: false,
+        approved: false,
+        pendingReview: false,
+        drafting: true,
+      },
+    });
+    const steps = workflowOf(input);
+    assert.equal(
+      steps.find((step) => step.key === "testdesign")?.status,
+      "Plan being drafted",
+    );
+    const next = nextStep(steps, input, about);
+    assert.equal(next.mode, "next");
+    const scope =
+      next.mode === "next"
+        ? next.actions.find((each) => each.key === "testdesign")
+        : undefined;
+    assert.ok(scope !== undefined);
+    assert.equal(scope.kind, "agent");
+    assert.equal(scope.flag, "Agent working");
+    assert.doesNotMatch(scope.title, /^Approve/);
   });
 });

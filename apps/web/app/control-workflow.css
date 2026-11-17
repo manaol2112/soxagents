@@ -7,10 +7,10 @@
    motion. */
 
 .wf {
-  --wf-source: var(--accent-text);
+  --wf-source: var(--text-secondary);
   --wf-agent: var(--ai);
-  --wf-gate: var(--warning);
-  --wf-output: var(--success);
+  --wf-gate: var(--text-secondary);
+  --wf-output: var(--text-secondary);
   display: grid;
   gap: 0.75rem;
   margin-top: 0.5rem;
@@ -25,7 +25,7 @@
 
 .wf-head h2 {
   margin: 0;
-  font-size: var(--fs-lg, 16px);
+  font-size: var(--fs-lg);
 }
 
 .wf-head p {
@@ -36,7 +36,7 @@
 
 .wf-head p strong {
   color: var(--text);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .wf-meter {
@@ -67,7 +67,7 @@
   margin: 0;
   padding: 0;
   color: var(--text-secondary);
-  font-size: var(--fs-xs, 12px);
+  font-size: var(--fs-xs);
   list-style: none;
 }
 
@@ -88,12 +88,15 @@
 .wf .kind-gate { --wf-kind: var(--wf-gate); }
 .wf .kind-output { --wf-kind: var(--wf-output); }
 
-/* The canvas: a quiet dot grid on a sunken well, as high as the workflow at the zoom it opens
-   at (the height is set by control-workflow.tsx from workflowFrame). */
+/* The canvas: a quiet dot grid, as high as the workflow at the zoom it opens at (the height
+   is set by control-workflow.tsx from workflowFrame). Light: a white canvas with light-grey
+   step cards on it, as the node preview the product owner chose (17 November 2026); dark: the
+   sunken well with raised cards. */
 .wf-canvas {
-  --wf-canvas-bg: var(--surface-muted);
-  /* 3:1 or more on the well in both themes (WCAG 1.4.11). */
-  --wf-line: color-mix(in srgb, var(--text-tertiary) 70%, var(--wf-canvas-bg));
+  --wf-canvas-bg: var(--surface);
+  --wf-node-bg: var(--surface-muted);
+  /* 3:1 or more on the canvas in both themes (WCAG 1.4.11): 80% on white. */
+  --wf-line: color-mix(in srgb, var(--text-tertiary) 80%, var(--wf-canvas-bg));
   --wf-line-strong: var(--text-tertiary);
   --wf-dots: color-mix(in srgb, var(--text-tertiary) 24%, transparent);
   position: relative;
@@ -101,12 +104,13 @@
   overflow: hidden;
   background: var(--wf-canvas-bg);
   border: 1px solid var(--border);
-  border-radius: var(--radius-xl, 14px);
+  border-radius: var(--radius-xl);
   box-shadow: var(--shadow-xs);
 }
 
 :root[data-theme="dark"] .wf-canvas {
   --wf-canvas-bg: var(--surface-sunken);
+  --wf-node-bg: var(--surface);
   --wf-dots: color-mix(in srgb, var(--text-tertiary) 20%, transparent);
 }
 
@@ -142,18 +146,20 @@
 }
 
 /* A stage's lane: a soft tint behind its steps, its name in a quiet chip. */
+/* A stage's lane is an outline only (17 November 2026): the step cards are the grey surfaces,
+   as in the node preview the product owner chose. */
 .wf-band {
   --wf-band: var(--text-tertiary);
   position: relative;
-  background: color-mix(in srgb, var(--wf-band) 5%, transparent);
-  border: 1px solid color-mix(in srgb, var(--wf-band) 16%, transparent);
-  border-radius: 16px;
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--wf-band) 22%, transparent);
+  border-radius: var(--radius-xl);
 }
 
 .wf-band.band-prepare { --wf-band: var(--text-tertiary); }
-.wf-band.band-design { --wf-band: var(--accent); }
-.wf-band.band-operating { --wf-band: var(--ai); }
-.wf-band.band-conclude { --wf-band: var(--success); }
+.wf-band.band-design { --wf-band: var(--text-tertiary); }
+.wf-band.band-operating { --wf-band: var(--text-tertiary); }
+.wf-band.band-conclude { --wf-band: var(--text-tertiary); }
 
 .wf-band-label,
 .wf-lane {
@@ -165,8 +171,8 @@
   margin: 0;
   padding: 0 9px 0 8px;
   color: var(--text-secondary);
-  font-size: 12.5px;
-  font-weight: 650;
+  font-size: var(--fs-sm);
+  font-weight: 600;
   line-height: 1;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -195,7 +201,11 @@
 .wf button.wf-node {
   position: relative;
   display: grid;
-  grid-template-rows: auto auto auto 1fr;
+  /* One full-width column: sized to its content, the column was centred by the global
+     button rule, so a short step's kind and number bunched in the middle (17 November 2026). */
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto 1fr;
+  justify-content: stretch;
   align-content: start;
   align-items: start;
   justify-items: stretch;
@@ -207,41 +217,37 @@
   line-height: 1.3;
   text-align: left;
   white-space: normal;
-  background: var(--surface);
+  /* A grey card with a hairline edge, flat (node preview, 17 November 2026). */
+  background: var(--wf-node-bg, var(--surface-muted));
   border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--radius-xl);
+  box-shadow: none;
   cursor: pointer;
   transition:
-    transform 120ms ease,
     border-color 120ms ease,
-    box-shadow 120ms ease;
+    background 120ms ease;
 }
 
 .wf button.wf-node:hover {
   color: var(--text);
-  background: var(--surface);
+  background: var(--surface-hover);
   border-color: var(--border-strong);
-  box-shadow: var(--shadow-lg);
-  transform: translateY(-1px);
+  box-shadow: none;
 }
 
-/* A step to do next: the accent ring and the card's words in a flag. */
+/* A step to do next: a stronger edge and the card's words in a flag. */
 .wf button.wf-node.is-next {
-  border-color: var(--accent);
-  box-shadow:
-    0 0 0 4px var(--accent-soft),
-    var(--shadow-sm);
+  border-color: var(--border-strong);
+  box-shadow: none;
 }
 
 /* The step whose panel is open. */
 .wf button.wf-node.is-selected {
-  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+  background: var(--wf-node-bg, var(--surface-muted));
   border-color: var(--accent);
   box-shadow:
     0 0 0 1px var(--accent),
-    0 0 0 5px var(--accent-soft),
-    var(--shadow-lg);
+    var(--shadow-xs);
 }
 
 /* Keyboard focus keeps the ring whatever the step's state (WCAG 2.4.7). */
@@ -249,7 +255,7 @@
   outline: 0;
   box-shadow:
     var(--ring),
-    var(--shadow-lg);
+    var(--shadow-xs);
 }
 
 /* Needs attention, or blocked: an edge and the status in the tone, nothing louder. */
@@ -269,28 +275,29 @@
   min-width: 0;
 }
 
+/* The kind: its icon and its name, plainly, with no box (node preview, 17 November 2026). */
 .wf-badge {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
-  height: 24px;
-  padding: 0 8px 0 7px;
+  height: 20px;
+  padding: 0;
   color: var(--text-secondary);
-  font-size: 13.5px;
-  font-weight: 550;
+  font-size: var(--fs-md);
+  font-weight: 400;
   line-height: 1;
   white-space: nowrap;
-  background: var(--surface-muted);
-  border: 1px solid var(--border-subtle, var(--border));
-  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
 }
 
 .wf-num {
   flex: none;
   color: var(--text-tertiary);
-  font-size: 13.5px;
-  font-weight: 550;
+  font-size: var(--fs-md);
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
 
@@ -298,8 +305,8 @@
   margin-left: auto;
   padding: 1px 7px;
   color: var(--accent-text);
-  font-size: 12px;
-  font-weight: 650;
+  font-size: var(--fs-sm);
+  font-weight: 600;
   letter-spacing: 0.01em;
   text-transform: none;
   background: var(--accent-soft);
@@ -307,23 +314,13 @@
 }
 
 .wf-title {
-  margin-top: 8px;
+  margin-top: 12px;
   overflow: hidden;
   color: var(--text-strong, var(--text));
-  font-size: 16px;
-  font-weight: 650;
+  font-size: var(--fs-lg);
+  font-weight: 600;
   line-height: 20px;
   letter-spacing: -0.01em;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.wf-covers {
-  margin-top: 1px;
-  overflow: hidden;
-  color: var(--text-secondary);
-  font-size: 13.5px;
-  line-height: 18px;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
@@ -335,14 +332,14 @@
   align-items: center;
   gap: 8px;
   min-width: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 
 .wf-state-text {
   overflow: hidden;
-  color: var(--text);
-  font-size: 13.5px;
-  font-weight: 550;
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
+  font-weight: 400;
   line-height: 18px;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -354,9 +351,11 @@
   color: var(--text-secondary);
 }
 
+/* What a person must act on sits one step above the waiting words; the amber mark carries
+   the colour. */
 .wf-node.tone-attention .wf-state-text,
 .wf-state-text.tone-attention {
-  color: var(--warning);
+  color: var(--text);
 }
 
 .wf-node.tone-blocked .wf-state-text,
@@ -373,9 +372,18 @@
   border-radius: 999px;
 }
 
-.wf-dot.tone-active { background: var(--accent); border-color: var(--accent); }
+.wf-dot.tone-active { background: var(--info); border-color: var(--info); }
 .wf-dot.tone-attention { background: var(--warning); border-color: var(--warning); }
 .wf-dot.tone-blocked { background: var(--danger); border-color: var(--danger); }
+
+.wf-wait {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  color: var(--text-tertiary);
+}
 
 .wf-check {
   display: inline-grid;
@@ -448,9 +456,11 @@
 }
 
 /* A step not performed: OE when the design is not effective. */
+/* Not performed: recessed against the filled cards, its edge dashed; the canvas colour, so
+   the dot grid does not show through its words. */
 .wf button.wf-node.tone-skipped {
   color: var(--text-secondary);
-  background: var(--surface-muted);
+  background: var(--wf-canvas-bg);
   border-style: dashed;
   box-shadow: none;
 }
@@ -464,7 +474,7 @@
   border-style: dashed;
 }
 
-/* The next step's node: the card's words in a flag, and a soft pulse. */
+/* The next step's node: the card's words in a flag. */
 .wf-flag {
   position: absolute;
   top: -11px;
@@ -473,38 +483,15 @@
   align-items: center;
   height: 22px;
   padding: 0 10px;
-  color: var(--text-on-accent);
-  font-size: 12.5px;
-  font-weight: 650;
+  color: var(--text-strong);
+  font-size: var(--fs-xs);
+  font-weight: 500;
   letter-spacing: 0.01em;
   white-space: nowrap;
-  background: var(--accent);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
   border-radius: 999px;
   box-shadow: var(--shadow-sm);
-}
-
-.wf button.wf-node.is-next::after {
-  position: absolute;
-  inset: -6px;
-  border: 2px solid var(--accent);
-  border-radius: 16px;
-  opacity: 0;
-  pointer-events: none;
-  animation: wf-next-pulse 2.8s ease-out infinite;
-  content: "";
-}
-
-@keyframes wf-next-pulse {
-  0% {
-    opacity: 0.35;
-    transform: scale(0.98);
-  }
-
-  70%,
-  100% {
-    opacity: 0;
-    transform: scale(1.03);
-  }
 }
 
 /* Handles mark where edges join; nothing connects by hand, so they stay out of sight. */
@@ -535,6 +522,29 @@
   stroke-width: 2;
 }
 
+/* The way into a step to do next moves along, so the eye follows it to that step (product
+   owner, 17 November 2026, from the studio-canvas prototype). It moves for about four seconds
+   when a step becomes next, then rests as a solid line: motion that runs longer than five
+   seconds beside other content must be pausable (WCAG 2.2.2). Still under reduced motion. */
+.wf .wf-edge.is-next .react-flow__edge-path {
+  stroke-dasharray: 6 6;
+  animation:
+    wf-flow 1.1s linear 4,
+    wf-settle 0s linear 4.4s forwards;
+}
+
+@keyframes wf-flow {
+  to {
+    stroke-dashoffset: -24;
+  }
+}
+
+@keyframes wf-settle {
+  to {
+    stroke-dasharray: 12 0;
+  }
+}
+
 .wf .wf-arrow path { fill: var(--wf-line); }
 .wf .wf-arrow-reached path { fill: var(--wf-line-strong); }
 .wf .wf-arrow-next path { fill: var(--accent); }
@@ -547,7 +557,7 @@
 
 .wf .react-flow__edge-text {
   fill: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-base);
   font-weight: 600;
 }
 
@@ -631,7 +641,7 @@
   padding: 3px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
 }
 
@@ -644,7 +654,7 @@
   color: var(--text-secondary);
   background: transparent;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   box-shadow: none;
 }
 
@@ -657,7 +667,7 @@
   width: auto;
   min-width: 50px;
   padding: 0 6px;
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
@@ -678,7 +688,7 @@
 /* React Flow's attribution, kept as its licence asks of anyone not on its Pro plan. */
 .wf .react-flow__attribution {
   padding: 2px 6px;
-  font-size: 10px;
+  font-size: var(--fs-2xs);
   background: transparent;
 }
 
@@ -690,8 +700,8 @@
 .wf-peek-kicker {
   margin: 0;
   color: var(--text-tertiary);
-  font-size: var(--fs-xs, 11px);
-  font-weight: 700;
+  font-size: var(--fs-xs);
+  font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
@@ -702,14 +712,14 @@
   height: 20px;
   padding: 0 0.45rem;
   color: var(--neutral);
-  font-size: 11px;
-  font-weight: 650;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
   letter-spacing: 0;
   text-transform: none;
   white-space: nowrap;
   background: var(--neutral-soft);
   border: 1px solid var(--neutral-border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 
 .wf-chip.tone-done { color: var(--success); background: var(--success-soft); border-color: var(--success-border); }
@@ -753,8 +763,8 @@
   text-decoration: none;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
   transition:
     border-color 120ms ease,
     box-shadow 120ms ease;
@@ -766,15 +776,13 @@
 }
 
 .wf-list-row:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  outline: 0;
+  box-shadow: var(--ring);
 }
 
 .wf-list-row.is-next {
-  border-color: var(--accent);
-  box-shadow:
-    0 0 0 3px var(--accent-soft),
-    var(--shadow-sm);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-xs);
 }
 
 .wf-list-mark {
@@ -784,8 +792,8 @@
   width: 32px;
   height: 32px;
   color: var(--text-secondary);
-  font-size: 12.5px;
-  font-weight: 650;
+  font-size: var(--fs-sm);
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   background: var(--surface-muted);
   border: 1px solid var(--border-subtle, var(--border));
@@ -794,13 +802,10 @@
 
 .wf-list-mark.tone-done {
   color: var(--success);
-  background: var(--success-soft);
-  border-color: var(--success-border);
 }
 
 .wf-list-mark.tone-attention {
   color: var(--warning);
-  background: var(--warning-soft);
   border-color: var(--warning-border);
 }
 
@@ -821,18 +826,18 @@
   display: flex;
   height: auto;
   padding: 0;
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   background: none;
   border: 0;
 }
 
 .wf-list .wf-title {
   margin: 0;
-  font-size: 15px;
+  font-size: var(--fs-lg);
 }
 
 .wf-list .wf-state-text {
-  font-size: 13px;
+  font-size: var(--fs-base);
   font-weight: 500;
 }
 
@@ -854,15 +859,19 @@
 
   .wf-pulse::after,
   .wf-node.is-working .wf-state-text::after,
-  .wf button.wf-node.is-next::after {
+  .wf .wf-edge.is-next .react-flow__edge-path {
     animation: none;
+  }
+
+  .wf .wf-edge.is-next .react-flow__edge-path {
+    stroke-dasharray: none;
   }
 }
 
 /* The step's panel: wide, over the workflow's right side, the workflow visible on its left. */
 
 .wf-panel {
-  --wf-source: var(--accent-text);
+  --wf-source: var(--text-secondary);
   position: fixed;
   top: 0;
   right: 0;
@@ -871,7 +880,7 @@
   display: flex;
   flex-direction: column;
   width: min(1120px, calc(100vw - 380px));
-  background: var(--bg, var(--surface));
+  background: var(--surface);
   border-left: 1px solid var(--border);
   box-shadow: var(--shadow-pop, var(--shadow-lg));
   animation: wf-panel-in 220ms ease-out;
@@ -904,7 +913,7 @@
   align-items: center;
   gap: 0.55rem;
   margin: 0.15rem 0 0;
-  font-size: 19px;
+  font-size: var(--fs-title);
   outline: none;
 }
 
@@ -933,7 +942,7 @@
   color: var(--text-secondary);
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 
 .wf-icon-btn:hover {
@@ -965,16 +974,24 @@
   border-bottom-color: var(--border-subtle);
 }
 
+/* One row: the kind icon stays beside its words and the words wrap (design review,
+   17 November 2026). */
 .wf-panel-kicker {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 8px;
+  min-width: 0;
   margin: 0;
   color: var(--text-tertiary);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 500;
   line-height: 20px;
+}
+
+.wf-panel-kicker-text {
+  min-width: 0;
+  overflow-wrap: break-word;
 }
 
 .wf-panel-kind {
@@ -989,9 +1006,9 @@
 }
 
 .wf-panel-kind.kind-agent { color: var(--ai); background: var(--ai-soft); }
-.wf-panel-kind.kind-gate { color: var(--warning); background: var(--warning-soft); }
-.wf-panel-kind.kind-source { color: var(--accent-text); background: var(--accent-soft); }
-.wf-panel-kind.kind-output { color: var(--success); background: var(--success-soft); }
+.wf-panel-kind.kind-gate { color: var(--text-secondary); background: var(--surface-muted); }
+.wf-panel-kind.kind-source { color: var(--text-secondary); background: var(--surface-muted); }
+.wf-panel-kind.kind-output { color: var(--text-secondary); background: var(--surface-muted); }
 
 .wf-panel-line {
   display: flex;
@@ -1004,7 +1021,7 @@
 .wf-panel-line h2 {
   margin: 0;
   color: var(--text-strong);
-  font-size: 22px;
+  font-size: var(--fs-title);
   font-weight: 600;
   letter-spacing: -0.015em;
   line-height: 1.2;
@@ -1023,7 +1040,7 @@
   height: 24px;
   padding: 0 10px;
   color: var(--neutral);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   white-space: nowrap;
   background: var(--neutral-soft);
@@ -1111,7 +1128,7 @@
   }
 
   .wf-panel-line h2 {
-    font-size: 19px;
+    font-size: var(--fs-title);
   }
 
   .wf-panel-actions {
@@ -1162,16 +1179,10 @@
   font-size: var(--fs-sm);
   background: var(--surface-muted);
   border: 1px dashed var(--border);
-  border-radius: 9px;
+  border-radius: var(--radius);
 }
 
 /* Step 05, the D&I conclusion: the verdict, what it rests on, and the reviewer's sign-off. */
-
-.dc {
-  display: grid;
-  gap: 1rem;
-  max-width: 880px;
-}
 
 .dc-verdict {
   display: grid;
@@ -1179,8 +1190,8 @@
   padding: 1rem 1.15rem;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-left: 4px solid var(--neutral-border);
-  border-radius: 10px;
+  border-left: 2px solid var(--border-strong);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-xs);
 }
 
@@ -1201,7 +1212,7 @@
   margin: 0;
   color: var(--text-secondary);
   font-size: var(--fs-sm);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .dc-status {
@@ -1210,8 +1221,8 @@
   height: 22px;
   padding: 0 0.5rem;
   color: var(--neutral);
-  font-size: 12px;
-  font-weight: 650;
+  font-size: var(--fs-sm);
+  font-weight: 600;
   background: var(--neutral-soft);
   border: 1px solid var(--neutral-border);
   border-radius: 999px;
@@ -1234,8 +1245,8 @@
 .dc-verdict-word {
   margin: 0;
   color: var(--text);
-  font-size: 1.35rem;
-  font-weight: 700;
+  font-size: var(--fs-title);
+  font-weight: 600;
   line-height: 1.2;
 }
 
@@ -1243,8 +1254,8 @@
    the quieter words of a state, never as a verdict. */
 .dc-verdict-word.is-none {
   color: var(--text-secondary);
-  font-size: 1.1rem;
-  font-weight: 650;
+  font-size: var(--fs-xl);
+  font-weight: 600;
 }
 
 /* Sign off waits for the conclusion's text it signs: off, said beside it, and still in
@@ -1254,69 +1265,6 @@
   opacity: 0.5;
   box-shadow: none;
 }
-
-.dc-effect {
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: var(--fs-sm);
-}
-
-/* D&I Conclusion and Review (docs/design-workpaper.md, section 3.5): the preparer's
-   conclusion and its text, read-only, as section 7 has them. */
-.dc-none,
-.dc-edit-where {
-  margin: 0;
-  font-size: var(--fs-sm);
-}
-
-.dc-none a,
-.dc-edit-where a {
-  font-weight: 600;
-}
-
-.dc-chosen {
-  display: grid;
-  gap: 0.2rem;
-  color: var(--text-secondary);
-  font-size: var(--fs-sm);
-  overflow-wrap: anywhere;
-}
-
-.dc-chosen > p { margin: 0; }
-
-.dc-chosen b {
-  color: var(--text);
-  font-weight: 600;
-}
-
-.dc-text {
-  display: grid;
-  gap: 0.4rem;
-  padding: 0.7rem 0.85rem;
-  color: var(--text);
-  font-size: var(--fs-sm);
-  background: var(--surface-muted);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  overflow-wrap: anywhere;
-}
-
-.dc-text h4 {
-  margin: 0;
-  color: var(--text-tertiary);
-  font-size: var(--fs-2xs);
-  font-weight: 650;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.dc-text p,
-.dc-text ul,
-.dc-text ol { margin: 0; }
-
-.dc-text :is(ul, ol) { padding-left: 1.2rem; }
-
-.dc-quiet { color: var(--text-secondary); }
 
 /* Why the conclusion cannot be signed while an exception stands, in the server's own
    sentence(s), whole, and what the preparer does next: each wraps, none is cut. */
@@ -1328,7 +1276,7 @@
   font-size: var(--fs-sm);
   background: var(--warning-soft);
   border: 1px solid var(--warning-border);
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 
 .dc-excepted > p {
@@ -1356,34 +1304,6 @@
 
 .dc-outdated li { overflow-wrap: anywhere; }
 
-.dc-basis {
-  display: grid;
-  gap: 0.5rem;
-  margin: 0.25rem 0 0;
-  padding-top: 0.75rem;
-  border-top: 1px solid var(--border);
-}
-
-.dc-basis > div {
-  display: grid;
-  grid-template-columns: minmax(9rem, 12rem) minmax(0, 1fr);
-  gap: 0.75rem;
-}
-
-.dc-basis dt {
-  color: var(--text-tertiary);
-  font-size: var(--fs-sm);
-}
-
-.dc-basis dd {
-  margin: 0;
-  color: var(--text);
-  font-size: var(--fs-sm);
-  overflow-wrap: anywhere;
-}
-
-.dc-basis dd a { margin-left: 0.35rem; }
-
 .dc-list {
   display: grid;
   gap: 0.2rem;
@@ -1396,11 +1316,6 @@
   display: block;
   margin-top: 0.2rem;
   color: var(--text-secondary);
-}
-
-.dc-form {
-  display: grid;
-  gap: 0.6rem;
 }
 
 .dc-field {
@@ -1425,7 +1340,7 @@
   font-size: var(--fs-sm);
   background: var(--surface-muted);
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 
 /* Each sentence that holds the sign-off, whole: it wraps, and is never cut. */
@@ -1438,19 +1353,22 @@
   margin-top: 0.35rem;
 }
 
-.dc-reopen,
 .dc-history {
   font-size: var(--fs-sm);
 }
 
-.dc-reopen summary,
 .dc-history summary {
   color: var(--text-secondary);
-  font-weight: 600;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 
-.dc-reopen[open] summary,
+.dc-history summary:focus-visible {
+  outline: 0;
+  box-shadow: var(--ring);
+}
+
 .dc-history[open] summary { margin-bottom: 0.6rem; }
 
 .dc-history ol {
@@ -1458,10 +1376,6 @@
   gap: 0.5rem;
   margin: 0;
   padding-left: 1.2rem;
-}
-
-@media (max-width: 640px) {
-  .dc-basis > div { grid-template-columns: minmax(0, 1fr); gap: 0.15rem; }
 }
 
 /* The control's next step, above its workflow (product owner, 10 November 2026; mock-up
@@ -1478,20 +1392,12 @@
   overflow: hidden;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 14px;
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
 }
 
 .ns::before {
-  position: absolute;
-  inset: 0 0 auto;
-  height: 2px;
-  background: linear-gradient(90deg, var(--accent), var(--ai));
-  content: "";
-}
-
-.ns.is-done::before {
-  background: var(--success);
+  display: none;
 }
 
 .ns-tile {
@@ -1499,8 +1405,8 @@
   place-items: center;
   width: 30px;
   height: 30px;
-  border-radius: 9px;
-  background: var(--accent-soft);
+  border-radius: var(--radius);
+  background: var(--ai-soft);
 }
 
 .ns.is-done .ns-tile {
@@ -1525,7 +1431,7 @@
   gap: 6px;
   margin: 0;
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -1539,7 +1445,7 @@
   color: var(--text-secondary);
   background: var(--surface-sunken);
   border-radius: 999px;
-  font-size: 10.5px;
+  font-size: var(--fs-2xs);
   letter-spacing: 0.04em;
 }
 
@@ -1553,12 +1459,17 @@
   background: var(--warning-soft);
 }
 
+.ns-pill.is-ai {
+  color: var(--ai);
+  background: var(--ai-soft);
+}
+
 .ns h2 {
   min-width: 0;
   margin: 0;
   color: var(--text-strong);
-  font-size: 15px;
-  font-weight: 650;
+  font-size: var(--fs-lg);
+  font-weight: 600;
   letter-spacing: -0.005em;
   line-height: 1.35;
 }
@@ -1569,7 +1480,7 @@
   margin: 0;
   overflow: hidden;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-base);
   line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1583,7 +1494,7 @@
   margin: 2px 0 0;
   padding: 0;
   color: var(--text-secondary);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   list-style: none;
 }
 
@@ -1598,7 +1509,7 @@
   height: 5px;
   flex: none;
   border-radius: 50%;
-  background: var(--accent);
+  background: var(--text-tertiary);
   content: "";
 }
 
@@ -1609,14 +1520,6 @@
   gap: 6px;
 }
 
-.ns .btn {
-  height: 32px;
-  padding: 0 12px;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 600;
-}
-
 .ns .btn.btn-quiet {
   padding: 0 10px;
 }
@@ -1624,7 +1527,7 @@
 .ns-side .ng-launch {
   height: 32px;
   padding: 0 10px;
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
 }
 
 .ns-working {
@@ -1640,7 +1543,7 @@
   width: 38%;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, var(--accent), var(--ai));
+  background: var(--ai);
   animation: ns-slide 1.6s ease-in-out infinite;
 }
 
@@ -1673,7 +1576,7 @@
   padding: 7px 8px 7px 12px;
   background: var(--surface-muted);
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 .ns-pair-text {
@@ -1684,13 +1587,13 @@
 
 .ns-pair-text strong {
   color: var(--text-strong);
-  font-size: 13px;
+  font-size: var(--fs-base);
 }
 
 .ns-pair-text span {
   overflow: hidden;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1718,7 +1621,7 @@
   gap: 6px;
   min-width: 0;
   color: var(--text-tertiary);
-  font-size: 12px;
+  font-size: var(--fs-sm);
   font-weight: 500;
 }
 
@@ -1754,12 +1657,11 @@
 
 .ns-journey li.is-here {
   color: var(--text-strong);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .ns-journey li.is-here .ns-dot {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .ns-journey li.is-here .ns-dot::after {
@@ -1794,13 +1696,13 @@
     padding: 12px 12px 0;
   }
 
-  /* No hover on touch: the reason wraps to two lines instead of truncating. */
+  /* No hover on touch: the reason is shown whole, wrapped (design review, 17 November
+     2026: a cut reason had no way to be read). */
   .ns-why {
-    display: -webkit-box;
     flex-basis: 100%;
+    overflow: visible;
     white-space: normal;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
+    text-overflow: clip;
   }
 
   .ns-side {
@@ -1822,6 +1724,25 @@
 
   .ns-pair {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* Each step's words in full, its button under them. */
+  .ns-pair li {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 10px 12px;
+  }
+
+  .ns-pair-text span {
+    overflow: visible;
+    white-space: normal;
+    text-overflow: clip;
+  }
+
+  .ns-pair .btn {
+    justify-content: center;
+    width: 100%;
   }
 
   .ns-journey {
@@ -1914,7 +1835,7 @@
   height: 30px;
   padding: 0 12px 0 6px;
   color: var(--text-secondary);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   font-weight: 500;
   white-space: nowrap;
   text-decoration: none;
@@ -1942,7 +1863,7 @@
   height: 20px;
   padding: 0 5px;
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: var(--fs-2xs);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   background: var(--surface-sunken);
@@ -1958,16 +1879,17 @@
   color: var(--text-tertiary);
 }
 
-/* The open step: dark, in either theme (the strong text on the surface, inverted). */
+/* The open step: a quiet chip with its edge (shadcn/ui, 17 November 2026). */
 .wf-strip-pill.is-current,
 .wf-strip-pill.is-current:hover {
-  color: var(--surface);
-  background: var(--text-strong);
+  color: var(--text-strong);
+  background: var(--surface-muted);
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 
 .wf-strip-pill.is-current .wf-strip-mark {
-  color: var(--surface);
-  background: color-mix(in srgb, var(--surface) 18%, transparent);
+  color: var(--text-strong);
+  background: var(--surface);
 }
 
 /* The control's name, quiet, before the step's title. */
@@ -1976,7 +1898,7 @@
   max-width: 42ch;
   overflow: hidden;
   color: var(--text-tertiary);
-  font-size: 13px;
+  font-size: var(--fs-base);
   font-weight: 500;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -1984,7 +1906,7 @@
 
 .wf-crumb-sep {
   color: var(--border-strong, var(--text-tertiary));
-  font-size: 15px;
+  font-size: var(--fs-lg);
 }
 
 @media (max-width: 1100px) {
@@ -2021,7 +1943,7 @@
   }
 
   /* The strip names the step's number: the header is one line. */
-  .wf-panel.is-focus .wf-panel-kicker {
+  .wf-panel.is-focus .wf-panel-head.is-minimal .wf-panel-kicker {
     display: none;
   }
 
@@ -2033,7 +1955,7 @@
 
   .wf-panel.is-focus .wf-panel-line h2 {
     flex: none;
-    font-size: 19px;
+    font-size: var(--fs-title);
   }
 
   .wf-panel.is-focus .wf-panel-body {
@@ -2127,13 +2049,13 @@
     z-index: 2;
     padding: 5px 9px;
     color: var(--surface);
-    font-size: 12px;
+    font-size: var(--fs-sm);
     font-weight: 500;
     line-height: 1.3;
     white-space: nowrap;
     pointer-events: none;
     background: var(--text-strong);
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     box-shadow: var(--shadow-pop, var(--shadow-sm));
     opacity: 0;
     transform: translate(-4px, -50%);
@@ -2155,7 +2077,7 @@
     height: 16px;
     margin: 0;
     padding: 0 4px;
-    font-size: 10px;
+    font-size: var(--fs-2xs);
   }
 
   :root[data-step-focus] .shell .sidebar nav .nav-badge + .nav-badge {

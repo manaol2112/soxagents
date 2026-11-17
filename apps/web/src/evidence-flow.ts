@@ -53,7 +53,9 @@ export const REQUEST_STAGES: Record<
   AWAITING_APPROVAL: {
     label: "Awaiting approval",
     owner: "APPROVER",
-    tone: "info",
+    // Waits on a person (the approver): amber, not the information blue (shadcn/ui
+    // design audit, 17 November 2026).
+    tone: "warn",
   },
   APPROVED: { label: "Approved, not sent", owner: "PREPARER", tone: "info" },
   APPROVAL_EXPIRED: {

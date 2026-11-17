@@ -840,3 +840,22 @@ describe("the project plan opens on the current work", () => {
     assert.equal(openPhases([phase("PLANNING", "DONE")]).size, 0);
   });
 });
+
+describe("one meaning per word: a plan waiting on approval (design review, 17 November 2026)", () => {
+  it("is 'Plan to approve' in the header, on the workflow node and in the register", async () => {
+    const { PROGRESS_LABELS } = await import(
+      "../apps/web/src/engagement-model.ts"
+    );
+    const { PLAN_TO_APPROVE } = await import(
+      "../apps/web/src/control-workflow-model.ts"
+    );
+    const { PLAN_LABEL } = await import(
+      "../apps/web/src/controls-page-model.ts"
+    );
+    // Old: the control header (stageText, from PROGRESS_LABELS) read "Test plan to approve"
+    // beside the node's, the Scope & Sampling pill's and the register's "Plan to approve".
+    assert.equal(PROGRESS_LABELS.PLAN_TO_APPROVE, "Plan to approve");
+    assert.equal(PROGRESS_LABELS.PLAN_TO_APPROVE, PLAN_TO_APPROVE);
+    assert.equal(PROGRESS_LABELS.PLAN_TO_APPROVE, PLAN_LABEL.PENDING);
+  });
+});

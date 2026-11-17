@@ -9,6 +9,7 @@ import {
   parseWelcomeNotice,
   TRIAL_DAYS,
   TRIAL_INCLUDES,
+  visitorAddress,
   welcomeNoticeFor,
 } from "../apps/web/src/welcome-model.ts";
 
@@ -125,5 +126,24 @@ describe("the landing page's pricing", () => {
   it("keeps the product's neutral voice", () => {
     const answers = PRICING_QUESTIONS.map((item) => item.a).join(" ");
     assert.doesNotMatch(answers, /\b(I|I'll|I'm|me|my)\b/);
+  });
+});
+
+describe("the visitor's address passed with a demo request", () => {
+  // Security review, 17 November 2026: the API counted every request through the web
+  // tier as the web server's own. The web tier passes on only the hop its nearest proxy
+  // (or Next.js itself, from the socket) wrote; what the visitor wrote before it is dropped.
+  it("passes on the right-most hop only", () => {
+    assert.equal(visitorAddress("198.51.100.1"), "198.51.100.1");
+    assert.equal(visitorAddress("6.6.6.6, 203.0.113.9"), "203.0.113.9");
+    assert.equal(visitorAddress(" 2001:db8::1 "), "2001:db8::1");
+    assert.equal(visitorAddress("::1"), "::1");
+  });
+
+  it("passes on nothing that is not an address", () => {
+    assert.equal(visitorAddress(null), null);
+    assert.equal(visitorAddress(""), null);
+    assert.equal(visitorAddress("1.2.3.4, evil.example"), null);
+    assert.equal(visitorAddress("1.2.3.4, 1.2.3.4\r\nx-injected: 1"), null);
   });
 });

@@ -2,39 +2,43 @@
    notifications, and a strip above the page while the subscription allows no change.
    Tokens only; both read the same in the dark theme. */
 
+/* In the top bar it sits beside small outline buttons, so it is drawn as one
+   (shadcn/ui, 17 November 2026): neutral, the status in its icon's colour. */
 .trial-badge {
   display: inline-flex;
   align-items: center;
   gap: 0.4rem;
-  height: 30px;
-  padding: 0 0.75rem;
-  color: var(--info);
+  height: 28px;
+  padding: 0 0.625rem;
+  color: var(--text-strong);
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1;
   white-space: nowrap;
   text-decoration: none;
-  background: var(--info-soft);
-  border: 1px solid var(--info-border);
-  border-radius: 999px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-xs);
   transition:
     border-color 120ms ease,
     background 120ms ease;
 }
 
-.trial-badge.tone-warning {
-  color: var(--warning);
-  background: var(--warning-soft);
-  border-color: var(--warning-border);
-}
-
 .trial-badge:hover,
 .trial-badge:focus-visible {
-  border-color: currentColor;
+  color: var(--text-strong);
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
 }
 
 .trial-badge svg {
   flex: none;
+  color: var(--info);
+}
+
+.trial-badge.tone-warning svg {
+  color: var(--warning);
 }
 
 .trial-badge-kind::after {
@@ -102,7 +106,7 @@
 .tu-head h2 {
   margin: 0.15rem 0 0;
   font-size: var(--fs-title);
-  font-weight: 650;
+  font-weight: 600;
   letter-spacing: -0.02em;
 }
 
@@ -150,7 +154,7 @@
 .tu-notice strong {
   display: block;
   color: var(--text-strong);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .tu-notice p {
@@ -272,7 +276,7 @@
 .demo-reset-head h2 {
   margin: 0;
   font-size: var(--fs-md);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .demo-reset-head p {

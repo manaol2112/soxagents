@@ -10,7 +10,6 @@ export function LoadingScreen() {
   return (
     <div className="boot" role="status" aria-live="polite">
       <div className="boot-center">
-        <div className="boot-glow" aria-hidden="true" />
         <div className="boot-mark" aria-hidden="true">
           <span className="boot-orbit">
             <span className="boot-dot" />
@@ -18,12 +17,6 @@ export function LoadingScreen() {
             <span className="boot-dot" />
           </span>
           <svg viewBox="0 0 48 48" width="56" height="56" aria-hidden="true">
-            <defs>
-              <linearGradient id="boot-stroke" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0%" stopColor="#7c95ff" />
-                <stop offset="100%" stopColor="#3b5bdb" />
-              </linearGradient>
-            </defs>
             <path
               className="boot-hex"
               d="M24 5 8 14.5v19L24 43l16-9.5v-19L24 5Z"

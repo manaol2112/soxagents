@@ -30,6 +30,7 @@ import {
   type UnitKind,
 } from "./shared-plans-model";
 import { UiIcon } from "./ui-icon";
+import { isTopmostDialog, useFocusTrap } from "./use-focus-trap";
 
 type Ids = {
   organizationId: string;
@@ -173,7 +174,10 @@ export function ControlsView({
         </p>
         <ul className="cp-counts">
           {(["TOGETHER", "SEPARATE", "WAITING"] as const).map((group) => (
-            <li key={group} className={`cp-count is-${group.toLowerCase()}`}>
+            <li
+              key={group}
+              className={`cp-count is-${group.toLowerCase()}${families.counts[group] === 0 ? " is-zero" : ""}`}
+            >
               <span>{GROUP_TITLES[group].title}</span>
               <strong>{families.counts[group]}</strong>
             </li>
@@ -386,7 +390,11 @@ function FamilyRow({
           Approved
         </span>
       ) : family.group === "TOGETHER" ? (
-        <button type="button" className="btn btn-sm" onClick={onOpen}>
+        <button
+          type="button"
+          className="btn btn-secondary btn-sm"
+          onClick={onOpen}
+        >
           Review
           <UiIcon name="arrow" size={13} />
         </button>
@@ -443,12 +451,14 @@ function FamilyDrawer({
   onApproved: (message: string) => void;
 }) {
   const dialog = useRef<HTMLDivElement>(null);
+  // Tab stays inside the drawer; Escape closes only the topmost dialog.
+  useFocusTrap(dialog);
   const [comment, setComment] = useState("");
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     dialog.current?.focus();
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && isTopmostDialog(dialog.current)) {
         onClose();
       }
     };

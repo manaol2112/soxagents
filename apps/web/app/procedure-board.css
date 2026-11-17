@@ -42,7 +42,7 @@
   height: 28px;
   padding: 0 0.625rem;
   font-size: var(--fs-sm);
-  font-weight: 550;
+  font-weight: 500;
   color: var(--text);
   text-decoration: none;
   background: var(--surface);
@@ -70,7 +70,7 @@
   padding: 0.9rem 1rem 1rem;
   background: var(--surface-muted);
   border: 1px solid var(--border-subtle);
-  border-radius: 14px;
+  border-radius: var(--radius-xl);
 }
 
 .pb-coverage-head {
@@ -117,7 +117,7 @@ button.pb-tile {
   white-space: normal;
   background: var(--surface);
   border: 1px solid var(--border-subtle);
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   box-shadow: none;
   font-weight: 400;
   transition:
@@ -186,7 +186,7 @@ button.pb-tile.is-na {
   height: 22px;
   padding: 0 0.35rem;
   font-size: var(--fs-xs);
-  font-weight: 700;
+  font-weight: 600;
   color: var(--text-secondary);
   background: var(--surface-muted);
   border: 1px solid var(--border-subtle);
@@ -195,35 +195,37 @@ button.pb-tile.is-na {
 
 .pb-views {
   display: inline-flex;
-  gap: 0.15rem;
+  gap: 2px;
   margin: 0;
-  padding: 0.15rem;
-  background: var(--surface-muted);
-  border: 1px solid var(--border-subtle);
-  border-radius: 999px;
+  padding: 2px;
+  background: var(--surface-sunken);
+  border: 0;
+  border-radius: var(--radius);
 }
 
 .pb-views > button {
   height: 26px;
   padding: 0 0.75rem;
   font-size: var(--fs-xs);
-  font-weight: 600;
+  font-weight: 500;
   color: var(--text-secondary);
   background: transparent;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   box-shadow: none;
 }
 
 .pb-views > button:hover {
   color: var(--text-strong);
-  background: var(--surface-hover);
+  background: transparent;
 }
 
 .pb-views > button.is-on {
   color: var(--text-strong);
   background: var(--surface);
+  border: 0;
   box-shadow: var(--shadow-xs);
+  font-weight: 500;
 }
 
 .pb-purpose {
@@ -242,16 +244,16 @@ button.pb-tile.is-na {
 
 .pb-card {
   background: var(--surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
   transition:
     border-color 150ms ease,
     background 150ms ease;
 }
 
 .pb-card.is-open {
-  background: color-mix(in srgb, var(--accent-soft) 45%, var(--surface));
-  border-color: var(--accent-border);
+  background: var(--surface-muted);
+  border-color: var(--border-strong);
 }
 
 .pb-card.is-related {
@@ -270,7 +272,7 @@ button.pb-card-head {
   white-space: normal;
   background: transparent;
   border: 0;
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   box-shadow: none;
   font-weight: 400;
 }
@@ -287,12 +289,12 @@ button.pb-card-head:hover {
   width: 34px;
   height: 34px;
   font-size: var(--fs-sm);
-  font-weight: 700;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
   color: var(--text-strong);
   background: var(--surface-muted);
   border: 1px solid var(--border-subtle);
-  border-radius: 9px;
+  border-radius: var(--radius);
 }
 
 .pb-card.is-open .pb-num {
@@ -342,13 +344,13 @@ button.pb-card-head:hover {
   padding: 0.8rem 0.9rem;
   background: var(--surface-muted);
   border: 1px solid var(--border-subtle);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
 }
 
 .pb-overview h5 {
   margin: 0;
   font-size: var(--fs-xs);
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: 0.04em;
   color: var(--accent-text);
   text-transform: uppercase;
@@ -411,16 +413,6 @@ button.pb-card-head:hover {
   margin-right: 0.3rem;
   font-weight: 600;
   color: var(--text-strong);
-}
-
-.pb-card .pp-status.is-info {
-  color: var(--accent-text);
-  background: var(--accent-soft);
-}
-
-.pb-card .pp-status.is-idle {
-  color: var(--text);
-  background: var(--neutral-soft);
 }
 
 .pb-table {

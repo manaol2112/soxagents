@@ -5,6 +5,8 @@ import { analysisFor, reviewFor } from "./analysis-model";
 import { AnalysisPanel } from "./analysis-view";
 import { AppIdentity } from "./app-identity";
 import { assistantBrief, stepAnchor } from "./assistant-model";
+import { AttributesHandoff } from "./attributes-handoff";
+import { handoff as attributesHandoff } from "./attributes-handoff-model";
 import { AutoRefresh } from "./auto-refresh";
 import { ControlConclusionWork } from "./control-conclusion-panel";
 import {
@@ -202,6 +204,7 @@ import type { ShellModel } from "./shell-model";
 import { canManageProjects } from "./shell-model";
 import { receiptText, reopenText } from "./signoff-model";
 import { StepFrame } from "./step-frame";
+import { quietLineOf } from "./step-frame-model";
 import { agentNote, PREPARED_TITLE, panelFrame } from "./step-panel-model";
 import { TestBasisCard } from "./test-basis-view";
 import { testFor } from "./testing-model";
@@ -1854,9 +1857,15 @@ function ControlRecord({
               masterHere !== null &&
               masterHere.state === "APPROVED" &&
               !masterHere.revisedSinceApproval,
+            // Awaiting approval as the header and the register read it (the control's
+            // progress), or by the plan's own state (design review, 17 November 2026).
             pendingReview:
+              control.progress === "PLAN_TO_APPROVE" ||
+              (masterHere !== null &&
+                ["PENDING_REVIEW", "DRAFT_READY"].includes(masterHere.state)),
+            drafting:
               masterHere !== null &&
-              ["PENDING_REVIEW", "DRAFT_READY"].includes(masterHere.state),
+              ["ANALYZING", "CHANGES_REQUESTED"].includes(masterHere.state),
           },
           canAct,
           canApprove: masterHere?.viewerCanDecide ?? false,
@@ -3438,18 +3447,56 @@ function ControlRecord({
     (openStep?.key === "understanding" &&
       context !== null &&
       setupInput !== null);
-  const stepPanel =
-    openStep === null ? (
-      panelContent
-    ) : (
-      <StepFrame
-        frame={panelFrame(
+  const openFrame =
+    openStep === null
+      ? null
+      : panelFrame(
           openStep.key,
           workflow,
           engagement.designConclusion?.status === "SIGNED_OFF"
             ? (engagement.designConclusion.signed?.verdict ?? null)
             : null,
-        )}
+        );
+  // The Attributes step once every attribute is settled (prototype approved 17 November
+  // 2026): what was settled, then each branch's next step, in place of "Nothing is needed
+  // from you here" and the footer's two links.
+  const settledHandoff =
+    openStep?.key === "attributes" &&
+    openFrame?.need.kind === "done" &&
+    context !== null
+      ? attributesHandoff({
+          steps: workflow,
+          approved: context.approved,
+          requests: designRequests,
+        })
+      : null;
+  const stepPanel =
+    openStep === null || openFrame === null ? (
+      panelContent
+    ) : (
+      <StepFrame
+        frame={openFrame}
+        decision={
+          settledHandoff !== null ? (
+            <AttributesHandoff
+              handoff={settledHandoff}
+              stepHrefs={stepHrefsWf}
+            />
+          ) : undefined
+        }
+        nextShown={settledHandoff === null}
+        needShown={
+          !(
+            openStep.key === "designevidence" &&
+            canAct &&
+            designRequests.mode === "list" &&
+            designRequests.accept.length > 0
+          ) &&
+          // The conclusion's own card says what it waits on, and the header's pill its
+          // status: the quiet line above would say it a third time (design review, 17
+          // November 2026). A decision row (rate the deficiencies) stays.
+          !(openStep.key === "conclusion" && quietLineOf(openFrame.need) !== null)
+        }
         stepHrefs={stepHrefsWf}
         askHref={askHref}
         about={{ ref: control.controlRef, title: control.title }}

@@ -760,7 +760,7 @@ const STATE_WORDS: Record<AttributeState, { words: string; tone: Tone }> = {
   SHOWN: { words: NO_EXCEPTIONS_NOTED, tone: "success" },
   SHOWN_IN_PART: { words: "Shown in part", tone: "warning" },
   NOT_SHOWN: { words: "Not shown", tone: "warning" },
-  NOT_CONCLUDED: { words: "Not concluded", tone: "info" },
+  NOT_CONCLUDED: { words: "Not concluded", tone: "neutral" },
   NOT_TESTED: { words: "Not tested yet", tone: "neutral" },
   // A person's disposition: in its own words, never the plain "Shown", never green.
   SHOWN_ON_REVIEW: { words: "Shown, auditor's judgment", tone: "neutral" },
@@ -963,7 +963,7 @@ export function statusOf(paper: Standing): { words: string; tone: Tone } {
     return { words: "No workpaper yet", tone: "neutral" };
   }
   if (workpaper.drafting) {
-    return { words: "The agent is drafting", tone: "info" };
+    return { words: "The agent is drafting", tone: "ai" };
   }
   if (workpaper.currentVersion === 0) {
     return { words: "Not drafted", tone: "neutral" };
@@ -980,7 +980,7 @@ export function statusOf(paper: Standing): { words: string; tone: Tone } {
   if (isStale(paper)) {
     return { words: "Prepared, sign-off out of date", tone: "warning" };
   }
-  return { words: "Prepared, waiting for sign-off", tone: "info" };
+  return { words: "Prepared, waiting for sign-off", tone: "warning" };
 }
 
 export type HeaderRow = {

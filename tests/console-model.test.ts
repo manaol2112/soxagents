@@ -209,7 +209,12 @@ describe("agent console model", () => {
     );
   });
 
-  it("links only to the web or to the app, never anywhere else", () => {
+  it("links only to a page of the app; any other address is text in full", () => {
+    // Security review, 17 November 2026. Old expectation: a web address the agent wrote
+    // was a link ("the policy" to https://example.com/policy), opened in a new tab. New:
+    // the agent's words are untrusted (a file it read may steer them), so only a page of
+    // this app is a link; any other address is shown as text with the whole address, so
+    // a click can never carry what the agent read to another site.
     const [line] = blocks(
       "See [the policy](https://example.com/policy), [the control](/?section=controls), " +
         "[a trap](javascript:alert(1)) and [a file](file:///c:/x).",
@@ -218,13 +223,24 @@ describe("agent console model", () => {
     const links = line.parts.filter((part) => part.href !== undefined);
     assert.deepEqual(
       links.map((part) => [part.text, part.href]),
-      [
-        ["the policy", "https://example.com/policy"],
-        ["the control", "/?section=controls"],
-      ],
+      [["the control", "/?section=controls"]],
     );
+    const text = line.parts.map((part) => part.text).join("");
+    assert.ok(text.includes("the policy (https://example.com/policy)"));
+    assert.ok(text.includes("a file (file:///c:/x)"));
     // An unsafe link keeps its words, without the link.
     assert.ok(line.parts.some((part) => part.text.includes("a trap")));
+    // An address written as its own label is shown once.
+    const [bare] = blocks(
+      "[https://exfil.example/?d=secret](https://exfil.example/?d=secret)",
+    );
+    assert.ok(bare?.kind === "paragraph");
+    assert.deepEqual(
+      bare.parts.map((part) => [part.text, part.href]),
+      [["https://exfil.example/?d=secret", undefined]],
+    );
+    assert.equal(safeHref("https://example.com/policy"), null);
+    assert.equal(safeHref("http://example.com"), null);
     assert.equal(safeHref("//evil.example"), null);
     assert.equal(safeHref("data:text/html,x"), null);
     // A browser reads a backslash as a slash: "/\evil.example" would leave the app

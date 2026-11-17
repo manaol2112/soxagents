@@ -221,6 +221,10 @@ describe("withdrawn files in the register", () => {
     assert.equal(kept?.control?.controlRef, "ITGC-AC-01");
     assert.equal(filterWithdrawn(register.withdrawn, "wrong").length, 1);
     assert.equal(filterWithdrawn(register.withdrawn, "payroll").length, 0);
+    // A word with an "s" in it, and two words, are found (17 November 2026: the query was
+    // split on the letter "s", so "users" and "access" found nothing).
+    assert.equal(filterWithdrawn(register.withdrawn, "users").length, 1);
+    assert.equal(filterWithdrawn(register.withdrawn, "access  ITGC-AC-01").length, 1);
     // An older API without the list still parses.
     assert.deepEqual(parseRegister({ files: [], controls: [] })?.withdrawn, []);
   });

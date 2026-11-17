@@ -51,9 +51,10 @@ export async function GET(request: Request) {
       "cache-control": "private, no-store",
     };
     if (target.mode === "preview") {
-      // Shown, never run: no scripts, forms, or requests from the file.
+      // Shown, never run: no scripts, forms, or requests from the file. Its own policy,
+      // kept over the app-wide one (next.config.ts), so it also forbids framing.
       headers["content-security-policy"] =
-        "sandbox; default-src 'none'; img-src data:";
+        "sandbox; default-src 'none'; img-src data:; frame-ancestors 'none'";
     }
     return new NextResponse(await response.arrayBuffer(), { headers });
   } catch {

@@ -123,7 +123,7 @@ export const FINDING_STATUS_LABELS: Record<FindingStatus, string> = {
 
 export const FINDING_STATUS_TONES: Record<FindingStatus, string> = {
   PROPOSED: "tone-ai",
-  ACCEPTED: "tone-info",
+  ACCEPTED: "tone-success",
   DISMISSED: "tone-neutral",
   SENT: "tone-info",
   ANSWERED: "tone-warning",

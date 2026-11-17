@@ -57,6 +57,25 @@ export function demoWrite(fields: Record<string, string>): DemoWrite {
   return { body: { name, email, firm, message, website } };
 }
 
+// An IPv4 or IPv6 address as a proxy writes it: digits, hex letters, dots and colons.
+const ADDRESS = /^(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9A-Fa-f:.]{2,45})$/;
+
+/**
+ * The visitor's address to pass to the API with a demo request: the right-most hop of the
+ * X-Forwarded-For this server received, which is the one the nearest proxy (or Next.js
+ * itself, from the socket, when nothing came) wrote. The hops before it are whatever the
+ * visitor sent and are never passed on. The API believes it only from a trusted proxy
+ * (TRUSTED_PROXIES; security review, 17 November 2026). Null when there is none.
+ */
+export function visitorAddress(forwarded: string | null): string | null {
+  const hops = (forwarded ?? "")
+    .split(",")
+    .map((hop) => hop.trim())
+    .filter((hop) => hop !== "");
+  const last = hops.at(-1);
+  return last !== undefined && ADDRESS.test(last) ? last : null;
+}
+
 export type WelcomeNotice = "sent" | "invalid" | "busy" | "unavailable";
 
 export const WELCOME_NOTICES: Record<WelcomeNotice, string> = {

@@ -357,7 +357,8 @@ export function filterWithdrawn(
   files: readonly WithdrawnFile[],
   query: string,
 ): WithdrawnFile[] {
-  const words = query.toLowerCase().split(/s+/).filter(Boolean);
+  // Split on whitespace (17 November 2026: it split on the letter "s", so "users" found nothing).
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   return files.filter((file) => {
     const haystack = [
       file.fileName,
@@ -452,11 +453,11 @@ export function fileCounts(files: readonly RegisterFile[]): {
   };
 }
 
-export type Tone = "neutral" | "info" | "success" | "warning" | "danger";
+export type Tone = "neutral" | "info" | "success" | "warning" | "danger" | "ai";
 
 export const REQUEST_STATUS: Record<string, { label: string; tone: Tone }> = {
   DRAFT: { label: "Draft", tone: "neutral" },
-  APPROVAL_PENDING: { label: "Awaiting approval", tone: "info" },
+  APPROVAL_PENDING: { label: "Awaiting approval", tone: "warning" },
   SENT: { label: "Requested", tone: "info" },
   WAITING_FOR_RESPONSE: { label: "Requested", tone: "info" },
   PARTIALLY_RECEIVED: { label: "Partly received", tone: "warning" },
@@ -470,7 +471,7 @@ export const REQUEST_STATUS: Record<string, { label: string; tone: Tone }> = {
 /** What the agents made of the file, as one status for the table. */
 export function agentStatus(file: RegisterFile): { label: string; tone: Tone } {
   if (file.state === "READING" || isReading(file)) {
-    return { label: "Reading", tone: "info" };
+    return { label: "Reading", tone: "ai" };
   }
   if (file.readStatus === "FAILED") {
     return { label: "Not read", tone: "danger" };
@@ -484,7 +485,7 @@ export function agentStatus(file: RegisterFile): { label: string; tone: Tone } {
     }
     return file.reviewProposed === "EXCEPTION"
       ? { label: "Exception proposed", tone: "danger" }
-      : { label: "Reviewed · to sign off", tone: "info" };
+      : { label: "Reviewed · to sign off", tone: "warning" };
   }
   return {
     label: file.kindConfirmed ? "Kind confirmed" : "Read",

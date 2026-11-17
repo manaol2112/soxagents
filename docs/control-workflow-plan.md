@@ -406,6 +406,18 @@ The product owner, on the Next step guidance: "revisit the first step in the nod
   - Each save and copy is audited (`control.details_set`, `control.details_copied`).
   - A person without the permission sees the record read-only.
 
+## Step 03 once settled: what happens next (built 17 November 2026)
+
+The product owner: "I accepted all the attributes but the user is not given an option to do what's next here." A prototype was approved the same day.
+
+- **In place of "Nothing is needed from you here"** (`attributes-handoff.tsx`, `attributes-handoff-model.ts`, in the step frame's decision slot):
+  - **The outcome, once:** "All 6 attributes are settled.", who accepted their criteria and on which day, and "Change attributes", which goes to the list below.
+  - **What happens next:** the next step of each branch as a card, with its live status from the workflow. D&I Evidence shows the requests the planner prepared (up to three), the attributes each addresses, and the coverage line, which says when an attribute is not addressed. Scope & Sampling says it can start now, and says once that OE evidence waits for an effective D&I sign-off.
+  - **One card is primary:** the one with the person's work in it. D&I while its requests or evidence wait on the person; Scope & Sampling while the D&I requests are drafted or with the owner.
+- **The footer's two branch links are left out** while the cards show (`StepFrame` `nextShown`), so there is one way forward.
+- **Control Understanding's finished button goes to the Attributes step**, settled or not (product owner, the same day: "Next step is attributes after control understanding"). Before, a settled set sent the person past it to D&I Evidence. One test expectation rewritten, with the old and new expectation (`understanding-chat-model.test.ts`).
+- Tests: `attributes-handoff-model.test.ts` (in `make test-fast`).
+
 **C. Pass/fail guidelines in the firm methodology.** This is increment B of the 14-step plan below, unchanged.
 
 ---

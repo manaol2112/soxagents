@@ -18,8 +18,8 @@
   --eg-green-soft: var(--success-soft);
   --eg-amber: var(--warning);
   --eg-amber-soft: var(--warning-soft);
-  --eg-shadow: var(--shadow-sm);
-  --eg-shadow-lg: var(--shadow-lg);
+  --eg-shadow: var(--shadow-xs);
+  --eg-shadow-lg: var(--shadow-pop);
   gap: 1rem;
   color: var(--eg-text);
   letter-spacing: -0.005em;
@@ -45,10 +45,10 @@
   max-width: 100%;
   overflow-x: auto;
   scrollbar-width: none;
-  padding: 3px;
-  background: var(--eg-tint);
-  border: 1px solid var(--eg-line);
-  border-radius: 9px;
+  padding: 2px;
+  background: var(--surface-sunken);
+  border: 0;
+  border-radius: var(--radius);
 }
 
 .eg .eg-filters button {
@@ -62,24 +62,24 @@
   color: var(--eg-muted);
   background: transparent;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   box-shadow: none;
   font: inherit;
-  font-size: 12.5px;
-  font-weight: 550;
+  font-size: var(--fs-sm);
+  font-weight: 500;
   cursor: pointer;
 }
 
 .eg .eg-filters button span {
   color: var(--eg-faint);
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   font-variant-numeric: tabular-nums;
 }
 
 .eg .eg-filters button.is-on {
   color: var(--eg-ink);
   background: var(--surface);
-  box-shadow: 0 1px 2px rgb(16 24 40 / 10%);
+  box-shadow: var(--shadow-xs);
 }
 
 .eg-search {
@@ -104,19 +104,18 @@
   color: var(--eg-text);
   background: var(--surface);
   border: 1px solid var(--eg-line);
-  border-radius: 8px;
-  font-size: 13px;
+  border-radius: var(--radius);
+  font-size: var(--fs-base);
 }
 
 .eg .eg-search input[type="search"]:focus {
-  border-color: var(--accent-border);
-  outline: 3px solid rgb(59 91 219 / 14%);
+  border-color: var(--accent);
 }
 
 .eg-empty {
   margin: 1rem 0;
   color: var(--eg-faint);
-  font-size: 13.5px;
+  font-size: var(--fs-md);
 }
 
 .eg-grid {
@@ -140,7 +139,7 @@
   color: var(--eg-text);
   background: var(--surface);
   border: 1px solid var(--eg-line);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   box-shadow: var(--eg-shadow);
   text-decoration: none;
   transition:
@@ -150,16 +149,13 @@
 }
 
 .eg-card:hover {
-  border-color: var(--accent-border);
-  box-shadow: var(--eg-shadow-lg);
-  transform: translateY(-1px);
+  border-color: var(--border-strong);
+  box-shadow: var(--eg-shadow);
 }
 
 .eg-card[aria-current="true"] {
-  border-color: var(--accent-border);
-  box-shadow:
-    0 0 0 3px rgb(59 91 219 / 10%),
-    var(--eg-shadow);
+  border-color: var(--text-strong);
+  box-shadow: var(--eg-shadow);
 }
 
 .eg-card.is-archived {
@@ -189,11 +185,11 @@
   height: 22px;
   padding: 0 0.55rem;
   color: var(--eg-muted);
-  background: var(--eg-tint);
+  background: var(--surface);
   border: 1px solid var(--eg-line);
-  border-radius: 999px;
-  font-size: 11.5px;
-  font-weight: 600;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  font-weight: 500;
 }
 
 .eg-status::before {
@@ -204,41 +200,20 @@
   content: "";
 }
 
-.eg-status.is-active {
-  color: var(--eg-green);
-  background: var(--eg-green-soft);
-  border-color: var(--success-border);
-}
-
+/* The dot names the status (17 November 2026): under way in blue, paused amber, done green. */
 .eg-status.is-active::before {
-  background: var(--eg-green);
-}
-
-.eg-status.is-draft {
-  color: var(--eg-accent-ink);
-  background: var(--eg-accent-soft);
-  border-color: var(--accent-border);
-}
-
-.eg-status.is-draft::before {
-  background: var(--eg-accent);
-}
-
-.eg-status.is-paused {
-  color: var(--eg-amber);
-  background: var(--eg-amber-soft);
-  border-color: var(--warning-border);
+  background: var(--info);
 }
 
 .eg-status.is-paused::before {
-  background: #e08a00;
+  background: var(--warning);
 }
 
 .eg-name {
   overflow: hidden;
   color: var(--eg-ink);
-  font-size: 15px;
-  font-weight: 650;
+  font-size: var(--fs-lg);
+  font-weight: 600;
   letter-spacing: -0.01em;
   line-height: 1.3;
   display: -webkit-box;
@@ -247,19 +222,21 @@
 }
 
 .eg-client {
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   color: var(--eg-muted);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* Upright (design review, 17 November 2026): an italic's last letter leaned past the
+   clipping edge and read as "No organizatior". */
 .eg-client.is-unset,
 .eg-row-client.is-unset {
   color: var(--eg-faint);
-  font-style: italic;
   font-weight: 400;
 }
 
@@ -268,7 +245,7 @@
   gap: 0.25rem;
   margin-top: 0.5rem;
   color: var(--eg-muted);
-  font-size: 12.5px;
+  font-size: var(--fs-sm);
 }
 
 .eg-facts > span {
@@ -289,12 +266,12 @@
   padding-top: 0.65rem;
   color: var(--eg-muted);
   border-top: 1px solid var(--eg-line-soft);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .eg-foot strong {
   color: var(--eg-ink);
-  font-weight: 650;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 
@@ -304,7 +281,7 @@
 
 .eg-foot > svg {
   margin-left: auto;
-  color: #c3c8d2;
+  color: var(--text-disabled);
 }
 
 .eg-card:hover .eg-foot > svg {
@@ -312,29 +289,23 @@
 }
 
 .eg .eg-card-plain {
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
 }
 
-/* Tiles or a list (milestone 8.15), and the completed status (8.14). */
-.eg-status.is-completed {
-  color: var(--info);
-  background: var(--info-soft);
-  border-color: var(--info-border);
-}
-
+/* Tiles or a list (milestone 8.15), and the completed status (8.14): done is green. */
 .eg-status.is-completed::before {
-  background: var(--info);
+  background: var(--success);
 }
 
 .eg-layout-switch {
   display: inline-flex;
   min-width: 0;
   margin: 0 0 0 auto;
-  padding: 3px;
-  background: var(--eg-tint);
-  border: 1px solid var(--eg-line);
-  border-radius: 9px;
+  padding: 2px;
+  background: var(--surface-sunken);
+  border: 0;
+  border-radius: var(--radius);
 }
 
 .eg .eg-layout-switch button {
@@ -346,18 +317,18 @@
   color: var(--eg-muted);
   background: transparent;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   box-shadow: none;
   font: inherit;
-  font-size: 12.5px;
-  font-weight: 550;
+  font-size: var(--fs-sm);
+  font-weight: 500;
   cursor: pointer;
 }
 
 .eg .eg-layout-switch button.is-on {
   color: var(--eg-ink);
   background: var(--surface);
-  box-shadow: 0 1px 2px rgb(16 24 40 / 10%);
+  box-shadow: var(--shadow-xs);
 }
 
 .eg-list {
@@ -365,7 +336,7 @@
   overflow: hidden;
   background: var(--surface);
   border: 1px solid var(--eg-line);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   box-shadow: var(--eg-shadow);
 }
 
@@ -387,13 +358,14 @@
 }
 
 .eg-list-head {
-  color: var(--eg-faint);
-  background: var(--eg-tint);
-  border-bottom: 1px solid var(--eg-line);
-  font-size: 11px;
+  color: var(--text-tertiary);
+  background: var(--surface-muted);
+  font-size: var(--fs-2xs);
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
 }
 
 .eg-list .eg-list-head span:nth-child(n + 6) {
@@ -430,7 +402,7 @@
     display: flex;
     justify-content: space-between;
     gap: 0.75rem;
-    font-size: 12.5px;
+    font-size: var(--fs-sm);
   }
 
   .eg-row-cell::before {
@@ -444,40 +416,47 @@
 /* Engagements or clients (milestone 8.18): two views of one page. */
 /* Engagements or clients: a switch between two lists, drawn as a segmented control so it
    never reads as a second row of tabs under the destination's own. */
+/* Engagements or organizations: the page's sections as underline tabs, as .page-tabs
+   (design review, 17 November 2026). */
 .eg-views {
-  display: inline-flex;
-  align-self: flex-start;
-  justify-self: start;
-  gap: 2px;
+  display: flex;
+  gap: 0.25rem;
   max-width: 100%;
-  padding: 3px;
-  background: var(--eg-tint);
-  border: 1px solid var(--eg-line);
-  border-radius: 10px;
+  overflow-x: auto;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  scrollbar-width: none;
 }
 
 .eg-views a {
   display: inline-flex;
+  flex: none;
   align-items: center;
   gap: 0.45rem;
-  height: 32px;
-  padding: 0 0.875rem;
-  color: var(--eg-muted);
-  border-radius: 7px;
-  font-size: 13.5px;
-  font-weight: 600;
+  margin-bottom: -1px;
+  padding: 0.5rem 0.875rem 0.625rem;
+  color: var(--text-secondary);
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  font-size: var(--fs-md);
+  font-weight: 500;
   text-decoration: none;
   white-space: nowrap;
 }
 
 .eg-views a:hover {
-  color: var(--eg-ink);
+  color: var(--text);
 }
 
 .eg-views a[aria-current="page"] {
-  color: var(--eg-ink);
-  background: var(--surface);
-  box-shadow: 0 1px 2px rgb(16 24 40 / 10%);
+  color: var(--text);
+  font-weight: 600;
+  background: none;
+  border-bottom-color: var(--accent);
+  box-shadow: none;
 }
 
 .eg-views a span {
@@ -486,7 +465,7 @@
   background: var(--eg-tint);
   border: 1px solid var(--eg-line-soft);
   border-radius: 999px;
-  font-size: 11.5px;
+  font-size: var(--fs-xs);
   font-variant-numeric: tabular-nums;
   line-height: 1.55;
 }
@@ -510,7 +489,7 @@
 }
 
 .eg-client-row {
-  font-size: 13px;
+  font-size: var(--fs-base);
   border-bottom: 1px solid var(--eg-line-soft);
 }
 
@@ -527,14 +506,14 @@
 .eg-client-name strong {
   overflow: hidden;
   color: var(--eg-ink);
-  font-weight: 620;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .eg-client-name small {
   color: var(--eg-faint);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .eg-client-row .eg-row-cell a {
@@ -621,7 +600,7 @@
   justify-content: space-between;
   gap: 0.75rem;
   color: var(--eg-muted);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .eg-progress-line > span:last-child {
@@ -651,7 +630,7 @@
   gap: 0.2rem;
   margin-top: 0.35rem;
   color: var(--eg-muted);
-  font-size: 12px;
+  font-size: var(--fs-sm);
 }
 
 .eg-signals > span {
@@ -710,7 +689,7 @@
   color: var(--eg-faint);
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   box-shadow: none;
   cursor: pointer;
 }
@@ -738,7 +717,7 @@
   padding: 0.3rem;
   background: var(--surface);
   border: 1px solid var(--eg-line);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--eg-shadow-lg);
 }
 
@@ -750,8 +729,8 @@
   padding: 0.5rem 0.6rem;
   overflow: hidden;
   color: var(--eg-text);
-  border-radius: 6px;
-  font-size: 13px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-base);
   text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -793,7 +772,7 @@
 }
 
 .eg .eg-filters button.eg-starred.is-on svg {
-  color: #d99a06;
+  color: var(--text-strong);
   fill: currentColor;
 }
 
@@ -809,7 +788,7 @@
   color: var(--eg-faint);
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 7px;
+  border-radius: var(--radius-sm);
   box-shadow: none;
   cursor: pointer;
 }
@@ -826,7 +805,7 @@
 }
 
 .eg .eg-star.is-on {
-  color: #d99a06;
+  color: var(--text-strong);
 }
 
 .eg .eg-star.is-on svg {
@@ -850,7 +829,7 @@
   justify-self: start;
   gap: 0.35rem;
   color: var(--eg-accent-ink, var(--accent-strong));
-  font-size: 13.5px;
+  font-size: var(--fs-md);
   font-weight: 600;
   text-decoration: none;
 }
@@ -884,29 +863,30 @@
   width: auto;
   height: auto;
   min-width: 0;
-  padding: 1rem 1.125rem;
+  padding: 0.85rem 1rem;
   color: var(--eg-text);
   background: var(--surface);
-  border: 1px solid var(--eg-line);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--eg-shadow);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
   font: inherit;
   text-align: left;
   white-space: normal;
   cursor: pointer;
-  transition:
-    border-color 120ms ease,
-    background 120ms ease;
+  transition: border-color 120ms ease;
 }
 
 .eg .eg-kpi:hover {
-  background: var(--surface-hover);
+  color: var(--eg-text);
+  background: var(--surface);
   border-color: var(--border-strong);
 }
 
+/* The chosen tile: a strong edge, not the focus ring (design audit, 17 November 2026). */
 .eg .eg-kpi.is-on {
-  border-color: var(--accent-border);
-  box-shadow: var(--ring);
+  background: var(--surface);
+  border-color: var(--text-strong);
+  box-shadow: var(--shadow-xs);
 }
 
 .eg .eg-kpi:focus-visible {
@@ -914,35 +894,23 @@
   outline-offset: 2px;
 }
 
+/* The tiles' icons in grey; only an at-risk count above zero keeps its colour. */
 .eg-kpi-icon {
   display: grid;
   flex: none;
   place-items: center;
-  width: 40px;
-  height: 40px;
-  color: var(--accent-text);
-  background: var(--accent-soft);
-  border-radius: var(--radius-lg);
-}
-
-.eg-kpi.tone-info .eg-kpi-icon {
-  color: var(--info);
-  background: var(--info-soft);
-}
-
-.eg-kpi.tone-success .eg-kpi-icon {
-  color: var(--success);
-  background: var(--success-soft);
+  width: 32px;
+  height: 32px;
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
 }
 
 .eg-kpi.tone-danger .eg-kpi-icon {
   color: var(--danger);
   background: var(--danger-soft);
-}
-
-.eg-kpi.tone-neutral .eg-kpi-icon {
-  color: var(--neutral);
-  background: var(--neutral-soft);
+  border-color: var(--danger-border);
 }
 
 .eg-kpi-copy {
@@ -954,7 +922,7 @@
 .eg-kpi-copy strong {
   color: var(--eg-ink);
   font-size: var(--fs-display);
-  font-weight: 650;
+  font-weight: 600;
   line-height: 1.1;
   font-variant-numeric: tabular-nums;
 }
@@ -964,9 +932,9 @@
 }
 
 .eg-kpi-copy > span {
-  color: var(--eg-text);
-  font-size: var(--fs-md);
-  font-weight: 550;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 500;
 }
 
 .eg-kpi-copy small {
@@ -1028,7 +996,7 @@
   overflow: hidden;
   background: var(--surface);
   border: 1px solid var(--eg-line);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   box-shadow: var(--eg-shadow);
 }
 
@@ -1050,17 +1018,18 @@
 }
 
 .eg-thead {
-  color: var(--eg-faint);
-  background: var(--eg-tint);
-  border-bottom: 1px solid var(--eg-line);
+  color: var(--text-tertiary);
+  background: var(--surface-muted);
+  border-bottom: 1px solid var(--border);
   font-size: var(--fs-2xs);
   font-weight: 600;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
 .eg-thead span:nth-child(5),
 .eg-thead span:nth-child(6) {
+  padding-right: 0.75rem;
   text-align: right;
 }
 
@@ -1083,7 +1052,7 @@
 
 .eg-trow[aria-current="true"] {
   background: var(--eg-accent-soft);
-  box-shadow: inset 3px 0 0 var(--eg-accent);
+  box-shadow: none;
 }
 
 .eg-trow:focus-visible {
@@ -1113,7 +1082,7 @@
   border: 1px solid var(--eg-line);
   border-radius: var(--radius);
   font-size: var(--fs-sm);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .eg-ident-text {
@@ -1131,7 +1100,7 @@
 .eg-ident-text strong {
   color: var(--eg-ink);
   font-size: var(--fs-md);
-  font-weight: 620;
+  font-weight: 600;
 }
 
 .eg-ident-text small {
@@ -1191,7 +1160,9 @@
   text-align: right;
 }
 
+/* Right-aligned figures keep clear of the next column (design review, 17 November 2026). */
 .eg-trow .eg-num {
+  padding-right: 0.75rem;
   color: var(--eg-ink);
   font-variant-numeric: tabular-nums;
   text-align: right;
@@ -1199,11 +1170,12 @@
 
 .eg-trow .eg-num.is-warn {
   color: var(--warning);
-  font-weight: 650;
+  font-weight: 600;
 }
 
+/* No open findings reads quietly (17 November 2026): a zero is not a status. */
 .eg-trow .eg-num.is-clear {
-  color: var(--success);
+  color: var(--text-tertiary);
 }
 
 .eg-next {
@@ -1253,31 +1225,16 @@
   place-items: center;
   width: 28px;
   height: 28px;
-  color: var(--accent-text);
-  background: var(--accent-soft);
+  color: var(--text-secondary);
+  background: var(--surface-sunken);
   border: 2px solid var(--surface);
   border-radius: 50%;
   font-size: var(--fs-2xs);
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .eg-avatar + .eg-avatar {
   margin-left: -7px;
-}
-
-.eg-avatar.tone-ai {
-  color: var(--ai);
-  background: var(--ai-soft);
-}
-
-.eg-avatar.tone-success {
-  color: var(--success);
-  background: var(--success-soft);
-}
-
-.eg-avatar.tone-warning {
-  color: var(--warning);
-  background: var(--warning-soft);
 }
 
 .eg-avatar.is-more {
@@ -1304,8 +1261,8 @@
   }
 
   .eg-kpi-icon {
-    width: 30px;
-    height: 30px;
+    width: 28px;
+    height: 28px;
   }
 
   .eg-kpi-copy strong {
@@ -1389,6 +1346,7 @@
   }
 
   .eg-trow .eg-num {
+    padding-right: 0;
     text-align: left;
   }
 

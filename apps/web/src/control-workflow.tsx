@@ -99,6 +99,22 @@ export function StatusChip({ tone }: { tone: Tone }) {
   return <span className={`wf-chip tone-${tone}`}>{TONE_LABELS[tone]}</span>;
 }
 
+/** A step's status in its panel's header: one badge in both headers (design audit, 17
+ * November 2026), a check when done and a dot otherwise. */
+function PanelPill({ pill }: { pill: { label: string; tone: Tone } }) {
+  return (
+    <span className={`wf-panel-pill tone-${pill.tone}`}>
+      <span className="sr-only">Status: </span>
+      {pill.tone === "done" ? (
+        <UiIcon name="check" size={12} />
+      ) : (
+        <span className="wf-panel-pill-dot" aria-hidden="true" />
+      )}
+      {pill.label}
+    </span>
+  );
+}
+
 const NO_FLAGS: Partial<Record<StepKey, string>> = {};
 
 /**
@@ -473,13 +489,16 @@ export function WorkflowPanel({
   // Understanding, which keeps its own, and the activity, which is no step.
   const head = step !== null ? panelHeadFor(step) : panelHeadOf(kicker);
   const minimal = head !== null && takesMinimalLayout(head.key);
+  // Every step's header takes the quiet icons, Control Understanding's own layout too (design
+  // review, 17 November 2026); only the activity, which is no step, keeps the outlined ones.
+  const ghost = head !== null;
   const pill = tone !== null ? statusPill(tone, status) : null;
   const stepNav = (
     <nav className="wf-panel-nav" aria-label="Steps">
-      {wide ? <FocusToggle on={chosen} ghost={minimal} /> : null}
+      {wide ? <FocusToggle on={chosen} ghost={ghost} /> : null}
       {previous !== null ? (
         <Link
-          className={`wf-icon-btn${minimal ? " is-ghost" : ""}`}
+          className={`wf-icon-btn${ghost ? " is-ghost" : ""}`}
           href={previous.href}
           scroll={false}
           title={`Previous: ${previous.title}`}
@@ -490,7 +509,7 @@ export function WorkflowPanel({
       ) : null}
       {next !== null ? (
         <Link
-          className={`wf-icon-btn${minimal ? " is-ghost" : ""}`}
+          className={`wf-icon-btn${ghost ? " is-ghost" : ""}`}
           href={next.href}
           scroll={false}
           title={`Next: ${next.title}`}
@@ -500,7 +519,7 @@ export function WorkflowPanel({
         </Link>
       ) : null}
       <Link
-        className={`wf-icon-btn${minimal ? " is-ghost" : ""}`}
+        className={`wf-icon-btn${ghost ? " is-ghost" : ""}`}
         href={closeHref}
         scroll={false}
         aria-label="Close and return to the workflow"
@@ -524,7 +543,7 @@ export function WorkflowPanel({
               >
                 <UiIcon name={KIND_ICON[head.kind]} size={12} />
               </span>
-              {head.label}
+              <span className="wf-panel-kicker-text">{head.label}</span>
             </p>
             <div className="wf-panel-line">
               {focus && crumb !== "" ? (
@@ -540,17 +559,7 @@ export function WorkflowPanel({
               <h2 id="wf-panel-title" ref={heading} tabIndex={-1}>
                 {title}
               </h2>
-              {pill !== null ? (
-                <span className={`wf-panel-pill tone-${pill.tone}`}>
-                  <span className="sr-only">Status: </span>
-                  {pill.tone === "done" ? (
-                    <UiIcon name="check" size={12} />
-                  ) : (
-                    <span className="wf-panel-pill-dot" aria-hidden="true" />
-                  )}
-                  {pill.label}
-                </span>
-              ) : null}
+              {pill !== null ? <PanelPill pill={pill} /> : null}
             </div>
           </div>
           <div className="wf-panel-actions">
@@ -576,7 +585,7 @@ export function WorkflowPanel({
     <aside className={`wf-panel${focusClass}`} aria-labelledby="wf-panel-title">
       <header className="wf-panel-head">
         <div className="wf-panel-titles">
-          <p className="wf-peek-kicker">
+          <p className={head !== null ? "wf-panel-kicker" : "wf-peek-kicker"}>
             {focus && crumb !== "" ? (
               <>
                 <span className="wf-crumb" title={crumb}>
@@ -587,47 +596,29 @@ export function WorkflowPanel({
                 </span>
               </>
             ) : null}
-            {kicker}
+            {head !== null ? (
+              <>
+                <span
+                  className={`wf-panel-kind kind-${head.kind}`}
+                  aria-hidden="true"
+                >
+                  <UiIcon name={KIND_ICON[head.kind]} size={12} />
+                </span>
+                <span className="wf-panel-kicker-text">{head.label}</span>
+              </>
+            ) : (
+              kicker
+            )}
           </p>
           <h2 id="wf-panel-title" ref={heading} tabIndex={-1}>
             {title}
-            {tone !== null ? <StatusChip tone={tone} /> : null}
+            {tone !== null ? (
+              <PanelPill pill={statusPill(tone, "")} />
+            ) : null}
           </h2>
           {status !== "" ? <p className="wf-panel-status">{status}</p> : null}
         </div>
-        <nav className="wf-panel-nav" aria-label="Steps">
-          {wide ? <FocusToggle on={chosen} ghost={false} /> : null}
-          {previous !== null ? (
-            <Link
-              className="wf-icon-btn"
-              href={previous.href}
-              scroll={false}
-              title={`Previous: ${previous.title}`}
-              aria-label={`Previous step: ${previous.title}`}
-            >
-              <UiIcon name="back" size={15} />
-            </Link>
-          ) : null}
-          {next !== null ? (
-            <Link
-              className="wf-icon-btn"
-              href={next.href}
-              scroll={false}
-              title={`Next: ${next.title}`}
-              aria-label={`Next step: ${next.title}`}
-            >
-              <UiIcon name="arrow" size={15} />
-            </Link>
-          ) : null}
-          <Link
-            className="wf-icon-btn"
-            href={closeHref}
-            scroll={false}
-            aria-label="Close and return to the workflow"
-          >
-            <UiIcon name="x" size={15} />
-          </Link>
-        </nav>
+        {stepNav}
       </header>
       <StepStrip pills={pills} focus={focus} />
       <div className="wf-panel-main">

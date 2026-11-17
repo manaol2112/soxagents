@@ -42,6 +42,7 @@ const TONES: Record<Tone, string> = {
   success: "tone-success",
   warning: "tone-warning",
   danger: "tone-danger",
+  ai: "tone-ai",
 };
 
 function href(model: Ready, keep: Keep): string {
