@@ -10,6 +10,7 @@ import {
   useRef,
   useState,
 } from "react";
+import type { QuestionPass } from "./control-context-model";
 import { useAction } from "./control-context-view";
 import {
   agentQuestions,
@@ -79,6 +80,10 @@ export type Conversation = {
   documentsHref?: string | null;
   /** Where the attributes are decided (the Attributes step), the step after the understanding. */
   attributesHref?: string | null;
+  /** B1j: when the understanding was recorded complete, and where the agents' question pass
+   * stands. Absent or null on a body from before it. */
+  completedAt?: string | null;
+  questionPass?: QuestionPass | null;
 };
 
 /** What each step is for, under its title. */
@@ -190,6 +195,10 @@ export function ControlSetup({
           documentsHref={conversation.documentsHref ?? null}
           attributesHref={conversation.attributesHref ?? null}
           issues={issues}
+          once={{
+            completedAt: conversation.completedAt ?? null,
+            questionPass: conversation.questionPass ?? null,
+          }}
         />
       </div>
     );
@@ -285,6 +294,7 @@ export function ControlSetup({
             slots={slots.filter((slot) => !slot.document)}
             issues={issues}
             canAct={input.canAct}
+            narrates={input.processRequired}
             onDone={goNext}
             onBack={index > 0 ? goBack : null}
             onSkip={null}
@@ -418,11 +428,15 @@ function AnswersStep({
   onSkip,
   conversation,
   onDraft = null,
+  narrates,
 }: {
   ids: Ids;
   slots: Slot[];
   issues: readonly SetupIssue[];
   canAct: boolean;
+  /** Whether the control needs a process narrative (B1j): an ITGC needs none, so the page
+   * never asks for it there. */
+  narrates: boolean;
   onDone: () => void;
   /** The step before, when there is one. */
   onBack: (() => void) | null;
@@ -596,8 +610,9 @@ function AnswersStep({
     setSettled((now) => ({ ...now, ...plan.settled }));
     writeDraft(ids.controlId, null);
     // Every question answered: the narrative is drafted from them in the background, as on
-    // the page (DesignPanel).
-    if (touched || Object.keys(plan.settled).length > 0) {
+    // the page (DesignPanel), once for the whole set and only for a control that needs one
+    // (B1j: never for an ITGC).
+    if (narrates && (touched || Object.keys(plan.settled).length > 0)) {
       void action.run("narrate", { intent: "process-narrate" });
     }
     // In the conversation, the planner offers the answers to the same control on other

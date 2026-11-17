@@ -4025,3 +4025,31 @@
   gap: 0.4rem;
   margin: 0.5rem 0 0;
 }
+
+/* The understanding complete once (B1j): the time it was recorded, and the way on. */
+.ur-complete {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  width: 100%;
+  padding: 12px 14px;
+  background: var(--success-soft);
+  border: 1px solid var(--success-border);
+  border-radius: 12px;
+}
+
+.ur-complete p {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--success);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.ur-once {
+  margin: 0;
+}

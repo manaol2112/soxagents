@@ -22,6 +22,7 @@ import {
 import { requestsNeed } from "./design-requests-model.ts";
 import { DW_SECTION } from "./design-workpaper-sections.ts";
 import { STEP_DRAFT, STEP_RETURNED } from "./review-request-model.ts";
+import { CHECKING_LINE, CHECKING_STATUS } from "./understanding-once-model.ts";
 
 export type PanelNeed = {
   /** act: a person decides; agent: an agent is working; wait: an earlier step holds it;
@@ -39,6 +40,8 @@ export type PanelLink = {
   title: string;
   status: string;
   tone: Tone;
+  /** Control Understanding once complete (B1j): when, in words. */
+  since?: string;
 };
 
 export type PanelFrame = {
@@ -125,6 +128,7 @@ const link = (step: WorkflowStep): PanelLink => ({
   title: step.title,
   status: step.status,
   tone: step.tone,
+  ...(step.since !== undefined ? { since: step.since } : {}),
 });
 
 const OUT_OF_ORDER = ["Started before D&I sign-off", "Not relied on"];
@@ -209,6 +213,16 @@ function needOf(step: WorkflowStep, steps: readonly WorkflowStep[]): PanelNeed {
       : null;
   if (requests !== null) {
     return requests;
+  }
+  // The question pass (B1j): the agents check what else the attributes need; whatever they
+  // ask joins Control Understanding's course, and nothing is drafted until it is answered.
+  if (step.key === "understanding" && step.status === CHECKING_STATUS) {
+    return {
+      kind: "agent",
+      title: CHECKING_LINE,
+      detail:
+        "The agents are checking the answers for anything else the attributes need. A question they add joins this course.",
+    };
   }
   if (step.agent) {
     return {
@@ -389,11 +403,25 @@ export function agentNote(
             : [`Not in the RCM: ${missing.join(", ")}.`],
       };
     }
-    case "understanding":
+    case "understanding": {
+      // Complete once (B1j): a question the rules raised later is said with its own count,
+      // and does not reopen the step.
+      const rules =
+        (input.understanding?.completedAt ?? null) !== null
+          ? (input.understanding?.rulesOpen ?? 0)
+          : 0;
       return {
         did: "Drafted the understanding from the RCM, prior work and the documents on file, with an answer proposed for each question.",
-        found: [`${step.status}.`],
+        found: [
+          `${step.status}.`,
+          ...(rules > 0
+            ? [
+                `${count(rules, "question")} the rules raised ${rules === 1 ? "is" : "are"} open here.`,
+              ]
+            : []),
+        ],
       };
+    }
     case "designevidence":
       // Once its requests are drafted the evidence list words the agent's line itself,
       // for the state the rows are in (design-evidence-model).
@@ -422,15 +450,19 @@ export function agentNote(
         found: [drafted, ...said.found],
       };
     }
-    case "attributes":
+    case "attributes": {
+      // Once the understanding is complete (B1j) no question is said here: a later gap is an
+      // assumption on the attribute, and nothing on this step sends the person back.
+      const questions =
+        (input.understanding?.completedAt ?? null) !== null
+          ? 0
+          : (input.attributes.questions ?? 0);
       return {
         did: "Started from the standard's attributes, proposed what the understanding changes, and tailored each one's pass/fail criteria to this control.",
         found: [
           `${count(input.attributes.approved, "attribute")} approved${input.attributes.proposed > 0 ? `, ${input.attributes.proposed} proposed to decide` : ""}.`,
-          ...((input.attributes.questions ?? 0) > 0
-            ? [
-                `${count(input.attributes.questions ?? 0, "question")} on them open.`,
-              ]
+          ...(questions > 0
+            ? [`${count(questions, "question")} on them open.`]
             : []),
           ...((input.attributes.untailored ?? 0) > 0
             ? [
@@ -441,6 +473,7 @@ export function agentNote(
               : []),
         ],
       };
+    }
     case "testdesign":
       return {
         did: "Proposed the phases, the sample and the periods from the understanding and the firm's methodology.",

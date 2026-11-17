@@ -100,6 +100,18 @@ import {
   withConfirmed,
   withOther,
 } from "./understanding-chat-model";
+import {
+  addedForAttributes,
+  CHECKING_LINE,
+  completeLine,
+  ONCE_COMPLETE_NOTE,
+  type Once,
+  offersAttributes,
+  raisedChip,
+  readsAgain,
+  readyOnceComplete,
+  understandingEnd,
+} from "./understanding-once-model";
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
 
@@ -137,9 +149,15 @@ export function UnderstandingReview({
   documentsHref,
   attributesHref = null,
   issues = [],
+  once = { completedAt: null, questionPass: null },
 }: {
   ids: Ids;
   canAct: boolean;
+  /** The understanding asked once (B1j, 16 November 2026): when it was recorded complete,
+   * and where the agents' question pass stands. While they check what else they need, the
+   * course stays open and their questions join it; the way on to the attributes is offered
+   * only once it is complete. */
+  once?: Once;
   /** The control's issues: an open question of the agents is answered in place, from its
    * own choices (12 November 2026). */
   issues?: readonly SetupIssue[];
@@ -294,6 +312,22 @@ export function UnderstandingReview({
   useEffect(() => {
     void read();
   }, [read]);
+
+  // While the agents check what else they need (B1j), the page and the review are read again
+  // every few seconds, in place: the pass's questions join this course as they are added, and
+  // the completion shows once it is recorded. Only the latest read is shown (reads).
+  const gatesDone = review?.evidence.ready === true && review.attributes.ready;
+  const passing = review !== null && readsAgain(once, gatesDone);
+  useEffect(() => {
+    if (!passing) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      router.refresh();
+      void read();
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [passing, router, read]);
 
   // A new question the reviewer agent is still checking appears once checked: read again
   // shortly while any is (14 November 2026; the draft wording is never shown).
@@ -657,9 +691,9 @@ export function UnderstandingReview({
       );
       return;
     }
-    // Confirmed by the server: the narrative is drafted again from the answers in the
-    // background, as after the conversation.
-    void action.run("narrate", { intent: "process-narrate" });
+    // Confirmed by the server. No narrative redraft is asked for after a single answer (B1j,
+    // 16 November 2026: each redraft kept the narrative's first round open and could ask
+    // again): the server redrafts once, after the last point is answered.
     const now = withConfirmed(review, { [need.key]: answer });
     setReview(now);
     go(nextOpen(now, interview, at));
@@ -1005,6 +1039,13 @@ export function UnderstandingReview({
   const groups = reviewGroups(review);
   const byKey = new Map(review.needs.map((need) => [need.key, need]));
   const status = statusLine(review);
+  // The understanding asked once (B1j): complete, checking what else the agents need, or as
+  // the gates read it.
+  const end = understandingEnd(
+    once,
+    review.evidence.ready && review.attributes.ready,
+  );
+  const complete = end === "complete" && once.completedAt !== null;
   // Where the answers start from: another system's, proposed below, or none.
   const banner = startFromBanner(review);
   const progress = interviewProgress(review, interview);
@@ -1438,7 +1479,12 @@ export function UnderstandingReview({
       >
         {/* The attributes first, then the D&I evidence requested against them (product
             owner, 11 November 2026). */}
-        {readyLines(review).map((line) => (
+        {readyOnceComplete(
+          readyLines(review),
+          complete,
+          review.attributesProposed,
+          end === "checking",
+        ).map((line) => (
           <li key={line.key} className={line.ready ? "is-ok" : ""}>
             <span className="ur-check" aria-hidden="true">
               {line.ready ? <UiIcon name="check" size={12} /> : null}
@@ -1712,11 +1758,17 @@ export function UnderstandingReview({
         ? text.trim()
         : choice;
     const unchanged = onFile && answer === need.value;
-    const forLine = neededForLine(need);
+    // A question the agents' pass added for the attributes (B1j) says so, in the same course.
+    const raised =
+      need.kind === "QUESTION"
+        ? issues.find((issue) => issue.id === need.key)
+        : undefined;
+    const forAttributes = raised !== undefined && addedForAttributes(raised);
+    const forLine = forAttributes ? "" : neededForLine(need);
     const chips = (
       <div className="ur-kicker">
         {need.kind === "QUESTION" ? (
-          <span className="ur-chip is-accent">Raised by the agents</span>
+          <span className="ur-chip is-accent">{raisedChip(raised)}</span>
         ) : null}
         {need.source === "USUAL" && !onFile ? (
           <span className="ur-chip is-warm">Usual practice</span>
@@ -2347,8 +2399,115 @@ export function UnderstandingReview({
   const openSteps = plan
     .map((key, index) => ({ key, index }))
     .filter((item) => stepRequired(review, interview, item.key));
+  const leftList =
+    openSteps.length > 0 ? (
+      <ul className="ur-left">
+        {openSteps.map((item) => {
+          const need = byKey.get(item.key);
+          return (
+            <li key={item.key}>
+              <span>
+                {item.key === CARRIED
+                  ? carriedCopy(interview, 0).step
+                  : stepLabel(item.key, need)}
+              </span>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => go(item.index)}
+              >
+                Answer
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    ) : null;
+  const onToAttributes =
+    nextAfterUnderstanding(review) === "attributes" && attributesHref !== null;
   const endStep = () =>
-    status.done ? (
+    complete ? (
+      // Complete once (B1j): the time it was recorded, and the way on to the attributes. A
+      // question the rules raised later still shows here, with its own count.
+      <div className="ur-end">
+        <span className="ur-seal" aria-hidden="true">
+          <UiIcon name="check" size={22} />
+        </span>
+        <h3 className="ur-q">{review.controlRef} is understood</h3>
+        <div className="ur-complete">
+          <p role="status">
+            <UiIcon name="check" size={15} />
+            <span suppressHydrationWarning>
+              {completeLine(once.completedAt ?? "")}
+            </span>
+          </p>
+          {onToAttributes ? (
+            <a className="btn btn-primary" href={attributesHref ?? "#"}>
+              Go to the attributes <UiIcon name="arrow" size={14} />
+            </a>
+          ) : documentsHref !== null ? (
+            <a className="btn btn-primary" href={documentsHref}>
+              Continue to D&amp;I evidence <UiIcon name="arrow" size={14} />
+            </a>
+          ) : null}
+        </div>
+        {openSteps.length > 0 ? (
+          <>
+            <p className="ur-hint">
+              {openSteps.length === 1
+                ? "1 question is open here. It does not hold the attributes."
+                : `${openSteps.length} questions are open here. They do not hold the attributes.`}
+            </p>
+            {leftList}
+          </>
+        ) : null}
+        {groups.confirmed.some((need) => need.kind === "ANSWER") ? (
+          <dl className="ur-answers">
+            {groups.confirmed
+              .filter((need) => need.kind === "ANSWER")
+              .map((need) => (
+                <div key={need.key}>
+                  <dt>{need.label}</dt>
+                  <dd>{need.value}</dd>
+                </div>
+              ))}
+          </dl>
+        ) : null}
+        <div className="ur-foot-actions">
+          {plan.length > 0 ? (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => go(Math.max(0, plan.length - 1))}
+            >
+              <UiIcon name="back" size={14} /> Back
+            </button>
+          ) : null}
+        </div>
+        <p className="ur-hint ur-once">{ONCE_COMPLETE_NOTE}</p>
+      </div>
+    ) : end === "checking" ? (
+      // The question pass (B1j): the course stays open, and the agents' questions join it.
+      <div className="ur-end">
+        <h3 className="ur-q">{CHECKING_LINE}</h3>
+        <p className="ur-hint ur-checking" role="status">
+          <span className="spinner small" aria-hidden="true" /> The agents are
+          checking the answers for anything else the attributes need. A question
+          they add joins this course, here.
+        </p>
+        <div className="ur-foot-actions">
+          {plan.length > 0 ? (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => go(Math.max(0, plan.length - 1))}
+            >
+              <UiIcon name="back" size={14} /> Back
+            </button>
+          ) : null}
+        </div>
+      </div>
+    ) : status.done ? (
       <div className="ur-end">
         <span className="ur-seal" aria-hidden="true">
           <UiIcon name="check" size={22} />
@@ -2377,10 +2536,9 @@ export function UnderstandingReview({
               <UiIcon name="back" size={14} /> Back
             </button>
           ) : null}
-          {nextAfterUnderstanding(review) === "attributes" &&
-          attributesHref !== null ? (
-            <a className="btn btn-primary" href={attributesHref}>
-              Finalize the attributes <UiIcon name="arrow" size={14} />
+          {onToAttributes && offersAttributes(once) ? (
+            <a className="btn btn-primary" href={attributesHref ?? "#"}>
+              Go to the attributes <UiIcon name="arrow" size={14} />
             </a>
           ) : documentsHref !== null ? (
             <a className="btn btn-primary" href={documentsHref}>
@@ -2397,29 +2555,7 @@ export function UnderstandingReview({
             : `${openSteps.length} ${openSteps.length === 1 ? "point is" : "points are"} still open`}
         </h3>
         <p className="ur-hint">{status.text}</p>
-        {openSteps.length > 0 ? (
-          <ul className="ur-left">
-            {openSteps.map((item) => {
-              const need = byKey.get(item.key);
-              return (
-                <li key={item.key}>
-                  <span>
-                    {item.key === CARRIED
-                      ? carriedCopy(interview, 0).step
-                      : stepLabel(item.key, need)}
-                  </span>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm"
-                    onClick={() => go(item.index)}
-                  >
-                    Answer
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        ) : null}
+        {leftList}
       </div>
     );
 
@@ -2485,20 +2621,30 @@ export function UnderstandingReview({
         <span className="ur-tile" aria-hidden="true">
           <AgentAvatar
             size={30}
-            state={checking || busy ? "working" : "idle"}
+            state={checking || busy || end === "checking" ? "working" : "idle"}
           />
         </span>
         <div className="ur-head-text">
           <p className="ur-eyebrow">{eyebrow}</p>
           <h2 id="ur-title">
-            {status.done
+            {complete || (status.done && end !== "checking")
               ? `${review.controlRef} is understood`
               : `Confirm how ${review.controlRef} runs`}
           </h2>
           <p className="ur-lede">
-            {status.done
-              ? "Every point the evidence and the attributes rely on is on record."
-              : `${draftedFrom(groups, interview)}. Confirm it, so the D&I evidence can be requested and the attributes finalized.`}
+            {complete ? (
+              <span suppressHydrationWarning>
+                {status.done
+                  ? `${completeLine(once.completedAt ?? "")}. Every point the evidence and the attributes rely on is on record.`
+                  : `${completeLine(once.completedAt ?? "")}. A question raised since is open below; it does not hold the attributes.`}
+              </span>
+            ) : end === "checking" ? (
+              `${draftedFrom(groups, interview)}. The agents are checking what else the attributes need: anything they ask is added here, not later.`
+            ) : status.done ? (
+              "Every point the evidence and the attributes rely on is on record."
+            ) : (
+              `${draftedFrom(groups, interview)}. Confirm it, so the D&I evidence can be requested and the attributes finalized.`
+            )}
           </p>
         </div>
         <div className="ur-head-tools">
@@ -2536,7 +2682,7 @@ export function UnderstandingReview({
             </span>
           </div>
         ) : null}
-        {checkingNow > 0 ? (
+        {end !== "checking" && checkingNow > 0 ? (
           <p className="ur-hint ur-checking" role="status">
             <span className="spinner small" aria-hidden="true" />{" "}
             {checkingLine(checkingNow)}

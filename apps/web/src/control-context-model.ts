@@ -130,6 +130,73 @@ export type Attribute = {
    * owner, 12 November 2026: the understanding is the authority, the newer answer wins).
    * Agent output; null or absent where it followed nothing over anything. */
   understandingBasis?: UnderstandingBasis | null;
+  /** What the agent assumed on this attribute after the understanding was complete (B1j,
+   * 16 November 2026: a later gap is stated on the attribute, never asked back in Control
+   * Understanding): the open ones, then those decided in the last 30 days, newest first. An
+   * assumption is the agent's until a person confirms or changes it. Absent from a body that
+   * predates B1j. */
+  assumptions?: Assumption[];
+  /** The matter of the answer or assumption that last changed these criteria, or "". */
+  criteriaUpdatedFrom?: string;
+  /** How many earlier versions of these criteria are kept (attribute_criteria_versions). */
+  criteriaVersions?: number;
+};
+
+/** Where the question pass stands (B1j): the required walkthrough answers or values are not
+ * in yet (WAITING); the attribute agent is checking what else it needs (CHECKING); or the pass
+ * ran, or the understanding is complete (DONE). */
+export type QuestionPass = "WAITING" | "CHECKING" | "DONE";
+export const QUESTION_PASSES: readonly QuestionPass[] = [
+  "WAITING",
+  "CHECKING",
+  "DONE",
+];
+
+/** An assumption's standing. ACCEPTED_WITH_ATTRIBUTE (the attribute was accepted while it was
+ * open) is never a person's confirmation: only CONFIRMED and CHANGED are a person's answer. */
+export type AssumptionStatus =
+  | "OPEN"
+  | "CONFIRMED"
+  | "CHANGED"
+  | "ACCEPTED_WITH_ATTRIBUTE"
+  | "SUPERSEDED";
+export const ASSUMPTION_STATUSES: readonly AssumptionStatus[] = [
+  "OPEN",
+  "CONFIRMED",
+  "CHANGED",
+  "ACCEPTED_WITH_ATTRIBUTE",
+  "SUPERSEDED",
+];
+
+/** An agent's stated assumption on one or more attributes (attribute_assumptions, B1j). */
+export type Assumption = {
+  id: string;
+  /** The matter it bears on, in a few words ("emergency changes"). */
+  matter: string;
+  /** The assumption, in one sentence: agent output, shown as the agent's. */
+  assumed: string;
+  status: AssumptionStatus;
+  /** The person's own words, for CHANGED; "" otherwise. */
+  answer: string;
+  decidedBy: { id: string; name: string } | null;
+  decidedAt: string | null;
+  /** The attributes it names, by code ("A", "C"); none for an assumption on the whole set. */
+  attributeCodes: string[];
+  version: number;
+};
+
+/** One earlier version of an attribute's criteria, kept on every change (B1j). */
+export type CriteriaVersion = {
+  version: number;
+  condition: string;
+  passCriteria: string;
+  failCriteria: string;
+  judgmentRequired: boolean;
+  origin: string;
+  writtenAt: string;
+  writtenBy: { kind: "PERSON" | "AGENT" | "SEEDED" | "RULES"; name: string };
+  /** What changed them ("Your answer on emergency changes"), or "". */
+  cause: string;
 };
 
 export type UnderstandingBasis = {
@@ -810,49 +877,6 @@ export function offersAgentRun(
   rerunUseful: boolean | null | undefined,
 ): boolean {
   return !ran || rerunUseful !== false;
-}
-
-/**
- * The agents' open questions that can change the attributes, said where the attributes are
- * accepted (product owner, 14 November 2026: "I don't want to have any follow-up questions
- * when the attributes are already approved and accepted"). The guided setup asks them in
- * Control Understanding; accepting the attributes closes them on the server
- * (control_attributes.close_questions_once_accepted), and a run on accepted attributes asks
- * none. The same questions the server closes: the agents' own, on the attributes, their
- * sources or the process (control_context.FOLLOW_UP_ORIGINS). Null when none is open.
- */
-export function openAttributeQuestionsLine(
-  issues: ReadonlyArray<
-    Pick<
-      ContextIssue,
-      "origin" | "status" | "topic" | "raisedBy" | "wordingPending"
-    >
-  >,
-  toAccept: boolean,
-): string | null {
-  const open = issues.filter(
-    (issue) =>
-      issue.status === "OPEN" &&
-      issue.raisedBy === "AGENT" &&
-      issue.wordingPending !== true,
-  );
-  if (open.length === 0) {
-    return null;
-  }
-  const topics = open
-    .slice(0, 3)
-    .map((issue) => issue.topic.trim())
-    .filter((topic) => topic !== "");
-  const more = open.length > topics.length ? "; and more" : "";
-  const about = topics.length > 0 ? ` (${topics.join("; ")}${more})` : "";
-  const asked =
-    open.length === 1
-      ? `The agents raised a question that can change these attributes${about}.`
-      : `The agents raised ${open.length} questions that can change these attributes${about}.`;
-  const them = open.length === 1 ? "it" : "them";
-  return toAccept
-    ? `${asked} Answer ${them} in Control Understanding, or accept the attributes as they are: accepting closes ${them}.`
-    : `${asked} Answer ${them} in Control Understanding.`;
 }
 
 /** Whether an agent has already worked on the attributes, so asking again is a re-run. */
@@ -1714,6 +1738,15 @@ export type ControlContext = {
   attributesPendingCriteria?: PendingCriteria[];
   /** A change to the person-approved test plan waits to be decided. */
   planRevisionPending?: boolean;
+  /** When the understanding was recorded complete (B1j, engagement_controls.
+   * understanding_completed_at), as an ISO time; null until it is. From then on no agent
+   * sends the person back to Control Understanding. */
+  understandingCompletedAt?: string | null;
+  /** Where the question pass stands; null where the API does not say (a body from before
+   * B1j: the steps then read as they did). */
+  questionPass?: QuestionPass | null;
+  /** The agent's assumptions that name no attribute: shown at the top of the list. */
+  setAssumptions?: Assumption[];
   note: string;
 };
 
@@ -2001,6 +2034,140 @@ function parseDesign(value: unknown): Design | null {
 const CLASSIFICATION_KEYS = CLASSIFICATIONS.map(([key]) => key);
 const DOCUMENT_KEYS = DOCUMENT_KINDS.map(([key]) => key);
 
+/** An ISO time the browser can read, or null: never a value shown as a date that is none. */
+function timeOrNull(value: unknown): string | null {
+  return typeof value === "string" && !Number.isNaN(Date.parse(value))
+    ? value
+    : null;
+}
+
+/** A person as the API names one ({id, name}), or null: anything else is not a person. */
+function personOf(value: unknown): { id: string; name: string } | null {
+  return isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.name === "string"
+    ? { id: value.id, name: value.name }
+    : null;
+}
+
+/** One assumption, read strictly (B1j): an id the routes can take, a status this page knows,
+ * the agent's sentence and a version. One that is not shaped so is left out, never guessed:
+ * a decided one with no one who decided it, or an open one with a decision, is not shown as
+ * either. */
+export function parseAssumption(value: unknown): Assumption | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const status = ASSUMPTION_STATUSES.find((each) => each === value.status);
+  const version = value.version;
+  if (
+    !UUID.test(str(value.id)) ||
+    status === undefined ||
+    typeof value.matter !== "string" ||
+    typeof value.assumed !== "string" ||
+    value.assumed.trim() === "" ||
+    typeof version !== "number" ||
+    !Number.isInteger(version) ||
+    version < 1
+  ) {
+    return null;
+  }
+  const decidedBy = personOf(value.decided_by);
+  const decidedAt = timeOrNull(value.decided_at);
+  if (value.decided_by !== null && value.decided_by !== undefined) {
+    if (decidedBy === null) {
+      return null;
+    }
+  }
+  // A person's decision names the person and the time; an open one names neither.
+  const personal = status === "CONFIRMED" || status === "CHANGED";
+  if (
+    (personal && (decidedBy === null || decidedAt === null)) ||
+    (status === "OPEN" && decidedBy !== null)
+  ) {
+    return null;
+  }
+  const answer = str(value.answer);
+  if (status === "CHANGED" && answer.trim() === "") {
+    return null;
+  }
+  return {
+    id: str(value.id),
+    matter: value.matter,
+    assumed: value.assumed,
+    status,
+    answer,
+    decidedBy,
+    decidedAt,
+    attributeCodes: strings(value.attribute_codes).slice(0, 12),
+    version,
+  };
+}
+
+const assumptionsOf = (value: unknown, most: number): Assumption[] =>
+  (Array.isArray(value) ? value : [])
+    .map(parseAssumption)
+    .filter((item): item is Assumption => item !== null)
+    .slice(0, most);
+
+const WRITERS = ["PERSON", "AGENT", "SEEDED", "RULES"] as const;
+
+/** An attribute's earlier criteria (GET .../criteria-history), newest first; null when the
+ * answer is not the history's shape. A version not shaped so is left out. */
+export function parseCriteriaHistory(value: unknown): CriteriaVersion[] | null {
+  if (!isRecord(value) || !Array.isArray(value.versions)) {
+    return null;
+  }
+  const versions: CriteriaVersion[] = [];
+  for (const item of value.versions) {
+    if (!isRecord(item)) {
+      continue;
+    }
+    const writer = item.written_by;
+    if (!isRecord(writer)) {
+      continue;
+    }
+    const kind = WRITERS.find((each) => each === writer.kind);
+    const version = item.version;
+    const writtenAt = timeOrNull(item.written_at);
+    if (
+      kind === undefined ||
+      typeof version !== "number" ||
+      !Number.isInteger(version) ||
+      writtenAt === null ||
+      typeof item.judgment_required !== "boolean"
+    ) {
+      continue;
+    }
+    versions.push({
+      version,
+      condition: str(item.condition),
+      passCriteria: str(item.pass_criteria),
+      failCriteria: str(item.fail_criteria),
+      judgmentRequired: item.judgment_required,
+      origin: str(item.origin),
+      writtenAt,
+      writtenBy: { kind, name: str(writer.name) },
+      cause: str(item.cause),
+    });
+  }
+  return versions.sort((a, b) => b.version - a.version);
+}
+
+/** Where an attribute's earlier criteria are read, or null when the ids are not all ids. */
+export function criteriaHistoryPath(fields: Fields): string | null {
+  const organizationId = text(fields, "organization_id");
+  const projectId = text(fields, "project_id");
+  const controlId = text(fields, "control_id");
+  const attributeId = text(fields, "attribute_id");
+  if (![organizationId, projectId, controlId, attributeId].every(isUuid)) {
+    return null;
+  }
+  return `/organizations/${organizationId}/projects/${projectId}/controls/${controlId}/attributes/${attributeId}/criteria-history`;
+}
+
+const isUuid = (value: string): boolean => UUID.test(value);
+
 function parseAttribute(item: Raw): Attribute {
   return {
     id: str(item.id),
@@ -2069,6 +2236,14 @@ function parseAttribute(item: Raw): Attribute {
         }
       : null,
     understandingBasis: parseBasis(item.understanding_basis),
+    assumptions: assumptionsOf(item.assumptions, 10),
+    criteriaUpdatedFrom: str(item.criteria_updated_from),
+    criteriaVersions:
+      typeof item.criteria_versions === "number" &&
+      Number.isInteger(item.criteria_versions) &&
+      item.criteria_versions > 0
+        ? item.criteria_versions
+        : 0,
   };
 }
 
@@ -2332,6 +2507,10 @@ export function parseContext(value: unknown): ControlContext | null {
       ["", "ATTRIBUTES", "CRITERIA", "REVIEW", "UNDERSTANDING"] as const,
       "",
     ),
+    understandingCompletedAt: timeOrNull(value.understanding_completed_at),
+    questionPass:
+      QUESTION_PASSES.find((each) => each === value.question_pass) ?? null,
+    setAssumptions: assumptionsOf(value.set_assumptions, 20),
     note: str(value.note),
   };
 }
@@ -2358,7 +2537,9 @@ export type ContextIntent =
   | "issue-resolve"
   | "document-write"
   | "document-link"
-  | "document-unlink";
+  | "document-unlink"
+  | "assumption-confirm"
+  | "assumption-change";
 
 export type ContextWrite =
   | { error: "invalid" }
@@ -2713,6 +2894,30 @@ export function contextWrite(fields: Fields): ContextWrite {
           })
         : { error: "invalid" };
     }
+    // B1j: a person confirms the agent's assumption, or changes it in their own words (which
+    // starts one update of the attributes it names). Each is sent at the version read.
+    case "assumption-confirm": {
+      const at = version(fields);
+      const assumptionId = text(fields, "assumption_id");
+      return UUID.test(assumptionId) && at !== null && at >= 1
+        ? ok("POST", `${control}/assumptions/${assumptionId}/confirm`, {
+            version: at,
+          })
+        : { error: "invalid" };
+    }
+    case "assumption-change": {
+      const at = version(fields);
+      const assumptionId = text(fields, "assumption_id");
+      return UUID.test(assumptionId) &&
+        at !== null &&
+        at >= 1 &&
+        assumptionTextProblem(wording) === null
+        ? ok("POST", `${control}/assumptions/${assumptionId}/change`, {
+            text: wording,
+            version: at,
+          })
+        : { error: "invalid" };
+    }
     default:
       return { error: "invalid" };
   }
@@ -2750,6 +2955,47 @@ export function documentUploadTarget(
   return {
     path: `/organizations/${organizationId}/projects/${projectId}/source-documents/upload?${params.toString()}`,
   };
+}
+
+/** A changed assumption is the person's own words, 10 to 1,000 characters (B1j). */
+export const ASSUMPTION_TEXT_MIN = 10;
+export const ASSUMPTION_TEXT_MAX = 1000;
+
+/** Why the words for a changed assumption cannot be sent, or null when they can. */
+export function assumptionTextProblem(value: string): string | null {
+  const words = value.trim();
+  if (words.length < ASSUMPTION_TEXT_MIN) {
+    return `Write at least ${ASSUMPTION_TEXT_MIN} characters.`;
+  }
+  if (words.length > ASSUMPTION_TEXT_MAX) {
+    return `Keep it to ${ASSUMPTION_TEXT_MAX.toLocaleString("en-US")} characters.`;
+  }
+  if (SECRET.test(words)) {
+    return "An answer cannot hold a password or key.";
+  }
+  return null;
+}
+
+/** The server's one sentence for a refused assumption decision (B1j: a stale version, one
+ * already decided, the attributes being updated), shown as it is when it reads as one; the
+ * page's own words otherwise. Null on success. */
+export function assumptionProblem(status: number, detail = ""): string | null {
+  if (status === 200) {
+    return null;
+  }
+  if (status === 409) {
+    const sentence = detail.trim();
+    if (sentence === "the attributes are being updated") {
+      return contextProblem(status, sentence);
+    }
+    return /^[A-Z][^\n]{4,240}\.$/.test(sentence) && !SECRET.test(sentence)
+      ? sentence
+      : "The assumption changed; read it again.";
+  }
+  if (status === 422) {
+    return `Write between ${ASSUMPTION_TEXT_MIN} and ${ASSUMPTION_TEXT_MAX.toLocaleString("en-US")} characters, with no password or key.`;
+  }
+  return contextProblem(status, detail);
 }
 
 /** What to tell the team when a call did not succeed. */

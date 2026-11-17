@@ -10,6 +10,7 @@ import {
   useTransition,
 } from "react";
 import { createPortal } from "react-dom";
+import { AttributeAssumptions, CriteriaTrail } from "./attribute-assumptions";
 import { AcceptAllCriteria, TailoredCriteria } from "./attribute-criteria";
 import {
   ClientWalkthrough,
@@ -53,7 +54,6 @@ import {
   type LibraryUpdate,
   NATURE_LABELS,
   offersAgentRun,
-  openAttributeQuestionsLine,
   PROCEDURE_PHASES,
   type ProcessStep,
   pendingCriteriaLine,
@@ -82,6 +82,7 @@ import {
 import { RecordDialog } from "./record-dialog";
 import { RowMenu, type RowMenuItem } from "./row-menu";
 import { type IconName, UiIcon } from "./ui-icon";
+import { DRAFTED_ONCE_COMPLETE } from "./understanding-once-model";
 import { isTopmostDialog, useFocusTrap } from "./use-focus-trap";
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
@@ -390,10 +391,15 @@ export function DesignPanel({
     subtitle?: string;
     /** The control's reference, shown on the flow where it operates. */
     controlRef?: string;
+    /** Whether the control needs a process narrative (B1j): an ITGC needs none, so the page
+     * never asks for one there. Absent: as before. */
+    processRequired?: boolean;
   } | null;
 }) {
   const action = useAction(ids);
   const fillable = design.slots.filter((slot) => !slot.automatic);
+  // B1j: never a narrative for a control that needs none.
+  const narrates = walkthrough?.processRequired !== false;
   const [everywhere, setEverywhere] = useState(true);
   const questionOf = (slot: (typeof fillable)[number]) =>
     slot.question || sentence(slot.label);
@@ -554,8 +560,8 @@ export function DesignPanel({
                 onAttach={(file) => attachToControl(ids, file)}
                 onComplete={() => {
                   // Every question answered: the narrative is drafted and reviewed in the
-                  // background.
-                  if (canAct) {
+                  // background, for a control that needs one (B1j: never for an ITGC).
+                  if (canAct && narrates) {
                     void action.run("narrate", { intent: "process-narrate" });
                   }
                 }}
@@ -597,6 +603,7 @@ export function DesignPanel({
             <div className="cc-walk-side">
               <ProcessNarrative
                 ids={ids}
+                drafts={narrates}
                 subtitle={walkthrough.subtitle ?? ""}
                 controlRef={walkthrough.controlRef ?? ""}
                 understanding={walkthrough.understanding}
@@ -967,21 +974,19 @@ function AttributeDialog({
 
 export function AttributesPanel({
   ids,
-  context,
+  context: given,
   canAct,
   compact = false,
   showQuestions = true,
-  questionsHref = null,
   embedded = false,
 }: {
   ids: Ids;
   context: ControlContext;
   canAct: boolean;
-  /** Off in the guided setup, which asks the open questions on its own step. */
+  /** Off in the guided setup, which asks the open questions in Control Understanding. Once
+   * the understanding is complete nothing here sends the person back to it (B1j, 16 November
+   * 2026: the warning banner that linked back to it is gone). */
   showQuestions?: boolean;
-  /** Where those questions are answered (Control Understanding), when they are not shown
-   * here: the list then says they are open, and links to them. */
-  questionsHref?: string | null;
   /** Inside the Attributes step's panel (product owner, 11 November 2026, approved
    * preview): the panel's frame gives the title, the status, the decision and the agent's
    * line, so this is the work alone: one list of rows that open on request, the first that
@@ -993,6 +998,16 @@ export function AttributesPanel({
   compact?: boolean;
 }) {
   const action = useAction(ids);
+  // The context an assumption decision answered with (B1j), shown at once in place of the
+  // page's until the page's own data catches up: a newer read always wins.
+  const [answered, setAnswered] = useState<{
+    base: ControlContext;
+    next: ControlContext;
+  } | null>(null);
+  const context =
+    answered !== null && answered.base === given ? answered.next : given;
+  const onContext = (next: ControlContext) =>
+    setAnswered({ base: given, next });
   const [chosen, setChosen] = useState<ReadonlySet<string>>(new Set());
   const [dialog, setDialog] = useState<AttributeDialogState | null>(null);
   const [shown, setShown] = useState<ReadonlySet<string>>(new Set());
@@ -1172,6 +1187,26 @@ export function AttributesPanel({
           {!proposed && !compact ? (
             <TailoredCriteria ids={ids} item={item} canAct={canAct} />
           ) : null}
+          {/* What the agent assumed on it after the understanding was complete, and where
+              its criteria came from (B1j). */}
+          {item.proposal !== "RETIRE" ? (
+            <>
+              <AttributeAssumptions
+                ids={ids}
+                items={item.assumptions}
+                canAct={canAct}
+                locked={action.pending || updating}
+                onContext={onContext}
+                label={`The agent's assumptions on ${name}`}
+              />
+              <CriteriaTrail
+                ids={ids}
+                attributeId={item.id}
+                updatedFrom={item.criteriaUpdatedFrom}
+                versions={item.criteriaVersions}
+              />
+            </>
+          ) : null}
           {open && item.definition !== null ? (
             <div className="ta-how">
               <p className="ta-how-title">The standard's requirement</p>
@@ -1293,8 +1328,7 @@ export function AttributesPanel({
         ids={ids}
         context={context}
         canAct={canAct}
-        showQuestions={showQuestions}
-        questionsHref={questionsHref}
+        onContext={onContext}
         busy={action.pending}
         busyKey={action.busy}
         open={opened}
@@ -1409,15 +1443,15 @@ export function AttributesPanel({
           </button>
         </section>
       )}
-      {showQuestions ? null : (
-        <OpenQuestionsNote
-          line={openAttributeQuestionsLine(
-            context.issues,
-            context.proposed.length > 0,
-          )}
-          href={questionsHref}
-        />
-      )}
+      {/* The agent's assumptions on the whole set (B1j). */}
+      <AttributeAssumptions
+        ids={ids}
+        items={context.setAssumptions}
+        canAct={canAct}
+        locked={action.pending || updating}
+        onContext={onContext}
+        label="The agent's assumptions on the attributes as a set"
+      />
       {compact ? null : (
         <div className="ta-head">
           <h4>
@@ -1602,38 +1636,11 @@ export function AttributesPanel({
  * decision is the panel's own, so the same server calls, versions and audit apply, and each
  * shows success only once the server has confirmed it.
  */
-/** The agents' open questions that can change the attributes, where they are not listed. */
-function OpenQuestionsNote({
-  line,
-  href,
-}: {
-  line: string | null;
-  href: string | null;
-}) {
-  if (line === null) {
-    return null;
-  }
-  return (
-    <p className="ta-run-note tone-warning has-acts" role="status">
-      <UiIcon name="info" size={13} />
-      <span>{line}</span>
-      {href !== null ? (
-        <span className="ta-run-acts">
-          <a className="btn btn-ghost btn-sm" href={href}>
-            Answer the questions
-          </a>
-        </span>
-      ) : null}
-    </p>
-  );
-}
-
 function EmbeddedAttributes({
   ids,
   context,
   canAct,
-  showQuestions,
-  questionsHref,
+  onContext,
   busy,
   busyKey,
   open,
@@ -1651,9 +1658,8 @@ function EmbeddedAttributes({
   ids: Ids;
   context: ControlContext;
   canAct: boolean;
-  /** Whether the open questions are listed with the attributes (see AttributesPanel). */
-  showQuestions: boolean;
-  questionsHref: string | null;
+  /** The context an assumption decision answered with, shown until the page catches up. */
+  onContext: (next: ControlContext) => void;
   busy: boolean;
   busyKey: string;
   /** The rows the person opened, or null until they open or close one: the first row that
@@ -1725,11 +1731,11 @@ function EmbeddedAttributes({
   }, [running, router]);
   const locked = busy || running;
   const toAccept = acceptableRows(rows);
-  // The agents' open questions, asked on Control Understanding in the guided setup: said
-  // here, since answering one can change the attributes accepted on this list.
-  const questionsOpen = showQuestions
-    ? null
-    : openAttributeQuestionsLine(context.issues, toAccept.length > 0);
+  // Before the understanding is complete (B1j): said quietly, with no warning and no way
+  // back; once it is, nothing on this step sends the person to Control Understanding.
+  const beforeComplete =
+    (context.understandingCompletedAt ?? null) === null &&
+    (context.questionPass === "WAITING" || context.questionPass === "CHECKING");
   const unreviewed = reviewUnfinished(context.reviewSummary);
   const first = running ? null : firstUnifiedToDecide(rows);
   const opened = open ?? new Set(first !== null ? [first] : []);
@@ -1760,6 +1766,27 @@ function EmbeddedAttributes({
     // never silent (12 November 2026).
     const basis =
       kind === "REMOVAL" ? null : basisLines(item.understandingBasis);
+    // What the agent assumed on the attribute after the understanding was complete, and
+    // where its criteria came from (B1j): between the criteria and the row's actions.
+    const notes =
+      kind === "REMOVAL" ? null : (
+        <>
+          <AttributeAssumptions
+            ids={ids}
+            items={item.assumptions}
+            canAct={canAct}
+            locked={locked}
+            onContext={onContext}
+            label={`The agent's assumptions on ${name}`}
+          />
+          <CriteriaTrail
+            ids={ids}
+            attributeId={item.id}
+            updatedFrom={item.criteriaUpdatedFrom}
+            versions={item.criteriaVersions}
+          />
+        </>
+      );
     const criteria = item.criteria;
     const stated =
       criteria.condition !== "" ||
@@ -1889,6 +1916,7 @@ function EmbeddedAttributes({
                 canAct={canAct && !running}
                 startEditing={writing === item.id}
                 flat
+                notes={notes}
                 extra={
                   standard !== null || more !== null ? (
                     <>
@@ -1930,6 +1958,7 @@ function EmbeddedAttributes({
                     them once the attribute is accepted.
                   </p>
                 )}
+                {notes}
                 <div className="tc-row-acts">
                   {canAct ? (
                     <>
@@ -2108,7 +2137,12 @@ function EmbeddedAttributes({
           {unreviewed}
         </p>
       ) : null}
-      <OpenQuestionsNote line={questionsOpen} href={questionsHref} />
+      {beforeComplete && working === null ? (
+        <p className="ta-run-note" role="status">
+          <UiIcon name="info" size={13} />
+          <span>{DRAFTED_ONCE_COMPLETE}</span>
+        </p>
+      ) : null}
       {!running && pending !== null ? (
         // The planner's criteria were written into a change to the approved test plan:
         // said, with where that change is decided (the Test plans page's "Accept the
@@ -2130,6 +2164,15 @@ function EmbeddedAttributes({
         </p>
       ) : null}
       {status}
+      {/* The agent's assumptions on the whole set (B1j), above the list, in the same form. */}
+      <AttributeAssumptions
+        ids={ids}
+        items={context.setAssumptions}
+        canAct={canAct}
+        locked={locked}
+        onContext={onContext}
+        label="The agent's assumptions on the attributes as a set"
+      />
       <ul className="tar-list" aria-label="Testing attributes">
         {rows.map((each) => row(each))}
         {rows.length === 0 ? (

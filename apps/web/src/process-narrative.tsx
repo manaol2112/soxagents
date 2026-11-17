@@ -112,8 +112,13 @@ export function ProcessNarrative({
   points = false,
   changed = [],
   controlRef = "",
+  drafts = true,
 }: {
   ids: Ids;
+  /** Whether the page may ask the agents to draft or review the narrative (B1j, 16 November
+   * 2026): only for a control that needs one; an ITGC needs none, and the server refuses it.
+   * A narrative already on record is still shown. */
+  drafts?: boolean;
   /** The system and the control, under the narrative's title. */
   subtitle?: string;
   understanding: Understanding | null;
@@ -252,7 +257,7 @@ export function ProcessNarrative({
               : "Drafted from the confirmed answers and checked by a reviewer agent. Review and update as needed."}
           </p>
         </div>
-        {canAct ? (
+        {canAct && drafts ? (
           <span className="pn-head-actions">
             {has ? (
               <button
@@ -330,6 +335,7 @@ export function ProcessNarrative({
             <span className="pn-review-actions">
               {reviewActions(review, version)
                 .filter((item) => item !== "answer" || points)
+                .filter((item) => item === "answer" || drafts)
                 .map((item) => (
                   <button
                     key={item}
@@ -385,7 +391,7 @@ export function ProcessNarrative({
               answers is approved.
             </span>
           </p>
-          {canAct ? (
+          {canAct && drafts ? (
             <button
               type="button"
               className="btn-secondary btn-sm"

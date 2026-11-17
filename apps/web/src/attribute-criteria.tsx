@@ -31,6 +31,7 @@ export function TailoredCriteria({
   canAct,
   flat = false,
   extra = null,
+  notes = null,
   startEditing: writing = false,
 }: {
   ids: Ids;
@@ -41,6 +42,9 @@ export function TailoredCriteria({
   flat?: boolean;
   /** The row's other actions, after Accept and Edit (flat only). */
   extra?: ReactNode;
+  /** What sits between the criteria and the row's actions (flat only): the agent's
+   * assumptions on the attribute and where its criteria came from (B1j). */
+  notes?: ReactNode;
   /** Opens with the criteria form showing: the step's "Write criteria", after a run that
    * did not write them. */
   startEditing?: boolean;
@@ -159,6 +163,7 @@ export function TailoredCriteria({
           </p>
         )}
         {state === "OWNED" ? <p className="tc-by">{owner}</p> : null}
+        {notes}
         {editor}
         {!editing && (canAct || extra !== null) ? (
           <div className="tc-row-acts">
