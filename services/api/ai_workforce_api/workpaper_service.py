@@ -419,12 +419,13 @@ control operated.
     + PRECEDENCE
     + """ Where confirmed_understanding or approved_process_narrative differs from the \
 control's RCM record or from a file, follow the understanding and say what the file shows.
-- On a design workpaper, the section keyed understanding is the design narrative: how the \
-control is designed, as the audit team understands it from the confirmed understanding, the \
-approved process narrative and the evidence. Write it as formal audit documentation: \
-paragraphs of connected prose in the third person, with no headings, labels, bullet points or \
-numbered lists, and never the first person. Define an abbreviation the first time it is used, \
-and keep one name for each role throughout.
+- On a design workpaper, the understanding section (its key starts with understanding-) is \
+the design narrative: how the control is designed, as the audit team understands it from \
+the confirmed understanding, the approved process narrative and the evidence. Write it as \
+formal audit documentation: paragraphs of connected prose in the third person, with no \
+headings, labels, bullet points or numbered lists, and never the first person. Define an \
+abbreviation the first time it is used, and keep one name for each role throughout. Name the \
+entity, or write "the organization"; never "the client".
 - Cover, in this order, as far as the facts allow: the control's objective, the risk it \
 addresses and the systems in scope; what starts the control, how often it operates and which \
 events or items it covers; who owns it and who performs each part, by role, naming a person \
@@ -982,9 +983,9 @@ def _apply(
     drops it), its key, title and how many (docs/design-workpaper.md, section 3.10)."""
     allowed = {section.key for section in wanted}
     drafted = {item.key: item.text for item in answer.sections if item.key in allowed}
-    # The standard names the design narrative "the section keyed understanding"; the
-    # template's key is longer ("understanding-of-the-control"). A design draft answered
-    # under the short key is placed in the one understanding section it means.
+    # The standard names the understanding section by its key's start; the template's key
+    # is longer ("understanding-of-the-control"). A design draft answered under the short
+    # key "understanding" is still placed in the one understanding section it means.
     meant = [key for key in allowed if key.startswith("understanding-")]
     if content.stage == "DESIGN" and len(meant) == 1 and meant[0] not in drafted:
         short = next((item.text for item in answer.sections if item.key == "understanding"), None)

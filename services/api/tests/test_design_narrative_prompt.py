@@ -84,13 +84,19 @@ CITATION_RULE = (
     "whose words are not found in the file is removed."
 )
 # The design narrative standard, as the product owner's contract gives it.
+# The standard's first bullet, revised the same day (16 November 2026). Old: "the section
+# keyed understanding", a key no template has (the IT general control's is
+# understanding-of-the-control), and nothing on how the entity is named; new: the
+# understanding section by its key's start, and never "the client" (the product's neutral
+# wording: internal audit uses it for its own organization).
 STANDARD = (
-    "- On a design workpaper, the section keyed understanding is the design narrative: how "
-    "the control is designed, as the audit team understands it from the confirmed "
-    "understanding, the approved process narrative and the evidence. Write it as formal audit "
-    "documentation: paragraphs of connected prose in the third person, with no headings, "
-    "labels, bullet points or numbered lists, and never the first person. Define an "
-    "abbreviation the first time it is used, and keep one name for each role throughout.",
+    "- On a design workpaper, the understanding section (its key starts with understanding-) "
+    "is the design narrative: how the control is designed, as the audit team understands it "
+    "from the confirmed understanding, the approved process narrative and the evidence. Write "
+    "it as formal audit documentation: paragraphs of connected prose in the third person, with "
+    "no headings, labels, bullet points or numbered lists, and never the first person. Define "
+    "an abbreviation the first time it is used, and keep one name for each role throughout. "
+    'Name the entity, or write "the organization"; never "the client".',
     "- Cover, in this order, as far as the facts allow: the control's objective, the risk it "
     "addresses and the systems in scope; what starts the control, how often it operates and "
     "which events or items it covers; who owns it and who performs each part, by role, naming "
