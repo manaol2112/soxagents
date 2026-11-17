@@ -670,10 +670,13 @@ describe("the editors' styles", () => {
     assert.match(css, /\.se-frame \{\s*min-width: 0;/);
     assert.match(css, /\.se-status \{[^}]*min-width: 0;/);
     // The document's own tables keep what only a screen reader hears inside their
-    // scroll as well, so a narrow page is never widened by them.
+    // scroll as well, so a narrow page is never widened by them. Rewritten after the
+    // screenshot check of 3.9 (16 November 2026). Old: the rule ended at overflow-x;
+    // new: it also makes the wrap a size container, so a point under a row is as wide as
+    // the window onto the table at 390 px. The scroll inside the frame is unchanged.
     assert.match(
       css,
-      /\.dw-table-wrap \{[^}]*position: relative;\s*margin-top: 0\.75rem;\s*overflow-x: auto;\s*\}/,
+      /\.dw-table-wrap \{[^}]*position: relative;\s*margin-top: 0\.75rem;\s*overflow-x: auto;[^}]*container-type: inline-size;\s*\}/,
     );
   });
 
