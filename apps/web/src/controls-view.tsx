@@ -209,6 +209,7 @@ import { TestPlanCard } from "./testing-view";
 import { type TraceRound, traceOf, traceRows } from "./trace-model";
 import { TraceRail } from "./trace-rail";
 import { UiIcon } from "./ui-icon";
+import { rulesOpen } from "./understanding-once-model";
 import { canDecide, canRequestEvidence } from "./workflow-model";
 import { WorkpapersTab } from "./workpaper-view";
 import { EmptyState, PageHeader, sectionHref } from "./workspace-view";
@@ -1477,6 +1478,9 @@ function ControlRecord({
     viewer: model.email,
     understanding: context?.understanding ?? null,
     issues: context?.issues ?? [],
+    // B1j: a process narrative is drafted only for a control that needs one; an ITGC needs
+    // none, so the page never asks for it there.
+    processRequired: context?.processRequired ?? false,
     // The attributes the plan tests, with the procedures that test them.
     attributes:
       engagement.masterPlan != null &&
@@ -1884,6 +1888,13 @@ function ControlRecord({
   if (sheet?.running === true) {
     busy.add("oetesting");
   }
+  // The question pass (B1j): the agents check what else the attributes need.
+  if (
+    context?.questionPass === "CHECKING" &&
+    (context.understandingCompletedAt ?? null) === null
+  ) {
+    busy.add("understanding");
+  }
   // The D&I evidence's own release for this control (phase_release, B1).
   const designPhase = phaseStatus(
     engagement.phaseProgress?.controls.find(
@@ -2053,6 +2064,16 @@ function ControlRecord({
       approved: false,
       pendingReview: false,
     },
+    // The understanding asked once (B1j): complete once, the attributes never wait on it
+    // again; the rules' questions still show in Control Understanding with their own count.
+    understanding:
+      context === null
+        ? null
+        : {
+            completedAt: context.understandingCompletedAt ?? null,
+            questionPass: context.questionPass ?? null,
+            rulesOpen: rulesOpen(context.issues),
+          },
     requirements: requirements.map((item) => ({
       phase: item.phase,
       state: item.state,
@@ -2205,6 +2226,12 @@ function ControlRecord({
                 documents: walkthrough.documents.length,
                 documentsHref: stepHrefsWf.designevidence ?? null,
                 attributesHref: stepHrefsWf.attributes ?? null,
+                completedAt: context.understandingCompletedAt ?? null,
+                questionPass: context.questionPass ?? null,
+                review: context.questionReview ?? null,
+                reviewRequest: context.questionReviewRequest ?? null,
+                reviewNotRun: context.reviewNotRun ?? null,
+                approved: context.approved,
               }
             : null
         }
@@ -2254,7 +2281,6 @@ function ControlRecord({
               context={context}
               canAct={canAct}
               showQuestions={false}
-              questionsHref={stepHrefsWf.understanding ?? null}
               embedded={embedded}
             />
           ),
@@ -2590,6 +2616,7 @@ function ControlRecord({
             {...workpaperProps}
             conclusion={openConclusion}
             evidenceHref={stepHrefsWf.designevidence}
+            attributesHref={stepHrefsWf.attributes}
           />
           <h4 className="stp-subhead">Operating effectiveness</h4>
           <WorkpapersTab compact {...workpaperProps} stage="EFFECTIVENESS" />
@@ -2729,6 +2756,7 @@ function ControlRecord({
                           {...workpaperProps}
                           conclusion={openConclusion}
                           evidenceHref={stepHrefsWf.designevidence}
+                          attributesHref={stepHrefsWf.attributes}
                         />
                       </PhaseStep>
                     </PhasePanel>

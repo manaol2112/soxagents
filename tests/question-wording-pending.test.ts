@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
-import {
-  type ContextIssue,
-  openAttributeQuestionsLine,
-} from "../apps/web/src/control-context-model.ts";
+import type { ContextIssue } from "../apps/web/src/control-context-model.ts";
 import {
   agentQuestions,
   type SetupIssue,
@@ -61,6 +58,14 @@ describe("an agent's question the reviewer agent is still checking", () => {
     assert.equal(shown?.source, "RECORDED");
   });
 
+  // Rewritten for B1j (16 November 2026; docs/control-workflow-plan.md):
+  // - Old expectation: the Attributes step's banner (openAttributeQuestionsLine) left out a
+  //   question whose wording was still being checked, and named the others.
+  // - New expectation: the Attributes step names no agent question at all, checked or not: the
+  //   banner that sent the person back to Control Understanding is gone, so a draft the
+  //   reviewer agent is still checking is never shown there either.
+  // - Methodology: the draft wording stays unseen until reviewed (14 November 2026), and the
+  //   understanding is asked once, in Control Understanding.
   it("is not named on the Attributes step either", () => {
     const pending: Pick<
       ContextIssue,
@@ -72,7 +77,17 @@ describe("an agent's question the reviewer agent is still checking", () => {
       raisedBy: "AGENT",
       wordingPending: true,
     };
-    assert.equal(openAttributeQuestionsLine([pending], true), null);
+    // Still left out of the course until checked.
+    assert.deepEqual(
+      agentQuestions([{ ...issue({}), ...pending, id: "i2" }]),
+      [],
+    );
+    const panel = readFileSync(
+      new URL("../apps/web/src/control-context-view.tsx", import.meta.url),
+      "utf8",
+    );
+    assert.doesNotMatch(panel, /openAttributeQuestionsLine|OpenQuestionsNote/);
+    assert.doesNotMatch(panel, new RegExp(pending.topic));
   });
 
   it("Control Understanding says one is coming, and reads again until it is", () => {

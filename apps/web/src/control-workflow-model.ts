@@ -7,6 +7,7 @@
  * records the page already holds, and laid out here so the canvas only draws it.
  */
 
+import type { QuestionPass } from "./control-context-model.ts";
 import {
   type ConclusionKind,
   type DesignConclusionStatus,
@@ -30,6 +31,12 @@ import {
   STEP_RETURNED,
   signedOffStatus,
 } from "./review-request-model.ts";
+import {
+  CHECKING_STATUS,
+  completeStatus,
+  whenWords,
+} from "./understanding-once-model.ts";
+import { REVIEW_FAILED_STATUS } from "./understanding-specialist-model.ts";
 
 export type StepKey =
   | "setup"
@@ -211,6 +218,15 @@ export type WorkflowInput = {
     untailored?: number;
   };
   plan: { exists: boolean; approved: boolean; pendingReview: boolean };
+  /** The understanding asked once (B1j, 16 November 2026): when it was recorded complete,
+   * where the agents' question pass stands, and the questions the rules raised that are open
+   * (they show in Control Understanding and never hold the attributes). Absent or null on a
+   * body from before B1j: the steps read as they did. */
+  understanding?: {
+    completedAt: string | null;
+    questionPass: QuestionPass | null;
+    rulesOpen?: number;
+  } | null;
   /** The evidence items, each in its phase (DESIGN, INTERIM, ROLLFORWARD), in the state
    * the server gives: an item that waited for an earlier one and has a file of its own
    * comes as RECEIVED (section 10.15, item 3), so nothing is worked out here from its
@@ -324,6 +340,9 @@ export type WorkflowStep = (typeof STEPS)[number] & {
   /** What the step needs from the person, where its own list words it (the D&I evidence
    * list once its requests are drafted): one line, with no action of its own. */
   need?: EvidenceWorkflowHeader["need"];
+  /** Control Understanding once complete (B1j): when, in words ("Nov 16, 4:12 PM"), for the
+   * Attributes step's quiet "Based on the understanding of …". */
+  since?: string;
 };
 
 const GONE: readonly RequirementState[] = [
@@ -385,6 +404,22 @@ function setupState(input: WorkflowInput): State {
 }
 
 function understandingState(input: WorkflowInput): State {
+  // Complete once (B1j): recorded complete, it stays complete. A question the rules raise
+  // later still shows in Control Understanding with its own count; it does not reopen it.
+  const once = input.understanding ?? null;
+  if (once !== null && once.completedAt !== null) {
+    return { tone: "done", status: completeStatus(once.completedAt) };
+  }
+  // The question pass: the agents check what else the attributes need, and their questions
+  // join the same course.
+  if (once?.questionPass === "CHECKING") {
+    return { tone: "active", status: CHECKING_STATUS };
+  }
+  // The specialist's review could not be used (B1l point 7): said, and the person chooses
+  // in Control Understanding: Run again, or Proceed without it. Nothing waits on it.
+  if (once?.questionPass === "FAILED") {
+    return { tone: "attention", status: REVIEW_FAILED_STATUS };
+  }
   const open = input.setup.find(
     (step) =>
       (step.key === "answers" || step.key === "process") &&
@@ -632,8 +667,11 @@ function designConclusionState(input: WorkflowInput): State {
  * reads them (phase_release.attribute_waits): approved, none proposed, no open question. */
 function attributesState(input: WorkflowInput, understanding: State): State {
   const { approved, proposed } = input.attributes;
-  const questions = input.attributes.questions ?? 0;
-  if (understanding.tone !== "done") {
+  // Once the understanding is complete (B1j) the attributes never wait on it again, and no
+  // question sends the person back: a later gap is an assumption on the attribute.
+  const completed = (input.understanding?.completedAt ?? null) !== null;
+  const questions = completed ? 0 : (input.attributes.questions ?? 0);
+  if (!completed && understanding.tone !== "done") {
     return waiting("understanding");
   }
   // The agents are at work on the attributes and their criteria (12 November 2026): the
@@ -908,6 +946,10 @@ export function workflowOf(input: WorkflowInput): WorkflowStep[] {
     next: false,
     ...(step.key === "designevidence" && designNote !== ""
       ? { note: designNote }
+      : {}),
+    ...(step.key === "understanding" &&
+    (input.understanding?.completedAt ?? null) !== null
+      ? { since: whenWords(input.understanding?.completedAt ?? "") }
       : {}),
     // The evidence list's own decision line goes with its state, and only with it.
     ...(step.key === "designevidence" &&

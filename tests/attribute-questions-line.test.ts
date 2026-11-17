@@ -1,121 +1,78 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
-import { openAttributeQuestionsLine } from "../apps/web/src/control-context-model.ts";
+import * as model from "../apps/web/src/control-context-model.ts";
+import { DRAFTED_ONCE_COMPLETE } from "../apps/web/src/understanding-once-model.ts";
 
 // Product owner, 14 November 2026: "I already accepted the attributes. Why a new question
 // showed up after I accepted the attributes??" and "I don't want to have any follow-up
-// questions when the attributes are already approved and accepted." The planner raised three
-// questions when it followed the walkthrough answers, three minutes before the attributes were
-// accepted; the guided setup asks them in Control Understanding, so the Attributes step never
-// said so. Accepting now closes them on the server; this line says so before the decision.
+// questions when the attributes are already approved and accepted." Accepting closes them on
+// the server (control_attributes.close_questions_once_accepted), which still holds.
+//
+// Rewritten for B1j (docs/control-workflow-plan.md; product owner, 16 November 2026, on
+// ITGC-CM-06: "Keeps going back and forth to the control understanding and attributes ...
+// This could be a never ending loop"):
+// - Old expectation: the Attributes step showed a warning banner, "The agents raised N
+//   questions that can change these attributes (...). Answer them in Control Understanding,
+//   or accept the attributes as they are: accepting closes them.", with an "Answer the
+//   questions" link back to Control Understanding (openAttributeQuestionsLine,
+//   OpenQuestionsNote).
+// - New expectation: the banner is gone. The understanding is asked once: the agents' questions
+//   are asked in Control Understanding's one pass, and once it is complete a later gap is the
+//   agent's assumption on the attribute, decided there. Nothing on the Attributes step sends the
+//   person back; before completion the step says, quietly and with no link, that the
+//   attributes are drafted once the understanding is complete.
+// - Methodology: one traceable decision where the work is (AGENTS.md, "The agent prepares the
+//   work first"); a question can no longer reopen a settled step, so the banner's two
+//   contradictory next actions (answer there, or accept here) cannot both be offered.
 
-type Issue = Parameters<typeof openAttributeQuestionsLine>[0][number];
+const read = (path: string) =>
+  readFileSync(new URL(path, import.meta.url), "utf8");
 
-const issue = (topic: string, over: Partial<Issue> = {}): Issue => ({
-  origin: "ATTRIBUTES",
-  status: "OPEN",
-  raisedBy: "AGENT",
-  topic,
-  ...over,
-});
-
-describe("the agents' open questions, said where the attributes are accepted", () => {
-  it("says nothing when no question is open", () => {
-    assert.equal(openAttributeQuestionsLine([], true), null);
+describe("the Attributes step never sends the person back to Control Understanding (B1j)", () => {
+  it("has no line that counts the agents' questions for the attributes", () => {
     assert.equal(
-      openAttributeQuestionsLine(
-        [
-          issue("Answered", { status: "RESOLVED" }),
-          issue("Dismissed", { status: "DISMISSED" }),
-        ],
-        true,
-      ),
-      null,
+      "openAttributeQuestionsLine" in model,
+      false,
+      "the banner's sentence is gone from the model",
     );
   });
 
-  it("counts only the questions accepting closes: the agents' own", () => {
-    assert.equal(
-      openAttributeQuestionsLine(
-        [issue("A rule's finding", { raisedBy: "RULES" })],
-        true,
-      ),
-      null,
-    );
-    assert.match(
-      openAttributeQuestionsLine(
-        [issue("Who raises the access request", { origin: "PROCESS" })],
-        true,
-      ) ?? "",
-      /Who raises the access request/,
-    );
+  it("shows no banner and no 'Answer the questions' link on either list", () => {
+    const panel = read("../apps/web/src/control-context-view.tsx");
+    assert.doesNotMatch(panel, /OpenQuestionsNote/);
+    assert.doesNotMatch(panel, /Answer the questions/);
+    assert.doesNotMatch(panel, /questionsHref/);
+    assert.doesNotMatch(panel, /can change these attributes/);
   });
 
-  it("names the open questions and says accepting closes them", () => {
-    assert.equal(
-      openAttributeQuestionsLine(
-        [
-          issue("Record of access actually granted and who granted it"),
-          issue("Completeness of the population of grants", {
-            origin: "SOURCES",
-          }),
-        ],
-        true,
-      ),
-      "The agents raised 2 questions that can change these attributes (Record of access actually granted and who granted it; Completeness of the population of grants). Answer them in Control Understanding, or accept the attributes as they are: accepting closes them.",
-    );
-    assert.equal(
-      openAttributeQuestionsLine([issue("Emergency access approval")], true),
-      "The agents raised a question that can change these attributes (Emergency access approval). Answer it in Control Understanding, or accept the attributes as they are: accepting closes it.",
-    );
-  });
-
-  it("with nothing to accept, only points to Control Understanding", () => {
-    assert.equal(
-      openAttributeQuestionsLine([issue("Emergency access approval")], false),
-      "The agents raised a question that can change these attributes (Emergency access approval). Answer it in Control Understanding.",
-    );
-  });
-
-  it("names at most three, and says there are more", () => {
-    const line = openAttributeQuestionsLine(
-      [issue("A"), issue("B"), issue("C"), issue("D")],
-      true,
-    );
-    assert.match(
-      line ?? "",
-      /^The agents raised 4 questions .*\(A; B; C; and more\)\./,
-    );
-  });
-
-  it("is shown on the guided setup's Attributes step, with a link to Control Understanding", () => {
-    const view = readFileSync(
-      new URL("../apps/web/src/controls-view.tsx", import.meta.url),
-      "utf8",
-    );
+  it("is mounted on the guided setup's Attributes step with no way back to step 2", () => {
+    const view = read("../apps/web/src/controls-view.tsx");
     assert.match(
       view,
-      /<AttributesPanel[\s\S]*?showQuestions=\{false\}\s*questionsHref=\{stepHrefsWf\.understanding \?\? null\}/,
+      /<AttributesPanel[\s\S]*?showQuestions=\{false\}\s*embedded=\{embedded\}/,
     );
-    const panel = readFileSync(
-      new URL("../apps/web/src/control-context-view.tsx", import.meta.url),
-      "utf8",
+    assert.doesNotMatch(
+      view,
+      /<AttributesPanel[^>]*questionsHref/,
+      "the panel is given no link to Control Understanding",
     );
-    assert.match(
-      panel,
-      /openAttributeQuestionsLine\(context\.issues, toAccept\.length > 0\)/,
-    );
-    assert.match(panel, /href=\{href\}[\s\S]{0,80}Answer the questions/);
-    // Both lists say it: the Attributes step's panel and the full list.
+  });
+
+  it("before completion says quietly that the attributes are drafted once it is complete", () => {
     assert.equal(
-      panel.match(/<OpenQuestionsNote\b/g)?.length,
-      2,
-      "the embedded and the full list each show the note",
+      DRAFTED_ONCE_COMPLETE,
+      "The attributes are drafted once the understanding is complete.",
+    );
+    const panel = read("../apps/web/src/control-context-view.tsx");
+    // A quiet note, never the warning tone and never a link.
+    assert.match(
+      panel,
+      /beforeComplete && working === null \? \(\s*<p className="ta-run-note" role="status">\s*<UiIcon name="info" size=\{13\} \/>\s*<span>\{DRAFTED_ONCE_COMPLETE\}<\/span>\s*<\/p>/,
     );
     assert.match(
       panel,
-      /showQuestions=\{showQuestions\}\s*questionsHref=\{questionsHref\}/,
+      /const beforeComplete =\s*\(context\.understandingCompletedAt \?\? null\) === null &&\s*\(context\.questionPass === "WAITING" \|\| context\.questionPass === "CHECKING"\);/,
     );
   });
 });

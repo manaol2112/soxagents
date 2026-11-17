@@ -1,7 +1,11 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
-import { contextWrite, versionsPath } from "../../../src/control-context-model";
+import {
+  contextWrite,
+  criteriaHistoryPath,
+  versionsPath,
+} from "../../../src/control-context-model";
 import { apiBaseUrl, sessionToken } from "../../../src/load-workspace";
 
 /** The control record's context actions: attributes, process understanding, documents,
@@ -38,7 +42,8 @@ export async function POST(request: Request) {
     });
     status = response.status;
     const body = (await response.json()) as unknown;
-    if (status === 200) {
+    // 202: a review the server accepted to run (B1k), answered with the context as it stands.
+    if (status === 200 || status === 202) {
       context = body;
     } else if (typeof body === "object" && body !== null && "detail" in body) {
       const value = (body as { detail?: unknown }).detail;
@@ -50,10 +55,14 @@ export async function POST(request: Request) {
   return NextResponse.json({ status, detail, context });
 }
 
-/** A control's process narrative versions (0116), read when the Versions tab opens. The API
- * decides who may read them. */
+/** A control's process narrative versions (0116), read when the Versions tab opens; and an
+ * attribute's earlier criteria (B1j), read when its "Previous criteria" opens. The API decides
+ * who may read them. */
 export async function GET(request: Request) {
   const query = new URL(request.url).searchParams;
+  if (query.get("intent") === "criteria-history") {
+    return criteriaHistory(query);
+  }
   const path = versionsPath({
     organization_id: query.get("organization_id") ?? "",
     project_id: query.get("project_id") ?? "",
@@ -81,5 +90,38 @@ export async function GET(request: Request) {
     });
   } catch {
     return NextResponse.json({ status: 0, detail: "", versions: null });
+  }
+}
+
+/** GET {control}/attributes/{attribute_id}/criteria-history, as `history`. */
+async function criteriaHistory(query: URLSearchParams) {
+  const path = criteriaHistoryPath({
+    organization_id: query.get("organization_id") ?? "",
+    project_id: query.get("project_id") ?? "",
+    control_id: query.get("control_id") ?? "",
+    attribute_id: query.get("attribute_id") ?? "",
+  });
+  if (path === null) {
+    return NextResponse.json({ status: 422, detail: "", history: null });
+  }
+  const session = sessionToken((await cookies()).get("aw_session")?.value);
+  try {
+    const headers = new Headers();
+    if (session !== undefined) {
+      headers.set("cookie", `aw_session=${session}`);
+    }
+    const response = await fetch(`${apiBaseUrl()}${path}`, {
+      headers,
+      cache: "no-store",
+      signal: AbortSignal.timeout(15000),
+    });
+    const body = (await response.json().catch(() => null)) as unknown;
+    return NextResponse.json({
+      status: response.status,
+      detail: "",
+      history: response.status === 200 ? body : null,
+    });
+  } catch {
+    return NextResponse.json({ status: 0, detail: "", history: null });
   }
 }

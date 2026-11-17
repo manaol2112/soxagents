@@ -5,6 +5,7 @@ import {
   type Attribute,
   type CriteriaState,
   criteriaState,
+  holdWords,
 } from "./control-context-model";
 import { useRelease } from "./phases-view";
 import { UiIcon } from "./ui-icon";
@@ -31,6 +32,7 @@ export function TailoredCriteria({
   canAct,
   flat = false,
   extra = null,
+  notes = null,
   startEditing: writing = false,
 }: {
   ids: Ids;
@@ -41,6 +43,9 @@ export function TailoredCriteria({
   flat?: boolean;
   /** The row's other actions, after Accept and Edit (flat only). */
   extra?: ReactNode;
+  /** What sits between the criteria and the row's actions (flat only): the agent's
+   * assumptions on the attribute and where its criteria came from (B1j). */
+  notes?: ReactNode;
   /** Opens with the criteria form showing: the step's "Write criteria", after a run that
    * did not write them. */
   startEditing?: boolean;
@@ -76,6 +81,13 @@ export function TailoredCriteria({
     (form.condition.trim() !== "" &&
       form.pass_criteria.trim() !== "" &&
       form.fail_criteria.trim() !== "");
+  // B1l point 6: an OPEN conflict on the attribute holds its acceptance until a person
+  // decides it; Accept is off, with the reason.
+  const held = item.heldByConflict === true;
+  const heldLine =
+    held && canAct && state === "TO_ACCEPT" ? (
+      <p className="tc-held">{holdWords(item)}</p>
+    ) : null;
   const accept = () =>
     void action.run({
       intent: "criteria-accept",
@@ -159,14 +171,16 @@ export function TailoredCriteria({
           </p>
         )}
         {state === "OWNED" ? <p className="tc-by">{owner}</p> : null}
+        {notes}
         {editor}
+        {!editing ? heldLine : null}
         {!editing && (canAct || extra !== null) ? (
           <div className="tc-row-acts">
             {canAct && state === "TO_ACCEPT" ? (
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
-                disabled={action.pending}
+                disabled={action.pending || held}
                 onClick={accept}
               >
                 {action.pending ? "Accepting…" : "Accept"}
@@ -213,7 +227,8 @@ export function TailoredCriteria({
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
-                disabled={action.pending}
+                disabled={action.pending || held}
+                title={held ? holdWords(item) : undefined}
                 onClick={accept}
               >
                 {action.pending ? "Accepting…" : "Accept"}

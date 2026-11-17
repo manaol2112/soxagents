@@ -310,6 +310,60 @@ Migration 0172 adds:
 - `attribute_criteria_versions` and its trigger;
 - the asked-matters check, as a column or view if needed.
 
+**B1k. Control Understanding ends with a review by an IT audit specialist, before the attributes. Proposed 16 November 2026, to be built after B1j.** Asked for by the product owner, the same day: "Just make sure that the questions to understand the control are all being asked in control understanding. Maybe run a quick check as an IT auditor specialist to validate all questions has been asked before moving to attributes? Right now that happens in attribute so why not check all while still in control understanding? Like a review before moving to attributes." Clarified the same day: "When I say it audit specialist, i meant an agent that reviews all the questions asked. Its good to keep the review by the it audit specialist in a narrarive format". Prototype: scratchpad brief-proto/ureview2.png (the first, ureview.png, showed a checklist of areas and is superseded). It is the question pass of B1j point 1, done by a reviewer of the questions asked instead of the attribute agent.
+
+- **When.** Once the walkthrough's required answers and the statement's values are in, and, for a business process control, its process understanding, the review runs before any attribute is drafted. Control Understanding shows "Checking what else the agents need…" meanwhile.
+- **Who.** A registered agent run: `independent-reviewer`, prompt `understanding-review/1`, under the existing safeguards (budgets, the run record, untrusted text as data).
+- **What it reads, as data.** The control: its statement, risk, activity, frequency, nature and system. The attributes it is tested on, with the needs of their criteria (the approved ones, or the library's for a control not yet tailored). The D&I evidence those attributes need. The confirmed understanding: walkthrough answers, values and answered questions. The summaries of the linked documents.
+- **What it reviews.** Every question asked on the control: the walkthrough bank's, the statement's values and the agents' questions, with the answers given. Is anything the attributes or the D&I evidence depend on still not established?
+- **What it returns.**
+  - **The review**, in narrative form: a short paragraph (at most 150 words), formal and in the third person, as the design narrative of design-workpaper.md 3.10. It says what the questions answered establish and, by name, what they do not yet establish and which attributes depend on it. It ends by saying either that these are asked now, or that no other question is needed before the attributes are drafted.
+  - **Every question needed** (see "Nothing missed" below), each with:
+    - why it is needed (the attribute or the evidence it bears on);
+    - a suggested answer and options, so it is never an essay question (27 October).
+- **Asked once.** No matter already asked is asked again: answered, dismissed, superseded or closed (B1j point 4).
+- **Nothing missed: how it is checked** (product owner, the same day: "does the agent also consider all the possible questions that are needed to be asked so no questions will be missed? Like an agent looking at the questions and answers and any follow up needed are all asked at the end if those are flagged?").
+  1. **The bank's own follow-ups are asked first.** Every follow-up question a confirmed answer reveals (`walkthrough_questions._follow_up`) is asked before the review runs, so the review never reads a course with a follow-up still waiting.
+  2. **The review goes attribute by attribute.** The code gives the specialist, for each attribute the control is tested on, the questions that inform it (each bank question's `informs`) with their answers, and what its criteria need (performer, approver, system, record, timing, population).
+  3. **It answers per attribute.** For each one it says "established", naming the answers, or "not established", naming the matter as a question.
+  4. **It reads every answer for the follow-up it opens.** An "Other: …" answer, a "no one" or "only the vendor" answer, an answer that contradicts another, and an answer that names a system, report or person not yet asked about are each treated as a matter to settle.
+  5. **The code checks the answer.** Every attribute must have a verdict, and every "not established" must have its question. An answer that skips one is corrected once, as B1i corrects an agent's answer. If it still skips one, the attribute gets a question from the rules (its matter in plain words), never a silent pass.
+  6. **Everything flagged is asked together.** All the questions are asked at the end of the course in one batch, in the same visit. There is no cap of five: every matter the attributes or the D&I evidence depend on is asked, and nothing else (B1c: "only ask the questions that are detailed but also reasonable").
+  7. **One follow-up round at most.** The second read, on the review's own answers, may ask only what those answers opened ("Other: a vendor applies them" → who at the vendor, under what agreement). There is never a third.
+- **A miss never sends the person back.** If something is still missed, it surfaces later as "The agent assumed …" on the attribute (B1j point 3), settled there.
+- **On screen.** Under "The understanding" narrative of Control Understanding comes "Review of the questions asked · IT audit specialist", with the review's paragraph. The matters still to establish are marked quietly in its text. Its questions join the same course, labelled "From the review · for the attributes". Once they are answered, the review is read again on the answers. That second read asks only what those answers opened, if anything (point 7 above), and then says the questions now establish what the attributes and the evidence depend on. Then the understanding is complete.
+- **Completion.** The understanding is complete when the review has run on the latest inputs and its questions are answered. A question answered is a confirmed fact (B1e). The review's paragraphs, its questions and the times are kept (`understanding_reviews`), and the last one is shown as "Reviewed <when>: …".
+- **One round.**
+  - Answering the review's questions starts only the second read described below, never a new review.
+  - The attribute agent never asks in the pass: everything it finds afterwards is an assumption on the attribute (B1j point 3).
+  - A person who changes an answer after completion keeps the understanding complete. The attributes follow (B1d), and any new gap is an assumption.
+- **Without a model.** The review is not run and says so in one line. Completion follows the rules as today.
+- **The question banks.** The walkthrough bank for patching (`change-patching`) asks who applies patches to production, how a patch is linked to its change record, and how emergency patches are approved. These are the three questions ITGC-CM-06 needed later. The other banks are checked for the same kind of gap, so the review has less to ask.
+
+**B1l. Hardening of B1j and B1k, from a review of the plan. Agreed 16 November 2026** (the product owner, asked to approve the review's eight fixes and three decisions: "Okay please proceed."). Where a point below differs from B1j or B1k, this one holds.
+
+1. **No dead end before completion.** Every question in Control Understanding offers **Not known yet, proceed** (a person's choice, with an optional note). The question is closed as the person's "not known", never as an answer, and the matter becomes an assumption on the attributes it bears on (B1j point 3). "Skip for now" still only moves on in the course.
+2. **Controls already past this stage are complete.** A control whose attributes are accepted (`attributes_accepted`) counts as completed with no review: the 14 November rule stands, and no review or question is started on it. A control in between gets the review once.
+3. **A budget per control, not per review.** Before completion the specialist reads at most twice in total: the review, and the one follow-up read. Edits to answers made meanwhile are read by whichever read comes next; they never add a read. After the second read the understanding completes, and whatever is still not established becomes assumptions. A further review happens only when a person asks for it ("Review again"), never by an agent or a save.
+4. **Asked once, by key.** A question is keyed on what it asks: the attribute (its definition key or code) and the kind of fact (`PERFORMER`, `APPROVER`, `SYSTEM`, `RECORD`, `TIMING`, `POPULATION`, `EXCEPTION`, `OTHER`), or, for a follow-up, the answer that opened it (one follow-up per answer). The code refuses a second question on a key already asked on the control in any status, whatever its wording. The free-text fingerprint check stays as a second net.
+5. **Only questions that earn their place.** Each question names the attribute criterion or the evidence request that cannot be written without the fact; the code checks that the attribute exists and refuses a question that names none. At most seven are asked; beyond that, the least critical become assumptions. Where the specialist's answer still skips an attribute after one correction, no question is invented for it: the attribute is marked "not reviewed" in the review, and the attribute agent states its assumptions on it.
+6. **Nothing is buried by "Accept all".**
+   - A **conflict** found after completion (evidence or a source contradicts a confirmed fact) is shown on the attribute and holds that attribute's acceptance until a person decides it; "Accept all" leaves it out and says so. It never reopens Control Understanding.
+   - An assumption accepted with its attribute, not confirmed, is carried into the D&I workpaper as a point to settle before the preparer signs (design-workpaper.md 3.9, kind `ASSUMPTION`): confirmed there, changed there, or considered with a reason.
+   - "Accept all N" says how many unconfirmed assumptions go with it.
+7. **A failed review never blocks.** A malformed answer is corrected once (B1i). If the review still cannot be used, Control Understanding says "The review could not run" with **Run again** and **Proceed without it**; proceeding completes the understanding by the rules, and the attribute agent's gaps become assumptions.
+8. **The guarantee is in the database.**
+   - A trigger refuses an OPEN agent-raised row in `control_context_issues` for a control whose `understanding_completed_at` is set.
+   - A replay test runs the ITGC-CM-06 sequence of 16 November (answers, an attribute question, its answer) against scripted agents and checks: no narrative is drafted, nothing reopens, the attributes are never waiting.
+   - A property test gives a completed control arbitrary agent outputs and checks that it stays completed, with no open agent question.
+
+Also agreed:
+- **A control with no attributes yet** (a control of the organization's own): the review works from the control's statement and risk over the same kinds of fact, and the attributes are proposed after it.
+- **An answer changed after completion** re-tailors only the attributes its question informs (the bank's `informs`); other attributes' criteria are not rewritten.
+- **A copied understanding** (from another control or year) is never copied as completed: it is reviewed where it lands.
+- **A live check before release.** The review is run on about five controls (among them ITGC-AC-01 and ITGC-CM-06) to count the questions asked, the repeats and the misses; the product owner is told its cost before it runs.
+- **Sequencing.** The question pass B1j builds on the attribute agent is replaced by the review of B1k before either is used: the attribute agent never asks before completion once B1k lands, and the two question sources never run together.
+
 ## The step panels (built 8 November 2026)
 
 The product owner: the panels "look like a traditional view which does not align with my new workflow and design". Decided: a decision-first layout for every panel, an agent strip in each panel, the agent proposes the conclusion and a person rates, and everything built at once.

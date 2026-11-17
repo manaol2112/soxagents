@@ -16,6 +16,7 @@ import {
   type Tone,
 } from "./control-workflow-model.ts";
 import type { PanelLink, PanelNeed } from "./step-panel-model.ts";
+import { basedOnLine } from "./understanding-once-model.ts";
 
 /** The step whose panel keeps the layout it had before (product owner, 11 November 2026:
  * "Except for the control understanding, don't change that for now"). */
@@ -147,7 +148,9 @@ export function stepName(link: Pick<PanelLink, "title">): string {
 
 /**
  * The footer's "Based on": the first step this one rests on, with its status, and the
- * others as a count. Null for a step that rests on none (the setup).
+ * others as a count. Null for a step that rests on none (the setup). A completed
+ * understanding is named by its time (B1j): "Based on the understanding of Nov 16, 4:12 PM",
+ * the one quiet way back from the Attributes step.
  */
 export function basedOnSummary(basedOn: readonly PanelLink[]): {
   first: PanelLink;
@@ -160,7 +163,10 @@ export function basedOnSummary(basedOn: readonly PanelLink[]): {
   }
   return {
     first,
-    label: `${stepName(first)} · ${first.status}`,
+    label:
+      first.key === "understanding" && first.since !== undefined
+        ? basedOnLine(first.since)
+        : `${stepName(first)} · ${first.status}`,
     more,
   };
 }

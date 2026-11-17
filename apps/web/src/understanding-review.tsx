@@ -100,6 +100,41 @@ import {
   withConfirmed,
   withOther,
 } from "./understanding-chat-model";
+import {
+  addedForAttributes,
+  CHECKING_LINE,
+  completeLine,
+  ONCE_COMPLETE_NOTE,
+  type Once,
+  offersAttributes,
+  raisedChip,
+  readsAgain,
+  readyOnceComplete,
+  understandingEnd,
+} from "./understanding-once-model";
+import {
+  ensureReview,
+  NotKnownButton,
+  NotKnownPanel,
+  QuestionReviewSection,
+  ReviewFailed,
+} from "./understanding-specialist";
+import {
+  blocksLine,
+  courseWithout,
+  ENSURE_EVERY_MS,
+  ENSURE_REFUSED,
+  ensuresReview,
+  fromReview,
+  heldByFailedReview,
+  type NotKnownTarget,
+  notKnownKeys,
+  notKnownTarget,
+  RUN_REVIEW,
+  reviewView,
+  targetKey,
+  withoutNotKnown,
+} from "./understanding-specialist-model";
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
 
@@ -137,9 +172,16 @@ export function UnderstandingReview({
   documentsHref,
   attributesHref = null,
   issues = [],
+  once = { completedAt: null, questionPass: null },
 }: {
   ids: Ids;
   canAct: boolean;
+  /** The understanding asked once (B1j, 16 November 2026): when it was recorded complete,
+   * and where the agents' question pass stands. While they check what else they need, the
+   * course stays open and their questions join it; the way on to the attributes is offered
+   * only once it is complete. B1k: the pass is the IT audit specialist's review of the
+   * questions asked, shown under the understanding. */
+  once?: Once;
   /** The control's issues: an open question of the agents is answered in place, from its
    * own choices (12 November 2026). */
   issues?: readonly SetupIssue[];
@@ -218,6 +260,13 @@ export function UnderstandingReview({
   const startRef = useRef<{ control: string; from: string } | null>(null);
   const [startPending, setStartPending] = useState<string | null>(null);
   const restart = useRef(false);
+  // B1l point 1: the questions a person left as not known yet. Closed, never an answer: they
+  // leave the course and are never on record. Those this visit closed are kept until the
+  // page's data says so too; the reads leave them out.
+  const [notKnownFor, setNotKnownFor] = useState<string | null>(null);
+  const [closed, setClosed] = useState<ReadonlySet<string>>(new Set());
+  const closedRef = useRef<ReadonlySet<string>>(new Set());
+  closedRef.current = notKnownKeys(issues, closed, review?.notKnown ?? []);
 
   const read = useCallback(async (): Promise<Review | null> => {
     reads.current += 1;
@@ -244,7 +293,9 @@ export function UnderstandingReview({
       if (mine !== reads.current) {
         return null;
       }
-      const found = parseReview(first.body ?? null);
+      const parsed = parseReview(first.body ?? null);
+      const found =
+        parsed === null ? null : withoutNotKnown(parsed, closedRef.current);
       setFailed(found === null);
       if (found !== null) {
         setReview(found);
@@ -294,6 +345,51 @@ export function UnderstandingReview({
   useEffect(() => {
     void read();
   }, [read]);
+
+  // While the agents check what else they need (B1j), the page and the review are read again
+  // every few seconds, in place: the pass's questions join this course as they are added, and
+  // the completion shows once it is recorded. Only the latest read is shown (reads).
+  const gatesDone = review?.evidence.ready === true && review.attributes.ready;
+  const passing = review !== null && readsAgain(once, gatesDone);
+  useEffect(() => {
+    if (!passing) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      router.refresh();
+      void read();
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [passing, router, read]);
+
+  // B1l point 1 (no dead end): while the course reads as checking before completion with no
+  // read live, the page asks the server, explicitly and idempotently, to queue a review that
+  // is due (or record a completion that is due): once on arriving, then every 30 seconds.
+  // Never a write in a GET; a refusal is said quietly, with a way to ask again.
+  const [ensureProblem, setEnsureProblem] = useState(false);
+  const ensuring =
+    review !== null &&
+    ensuresReview(
+      understandingEnd(once, gatesDone),
+      once.questionPass,
+      once.review,
+      canAct,
+    );
+  const ensureNow = useCallback(async () => {
+    const taken = await ensureReview(ids);
+    setEnsureProblem(!taken);
+    if (taken) {
+      router.refresh();
+    }
+  }, [ids, router]);
+  useEffect(() => {
+    if (!ensuring) {
+      return;
+    }
+    void ensureNow();
+    const timer = window.setInterval(() => void ensureNow(), ENSURE_EVERY_MS);
+    return () => window.clearInterval(timer);
+  }, [ensuring, ensureNow]);
 
   // A new question the reviewer agent is still checking appears once checked: read again
   // shortly while any is (14 November 2026; the draft wording is never shown).
@@ -657,13 +753,38 @@ export function UnderstandingReview({
       );
       return;
     }
-    // Confirmed by the server: the narrative is drafted again from the answers in the
-    // background, as after the conversation.
-    void action.run("narrate", { intent: "process-narrate" });
+    // Confirmed by the server. No narrative redraft is asked for after a single answer (B1j,
+    // 16 November 2026: each redraft kept the narrative's first round open and could ask
+    // again): the server redrafts once, after the last point is answered.
     const now = withConfirmed(review, { [need.key]: answer });
     setReview(now);
     go(nextOpen(now, interview, at));
     await settle(`${need.label || "The question"}: answered.`);
+  }
+
+  /** A question the person left as not known yet (B1l point 1), once the server recorded
+   * it: it leaves the course, never as an answer, and the course moves on. */
+  async function leftNotKnown(need: Need) {
+    if (review === null || interview === null) {
+      return;
+    }
+    const keys = new Set(closed);
+    keys.add(need.key);
+    setClosed(keys);
+    closedRef.current = notKnownKeys(issues, keys, review.notKnown ?? []);
+    setNotKnownFor(null);
+    const now = withoutNotKnown(review, keys);
+    setReview(now);
+    // A walkthrough question leaves its topic's step, which stays open on the questions
+    // still there; any other question moves the course on.
+    if (need.kind === "WALKTHROUGH") {
+      clearWalkthrough([need.key]);
+    } else {
+      go(nextOpen(now, interview, at));
+    }
+    await settle(
+      `Left as not known yet: ${(need.question || need.label || "the question").replace(/[?.]$/, "")}.`,
+    );
   }
 
   /** The carried step: the ticked answers confirmed together, the rest asked on their own. */
@@ -1005,9 +1126,21 @@ export function UnderstandingReview({
   const groups = reviewGroups(review);
   const byKey = new Map(review.needs.map((need) => [need.key, need]));
   const status = statusLine(review);
+  // The understanding asked once (B1j): complete, checking what else the agents need, or as
+  // the gates read it.
+  const end = understandingEnd(
+    once,
+    review.evidence.ready && review.attributes.ready,
+  );
+  const complete = end === "complete" && once.completedAt !== null;
+  const failedReview = reviewView(once.questionPass, once.review ?? null);
   // Where the answers start from: another system's, proposed below, or none.
   const banner = startFromBanner(review);
-  const progress = interviewProgress(review, interview);
+  // A question left as not known (B1l point 1) is never counted as confirmed.
+  const progress = interviewProgress(
+    review,
+    courseWithout(interview, closedRef.current),
+  );
   const plan = interview.plan;
   const step = at < plan.length ? (plan[at] ?? null) : null;
   const topic = step === null ? null : stepTopic(step);
@@ -1018,9 +1151,13 @@ export function UnderstandingReview({
   const onRecord = [...groups.confirmed, ...groups.rcm];
   // The walkthrough answers on record, by topic.
   const wtRecord = walkthroughRecord(review);
+  // B1l point 1: what a person left as not known yet stays on record as theirs, never as
+  // an answer.
+  const leftNotKnownList = review.notKnown ?? [];
   const recordCount =
     onRecord.length +
-    wtRecord.reduce((sum, group) => sum + group.needs.length, 0);
+    wtRecord.reduce((sum, group) => sum + group.needs.length, 0) +
+    leftNotKnownList.length;
   const wtSteps = plan.filter((item) => stepTopic(item) !== null);
   const reopened = Object.keys(wtReopened).filter(
     (key) => wtReopened[key] === true,
@@ -1431,6 +1568,19 @@ export function UnderstandingReview({
         </section>
       ) : null}
 
+      {/* B1k: the IT audit specialist's review of the questions asked, under the
+          understanding, in the narrative's own form. */}
+      <QuestionReviewSection
+        ids={ids}
+        canAct={canAct}
+        pass={once.questionPass}
+        review={once.review ?? null}
+        completedAt={once.completedAt}
+        request={once.request ?? null}
+        notRun={once.notRun ?? null}
+        approved={once.approved ?? []}
+      />
+
       <ul
         className={`ur-ready${checking ? " is-updating" : ""}`}
         aria-busy={checking}
@@ -1438,7 +1588,15 @@ export function UnderstandingReview({
       >
         {/* The attributes first, then the D&I evidence requested against them (product
             owner, 11 November 2026). */}
-        {readyLines(review).map((line) => (
+        {heldByFailedReview(
+          readyOnceComplete(
+            readyLines(review),
+            complete,
+            review.attributesProposed,
+            end === "checking",
+          ),
+          end === "failed",
+        ).map((line) => (
           <li key={line.key} className={line.ready ? "is-ok" : ""}>
             <span className="ur-check" aria-hidden="true">
               {line.ready ? <UiIcon name="check" size={12} /> : null}
@@ -1576,40 +1734,93 @@ export function UnderstandingReview({
               </ul>
             </section>
           ))}
+          {leftNotKnownList.length > 0 ? (
+            <section
+              className="ur-record-topic"
+              aria-labelledby={`ur-record-not-known-${ids.controlId}`}
+            >
+              <h4 id={`ur-record-not-known-${ids.controlId}`}>
+                Left as not known yet
+              </h4>
+              <ul>
+                {leftNotKnownList.map((item) => (
+                  <li key={item.key}>
+                    <span className="ur-record-q">{item.question}</span>
+                    <span className="ur-record-a">
+                      <strong>Not known yet</strong>
+                      {item.note !== "" ? <small>{item.note}</small> : null}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
         </details>
       ) : null}
     </>
   );
 
-  /** The foot of a step: where it stands, and Back with the step's own action. */
-  const foot = (primary: ReactNode, skip: boolean) => (
-    <div className="ur-foot">
-      <p className="ur-foot-where">
-        {plan.length > 1 ? `Step ${at + 1} of ${plan.length}` : null}
-        {skip ? (
-          <button
-            type="button"
-            className="ur-skip"
-            disabled={busy}
-            onClick={() => go(nextOpen(review, interview, at))}
-          >
-            Skip for now
-          </button>
+  /** The foot of a step: where it stands, and Back with the step's own action. A question
+   * the person is asked also offers "Not known yet, proceed" (B1l point 1), beside "Skip for
+   * now", which still only moves on in the course. */
+  const foot = (
+    primary: ReactNode,
+    skip: boolean,
+    asked: { need: Need; target: NotKnownTarget | null } | null = null,
+  ) => {
+    // Every question a person is asked (B1l point 1): an agent's or the review's, and a
+    // statement value not yet on record.
+    const target = asked?.target ?? null;
+    const notKnown = target === null ? undefined : { id: targetKey(target) };
+    return (
+      <>
+        <div className="ur-foot">
+          <p className="ur-foot-where">
+            {plan.length > 1 ? `Step ${at + 1} of ${plan.length}` : null}
+            {skip ? (
+              <button
+                type="button"
+                className="ur-skip"
+                disabled={busy}
+                onClick={() => go(nextOpen(review, interview, at))}
+              >
+                Skip for now
+              </button>
+            ) : null}
+            {notKnown !== undefined && notKnownFor !== notKnown.id ? (
+              <NotKnownButton
+                disabled={busy}
+                onOpen={() => setNotKnownFor(notKnown.id)}
+              />
+            ) : null}
+          </p>
+          <div className="ur-foot-actions">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={busy || at === 0}
+              onClick={() => go(Math.max(0, at - 1))}
+            >
+              <UiIcon name="back" size={14} /> Back
+            </button>
+            {primary}
+          </div>
+        </div>
+        {notKnown !== undefined &&
+        target !== null &&
+        asked !== null &&
+        notKnownFor === notKnown.id ? (
+          <NotKnownPanel
+            key={notKnown.id}
+            ids={ids}
+            target={target}
+            onCancel={() => setNotKnownFor(null)}
+            onDone={() => void leftNotKnown(asked.need)}
+          />
         ) : null}
-      </p>
-      <div className="ur-foot-actions">
-        <button
-          type="button"
-          className="btn btn-secondary"
-          disabled={busy || at === 0}
-          onClick={() => go(Math.max(0, at - 1))}
-        >
-          <UiIcon name="back" size={14} /> Back
-        </button>
-        {primary}
-      </div>
-    </div>
-  );
+      </>
+    );
+  };
 
   const carriedStep = () => {
     const items = interview.carried
@@ -1712,11 +1923,22 @@ export function UnderstandingReview({
         ? text.trim()
         : choice;
     const unchanged = onFile && answer === need.value;
-    const forLine = neededForLine(need);
+    // A question the agents' pass added for the attributes (B1j) says so, in the same course.
+    const raised =
+      need.kind === "QUESTION"
+        ? issues.find((issue) => issue.id === need.key)
+        : undefined;
+    const forAttributes =
+      raised !== undefined &&
+      (addedForAttributes(raised) || fromReview(raised));
+    const forLine = forAttributes ? "" : neededForLine(need);
+    // B1l point 5: a question from the review names what cannot be written without the fact.
+    const blocks = blocksLine(raised);
+    const asked = { need, target: notKnownTarget(need, raised, canAct) };
     const chips = (
       <div className="ur-kicker">
         {need.kind === "QUESTION" ? (
-          <span className="ur-chip is-accent">Raised by the agents</span>
+          <span className="ur-chip is-accent">{raisedChip(raised)}</span>
         ) : null}
         {need.source === "USUAL" && !onFile ? (
           <span className="ur-chip is-warm">Usual practice</span>
@@ -1768,23 +1990,24 @@ export function UnderstandingReview({
     }
     // A question the agents raised is answered here, from its own choices; the planner's
     // conversation stays one click away (12 November 2026).
-    const asked =
+    const row =
       need.kind === "QUESTION"
         ? agentQuestions(issues.filter((issue) => issue.id === need.key))[0]
         : undefined;
-    if (asked !== undefined && asked.source !== "RECORDED") {
+    if (row !== undefined && row.source !== "RECORDED") {
       return (
         <AgentQuestionPoint
           key={need.key}
-          row={asked}
+          row={row}
           canAct={canAct}
           busy={busy}
           saving={saving === need.key}
           chips={chips}
           title={title}
+          reason={blocks}
           why={why}
-          foot={(primary) => foot(primary, true)}
-          onAnswer={(picks) => void answerQuestion(need, asked, picks)}
+          foot={(primary) => foot(primary, true, asked)}
+          onAnswer={(picks) => void answerQuestion(need, row, picks)}
           onTalk={onTalk}
         />
       );
@@ -1817,9 +2040,10 @@ export function UnderstandingReview({
         <>
           {chips}
           {title}
+          {blocks !== "" ? <p className="ur-hint ur-blocks">{blocks}</p> : null}
           <p className="ur-hint">{lead}</p>
           {why}
-          {foot(act, true)}
+          {foot(act, true, asked)}
         </>
       );
     }
@@ -1943,6 +2167,7 @@ export function UnderstandingReview({
             <UiIcon name="arrow" size={14} />
           </button>,
           !onFile,
+          asked,
         )}
       </form>
     );
@@ -1990,6 +2215,10 @@ export function UnderstandingReview({
     const whyOpen = wtShown[`${need.key}:why`] === true;
     const quoteOpen = wtShown[`${need.key}:quote`] === true;
     const locked = !canAct || busy;
+    // B1l point 1: a walkthrough question not yet on record may be left as not known yet,
+    // with an optional note: the person's record, never an answer.
+    const notKnown = notKnownTarget(need, undefined, canAct);
+    const leaving = notKnown !== null && notKnownFor === need.key;
     const multi = wt.answerKind === "MULTI";
     // The question's Other answer (11 November 2026): its words when chosen, null otherwise.
     const other = wt.allowsOther ? otherText(pick) : null;
@@ -2192,7 +2421,7 @@ export function UnderstandingReview({
         ) : null}
         {control}
         {otherField}
-        {proposal || (!need.required && !onFile) ? (
+        {proposal || (!need.required && !onFile) || notKnown !== null ? (
           <div className="ur-wt-foot">
             {proposal && !mark.agent ? (
               <span className="ai-mark is-rules">{mark.text}</span>
@@ -2223,7 +2452,24 @@ export function UnderstandingReview({
                 {saving === need.key ? "Saving…" : "Mark not applicable"}
               </button>
             ) : null}
+            {notKnown !== null && !leaving ? (
+              <span className="ur-wt-na">
+                <NotKnownButton
+                  disabled={locked}
+                  onOpen={() => setNotKnownFor(need.key)}
+                />
+              </span>
+            ) : null}
           </div>
+        ) : null}
+        {notKnown !== null && leaving ? (
+          <NotKnownPanel
+            key={need.key}
+            ids={ids}
+            target={notKnown}
+            onCancel={() => setNotKnownFor(null)}
+            onDone={() => void leftNotKnown(need)}
+          />
         ) : null}
         {proposal && wt.quote !== "" ? (
           <blockquote
@@ -2347,8 +2593,149 @@ export function UnderstandingReview({
   const openSteps = plan
     .map((key, index) => ({ key, index }))
     .filter((item) => stepRequired(review, interview, item.key));
+  const leftList =
+    openSteps.length > 0 ? (
+      <ul className="ur-left">
+        {openSteps.map((item) => {
+          const need = byKey.get(item.key);
+          return (
+            <li key={item.key}>
+              <span>
+                {item.key === CARRIED
+                  ? carriedCopy(interview, 0).step
+                  : stepLabel(item.key, need)}
+              </span>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => go(item.index)}
+              >
+                Answer
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    ) : null;
+  const onToAttributes =
+    nextAfterUnderstanding(review) === "attributes" && attributesHref !== null;
   const endStep = () =>
-    status.done ? (
+    complete ? (
+      // Complete once (B1j): the time it was recorded, and the way on to the attributes. A
+      // question the rules raised later still shows here, with its own count.
+      <div className="ur-end">
+        <span className="ur-seal" aria-hidden="true">
+          <UiIcon name="check" size={22} />
+        </span>
+        <h3 className="ur-q">{review.controlRef} is understood</h3>
+        <div className="ur-complete">
+          <p role="status">
+            <UiIcon name="check" size={15} />
+            <span suppressHydrationWarning>
+              {completeLine(once.completedAt ?? "")}
+            </span>
+          </p>
+          {onToAttributes ? (
+            <a className="btn btn-primary" href={attributesHref ?? "#"}>
+              Go to the attributes <UiIcon name="arrow" size={14} />
+            </a>
+          ) : documentsHref !== null ? (
+            <a className="btn btn-primary" href={documentsHref}>
+              Continue to D&amp;I evidence <UiIcon name="arrow" size={14} />
+            </a>
+          ) : null}
+        </div>
+        {openSteps.length > 0 ? (
+          <>
+            <p className="ur-hint">
+              {openSteps.length === 1
+                ? "1 question is open here. It does not hold the attributes."
+                : `${openSteps.length} questions are open here. They do not hold the attributes.`}
+            </p>
+            {leftList}
+          </>
+        ) : null}
+        {groups.confirmed.some((need) => need.kind === "ANSWER") ? (
+          <dl className="ur-answers">
+            {groups.confirmed
+              .filter((need) => need.kind === "ANSWER")
+              .map((need) => (
+                <div key={need.key}>
+                  <dt>{need.label}</dt>
+                  <dd>{need.value}</dd>
+                </div>
+              ))}
+          </dl>
+        ) : null}
+        <div className="ur-foot-actions">
+          {plan.length > 0 ? (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => go(Math.max(0, plan.length - 1))}
+            >
+              <UiIcon name="back" size={14} /> Back
+            </button>
+          ) : null}
+        </div>
+        <p className="ur-hint ur-once">{ONCE_COMPLETE_NOTE}</p>
+      </div>
+    ) : end === "failed" ? (
+      // The specialist's review could not be used (B1l point 7): never a dead end.
+      <>
+        <ReviewFailed
+          ids={ids}
+          canAct={canAct}
+          failure={failedReview.state === "failed" ? failedReview.failure : ""}
+        />
+        <div className="ur-foot-actions">
+          {plan.length > 0 ? (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => go(Math.max(0, plan.length - 1))}
+            >
+              <UiIcon name="back" size={14} /> Back
+            </button>
+          ) : null}
+        </div>
+      </>
+    ) : end === "checking" ? (
+      // The question pass (B1j): the course stays open, and the agents' questions join it.
+      <div className="ur-end">
+        <h3 className="ur-q">{CHECKING_LINE}</h3>
+        <p className="ur-hint ur-checking" role="status">
+          <span className="spinner small" aria-hidden="true" /> The agents are
+          checking the answers for anything else the attributes need. A question
+          they add joins this course, here.
+        </p>
+        {ensureProblem && ensuring ? (
+          // The server did not take the request to queue the review: said quietly, with a
+          // way to ask again; never a dead end (B1l point 1).
+          <p className="ur-hint" role="status">
+            {ENSURE_REFUSED}{" "}
+            <button
+              type="button"
+              className="cs-link"
+              onClick={() => void ensureNow()}
+            >
+              {RUN_REVIEW}
+            </button>
+          </p>
+        ) : null}
+        <div className="ur-foot-actions">
+          {plan.length > 0 ? (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => go(Math.max(0, plan.length - 1))}
+            >
+              <UiIcon name="back" size={14} /> Back
+            </button>
+          ) : null}
+        </div>
+      </div>
+    ) : status.done ? (
       <div className="ur-end">
         <span className="ur-seal" aria-hidden="true">
           <UiIcon name="check" size={22} />
@@ -2377,10 +2764,9 @@ export function UnderstandingReview({
               <UiIcon name="back" size={14} /> Back
             </button>
           ) : null}
-          {nextAfterUnderstanding(review) === "attributes" &&
-          attributesHref !== null ? (
-            <a className="btn btn-primary" href={attributesHref}>
-              Finalize the attributes <UiIcon name="arrow" size={14} />
+          {onToAttributes && offersAttributes(once) ? (
+            <a className="btn btn-primary" href={attributesHref ?? "#"}>
+              Go to the attributes <UiIcon name="arrow" size={14} />
             </a>
           ) : documentsHref !== null ? (
             <a className="btn btn-primary" href={documentsHref}>
@@ -2397,29 +2783,7 @@ export function UnderstandingReview({
             : `${openSteps.length} ${openSteps.length === 1 ? "point is" : "points are"} still open`}
         </h3>
         <p className="ur-hint">{status.text}</p>
-        {openSteps.length > 0 ? (
-          <ul className="ur-left">
-            {openSteps.map((item) => {
-              const need = byKey.get(item.key);
-              return (
-                <li key={item.key}>
-                  <span>
-                    {item.key === CARRIED
-                      ? carriedCopy(interview, 0).step
-                      : stepLabel(item.key, need)}
-                  </span>
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm"
-                    onClick={() => go(item.index)}
-                  >
-                    Answer
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        ) : null}
+        {leftList}
       </div>
     );
 
@@ -2485,20 +2849,32 @@ export function UnderstandingReview({
         <span className="ur-tile" aria-hidden="true">
           <AgentAvatar
             size={30}
-            state={checking || busy ? "working" : "idle"}
+            state={checking || busy || end === "checking" ? "working" : "idle"}
           />
         </span>
         <div className="ur-head-text">
           <p className="ur-eyebrow">{eyebrow}</p>
           <h2 id="ur-title">
-            {status.done
+            {complete || (status.done && end !== "checking" && end !== "failed")
               ? `${review.controlRef} is understood`
               : `Confirm how ${review.controlRef} runs`}
           </h2>
           <p className="ur-lede">
-            {status.done
-              ? "Every point the evidence and the attributes rely on is on record."
-              : `${draftedFrom(groups, interview)}. Confirm it, so the D&I evidence can be requested and the attributes finalized.`}
+            {complete ? (
+              <span suppressHydrationWarning>
+                {status.done
+                  ? `${completeLine(once.completedAt ?? "")}. Every point the evidence and the attributes rely on is on record.`
+                  : `${completeLine(once.completedAt ?? "")}. A question raised since is open below; it does not hold the attributes.`}
+              </span>
+            ) : end === "checking" ? (
+              `${draftedFrom(groups, interview)}. The agents are checking what else the attributes need: anything they ask is added here, not later.`
+            ) : end === "failed" ? (
+              `${draftedFrom(groups, interview)}. The review of the questions asked could not run: run it again, or proceed without it.`
+            ) : status.done ? (
+              "Every point the evidence and the attributes rely on is on record."
+            ) : (
+              `${draftedFrom(groups, interview)}. Confirm it, so the D&I evidence can be requested and the attributes finalized.`
+            )}
           </p>
         </div>
         <div className="ur-head-tools">
@@ -2536,7 +2912,7 @@ export function UnderstandingReview({
             </span>
           </div>
         ) : null}
-        {checkingNow > 0 ? (
+        {end !== "checking" && checkingNow > 0 ? (
           <p className="ur-hint ur-checking" role="status">
             <span className="spinner small" aria-hidden="true" />{" "}
             {checkingLine(checkingNow)}

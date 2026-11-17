@@ -1369,3 +1369,233 @@ button.tar-head:focus-visible:not(:disabled) {
     animation: none;
   }
 }
+
+/* The agent's assumption on an attribute (B1j, 16 November 2026: "On the attribute"): the
+   agent's sentence with "That's right" and "Change…", quiet once a person decides it. */
+.tas-list {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tas-open {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  background: color-mix(in srgb, var(--warning-soft) 55%, var(--surface));
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--warning);
+  border-radius: var(--radius);
+}
+
+.tas-assumed {
+  margin: 0;
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.tas-assumed strong {
+  color: var(--text-strong);
+  font-weight: 650;
+}
+
+/* A conflict with a confirmed fact (B1l point 6): it holds the attribute's acceptance until a
+   person decides it, so it reads as a decision, in the danger tone only at its edge. */
+.tas-open.is-conflict {
+  background: color-mix(in srgb, var(--danger-soft) 45%, var(--surface));
+  border-left-color: var(--danger);
+}
+
+.tas-kicker {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--fs-2xs);
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* Accepted with the attribute, not confirmed (B1l point 6): still to settle, quieter than an
+   open one; its kicker carries no alarm. */
+.tas-open.is-accepted {
+  background: var(--surface);
+}
+
+.tas-open.is-accepted .tas-kicker {
+  color: var(--text-secondary);
+}
+
+/* Why Accept is off on an attribute a conflict holds. */
+.tc-held {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+/* What "Accept all" leaves out, and the assumptions not confirmed that go with it. */
+.ta-accept-note {
+  margin: -0.25rem 0 0.5rem;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  text-align: right;
+}
+
+@media (max-width: 760px) {
+  .ta-accept-note {
+    text-align: left;
+  }
+}
+
+.tas-acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.tas-change {
+  display: grid;
+  gap: 0.35rem;
+  animation: tas-open 200ms ease;
+}
+
+.tas-change label {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.tas-change textarea {
+  width: 100%;
+  min-height: 4.5rem;
+  resize: vertical;
+}
+
+.tas-count,
+.tas-note {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.tas-done {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.tas-done::before {
+  content: "✓";
+  margin-right: 0.4rem;
+  color: var(--text-tertiary);
+}
+
+/* Where the criteria came from, and their earlier versions on request. */
+.tas-trail {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.tas-meta {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.tas-link {
+  padding: 0;
+  color: var(--text-secondary);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  transition: color 120ms ease;
+}
+
+.tas-link:hover {
+  color: var(--text-strong);
+}
+
+/* An inline link-like button: the plain outline ring, not the button's filled one. */
+.tas-link:focus-visible:not(:disabled) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+  box-shadow: none;
+}
+
+.tas-history {
+  padding: 0.5rem 0.7rem;
+  background: var(--surface-muted, var(--surface));
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  animation: tas-open 200ms ease;
+}
+
+.tas-reading {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+.tas-versions {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tas-versions li + li {
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.tas-versions .tc-rules > div {
+  grid-template-columns: 4.5rem minmax(0, 1fr);
+  color: var(--text-secondary);
+}
+
+.tas-versions .tc-rules dd {
+  color: var(--text-secondary);
+}
+
+.tas-by {
+  margin: 0.25rem 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+@keyframes tas-open {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .tas-versions .tc-rules > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.1rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tas-change,
+  .tas-history {
+    animation: none;
+  }
+
+  .tas-link {
+    transition: none;
+  }
+}
