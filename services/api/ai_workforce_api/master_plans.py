@@ -2743,20 +2743,24 @@ def set_criteria(
             raise PlanState("the attribute changed")
         if row[1] != "APPROVED":
             raise PlanState("decide the attribute first")
-        cursor.execute(
-            """
-            UPDATE control_attributes
-            SET objective = %s, condition = %s, pass_criteria = %s, fail_criteria = %s,
-                judgment_required = %s, automatable = %s, phases = %s,
-                criteria_origin = 'PERSON', version = version + 1
-            WHERE id = %s
-            """,
-            (
-                _clean(body.objective), _clean(body.condition), _clean(body.pass_criteria),
-                _clean(body.fail_criteria), body.judgment_required, body.automatable,
-                sorted(set(body.phases), key=PHASES.index), attribute_id,
-            ),
-        )  # fmt: skip
+        from ai_workforce_api.criteria_history import writing
+
+        # The criteria history names the person as their writer (B1j, migration 0172).
+        with writing(cursor, by=actor, cause=""):
+            cursor.execute(
+                """
+                UPDATE control_attributes
+                SET objective = %s, condition = %s, pass_criteria = %s, fail_criteria = %s,
+                    judgment_required = %s, automatable = %s, phases = %s,
+                    criteria_origin = 'PERSON', version = version + 1
+                WHERE id = %s
+                """,
+                (
+                    _clean(body.objective), _clean(body.condition), _clean(body.pass_criteria),
+                    _clean(body.fail_criteria), body.judgment_required, body.automatable,
+                    sorted(set(body.phases), key=PHASES.index), attribute_id,
+                ),
+            )  # fmt: skip
         _audit(
             cursor, organization_id, project_id, actor, "control_attribute.criteria_set",
             "control_attribute", attribute_id, {},
@@ -2829,6 +2833,12 @@ def accept_one_criteria(
         cursor, organization_id, project_id, actor, "control_attribute.criteria_accepted",
         "control_attribute", attribute_id, {"code": str(row[3] or "")},
     )  # fmt: skip
+    # What an agent assumed on the attribute, still open, is accepted with it: never the
+    # person's own answer (B1j, attribute_assumptions.accept_with).
+    if row[3]:
+        from ai_workforce_api.attribute_assumptions import accept_with
+
+        accept_with(cursor, organization_id, project_id, control_id, str(row[3]), actor)
 
 
 # Routes

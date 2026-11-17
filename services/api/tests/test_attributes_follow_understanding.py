@@ -1233,9 +1233,11 @@ def test_a_duplicate_the_drafts_reviewer_returns_as_criteria_never_becomes_a_pro
     assert "its approved wording copied exactly" in control_attributes.SYSTEM_PROMPT
     # The versions moved with B1e (12 November 2026: the confirmed understanding is the
     # authority): old "attributes/4" and "attribute-review/2". The duplicate rules above,
-    # which this test is about, are unchanged in both prompts.
+    # which this test is about, are unchanged in both prompts. Old "attributes/5", new
+    # "attributes/6" since B1j (16 November 2026): two rules added (a completed
+    # understanding, a named update); the duplicate rules unchanged.
     assert (control_attributes.PROMPT_VERSION, control_attributes.REVIEW_PROMPT_VERSION) == (
-        "attributes/5", "attribute-review/3",
+        "attributes/6", "attribute-review/3",
     )  # fmt: skip
 
 

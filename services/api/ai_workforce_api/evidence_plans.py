@@ -201,10 +201,20 @@ class PlanState(Exception):
 # person accepted. One rule for the attributes the planner is asked to tailor (load_facts),
 # for whether a run on an approved plan changes them (_criteria_differ), and for what it
 # writes (_write_criteria), so the three cannot drift (review, 11 November 2026).
-CRITERIA_WRITABLE_SQL = """
+#
+# While a run may change only the attributes a changed assumption names (B1j, 16 November
+# 2026; the session's app.criteria_only, criteria_history.run_settings), it may write only
+# theirs: ONLY_NAMED_SQL, part of the one rule, so the planner is asked, compares and writes
+# exactly those (and migration 0172's trigger refuses any other).
+ONLY_NAMED_SQL = """
+    (coalesce(current_setting('app.criteria_only', true), '') = ''
+     OR a.code = ANY (string_to_array(current_setting('app.criteria_only', true), ',')))
+"""
+CRITERIA_WRITABLE_SQL = f"""
     (a.status = 'APPROVED'
      AND coalesce(a.criteria_origin, '') NOT IN ('PERSON', 'SEEDED')
-     AND a.criteria_accepted_at IS NULL)
+     AND a.criteria_accepted_at IS NULL
+     AND {ONLY_NAMED_SQL})
 """
 
 
@@ -1048,7 +1058,17 @@ def _write_criteria(
     has stated or accepted criteria for (migration 0122), the library's included since 11
     November 2026: the standard's wording is the requirement, the tailored criteria are what
     the tester applies. Marked as the agent's, for a person to accept. Only the attributes
-    CRITERIA_WRITABLE_SQL names: never a person's, an accepted, or the demo's."""
+    CRITERIA_WRITABLE_SQL names: never a person's, an accepted, or the demo's. The criteria
+    history names the planner as their writer (criteria_history.writing)."""
+    from ai_workforce_api.criteria_history import PLANNER, writing
+
+    with writing(cursor, writer=PLANNER):
+        _write_each_criteria(cursor, control_id, criteria)
+
+
+def _write_each_criteria(
+    cursor: psycopg.Cursor[Any], control_id: UUID, criteria: list[dict[str, Any]]
+) -> None:
     for item in criteria:
         cursor.execute(
             f"""
@@ -2355,7 +2375,7 @@ def queue_unrefined_plans(connection: psycopg.Connection[Any], project_id: UUID)
             """
             UPDATE evidence_plans
             SET run_status = 'PENDING', run_lease_until = NULL, run_note = '',
-                run_stage = ''
+                run_stage = '', run_codes = '{}', run_cause = ''
             WHERE project_id = %s AND status = 'PROPOSED' AND source = 'RULES'
               AND run_status = 'IDLE' AND run_attempts = 0
             RETURNING id
@@ -2389,7 +2409,7 @@ def replan_for_new_attributes(connection: psycopg.Connection[Any], control_id: U
             f"""
             UPDATE evidence_plans p
             SET run_status = 'PENDING', run_attempts = 0, run_lease_until = NULL,
-                run_note = '', run_stage = ''
+                run_note = '', run_stage = '', run_codes = '{{}}', run_cause = ''
             WHERE p.engagement_control_id = %s
               AND p.run_status NOT IN ('PENDING', 'WORKING')
               AND {_ATTRIBUTE_UNPLANNED_SQL}
@@ -2484,7 +2504,11 @@ def _tried_the_same(connection: psycopg.Connection[Any], control_id: UUID) -> bo
 
 # When a person last changed what the control's understanding states: a client value of its
 # statement, or a confirmed walkthrough answer. Both tables keep updated_at by trigger, and
-# the same answer saved again writes nothing.
+# the same answer saved again writes nothing. Since B1j (16 November 2026) also a person's
+# answer to a question on the control (resolved or dismissed: an answer counts as a change to
+# the understanding for this follow-up) and an assumption a person changed (its update is
+# queued with the change; this only says it is read). A confirmation ("That's right") is not
+# a change: what the attributes rest on stays as the agent assumed it.
 _UNDERSTANDING_CHANGED_SQL = """
     (SELECT max(changed.at) FROM (
          SELECT max(v.updated_at) AS at FROM control_parameters v
@@ -2493,6 +2517,13 @@ _UNDERSTANDING_CHANGED_SQL = """
          SELECT max(w.updated_at) FROM control_walkthrough_answers w
          WHERE w.engagement_control_id = p.engagement_control_id
            AND w.status = 'CONFIRMED'
+         UNION ALL
+         SELECT max(i.resolved_at) FROM control_context_issues i
+         WHERE i.engagement_control_id = p.engagement_control_id
+           AND i.status IN ('RESOLVED', 'DISMISSED') AND i.resolved_by IS NOT NULL
+         UNION ALL
+         SELECT max(s.decided_at) FROM attribute_assumptions s
+         WHERE s.engagement_control_id = p.engagement_control_id AND s.status = 'CHANGED'
      ) AS changed)
 """
 # An approved attribute the planner may write criteria for that has none a tester could
@@ -2561,8 +2592,19 @@ def queue_for_understanding(
     wait for a decision, criteria are the agent's to accept, and an approved plan gets its
     changes proposed. Never while a run for the control waits or works (the plan's, or the
     approved narrative's, which does the same), and not over a failed run, which a person
-    starts again. Returns the plan to run."""
-    if not understanding_due(connection, project_id, control_id):
+    starts again. Returns the plan to run.
+
+    Since B1j (16 November 2026) the same run is also the question pass
+    (understanding_once.pass_due): once the walkthrough's required answers and the
+    statement's values are in, and before the understanding is completed, the attribute
+    agent checks what else it needs, so its questions join the same Control Understanding
+    course instead of reopening it later; the run stops after its ATTRIBUTES stage when that
+    stage asked anything (_plan_pass)."""
+    from ai_workforce_api.understanding_once import pass_due
+
+    if not pass_due(connection, project_id, control_id) and not understanding_due(
+        connection, project_id, control_id
+    ):
         return None
     # A run that kept the plan because the planner's answer could not be used (generate)
     # leaves the plan as generated before, so the understanding still reads as due. It is
@@ -2575,12 +2617,40 @@ def queue_for_understanding(
             f"""
             UPDATE evidence_plans p
             SET run_status = 'PENDING', run_attempts = 0, run_lease_until = NULL,
-                run_note = '', run_stage = 'ATTRIBUTES'
+                run_note = '', run_stage = 'ATTRIBUTES', run_codes = '{{}}', run_cause = ''
             WHERE p.project_id = %s AND p.engagement_control_id = %s
               AND p.run_status = 'IDLE' AND NOT {_AGENTS_AT_WORK_SQL}
             RETURNING p.id
             """,
             (project_id, control_id),
+        ).fetchone()
+    return None if row is None else UUID(str(row[0]))
+
+
+def queue_assumption_update(
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    control_id: UUID,
+    codes: list[str],
+    cause: str,
+) -> UUID | None:
+    """The one attribute update a changed assumption starts (B1j: "Change... records the
+    person's fact and starts one attribute update that re-tailors only the attributes that
+    assumption names"): the run that follows the understanding, limited to the attribute
+    codes named (none: the set, for an assumption on the set as a whole), its criteria
+    history saying what it follows (`cause`, the assumption's matter). Not while a run waits
+    or works (the caller refuses first). Returns the plan to run."""
+    with transaction(connection) as cursor:
+        row = cursor.execute(
+            f"""
+            UPDATE evidence_plans p
+            SET run_status = 'PENDING', run_attempts = 0, run_lease_until = NULL,
+                run_note = '', run_stage = 'ATTRIBUTES', run_codes = %s, run_cause = %s
+            WHERE p.project_id = %s AND p.engagement_control_id = %s
+              AND NOT {_AGENTS_AT_WORK_SQL}
+            RETURNING p.id
+            """,
+            (sorted(set(codes))[:12], cause[:300], project_id, control_id),
         ).fetchone()
     return None if row is None else UUID(str(row[0]))
 
@@ -2605,7 +2675,7 @@ def request_attributes_run(
             f"""
             UPDATE evidence_plans p
             SET run_status = 'PENDING', run_attempts = 0, run_lease_until = NULL,
-                run_note = '', run_stage = 'ATTRIBUTES'
+                run_note = '', run_stage = 'ATTRIBUTES', run_codes = '{{}}', run_cause = ''
             WHERE p.project_id = %s AND p.engagement_control_id = %s
               AND NOT {_AGENTS_AT_WORK_SQL}
             RETURNING p.id
@@ -2856,7 +2926,7 @@ def run_plan(
             RETURNING organization_id, project_id, engagement_control_id, status,
                       coalesce(generated_by, (SELECT owner_user_id FROM projects
                                               WHERE id = evidence_plans.project_id)),
-                      run_stage
+                      run_stage, run_codes, run_cause
             """,
             (PLAN_LEASE_MINUTES, plan_id, PLAN_RUN_ATTEMPTS),
         ).fetchone()
@@ -2882,12 +2952,16 @@ def run_plan(
         # A run queued to start with the attributes (queue_for_understanding, a person's
         # "Run again"), or interrupted in one of its stages, says so in run_stage.
         follows = str(row[5]) != "" or understanding_due(connection, project_id, control_id)
+        # The one update a changed assumption starts names the attributes it may change and
+        # what it follows (B1j, queue_assumption_update); any other run names none.
+        only = tuple(str(code) for code in (row[6] or []))
+        cause = str(row[7] or "")
         if follows or str(row[3]) == "PROPOSED":
             began = _now(connection)
             read = agents_read(connection, project_id, control_id)
             note, finished = _plan_pass(
                 connection, provider, organization_id, project_id, control_id, requester,
-                follows,
+                follows, only, cause,
             )  # fmt: skip
             # An answer saved while the agents worked was not read: once more, and only
             # once, so a run always ends.
@@ -2895,7 +2969,7 @@ def run_plan(
                 read = agents_read(connection, project_id, control_id)
                 note, finished = _plan_pass(
                     connection, provider, organization_id, project_id, control_id,
-                    requester, True,
+                    requester, True, only, cause,
                 )  # fmt: skip
     from ai_workforce_api.phase_release import settle_after_run
 
@@ -2904,6 +2978,7 @@ def run_plan(
             """
             UPDATE evidence_plans
             SET run_status = 'IDLE', run_lease_until = NULL, run_stage = '', run_note = %s,
+                run_codes = '{}', run_cause = '',
                 run_read = CASE WHEN %s THEN %s ELSE run_read END,
                 run_read_at = CASE WHEN %s THEN clock_timestamp() ELSE run_read_at END,
                 run_tried = CASE WHEN %s THEN '' WHEN %s <> '' THEN %s ELSE run_tried END
@@ -2917,6 +2992,11 @@ def run_plan(
         # run that changed or added anything left it to accept, so nothing is released.
         # Never fails the run, which is done.
         settle_after_run(cursor.connection, control_id, "PLAN_RUN")
+    # The run's end may complete the understanding: its question pass ran, nothing in it is
+    # open, and no run is left at work (B1j, understanding_once.complete).
+    from ai_workforce_api.understanding_once import complete
+
+    complete(connection, project_id, control_id)
     return "DONE"
 
 
@@ -2935,6 +3015,8 @@ def _plan_pass(
     control_id: UUID,
     requester: UUID,
     attributes_first: bool,
+    only: tuple[str, ...] = (),
+    cause: str = "",
 ) -> tuple[str, bool]:
     """One pass of a plan run: the attribute agent's proposals from the understanding when
     the run follows it (as the approved narrative's run does, process_narrative), then the
@@ -2942,20 +3024,91 @@ def _plan_pass(
 
     Returns the run's note and whether the pass finished its work: the planner's answer was
     used (the plan was neither kept nor planned by the rules in its place) and no other
-    agent's last call in the pass failed."""
+    agent's last call in the pass failed.
+
+    B1j (16 November 2026). The ATTRIBUTES stage is the question pass while the
+    understanding is not completed: once the attribute agent has answered, the pass is
+    recorded (understanding_once.record_pass), and when the stage raised questions (its own,
+    or late points for the narrative) the run stops there: no criteria are tailored and no
+    set review runs until they are answered. The run that follows the
+    answers tailors them. Every criteria write of the pass carries what it follows (`cause`,
+    else the matters of the answers given since the plan was last generated), and the one
+    update a changed assumption starts changes only the attributes it names (`only`;
+    criteria_history.run_settings)."""
     began = _now(connection)
     if not attributes_first:
         _, _drafts, note = generate(
             connection, provider, organization_id, project_id, control_id, requester
         )
         return note, _pass_finished(connection, control_id, began, note)
+    from ai_workforce_api.criteria_history import run_settings
+
+    with run_settings(connection, cause or _answers_followed(connection, control_id), only):
+        return _staged_pass(
+            connection, provider, organization_id, project_id, control_id, requester, only,
+            began,
+        )  # fmt: skip
+
+
+def _answers_followed(connection: psycopg.Connection[Any], control_id: UUID) -> str:
+    """What a run that follows the understanding follows, for the history of the criteria it
+    writes: the matters of the questions a person answered on the control, and of the
+    assumptions a person changed, since the plan was last generated ("" when none)."""
+    from ai_workforce_api.criteria_history import cause_of
+
+    rows = connection.execute(
+        """
+        SELECT matter FROM (
+            SELECT i.topic AS matter, i.resolved_at AS at
+            FROM control_context_issues i JOIN evidence_plans p
+                 ON p.engagement_control_id = i.engagement_control_id
+            WHERE i.engagement_control_id = %s AND i.status IN ('RESOLVED', 'DISMISSED')
+              AND i.resolved_by IS NOT NULL
+              AND i.resolved_at > coalesce(p.generated_at, '-infinity'::timestamptz)
+            UNION ALL
+            SELECT s.matter, s.decided_at
+            FROM attribute_assumptions s JOIN evidence_plans p
+                 ON p.engagement_control_id = s.engagement_control_id
+            WHERE s.engagement_control_id = %s AND s.status = 'CHANGED'
+              AND s.decided_at > coalesce(p.generated_at, '-infinity'::timestamptz)
+        ) AS answered
+        ORDER BY at DESC
+        LIMIT 6
+        """,
+        (control_id, control_id),
+    ).fetchall()
+    return cause_of([str(row[0]) for row in rows])
+
+
+def _staged_pass(
+    connection: psycopg.Connection[Any],
+    provider: ModelProvider,
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    requester: UUID,
+    only: tuple[str, ...],
+    began: datetime,
+) -> tuple[str, bool]:
+    """The three stages of a pass that follows the understanding (see _plan_pass)."""
     from ai_workforce_api.attribute_review import review_set
     from ai_workforce_api.context_routes import _generate
+    from ai_workforce_api.understanding_once import asked_since, completed_at, record_pass
 
     _run_stage(connection, control_id, "ATTRIBUTES")
+    stage_began = _now(connection)
     attribute_note = _generate(
-        connection, provider, organization_id, project_id, control_id, requester
+        connection, provider, organization_id, project_id, control_id, requester, only
     )
+    answered = _agents_answered(connection, control_id, stage_began)
+    if answered:
+        record_pass(connection, control_id, stage_began)
+    if completed_at(connection, control_id) is None and asked_since(
+        connection, control_id, stage_began
+    ):
+        # The question pass asked: what the agents need is asked in Control Understanding,
+        # and the rest of the run waits for the answers.
+        return attribute_note, answered
     _run_stage(connection, control_id, "CRITERIA")
     _, _drafts, note = generate(
         connection, provider, organization_id, project_id, control_id, requester
@@ -2983,6 +3136,43 @@ def _plan_pass(
         " ".join(part for part in (attribute_note, note, review_note) if part),
         _pass_finished(connection, control_id, began, planner_note),
     )
+
+
+def _agents_answered(
+    connection: psycopg.Connection[Any], control_id: UUID, began: datetime
+) -> bool:
+    """Whether the attribute agent answered in a stage begun at `began`, and the reviewer of
+    its drafts did not fail after it: the question pass read the understanding. An agent
+    that was not asked (no model call) did not."""
+    from ai_workforce_api import control_attributes
+
+    row = connection.execute(
+        """
+        SELECT EXISTS (
+                   SELECT 1 FROM model_calls m
+                   WHERE m.target_type = 'engagement_control' AND m.target_id = %s
+                     AND m.created_at >= %s
+                     AND split_part(m.prompt_version, '/', 1) = %s)
+               AND NOT EXISTS (
+                   SELECT 1 FROM (
+                       SELECT DISTINCT ON (m.agent_key, m.prompt_version) m.status
+                       FROM model_calls m
+                       WHERE m.target_type = 'engagement_control' AND m.target_id = %s
+                         AND m.created_at >= %s
+                         AND split_part(m.prompt_version, '/', 1) = ANY(%s)
+                       ORDER BY m.agent_key, m.prompt_version, m.created_at DESC
+                   ) AS last
+                   WHERE last.status <> 'SUCCEEDED')
+        """,
+        (
+            control_id, began, control_attributes.PROMPT_VERSION.split("/", 1)[0],
+            control_id, began,
+            [version.split("/", 1)[0] for version in (
+                control_attributes.PROMPT_VERSION, control_attributes.REVIEW_PROMPT_VERSION
+            )],
+        ),
+    ).fetchone()  # fmt: skip
+    return row is not None and bool(row[0])
 
 
 def _pass_finished(

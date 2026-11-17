@@ -1443,6 +1443,7 @@ class LocalDraftScheduler:
                 # run's end may have released the control's D&I evidence (a list a person
                 # had completed): draft what is now requested, as a plan run does.
                 self._draft_narrative_released(control_id)
+                self._follow_understanding(control_id)
                 return
             except Exception:
                 logger.warning("a process narrative could not be drafted; retrying")
@@ -1469,6 +1470,32 @@ class LocalDraftScheduler:
                 self.schedule_evidence_assessments(follow_plan(connection, plan_id))
         except psycopg.Error:
             logger.warning("the checks of a planned control could not be queued")
+
+    def _follow_understanding(self, control_id: UUID) -> None:
+        """A narrative run held the attribute run that falls due when the last answer is
+        given (B1j: the understanding is completed when no run is at work): with its end the
+        understanding may be completed, and the run that follows it is queued and taken
+        here (understanding_once.after_agents). Only with a model, as context_routes.changed
+        queues it."""
+        if not live_model(self._settings):
+            return
+        from ai_workforce_api.understanding_once import after_agents
+
+        try:
+            with connect(self._settings.database_url) as connection:
+                project = connection.execute(
+                    "SELECT project_id FROM engagement_controls WHERE id = %s", (control_id,)
+                ).fetchone()
+                planned = (
+                    None
+                    if project is None
+                    else after_agents(connection, UUID(str(project[0])), control_id)
+                )
+        except psycopg.Error:
+            logger.warning("the understanding of a narrative's control could not be followed")
+            return
+        if planned is not None:
+            self.schedule_plan_runs([planned])
 
     def _draft_narrative_released(self, control_id: UUID) -> None:
         """Draft what the control's evidence plan released when its narrative run ended."""

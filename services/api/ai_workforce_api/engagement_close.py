@@ -93,6 +93,10 @@ _SETUP_TABLES = (
     "engagement_settings",
 )
 _KEPT = ("audit_events", "model_calls", "agent_instances", "engagement_reopenings")
+# Removed with the setup by the database itself: an attribute's earlier criteria go with
+# their attribute (migration 0172; a delete of their own is refused), so they are neither
+# deleted here nor work on record.
+_REMOVED_WITH_ATTRIBUTES = ("attribute_criteria_versions",)
 
 
 class CompletionBlocked(Exception):
@@ -502,7 +506,7 @@ def _work_on_record(cursor: psycopg.Cursor[Any], project_id: UUID) -> bool:
             WHERE table_schema = 'public' AND column_name = 'project_id'
               AND table_name <> ALL(%s)
             """,
-            (list(_SETUP_TABLES) + list(_KEPT),),
+            (list(_SETUP_TABLES) + list(_KEPT) + list(_REMOVED_WITH_ATTRIBUTES),),
         ).fetchall()
     ]
     for table in tables:

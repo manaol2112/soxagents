@@ -499,7 +499,13 @@ def _kept(
     REVISED when something was kept, OK when the revision changed nothing, CONCERN when it
     could not be kept."""
     from ai_workforce_api.control_attributes import _normal
-    from ai_workforce_api.evidence_plans import _APPROVED_PLAN, CRITERIA_WRITABLE_SQL
+    from ai_workforce_api.criteria_history import REVIEWER as REVIEWER_NAME
+    from ai_workforce_api.criteria_history import writing
+    from ai_workforce_api.evidence_plans import (
+        _APPROVED_PLAN,
+        CRITERIA_WRITABLE_SQL,
+        ONLY_NAMED_SQL,
+    )
 
     note = line(item.note, 300)
     if not row["may_revise"]:
@@ -517,23 +523,26 @@ def _kept(
         # Only where an agent may still write: a proposal not decided meanwhile, or
         # criteria no person stated or accepted meanwhile, on a plan no person approved
         # meanwhile (as write_detail: the reviewer's call takes a while).
-        written = cursor.execute(
-            f"""
-            UPDATE control_attributes a
-            SET condition = %s, pass_criteria = %s, fail_criteria = %s,
-                judgment_required = false, criteria_origin = 'AGENT',
-                version = a.version + 1, updated_at = clock_timestamp()
-            WHERE a.id = %s AND a.engagement_control_id = %s
-              AND (a.status = 'PROPOSED'
-                   OR ({CRITERIA_WRITABLE_SQL}
-                       AND NOT EXISTS (
-                           SELECT 1 FROM evidence_plans p
-                           WHERE p.engagement_control_id = a.engagement_control_id
-                             AND p.status = ANY(%s) AND p.approved_by IS NOT NULL)))
-            RETURNING a.id
-            """,
-            (*criteria, row["id"], control_id, list(_APPROVED_PLAN)),
-        ).fetchone()
+        # In the one update a changed assumption starts, only the attributes it names
+        # (ONLY_NAMED_SQL, B1j); the criteria history names the reviewer as the writer.
+        with writing(cursor, writer=REVIEWER_NAME):
+            written = cursor.execute(
+                f"""
+                UPDATE control_attributes a
+                SET condition = %s, pass_criteria = %s, fail_criteria = %s,
+                    judgment_required = false, criteria_origin = 'AGENT',
+                    version = a.version + 1, updated_at = clock_timestamp()
+                WHERE a.id = %s AND a.engagement_control_id = %s
+                  AND ((a.status = 'PROPOSED' AND {ONLY_NAMED_SQL})
+                       OR ({CRITERIA_WRITABLE_SQL}
+                           AND NOT EXISTS (
+                               SELECT 1 FROM evidence_plans p
+                               WHERE p.engagement_control_id = a.engagement_control_id
+                                 AND p.status = ANY(%s) AND p.approved_by IS NOT NULL)))
+                RETURNING a.id
+                """,
+                (*criteria, row["id"], control_id, list(_APPROVED_PLAN)),
+            ).fetchone()
         if written is None:
             return "CONCERN", line(
                 f"The reviewer's correction was left out: a person decided it meanwhile. {note}",
@@ -553,11 +562,22 @@ def _kept(
                 f"The reviewer's wording was left out: it repeats another attribute or "
                 f"holds a secret. {note}", 400,
             )  # fmt: skip
-        cursor.execute(
-            "UPDATE control_attributes SET text = %s, version = version + 1, "
-            "updated_at = clock_timestamp() WHERE id = %s AND status = 'PROPOSED'",
+        reworded = cursor.execute(
+            "UPDATE control_attributes a SET text = %s, version = a.version + 1, "
+            "updated_at = clock_timestamp() WHERE a.id = %s AND a.status = 'PROPOSED' "
+            f"AND {ONLY_NAMED_SQL} RETURNING a.id",
             (text, row["id"]),
-        )
+        ).fetchone()
+        if reworded is None:
+            named = cursor.execute(
+                "SELECT coalesce(current_setting('app.criteria_only', true), '') <> ''"
+            ).fetchone()
+            why = (
+                "only the attributes a person's correction names may change now"
+                if named is not None and named[0]
+                else "a person decided it meanwhile"
+            )
+            return "CONCERN", line(f"The reviewer's wording was left out: {why}. {note}", 400)
         wordings.discard(_normal(row["text"]))
         wordings.add(_normal(text))
         row["text"] = text
@@ -570,30 +590,34 @@ def write_detail(
     control_id: UUID,
     attribute_id: Any,
     criteria: tuple[str, str, str],
+    writer: str = "",
 ) -> bool:
     """Make an approved attribute's tailored criteria specific, its wording untouched
     (product owner, 12 November 2026: "If it already copies one, that means I only need to
     be specific on the criteria"). Only where the planner itself may write criteria
     (evidence_plans.CRITERIA_WRITABLE_SQL: none a person stated or accepted, none the
     demo's), and not on a plan a person approved, whose criteria change only through a
-    proposed revision. Written as the agent's, for a person to accept. False when nothing
-    was written."""
+    proposed revision. Written as the agent's, for a person to accept, with `writer` (the
+    agent that wrote it) in the criteria history. False when nothing was written."""
+    from ai_workforce_api.criteria_history import REVIEWER as REVIEWER_NAME
+    from ai_workforce_api.criteria_history import writing
     from ai_workforce_api.evidence_plans import _APPROVED_PLAN, CRITERIA_WRITABLE_SQL
 
-    written = cursor.execute(
-        f"""
-        UPDATE control_attributes a
-        SET condition = %s, pass_criteria = %s, fail_criteria = %s,
-            judgment_required = false, criteria_origin = 'AGENT',
-            version = a.version + 1, updated_at = clock_timestamp()
-        WHERE a.id = %s AND a.engagement_control_id = %s AND {CRITERIA_WRITABLE_SQL}
-          AND NOT EXISTS (SELECT 1 FROM evidence_plans p
-                          WHERE p.engagement_control_id = a.engagement_control_id
-                            AND p.status = ANY(%s) AND p.approved_by IS NOT NULL)
-        RETURNING a.id
-        """,
-        (*criteria, attribute_id, control_id, list(_APPROVED_PLAN)),
-    ).fetchone()
+    with writing(cursor, writer=writer or REVIEWER_NAME):
+        written = cursor.execute(
+            f"""
+            UPDATE control_attributes a
+            SET condition = %s, pass_criteria = %s, fail_criteria = %s,
+                judgment_required = false, criteria_origin = 'AGENT',
+                version = a.version + 1, updated_at = clock_timestamp()
+            WHERE a.id = %s AND a.engagement_control_id = %s AND {CRITERIA_WRITABLE_SQL}
+              AND NOT EXISTS (SELECT 1 FROM evidence_plans p
+                              WHERE p.engagement_control_id = a.engagement_control_id
+                                AND p.status = ANY(%s) AND p.approved_by IS NOT NULL)
+            RETURNING a.id
+            """,
+            (*criteria, attribute_id, control_id, list(_APPROVED_PLAN)),
+        ).fetchone()
     return written is not None
 
 

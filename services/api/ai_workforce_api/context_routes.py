@@ -7,6 +7,7 @@ asks its waiting test sheets to run again.
 """
 
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
@@ -16,15 +17,18 @@ from psycopg.types.json import Json
 from pydantic import BaseModel, Field
 
 from ai_workforce_api import (
+    attribute_assumptions,
     authentication_profile,
     control_attributes,
     control_design,
     control_details,
+    criteria_history,
     library_definitions,
     prior_year,
     process_narrative,
     process_understanding,
     understanding_chat,
+    understanding_once,
     walkthrough_answers,
 )
 from ai_workforce_api.actions import contains_secret
@@ -134,6 +138,16 @@ class ContextBody(BaseModel):
     # {"version", "decision": "ACCEPT"}). Until then the step reads "Needs criteria".
     plan_revision_pending: bool = False
     attributes_pending_criteria: list[PendingCriteriaBody] = []
+    # B1j (16 November 2026): when the control's Control Understanding was completed, once
+    # (understanding_once); null until then. From then on no agent reopens it.
+    understanding_completed_at: datetime | None = None
+    # The agents' question pass: WAITING while the required walkthrough answers or values
+    # are not in; CHECKING while its run is queued or at work and the understanding is not
+    # completed; DONE once it ran, or once the understanding is completed.
+    question_pass: understanding_once.QuestionPass = "WAITING"
+    # What the agents assumed on the set as a whole (assumptions that name no attribute):
+    # the open ones and those decided in the last 30 days, newest first, at most 10.
+    set_assumptions: list[attribute_assumptions.AssumptionBody] = []
     note: str = ""
 
 
@@ -231,6 +245,10 @@ def register_control_context(
     def changed(
         connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID, actor: UUID
     ) -> None:
+        # The save may complete the understanding (B1j): its question pass ran, nothing in
+        # it is open now, and no agent run is at work. Recorded once, before anything is
+        # queued, so the run that follows asks nothing.
+        understanding_once.complete(connection, project_id, control_id)
         sheets = resume_testing(connection, project_id, control_id)
         _after_commit(lambda: schedule_runs(scheduler, sheets))
         # The assurance chain's runs rest on the approved attributes and their criteria:
@@ -432,6 +450,76 @@ def register_control_context(
             control_attributes.accept_many(c, organization_id, project_id, control_id, p.id, body)
             changed(c, project_id, control_id, p.id)
             return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    # What the agents assumed once the understanding was completed (B1j, 16 November 2026;
+    # attribute_assumptions): That's right, or Change... in the person's own words. Who may
+    # decide the attributes may decide them, never while the agents update the attributes.
+
+    @app.post(f"{control}/assumptions/{{assumption_id}}/confirm")
+    def confirm_assumption(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        assumption_id: UUID,
+        body: attribute_assumptions.ConfirmBody,
+        request: Request,
+    ) -> ContextBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            _not_while_updating(c, control_id)
+            attribute_assumptions.confirm(
+                c, organization_id, project_id, control_id, assumption_id, p.id, body
+            )
+            changed(c, project_id, control_id, p.id)
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    @app.post(f"{control}/assumptions/{{assumption_id}}/change")
+    def change_assumption(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        assumption_id: UUID,
+        body: attribute_assumptions.ChangeBody,
+        request: Request,
+    ) -> ContextBody:
+        """The person's own fact in place of the agent's assumption, and one update of the
+        attributes it names, limited to them (evidence_plans.queue_assumption_update). With
+        no worker or no model nothing is queued: the fact is recorded, and "Run again"
+        applies it."""
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            _not_while_updating(c, control_id)
+            matter, codes = attribute_assumptions.change(
+                c, organization_id, project_id, control_id, assumption_id, p.id, body
+            )
+            plans = getattr(scheduler, "schedule_plan_runs", None)
+            if plans is not None and model() is not None:
+                from ai_workforce_api.evidence_plans import queue_assumption_update
+
+                planned = queue_assumption_update(c, project_id, control_id, codes, matter)
+                if planned is not None:
+                    _after_commit(lambda: plans([planned]))
+            changed(c, project_id, control_id, p.id)
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    @app.get(f"{control}/attributes/{{attribute_id}}/criteria-history")
+    def criteria_versions(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        attribute_id: UUID,
+        request: Request,
+    ) -> criteria_history.CriteriaHistoryBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> criteria_history.CriteriaHistoryBody:
+            _allowed(c, p, organization_id, project_id, control_id, Action.TASK_READ)
+            return criteria_history.versions(c, control_id, attribute_id)
 
         return run(request, work)
 
@@ -854,6 +942,11 @@ def register_control_context(
 
         def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
             _allowed(c, p, organization_id, project_id, control_id)
+            # A process narrative is drafted only for a control that needs one (B1j, 16
+            # November 2026: on ITGC-CM-06 the page drafted one after every answer, and its
+            # reviewer's questions reopened Control Understanding).
+            if not _needs_narrative(c, project_id, control_id):
+                raise ContextState(NO_NARRATIVE)
             asked.append(
                 process_narrative.request(c, organization_id, project_id, control_id, p.id, mode)
             )
@@ -930,7 +1023,11 @@ def register_control_context(
                     "AND status = 'OPEN' AND question <> ''",
                     (control_id,),
                 ).fetchone()
-            if waiting is not None and int(waiting[0]) == 0:
+            if (
+                waiting is not None
+                and int(waiting[0]) == 0
+                and _needs_narrative(c, project_id, control_id)
+            ):
                 asked.append(
                     process_narrative.request(
                         c, organization_id, project_id, control_id, p.id, "DRAFT"
@@ -1174,6 +1271,7 @@ def _generate(
     project_id: UUID,
     control_id: UUID,
     actor: UUID,
+    only: tuple[str, ...] = (),
 ) -> str:
     context = load_context(connection, project_id, control_id)
     found = _classes(connection, control_id, context)
@@ -1208,7 +1306,15 @@ def _generate(
         if item["id"] in owned:
             item["criteria_owned_by_a_person"] = True
     kept, note = control_attributes.generate(
-        connection, provider, organization_id, project_id, control_id, actor, package, sources
+        connection,
+        provider,
+        organization_id,
+        project_id,
+        control_id,
+        actor,
+        package,
+        sources,
+        only,
     )
     if not note and kept == 0:
         note = "The agent found nothing to add: the approved attributes cover the sources."
@@ -1348,6 +1454,7 @@ def _body(
     running, stage, run_note = attributes_run(connection, control_id)
     agent_notes = notes_for(connection, control_id)
     revision_pending, criteria_pending = pending_criteria(connection, control_id)
+    _by_code, for_set = attribute_assumptions.shown(connection, control_id)
     return ContextBody(
         control_id=control_id,
         classifications=current,
@@ -1374,6 +1481,9 @@ def _body(
         attributes_failure_note=attributes_failure_note(
             connection, control_id, agent_notes, running, run_note
         ),
+        understanding_completed_at=understanding_once.completed_at(connection, control_id),
+        question_pass=understanding_once.question_pass(connection, project_id, control_id),
+        set_assumptions=for_set,
         note=note,
     )
 
@@ -1419,6 +1529,20 @@ def _project(
     )
     if action is Action.TASK_UPDATE and principal.kind is not PrincipalKind.USER:
         raise NotVisible()
+
+
+NO_NARRATIVE = "A process narrative is drafted only for a control that needs one."
+
+
+def _needs_narrative(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
+) -> bool:
+    """Whether the control needs a process narrative (control_context.
+    needs_process_understanding: a business process control)."""
+    from ai_workforce_api.control_context import needs_process_understanding
+
+    context = load_context(connection, project_id, control_id)
+    return needs_process_understanding(_classes(connection, control_id, context))
 
 
 def _not_while_updating(connection: psycopg.Connection[Any], control_id: UUID) -> None:

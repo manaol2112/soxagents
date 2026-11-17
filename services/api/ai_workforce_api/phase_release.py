@@ -210,6 +210,30 @@ def understanding_waits(
     return waits
 
 
+def answers_waiting(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
+) -> bool:
+    """Whether the control's statement still asks a client value, or the walkthrough a
+    required answer, that is not given: what the question pass waits for (B1j,
+    understanding_once). The same two reads as understanding_waits, for one control."""
+    from ai_workforce_api.control_design import unanswered_values
+    from ai_workforce_api.walkthrough_answers import unanswered_required
+
+    if unanswered_values(connection, project_id).get(control_id):
+        return True
+    row = connection.execute(
+        "SELECT coalesce(library_key, ''), coalesce(nature, ''), coalesce(frequency, '') "
+        "FROM engagement_controls WHERE id = %s AND project_id = %s",
+        (control_id, project_id),
+    ).fetchone()
+    if row is None:
+        return True
+    waiting = unanswered_required(
+        connection, project_id, [(control_id, str(row[0]), str(row[1]), str(row[2]))], control_id
+    )
+    return bool(waiting.get(control_id))
+
+
 def _counted(count: int, word: str) -> str:
     return f"{count} {word}{'' if count == 1 else 's'}"
 
@@ -259,7 +283,14 @@ def attribute_waits(
     tailors and reviews, evidence_plans.queue_for_understanding) reads the same way while
     criteria are not owned, with the same lease rule; the planner's plain run, which only
     plans evidence, never does: those attributes were waiting already, so the planner's run
-    changes what they are said to wait for and never holds attributes that were settled."""
+    changes what they are said to wait for and never holds attributes that were settled.
+
+    Once the control's understanding is completed (B1j, 16 November 2026;
+    engagement_controls.understanding_completed_at) no open question holds the attributes:
+    no agent asks one any more, and one the rules raise (a frequency conflict, "Changed after
+    testing") is shown in Control Understanding without putting the Attributes step back to
+    waiting. Until then the questions about the attributes count, as before. The D&I release
+    reads the understanding first (understanding_waits), as before."""
     from ai_workforce_api.control_attributes import CRITERIA_OWNED_SQL
 
     one = control_id is not None
@@ -274,7 +305,8 @@ def attribute_waits(
                 WHERE a.engagement_control_id = c.id AND a.status = 'PROPOSED'),
                (SELECT count(*) FROM control_context_issues i
                 WHERE i.engagement_control_id = c.id AND i.status = 'OPEN'
-                  AND i.origin IN ('ATTRIBUTES', 'SOURCES')),
+                  AND i.origin IN ('ATTRIBUTES', 'SOURCES')
+                  AND c.understanding_completed_at IS NULL),
                {NARRATIVE_AT_WORK_SQL},
                (SELECT count(*) FROM control_attributes a
                 WHERE a.engagement_control_id = c.id AND a.status = 'APPROVED'

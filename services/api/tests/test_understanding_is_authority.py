@@ -557,7 +557,11 @@ def test_the_attribute_follows_the_understanding_and_the_conflict_is_never_raise
     assert planner is not None
     assert (audit[0], audit[1]) == (None, planner)
     payload = audit[2]
-    assert payload["by"] == "engagement-planner" and payload["prompt_version"] == "attributes/5"
+    # Old: "attributes/5". New: "attributes/6" since B1j (16 November 2026: after the
+    # understanding is completed the agent states assumptions instead of asking, and a
+    # named update changes only the attributes it names); the /5 rules this test reads
+    # stand word for word (test_understanding_once_rules.py).
+    assert payload["by"] == "engagement-planner" and payload["prompt_version"] == "attributes/6"
     assert payload["written_by"] == "independent-reviewer"
     [entry] = payload["followed"]
     assert (entry["attribute"], entry["change"]) == (proposed["id"], "CHANGE")
@@ -622,7 +626,12 @@ def test_a_one_source_conflict_is_dropped_only_when_a_confirmed_fact_is_shown_to
         "issues": [{**NEUTRAL, "covered_by": [_ref(facts, TICKETS), "U999"]}],
     }
     _inline(migrated, team, control, agents)
-    assert _open(team, control) == []
+    # Rewritten for B1j (16 November 2026: "A run no longer closes the earlier round's
+    # unanswered questions. They stay until they are answered or the attributes are
+    # accepted."). Old: the second run replaced the first run's question, so nothing was
+    # open. New: the question asked before stays open, as it was, until a person answers it;
+    # what this test is about holds: the conflict named as settled is not raised again.
+    assert [item["id"] for item in _open(team, control)] == [issue["id"]]
     [audit] = _followed_audit(migrated, control)
     [left] = audit[2]["not_raised"]
     assert left["covered_by"] == [_ref(agents.contexts[-1]["confirmed_understanding"], TICKETS)]
@@ -1159,16 +1168,24 @@ def test_a_conflict_between_two_documents_is_raised_with_one_statement_per_side(
         "Access policy says: kept for seven years.",
         "Access procedure says: kept for three years.",
     ]
-    for given in (["Seven years."], [*statements, "Approved requests are kept for five years."]):
-        agents.answer = lambda facts, given=given: {
+    # Rewritten for B1j (16 November 2026: a matter is asked once, and a run no longer
+    # closes the earlier round's unanswered questions). Old: the same conflict, raised again
+    # by the next run, replaced the run's own question with a new row. New: the earlier
+    # question stays open as it was, and the same matter is never asked again, so each case
+    # here is a conflict of its own (another topic, the same two sources).
+    for case, given in enumerate(
+        (["Seven years."], [*statements, "Approved requests are kept for five years."]), start=1
+    ):
+        topic = f"Retention of requests, case {case}"
+        agents.answer = lambda facts, given=given, topic=topic: {
             "attributes": [],
-            "issues": [_retention(policy, procedure, given)],
+            "issues": [_retention(policy, procedure, given, topic=topic)],
         }
         _inline(migrated, team, control, agents)
-        # Raised again by the next run, it is the run's own question replaced, as always.
-        [again] = _open(team, control)
+        again = next(item for item in _open(team, control) if item["topic"] == topic)
         assert again["id"] != issue["id"] and again["kind"] == "CONFLICT"
         assert again["suggestions"] == by_quote
+    assert issue["id"] in [item["id"] for item in _open(team, control)]
 
 
 # What the rules settle is closed by the agent's next run
@@ -1291,16 +1308,21 @@ def test_an_open_conflict_from_before_is_closed_only_for_a_reason_that_is_true_o
         planner = agent_actor(connection, team["project"], "engagement-planner")
     after = {row[8]: row for row in _issues(migrated, control)}
     # Closed by the agent, with the reason on the row: not resolved, and not by a person.
-    # The row's version moves with the write.
+    # The row's version moves with the write. Rewritten for B1j (16 November 2026: a run no
+    # longer closes the earlier round's unanswered questions). Old: every run first
+    # superseded its own open questions, then wrote the reason on the settled ones, so their
+    # version moved by two. New: only the settled ones are closed, in one write, so it moves
+    # by one; the reason is the same and is still written only where it is true.
     for settled in (stale, named):
         assert after[settled][3:8] == ("SUPERSEDED", "AGENT", authority.SETTLED_NOTE, None, None)
-        assert after[settled][9] == before[settled][9] + 2
+        assert after[settled][9] == before[settled][9] + 1
     assert "newer answer holds" in authority.SETTLED_NOTE
-    # The others are replaced as every run replaces its own questions, with no claim that
-    # the understanding settled them: the claim would not be true of them.
+    # Old: the others were replaced (SUPERSEDED, no note) as every run replaced its own
+    # questions. New: they stay open, unchanged, until a person answers them or the
+    # attributes are accepted (B1j, rule 4), with no claim that the understanding settled
+    # them: the claim would not be true of them.
     for replaced in (neutral, real):
-        assert after[replaced][3:8] == ("SUPERSEDED", "AGENT", "", None, None)
-        assert after[replaced][9] == before[replaced][9] + 1
+        assert after[replaced][3:8] == ("OPEN", "AGENT", "", None, None)
     # Another origin's, the rules', and a person's answers are untouched.
     assert after[rules] == before[rules] and after[point] == before[point]
     assert all(after[key] == row for key, row in before.items() if row[3] == "RESOLVED")
@@ -1666,8 +1688,10 @@ def test_every_agent_that_reads_the_understanding_is_given_the_precedence(
         # every D&I request addresses); "/8" was this increment's own bump, and still stands
         # for what this test is about: the planner reads confirmed_understanding. "/10"
         # since B1h the same day (the schema states its limits, a correction names the
-        # failing places): nothing this test reads changed.
-    ) == ("attributes/5", "attribute-review/3", "attribute-set-review/3", "engagement-planner/10")
+        # failing places): nothing this test reads changed. "attributes/6" since B1j (16
+        # November 2026; old "attributes/5"): two rules added for a completed understanding
+        # and a named update, the precedence and every other rule word for word.
+    ) == ("attributes/6", "attribute-review/3", "attribute-set-review/3", "engagement-planner/10")
     team, control, client, _a3 = _case(migrated, "uia-inputs")
     _walkthrough_confirmed(migrated, team, control, client)
     with connect(migrated.url) as connection:

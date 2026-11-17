@@ -314,6 +314,40 @@ def fingerprint(issue: Issue) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
+def matter_key(text: str) -> str:
+    """A matter as the asked-once rule compares it (B1j, 16 November 2026): lower-cased, and
+    everything but letters and digits read as one space, so "Emergency change approval" and
+    "emergency-change  approval." are the same matter. The same normal form as
+    migration 0172's attribute_assumptions_matter_once index."""
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+
+
+def already_asked(
+    marks: set[str], matters: set[str], issue: Issue, raised_by: Literal["AGENT", "RULES"]
+) -> bool:
+    """Whether a matter was already asked on the control (B1j, rule 4: a matter is never
+    asked again once it was asked: answered, dismissed, superseded or closed by acceptance).
+    `marks` are the fingerprints of every issue on the control, whatever its status;
+    `matters` the matter_key of every issue's topic. An agent's question is also refused
+    when its topic was asked in other words that read the same (matter_key); the rules'
+    issues keep their fingerprint alone, since one rule raises the same topic for each
+    source it reads (two documents that each name another frequency)."""
+    if fingerprint(issue) in marks:
+        return True
+    return raised_by == "AGENT" and matter_key(line(issue.topic, 120) or "Context") in matters
+
+
+def understanding_completed(cursor: psycopg.Cursor[Any], control_id: UUID) -> bool:
+    """Whether the control's Control Understanding was completed (migration 0172,
+    engagement_controls.understanding_completed_at; understanding_once.complete): from then
+    on no agent writes an open question on the control."""
+    row = cursor.execute(
+        "SELECT understanding_completed_at IS NOT NULL FROM engagement_controls WHERE id = %s",
+        (control_id,),
+    ).fetchone()
+    return bool(row is not None and row[0])
+
+
 def raise_issues(
     cursor: psycopg.Cursor[Any],
     organization_id: UUID,
@@ -323,19 +357,38 @@ def raise_issues(
     raised_by: Literal["AGENT", "RULES"],
     call_id: UUID | None = None,
 ) -> int:
-    """Record issues once each. One a person already resolved or dismissed is not raised
-    again; one superseded by a later review comes back."""
+    """Record issues once each, and a matter only once (B1j, 16 November 2026: asked once,
+    in code). Before, one a person resolved or dismissed was not raised again while one
+    superseded by a later review came back; now no issue whose fingerprint is on the control,
+    in any status (SUPERSEDED included), is raised again, and an agent's question whose topic
+    reads the same as any issue's topic (matter_key) is not either.
+
+    Once the control's understanding is completed (understanding_completed) an agent writes
+    no open question: what an agent would have asked is recorded as its assumption, on the
+    set (attribute_assumptions.record), and nothing is raised. A caller that knows which
+    attributes a finding bears on records the assumption itself, before this. The rules'
+    issues are raised as before."""
+    if raised_by == "AGENT" and issues and understanding_completed(cursor, control_id):
+        from ai_workforce_api import attribute_assumptions
+
+        attribute_assumptions.record(
+            cursor, organization_id, project_id, control_id,
+            [attribute_assumptions.from_issue(issue) for issue in issues], "agent", call_id,
+        )  # fmt: skip
+        return 0
+    held = cursor.execute(
+        "SELECT fingerprint, topic FROM control_context_issues WHERE engagement_control_id = %s",
+        (control_id,),
+    ).fetchall()
+    marks = {str(row[0]) for row in held}
+    matters = {matter_key(str(row[1])) for row in held}
     raised = 0
     for issue in issues:
         mark = fingerprint(issue)
-        held = cursor.execute(
-            "SELECT id, status FROM control_context_issues "
-            "WHERE engagement_control_id = %s AND fingerprint = %s "
-            "ORDER BY created_at DESC LIMIT 1",
-            (control_id, mark),
-        ).fetchone()
-        if held is not None and str(held[1]) in ("OPEN", "RESOLVED", "DISMISSED"):
+        if already_asked(marks, matters, issue, raised_by):
             continue
+        marks.add(mark)
+        matters.add(matter_key(line(issue.topic, 120) or "Context"))
         cursor.execute(
             """
             INSERT INTO control_context_issues (
@@ -395,6 +448,17 @@ _ACCEPTED_SQL = """
 
 # The agents' follow-up questions: on the attributes, their sources, and the process.
 FOLLOW_UP_ORIGINS: tuple[IssueOrigin, ...] = ("ATTRIBUTES", "SOURCES", "PROCESS")
+# The note on an agent's question the attributes' acceptance closed
+# (control_attributes.close_questions_once_accepted). Such a question stays SUPERSEDED (the
+# gates read OPEN only), and since B1j it is read as settled wherever a settled question is:
+# the agents' answered_questions and confirmed understanding, and the asked-once rule.
+QUESTIONS_CLOSED_NOTE = "Closed when the attributes were accepted."
+# SQL over control_context_issues as `i`: a question that is settled, by a person's answer
+# or dismissal, or by the attributes' acceptance.
+SETTLED_QUESTION_SQL = f"""
+    (i.status IN ('RESOLVED', 'DISMISSED')
+     OR (i.status = 'SUPERSEDED' AND i.resolution_note = '{QUESTIONS_CLOSED_NOTE}'))
+"""
 
 
 def attributes_accepted(cursor: psycopg.Cursor[Any], control_id: UUID) -> bool:
@@ -811,10 +875,11 @@ def context_package(
         "WHERE engagement_control_id = %s AND status = 'OPEN' ORDER BY created_at",
         (control_id,),
     ).fetchall()
+    # A question the attributes' acceptance closed is settled too (B1j): never asked again.
     settled_issues = connection.execute(
-        "SELECT question, topic, status, resolution_note FROM control_context_issues "
-        "WHERE engagement_control_id = %s AND status IN ('RESOLVED', 'DISMISSED') "
-        "ORDER BY resolved_at",
+        "SELECT i.question, i.topic, i.status, i.resolution_note FROM control_context_issues i "
+        f"WHERE i.engagement_control_id = %s AND {SETTLED_QUESTION_SQL} "
+        "ORDER BY coalesce(i.resolved_at, i.updated_at)",
         (control_id,),
     ).fetchall()
     evidence = connection.execute(
@@ -876,7 +941,7 @@ def context_package(
         "answered_questions": [
             {
                 "question": str(row[0]) or str(row[1]),
-                "answer": str(row[3]) if row[2] == "RESOLVED" else f"Not applicable: {row[3]}",
+                "answer": settled_answer(str(row[2]), str(row[3])),
             }
             for row in settled_issues
         ],
@@ -905,6 +970,17 @@ def context_package(
             else {}
         ),
     }
+
+
+def settled_answer(status: str, note: str) -> str:
+    """What a settled question says, for the agents: a person's answer as written; a
+    dismissal as not applicable, with its note; one the attributes' acceptance closed, as
+    the note says (QUESTIONS_CLOSED_NOTE), never as anyone's answer."""
+    if status == "RESOLVED":
+        return note
+    if status == "DISMISSED":
+        return f"Not applicable: {note}"
+    return QUESTIONS_CLOSED_NOTE
 
 
 def approved_narrative(

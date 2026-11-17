@@ -915,8 +915,9 @@ def test_an_independent_agent_reviews_each_drafted_attribute_before_a_person_see
     assert "The criteria need a person" in str(blank[4])
     # The prompt versions moved with B1e (12 November 2026: the confirmed understanding is
     # the authority); old: "attributes/4", "attribute-review/2". The behaviour this test
-    # checks, an independent reviewer of each draft, is unchanged.
-    assert {"attributes/5", "attribute-review/3"} <= agents
+    # checks, an independent reviewer of each draft, is unchanged. Old "attributes/5", new
+    # "attributes/6" since B1j (16 November 2026): two rules added, the reviewer unchanged.
+    assert {"attributes/6", "attribute-review/3"} <= agents
     # When the reviewer keeps none, the team is told why, not that nothing was found.
     dropped = {"attributes": [], "fixes": ["Left out the draft: it repeats A1."]}
     with connect(migrated.url) as connection:

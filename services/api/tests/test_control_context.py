@@ -942,9 +942,12 @@ def test_a_later_review_replaces_the_agents_earlier_conflicts(migrated: Database
     # understanding says so I won't get any conflict like this?"; decided: a CONFLICT is two
     # sources that disagree where the understanding is silent). Old expectation: a conflict
     # quoting one source was raised as a CONFLICT. New: it quotes both sides, each from its
-    # own source (here the policy and the RCM record); with one it would be ambiguity. What
-    # this test checks, that a later review replaces the agent's earlier conflict, is
-    # unchanged.
+    # own source (here the policy and the RCM record); with one it would be ambiguity.
+    # Rewritten again for B1j (16 November 2026: "A run no longer closes the earlier round's
+    # unanswered questions. They stay until they are answered or the attributes are
+    # accepted."). Old expectation: a later review replaced the agent's earlier conflict, so
+    # it was no longer open. New: it stays open, as it was, and keeps holding the control
+    # until a person settles it; the question is never asked twice either.
     conflict = {
         "attributes": [],
         "issues": [
@@ -969,8 +972,8 @@ def test_a_later_review_replaces_the_agents_earlier_conflicts(migrated: Database
         review_control(connection, _Provider([{"attributes": [], "issues": []}]), team["org"],
                        team["project"], UUID(control["id"]), team["owner_id"])  # fmt: skip
     second = _context(client, team, control["id"])
-    assert [i for i in second["issues"] if i["status"] == "OPEN"] == []
-    assert second["readiness"]["state"] != "CONFLICT_REQUIRES_REVIEW"
+    assert [i["id"] for i in second["issues"] if i["status"] == "OPEN"] == [issue["id"]]
+    assert second["readiness"]["state"] == "CONFLICT_REQUIRES_REVIEW"
 
 
 def test_a_policy_screenshot_on_the_control_is_read_by_ocr(migrated: Database) -> None:

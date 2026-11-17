@@ -122,7 +122,16 @@ def facts(connection: psycopg.Connection[Any], control_id: UUID) -> tuple[Fact, 
     (source PERSON; a confirmed answer always names who), a client value with filled_by, an
     issue with resolved_by. A value the records filled in and an issue the system resolved by
     itself (library_definitions' settled design confirmations, the migrations' backfills)
-    have no person and are RECORDS."""
+    have no person and are RECORDS.
+
+    Since B1j (16 November 2026) also an assumption a person decided (attribute_assumptions):
+    "That's right" is a PERSON fact of what the agent assumed, and "Change..." a PERSON fact
+    in the person's own words, each answering its matter, at when it was decided. One
+    accepted with an attribute is not a fact: nobody answered it. Nor is a question the
+    attributes' acceptance closed: it is settled, so no agent asks it again (the agents'
+    answered_questions, the asked-once rule), but it has no answer to follow, and read as a
+    fact it would change what the agents read with every acceptance, so "Run again" would be
+    offered for accepting their work (evidence_plans.agents_read, B1h)."""
     from ai_workforce_api.control_design import design_for
     from ai_workforce_api.walkthrough_answers import answers_of, questions_asked, stands
 
@@ -172,6 +181,16 @@ def facts(connection: psycopg.Connection[Any], control_id: UUID) -> tuple[Fact, 
         found.append(
             ("ANSWERED_QUESTION", str(issue_id), str(question) or str(topic), answer, at,
              "PERSON" if by is not None else "RECORDS")
+        )  # fmt: skip
+    for assumption_id, matter, assumed, status, answer_text, at in connection.execute(
+        "SELECT id, matter, assumed, status, answer, decided_at FROM attribute_assumptions "
+        "WHERE engagement_control_id = %s AND status IN ('CONFIRMED', 'CHANGED') "
+        "AND decided_by IS NOT NULL ORDER BY decided_at",
+        (control_id,),
+    ).fetchall():
+        found.append(
+            ("ANSWERED_QUESTION", str(assumption_id), str(matter),
+             str(answer_text) if status == "CHANGED" else str(assumed), at, "PERSON")
         )  # fmt: skip
     oldest = datetime.min.replace(tzinfo=UTC)
     # Newest first; facts confirmed at the same moment keep the order they were read in.

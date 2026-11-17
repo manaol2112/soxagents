@@ -31,13 +31,16 @@ from pydantic import BaseModel, Field, ValidationError
 
 from ai_workforce_api.actions import contains_secret
 from ai_workforce_api.control_context import (
+    SETTLED_QUESTION_SQL,
     Issue,
     attributes_accepted,
     clean,
     line,
     raise_issues,
     record_not_asked,
+    settled_answer,
     source_blocks,
+    understanding_completed,
 )
 from ai_workforce_api.db import independent_steps, transaction
 from ai_workforce_api.model_providers import live_model, provider_for
@@ -523,17 +526,30 @@ def _plan_from_narrative(
     updates a plan still being drafted and, on an approved plan, proposes each change for a
     person to accept. Nothing approved changes without a person."""
     from ai_workforce_api.context_routes import _generate
+    from ai_workforce_api.evidence_plans import _agents_answered, _now
     from ai_workforce_api.evidence_plans import generate as plan_evidence
+    from ai_workforce_api.understanding_once import asked_since, completed_at, record_pass
 
     _stage(connection, control_id, "ATTRIBUTES", 0)
+    stage_began = _now(connection)
     attribute_note = _generate(
         connection, provider, organization_id, project_id, control_id, requester
     )
-    proposed = connection.execute(
-        "SELECT count(*) FROM control_attributes WHERE engagement_control_id = %s "
-        "AND status = 'PROPOSED'",
-        (control_id,),
-    ).fetchone()
+    # As the run that follows the understanding (B1j, evidence_plans._plan_pass): while the
+    # understanding is not completed this stage is a question pass, and when it raised
+    # questions (the late points for the narrative, or a conflict) nothing is planned or
+    # reviewed until a person answers.
+    if _agents_answered(connection, control_id, stage_began):
+        record_pass(connection, control_id, stage_began)
+    if completed_at(connection, control_id) is None and asked_since(
+        connection, control_id, stage_began
+    ):
+        return _plan_outcome(
+            connection, organization_id, project_id, control_id, requester,
+            {"evidence_fallback": False, "attributes": _proposed(connection, control_id),
+             "evidence": 0, "evidence_proposed": 0, "waits_for_answers": True,
+             "note": line(attribute_note, 600)},
+        )  # fmt: skip
     _stage(connection, control_id, "EVIDENCE", 0)
     changes, _drafts, evidence_note = plan_evidence(
         connection, provider, organization_id, project_id, control_id, requester
@@ -546,25 +562,42 @@ def _plan_from_narrative(
     review_note = reviewed_set(
         connection, provider, organization_id, project_id, control_id, requester
     )
-    proposed = connection.execute(
-        "SELECT count(*) FROM control_attributes WHERE engagement_control_id = %s "
-        "AND status = 'PROPOSED'",
-        (control_id,),
-    ).fetchone()
     source = connection.execute(
         "SELECT source FROM evidence_plans WHERE engagement_control_id = %s", (control_id,)
     ).fetchone()
-    outcome = {
+    outcome: dict[str, Any] = {
         # The planner did not answer and the reviewed rules planned instead: the narrative
         # was not applied to the evidence, and the page says so.
         "evidence_fallback": source is not None and source[0] == "FALLBACK",
-        "attributes": 0 if proposed is None else int(proposed[0]),
+        "attributes": _proposed(connection, control_id),
         "evidence": len(changes.added) + len(changes.updated) + len(changes.removed),
         "evidence_proposed": len(changes.flagged),
         "note": line(
             " ".join(part for part in (attribute_note, evidence_note, review_note) if part), 600
         ),
     }
+    return _plan_outcome(connection, organization_id, project_id, control_id, requester, outcome)
+
+
+def _proposed(connection: psycopg.Connection[Any], control_id: UUID) -> int:
+    row = connection.execute(
+        "SELECT count(*) FROM control_attributes WHERE engagement_control_id = %s "
+        "AND status = 'PROPOSED'",
+        (control_id,),
+    ).fetchone()
+    return 0 if row is None else int(row[0])
+
+
+def _plan_outcome(
+    connection: psycopg.Connection[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    requester: UUID,
+    outcome: dict[str, Any],
+) -> str:
+    """The approved narrative's planning run ends: its outcome is kept on the run and the
+    audit trail, and the understanding may be completed now (understanding_once.complete)."""
     with transaction(connection) as cursor:
         cursor.execute(
             """
@@ -580,6 +613,9 @@ def _plan_from_narrative(
             cursor, organization_id, project_id, requester, "process.plan_updated",
             control_id, {key: value for key, value in outcome.items() if key != "note"},
         )  # fmt: skip
+    from ai_workforce_api.understanding_once import complete
+
+    complete(connection, project_id, control_id)
     return "PLANNED"
 
 
@@ -608,7 +644,7 @@ def _admit(raised: list[_Question], inputs: dict[str, Any]) -> list[_Question]:
     """The agents' new points the round allows: never a topic already asked; after the
     first round only a contradiction; after the second, none. A point still waiting that
     was asked open comes back with a statement to confirm (27 October 2026)."""
-    allowed = may_ask(int(inputs["round"]))
+    allowed = "NONE" if inputs.get("completed") else may_ask(int(inputs["round"]))
     asked: set[str] = inputs["asked"]
     blank = {_topic(item.topic) for item in inputs["waiting"] if not item.proposal.strip()}
     return [
@@ -772,6 +808,10 @@ def run_narrative(
              "questions": len(questions), "findings": len(findings),
              "incomplete": incomplete},
         )  # fmt: skip
+    # The run's end may complete the understanding (B1j, understanding_once.complete).
+    from ai_workforce_api.understanding_once import complete
+
+    complete(connection, project_id, control_id)
     return "PASSED" if passed else "REVIEWED"
 
 
@@ -802,11 +842,14 @@ def _inputs(
             (control_id,),
         ).fetchall()
     ]
+    # A question the attributes' acceptance closed is settled too (B1j): never asked again.
     package["answered_questions"] = [
-        {"question": str(row[0]) or str(row[1]), "answer": str(row[2])}
+        {"question": str(row[0]) or str(row[1]), "answer": settled_answer(str(row[3]), str(row[2]))}
         for row in connection.execute(
-            "SELECT question, topic, resolution_note FROM control_context_issues "
-            "WHERE engagement_control_id = %s AND status = 'RESOLVED' ORDER BY resolved_at",
+            "SELECT i.question, i.topic, i.resolution_note, i.status "
+            "FROM control_context_issues i WHERE i.engagement_control_id = %s "
+            "AND (i.status = 'RESOLVED' OR (i.status = 'SUPERSEDED' AND "
+            f"{SETTLED_QUESTION_SQL})) ORDER BY coalesce(i.resolved_at, i.updated_at)",
             (control_id,),
         ).fetchall()
     ]
@@ -822,7 +865,9 @@ def _inputs(
     package["confirmed_understanding"] = understanding_for_agents(
         understanding_facts(connection, control_id)
     )
-    package["may_ask"] = may_ask(point_round)
+    # Once the understanding is completed the narrative's agents ask nothing (B1j).
+    completed = understanding_completed(connection.cursor(), control_id)
+    package["may_ask"] = "NONE" if completed else may_ask(point_round)
     package["asked_topics"] = sorted(asked)
     package.pop("open_issues", None)
     return {
@@ -833,6 +878,7 @@ def _inputs(
         "waiting": waiting,
         "round": point_round,
         "asked": asked,
+        "completed": completed,
     }
 
 
@@ -846,7 +892,11 @@ def _rounds(
     connection: psycopg.Connection[Any], control_id: UUID, open_round: bool
 ) -> tuple[int, set[str]]:
     """The round a new point joins (the open one, or the next), and every topic the agents
-    have asked of the client, answered or not, so none is asked twice."""
+    have asked of the client, answered or not, so none is asked twice. Since B1j (16 November
+    2026) a point that was superseded (by a later redraft, the process map, or the
+    attributes' acceptance) counts as asked too, in the round and the topics: before, it was
+    left out of both, so the round could fall back to the first, in which anything may be
+    asked, and its topic be asked again."""
     rows = connection.execute(
         "SELECT topic, point_round, status FROM control_context_issues "
         "WHERE engagement_control_id = %s AND origin = 'PROCESS' AND raised_by = 'AGENT' "
@@ -854,8 +904,8 @@ def _rounds(
         (control_id,),
     ).fetchall()
     # A question raised before the rounds (0118) counts as the first round.
-    last = max((max(int(row[1]), 1) for row in rows if row[2] != "SUPERSEDED"), default=0)
-    asked = {_topic(str(row[0])) for row in rows if row[2] != "SUPERSEDED"}
+    last = max((max(int(row[1]), 1) for row in rows), default=0)
+    asked = {_topic(str(row[0])) for row in rows}
     return (last if open_round else last + 1), asked
 
 
@@ -1290,7 +1340,22 @@ def _ask(
     """The points for the client become the control's open questions, in this round: one
     still asked stays as it is, the agents' other earlier open ones are replaced, and one
     already answered is not asked again. Once the attributes are accepted nothing is asked
-    (control_context.attributes_accepted): what would have been is kept on the record."""
+    (control_context.attributes_accepted): what would have been is kept on the record. Once
+    the understanding is completed (B1j) nothing is asked either: each point is the agents'
+    assumption on the attributes it serves (attribute_assumptions), never an open question."""
+    if questions and understanding_completed(cursor, control_id):
+        from ai_workforce_api import attribute_assumptions
+
+        attribute_assumptions.record(
+            cursor, organization_id, project_id, control_id,
+            [attribute_assumptions.drafted(
+                "CONFLICT" if item.kind == "CONTRADICTION" else "MISSING", item.topic,
+                item.proposal or item.question,
+                [code for code in item.attributes if code in codes],
+            ) for item in questions],
+            "process-narrative", None,
+        )  # fmt: skip
+        return
     if attributes_accepted(cursor, control_id):
         record_not_asked(
             cursor, organization_id, project_id, control_id, None, "process-narrative",
@@ -1366,11 +1431,18 @@ def raise_late_points(
     points to confirm (product owner, 27 October 2026: "If the process narrative is
     finalized, shouldn't that questions in narrative be capturing this?"). Each is (topic,
     question, statement, basis, why); a topic already asked is not asked again, and
-    confirming them redrafts the narrative beside the approved one. Returns how many."""
+    confirming them redrafts the narrative beside the approved one. Returns how many.
+
+    B1j (16 November 2026): a topic superseded or closed by acceptance counts as asked
+    (before, it was left out and could be asked again), and once the understanding is
+    completed nothing is raised here: the attribute agent states the gap as its assumption
+    instead (control_attributes.generate)."""
+    if understanding_completed(cursor, control_id):
+        return 0
     rows = cursor.execute(
         "SELECT topic, point_round FROM control_context_issues "
         "WHERE engagement_control_id = %s AND origin = 'PROCESS' AND raised_by = 'AGENT' "
-        "AND question <> '' AND status <> 'SUPERSEDED'",
+        "AND question <> ''",
         (control_id,),
     ).fetchall()
     asked = {_topic(str(row[0])) for row in rows}

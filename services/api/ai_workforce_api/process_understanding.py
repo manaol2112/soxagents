@@ -46,7 +46,6 @@ from ai_workforce_api.control_context import (
     raise_issues,
     record_not_asked,
     source_blocks,
-    supersede_agent_issues,
 )
 from ai_workforce_api.db import transaction
 from ai_workforce_api.model_providers import fallback_note
@@ -1002,7 +1001,11 @@ def build(
             "BUILT" if current is None or int(current[0]) == 0 else "PROPOSED", requester,
             built,
         )  # fmt: skip
-        supersede_agent_issues(cursor, control_id, "PROCESS")
+        # Rewritten for B1j (16 November 2026). Before, every build first closed the open
+        # PROCESS questions of every agent on the control (the narrative's points and the
+        # late points included), so one agent wiped another's and an unanswered one could
+        # vanish. Now a question stays until a person answers it or the attributes are
+        # accepted, and a matter asked once is never raised again (raise_issues).
         found = checked_issues(issues, sources, "PROCESS")
         if built == "AGENT" and attributes_accepted(cursor, control_id):
             # Once the attributes are accepted the agent asks nothing; kept on the record.
