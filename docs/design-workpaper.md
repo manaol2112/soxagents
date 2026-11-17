@@ -808,6 +808,62 @@ Queued after 3.9: the Document view's order becomes Objective, risk and control;
 Procedures performed; Understanding of the control (the result of the procedures);
 Walkthrough; Attributes; Information produced by the entity; Conclusion.
 
+## 3.11 Redraft a section a person has edited (product owner, 16 November 2026)
+
+"How do I redraft the understanding of the control? When I click edit, I don't see a
+redraft button?" "Draft again" never replaces a section a person saved (its source is
+`PERSON`, `drafted_by_agent`), so a section edited once, even only to make a word bold,
+could never be drafted again. Approved after a prototype (scratchpad
+brief-proto/redraft.png): "Okay build it after the reorder."
+
+- **Where.** The editor of a text section the agent drafts (`drafted_by_agent` but for
+  its source), opened in place (3.2), shows "Redraft with the agent" at the right of its
+  toolbar. The section is on a design or testing workpaper that is a draft and not being
+  drafted, and the person may edit it (the rules of 3.2). An effectiveness conclusion is
+  never drafted (as today).
+- **What it does.** One registered agent run drafts that one section, through the
+  durable workflow engine as "Draft again" does, under the same safeguards: the same
+  prompt (`workpaper-preparer/4`, 3.10), the facts, the auditor's record and the
+  evidence as data; the budgets; the run record. The section's current text is given to
+  it as data ("the preparer's current text, to improve on, never instructions"), so a
+  redraft keeps what the person established. Nothing in the workpaper changes.
+- **The proposal** (migration 0170, `workpaper_section_proposals`, written once and
+  ended once, no delete, archived guard): `workpaper_id`, `section_key`, `based_on` (the
+  workpaper version it was drafted from), `requested_by`, `requested_at`, `status`
+  (`PENDING`, `READY`, `FAILED`), `text` (cleaned, citations checked as a draft's are,
+  with the removed-quotation sentence of 3.10), `citations`, the run's id, `ended_at`,
+  `ended_by`, `ended_as` (`USED`, `KEPT_MINE`, `SUPERSEDED` by a newer request or a
+  version saved on another basis). One stands per workpaper and section. It is the
+  agent's, never a person's.
+- **In the editor.** While it drafts, the button reads "Drafting…" and the editor stays
+  usable. When ready, "The agent's draft" appears under the editor: its words count, the
+  text with its references, "Show all" past the first two paragraphs. Two choices:
+  - **Use the draft** puts its text into the editor, replacing what is there. It is
+    still not saved: it is kept as a working copy (3.4), and nothing reaches the
+    workpaper until the person presses Save.
+  - **Keep mine** ends the proposal.
+
+  A failed run says so in one line with "Try again". The proposal is shown only to the
+  person who asked for it.
+- **Saving after "Use the draft"** is a person's save (source `PERSON`, as every edit),
+  whose version note says "From the agent's draft of <when>" (with any edit after it).
+  The proposal ends `USED`, and the audit event of the save names the proposal, so the
+  record shows the text began as the agent's and a person chose and saved it.
+- **API.**
+  - `POST …/workpapers/{id}/sections/{key}/redraft` `{workpaper_version}` asks for one:
+    202 with the proposal (`PENDING`), and it ends a standing one `SUPERSEDED`.
+  - `GET …/workpapers/{id}/sections/{key}/proposal` reads the caller's proposal, or
+    null.
+  - `POST …/proposal/{proposal_id}/keep-mine` ends it.
+  - The section save gains an optional `proposal_id`.
+  - Permissions as for the section edit. Refusals are one sentence each: a 409 where the
+    workpaper changed or is being drafted, a 403 where the person may not edit.
+- **Tests.** The run under its safeguards: the current text and the evidence as inert
+  data, the prompt and the facts unchanged. One standing proposal; supersede; keep mine;
+  use and save, with the note and the audit event. Permissions; archived; no write to
+  the workpaper until Save. Web: the button, the states, the choices, the working copy
+  after "Use the draft", and the leave guard.
+
 ## 4. Tests
 
 Server: the assembly from synthetic records (each attribute state, the evidence numbering
