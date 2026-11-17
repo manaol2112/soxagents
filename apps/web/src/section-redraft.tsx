@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  type ReactNode,
   type RefObject,
   useCallback,
   useEffect,
@@ -13,11 +12,11 @@ import {
 import { RichText } from "./rich-text";
 import {
   answered,
+  cardShows,
   citedIn,
+  DISCARD,
   DRAFTING,
-  failureLine,
   folded,
-  IN_EDITOR,
   KEEP_MINE,
   keepMineRequest,
   mayRead,
@@ -41,6 +40,7 @@ import {
   sent,
   TRY_AGAIN,
   USE_DRAFT,
+  USE_NEW,
 } from "./section-redraft-model";
 import { UiIcon } from "./ui-icon";
 
@@ -61,13 +61,20 @@ export type RedraftOffer = {
   /** The workpaper's current version the editor was opened on (a save's `based_on`): a
    * redraft asked on an older one is refused by the server. */
   workpaperVersion: number;
-  /** The proposal whose text the editor holds, not saved yet; null where it holds none. */
+  /** The proposal whose text the editor holds, not saved yet (put there by "Use the
+   * draft", or taken up again with a working copy); null where it holds none. */
   used: string | null;
+  /** The server said that proposal changed (a save or a keep refused, 409): the link is
+   * kept, and the card offers the ways on. */
+  refused: boolean;
   /** Changes when the owner wants the proposal read again (a save refused as the draft
    * changed). */
   reread: number;
   /** "Use the draft": the owner puts its text in the editor. */
   onUse: (proposal: Proposal) => void;
+  /** "Discard" where the draft the editor holds changed: the owner discards the working
+   * copy and goes back to what is stored, as "Discard them" does. */
+  onDiscard: () => void;
 };
 
 /** Where the redraft of the open editor stands, and what may be done. */
@@ -310,9 +317,11 @@ export function RedraftButton({
 }
 
 /** Under the editor: the agent's draft (READY) with its two choices, a line once the
- * editor holds it, or a failed run's one line with "Try again". Nothing for a drafting
- * one: the button says so. Its owner keys it by the proposal, so another one is shown
- * folded again. */
+ * editor holds it (or where its text came from), a failed run's one line with "Try
+ * again", or, where the draft the editor's text came from changed, the two ways on: "Use
+ * the new draft" where a new one is shown, and "Discard". Nothing for a drafting one: the
+ * button says so. What it shows is the model's (`cardShows`). Its owner keys it by the
+ * proposal, so another one is shown folded again. */
 export function RedraftCard({
   redraft,
   offer,
@@ -326,42 +335,49 @@ export function RedraftCard({
   const [all, setAll] = useState(false);
   const here = useRef<HTMLDivElement>(null);
   const { proposal, problem } = redraft;
-  const line = (words: string, action: ReactNode = null) => (
-    <div className="se-proposal-line" ref={here}>
-      <p>{words}</p>
-      {action}
-    </div>
+  const shows = cardShows({
+    proposal,
+    problem,
+    held: offer.used,
+    refused: offer.refused,
+  });
+  const discard = (
+    <button
+      type="button"
+      className="btn-secondary btn-sm"
+      disabled={busy}
+      onClick={() => {
+        offer.onDiscard();
+        focusBox(here);
+      }}
+    >
+      {DISCARD}
+    </button>
   );
-  if (proposal === null || proposal.status === "PENDING") {
-    return problem === ""
-      ? null
-      : line(
-          problem,
+  if (shows.kind === "none") {
+    return null;
+  }
+  if (shows.kind === "line") {
+    return (
+      <div className="se-proposal-line" ref={here}>
+        <p>{shows.words}</p>
+        {shows.action === "discard" ? (
+          discard
+        ) : shows.action === "try" ? (
           <button
             type="button"
             className="btn-secondary btn-sm"
-            disabled={busy || redraft.asking}
+            disabled={busy || redraft.asking || offer.used !== null}
             onClick={redraft.ask}
           >
             {TRY_AGAIN}
-          </button>,
-        );
-  }
-  if (proposal.status === "FAILED") {
-    return line(
-      problem !== "" ? problem : failureLine(proposal),
-      <button
-        type="button"
-        className="btn-secondary btn-sm"
-        disabled={busy || redraft.asking || offer.used !== null}
-        onClick={redraft.ask}
-      >
-        {TRY_AGAIN}
-      </button>,
+          </button>
+        ) : null}
+      </div>
     );
   }
-  if (offer.used === proposal.id) {
-    return line(IN_EDITOR);
+  if (proposal === null || proposal.status !== "READY") {
+    return null;
   }
   const fold = folded(proposal.text);
   const text = all || !fold.more ? proposal.text : fold.head;
@@ -374,6 +390,9 @@ export function RedraftCard({
       aria-labelledby={`${uid}-title`}
       aria-busy={redraft.keeping}
     >
+      {shows.lead !== "" ? (
+        <p className="se-proposal-lead">{shows.lead}</p>
+      ) : null}
       <header className="se-proposal-head">
         <h6 id={`${uid}-title`}>{PROPOSAL_TITLE}</h6>
         <span>{proposalMeta(proposal)}</span>
@@ -415,17 +434,21 @@ export function RedraftCard({
         </p>
       ) : null}
       <div className="se-proposal-actions" ref={here}>
-        <button
-          type="button"
-          className="btn-secondary btn-sm"
-          disabled={off}
-          onClick={() => {
-            redraft.keepMine();
-            focusBox(here);
-          }}
-        >
-          {KEEP_MINE}
-        </button>
+        {shows.choices === "changed" ? (
+          discard
+        ) : (
+          <button
+            type="button"
+            className="btn-secondary btn-sm"
+            disabled={off}
+            onClick={() => {
+              redraft.keepMine();
+              focusBox(here);
+            }}
+          >
+            {KEEP_MINE}
+          </button>
+        )}
         <button
           type="button"
           className="btn-sm"
@@ -435,7 +458,7 @@ export function RedraftCard({
             focusBox(here);
           }}
         >
-          {USE_DRAFT}
+          {shows.choices === "changed" ? USE_NEW : USE_DRAFT}
         </button>
       </div>
     </section>

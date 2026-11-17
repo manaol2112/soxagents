@@ -438,6 +438,19 @@ export const SHOW_LESS = "Show less";
 /** Where the editor holds the agent's draft: it is not in the workpaper yet. */
 export const IN_EDITOR =
   "The agent's draft is in the editor. It is not in the workpaper until you save.";
+/** Under an editor that holds a draft another than the one the card shows, or none is
+ * shown (a working copy taken up again): where its text came from. */
+export const FROM_DRAFT =
+  "The text in the editor came from the agent's draft. Saving records it as from that draft.";
+/** Where the server said the draft the editor's text came from changed: no new one to
+ * use. */
+export const CHANGED_DISCARD =
+  "The agent's draft this text came from has changed, so it cannot be saved as it is. Discard it to go on from what is saved.";
+/** The same, with a new draft shown. */
+export const CHANGED_NEW =
+  "The agent's draft this text came from has changed, so it cannot be saved as it is. Use the new draft, or discard it.";
+export const USE_NEW = "Use the new draft";
+export const DISCARD = "Discard";
 /** Why "Redraft with the agent" is off while the editor holds a draft not saved yet: a new
  * request would end the one the editor's text came from. */
 export const SAVE_FIRST =
@@ -514,31 +527,72 @@ export function editorText(text: string): string {
 
 /** The agent's draft the editor holds: which proposal, what it put there, and what the
  * editor held before. `off` while the editor's text is back to what it held before (undo):
- * a save then does not name the proposal. */
+ * a save then does not name the proposal. `refused` once the server said the draft it
+ * names changed (a save or a keep refused, 409): the link is kept, never dropped in
+ * silence, and the person goes on by the new draft or by discarding (section 3.11). */
 export type UsedDraft = {
   id: string;
   /** The text "Use the draft" put in the editor (editorText of the proposal's). */
   text: string;
-  /** What the editor held just before. */
+  /** What the editor held before any of the agent's drafts was put in it: undoing back to
+   * it is the person's own text again. */
   before: string;
-  /** When the agent drafted it (the proposal's ready time, else its request's). */
+  /** When the agent drafted it (the proposal's ready time, else its request's); "" where
+   * the editor took it up from a working copy, which does not say. */
   at: string;
   off: boolean;
+  refused: boolean;
 };
 
-/** "Use the draft": what the editor now holds, and what it remembers of it. */
+/** "Use the draft": what the editor now holds, and what it remembers of it. Where the
+ * editor already holds one of the agent's drafts, what it held before that one is kept,
+ * so undoing back to the earlier draft's text still names a draft, never none. */
 export function draftUsed(
   proposal: Pick<Proposal, "id" | "text" | "readyAt" | "requestedAt">,
   before: string,
+  held: Pick<UsedDraft, "before"> | null = null,
 ): UsedDraft {
   return {
     id: proposal.id,
     text: editorText(proposal.text),
-    before,
+    before: held === null ? before : held.before,
     at: proposal.readyAt ?? proposal.requestedAt,
     off: false,
+    refused: false,
   };
 }
+
+/**
+ * An editor that opens with a working copy naming the agent's draft (section 3.11: "Use
+ * the draft", then "Leave without saving", then back): it holds that draft again, so a
+ * save names it. Before it is the stored text (what the section holds). Null for a copy
+ * that names none, or is not a text.
+ */
+export function draftRestored(
+  copy: { proposalId: string | null; text: string | null },
+  stored: string,
+): UsedDraft | null {
+  if (copy.proposalId === null || copy.text === null) {
+    return null;
+  }
+  return {
+    id: copy.proposalId,
+    text: editorText(copy.text),
+    before: stored,
+    at: "",
+    off: false,
+    refused: false,
+  };
+}
+
+/** The server said the draft the editor holds changed (409): kept, and marked so. */
+export const draftRefused = <Used extends UsedDraft>(
+  used: Used | null,
+  id: string,
+): Used | null =>
+  used === null || used.id !== id || used.refused
+    ? used
+    : { ...used, refused: true };
 
 /**
  * What the editor remembers of the agent's draft after a change: back to the text it held
@@ -566,3 +620,64 @@ export function usedAfter<Used extends UsedDraft>(
 /** The draft a save names: the one the editor holds, unless it is back to the person's. */
 export const namedDraft = (used: UsedDraft | null): { id: string } | null =>
   used === null || used.off ? null : { id: used.id };
+
+/* What the card under the editor shows ------------------------------------------------- */
+
+/** The card under the editor: nothing; one line, with "Try again", "Discard" or no
+ * action; or the agent's draft with its choices: "Keep mine" and "Use the draft" for a
+ * draft the editor does not hold, "Discard" and "Use the new draft" where the draft the
+ * editor holds changed. `lead` is said above the draft; "". */
+export type CardShows =
+  | { kind: "none" }
+  | { kind: "line"; words: string; action: "try" | "discard" | null }
+  | { kind: "draft"; lead: string; choices: "first" | "changed" };
+
+/**
+ * What the card shows (section 3.11). Where the server said the draft the editor's text
+ * came from changed, the link is kept and there are two ways on: the new draft, where a
+ * new READY one is shown, or "Discard"; nothing else (a save would be refused again).
+ * Otherwise: a drafting or no proposal says nothing (or the last refusal with "Try
+ * again", or where the editor's text came from); a failed run its line; the draft the
+ * editor holds a line that it is there; another READY one the draft with its choices.
+ */
+export function cardShows(input: {
+  proposal: Pick<Proposal, "id" | "status" | "failure"> | null;
+  /** Why the last request was not taken; "". */
+  problem: string;
+  /** The draft the editor holds (a save names it); null where none. */
+  held: string | null;
+  /** The server said that draft changed. */
+  refused: boolean;
+}): CardShows {
+  const { proposal, problem, held } = input;
+  if (held !== null && input.refused) {
+    return proposal !== null &&
+      proposal.status === "READY" &&
+      proposal.id !== held
+      ? { kind: "draft", lead: CHANGED_NEW, choices: "changed" }
+      : { kind: "line", words: CHANGED_DISCARD, action: "discard" };
+  }
+  if (proposal === null || proposal.status === "PENDING") {
+    if (problem !== "") {
+      return { kind: "line", words: problem, action: "try" };
+    }
+    return held === null
+      ? { kind: "none" }
+      : { kind: "line", words: FROM_DRAFT, action: null };
+  }
+  if (proposal.status === "FAILED") {
+    return {
+      kind: "line",
+      words: problem !== "" ? problem : failureLine(proposal),
+      action: "try",
+    };
+  }
+  if (held === proposal.id) {
+    return { kind: "line", words: IN_EDITOR, action: null };
+  }
+  return {
+    kind: "draft",
+    lead: held === null ? "" : FROM_DRAFT,
+    choices: "first",
+  };
+}

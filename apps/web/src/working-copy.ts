@@ -10,6 +10,7 @@ import {
   savePayload,
 } from "./section-edit-model";
 import type { EditPhase } from "./section-editor";
+import { draftChanged } from "./section-redraft-model";
 import {
   bodyBytes,
   type CopiesRead,
@@ -25,6 +26,7 @@ import {
   keepAction,
   keepBasis,
   keepProblem,
+  keepRefusedDraft,
   keepRequest,
   mayKeep,
   parseWorkingCopies,
@@ -204,11 +206,18 @@ export type KeepingOpen = {
   restored: WorkingCopy | null;
   /** Keeping is off: the editor does not know what the server holds for it. */
   off: KeepingOff | null;
+  /** The agent's draft the editor's text came from (section 3.11), kept with the copy so
+   * a save after coming back still names it; null where none. */
+  proposalId: string | null;
 };
 
-/** What a keep holds, as one string: two drafts that would send the same are the same. */
-const keyOf = (editor: SectionEditor, draft: Draft) =>
-  JSON.stringify(savePayload(editor, draft));
+/** What a keep holds, as one string: two drafts that would send the same, naming the same
+ * draft of the agent's or none, are the same. */
+const keyOf = (
+  editor: SectionEditor,
+  draft: Draft,
+  proposalId: string | null,
+) => JSON.stringify([savePayload(editor, draft), proposalId]);
 
 const pause = (ms: number) =>
   new Promise<void>((done) => {
@@ -264,6 +273,9 @@ export function useKeeping(
     onDiscarded: (section: string) => void;
     /** A discard the server took: the copies are read again. */
     onGone: () => void;
+    /** A keep refused because the agent's draft it named changed (section 3.11): that
+     * draft's id (the bar says the server's sentence). */
+    onDraftChanged: (proposalId: string) => void;
   },
 ): Keeper {
   const [keeping, setKeeping] = useState<Keeping>({ state: "none" });
@@ -280,6 +292,9 @@ export function useKeeping(
   const beaconed = useRef<string | null>(null);
   // The server refused in its own words: not tried again for this editor.
   const blocked = useRef(false);
+  // The agent's draft a keep was refused for (it changed): nothing is kept naming it, and
+  // keeping goes on once the editor names another or none.
+  const refusedDraft = useRef<string | null>(null);
   // The editor whose save the server confirmed: nothing more is kept for it.
   const savedFor = useRef<SectionEditor | null>(null);
   // Keeps sent, and answered (independent review, 15 November 2026).
@@ -306,7 +321,9 @@ export function useKeeping(
     const same = (editor: SectionEditor) => latest.current?.editor === editor;
     const may = (now: KeepingOpen) =>
       mayKeep(now, {
-        blocked: blocked.current,
+        blocked:
+          blocked.current ||
+          keepRefusedDraft(now.proposalId, refusedDraft.current),
         saved: savedFor.current === now.editor,
       });
 
@@ -337,7 +354,8 @@ export function useKeeping(
         }
         return;
       }
-      const key = keyOf(editor, draft);
+      const { proposalId } = now;
+      const key = keyOf(editor, draft, proposalId);
       if (key === kept.current || (gone.current && key === beaconed.current)) {
         if (same(editor) && key === kept.current) {
           setKeeping({ state: "kept", at: keptAt.current });
@@ -346,7 +364,9 @@ export function useKeeping(
       }
       sending.current = key;
       count.current = { ...count.current, sent: count.current.sent + 1 };
-      const answer = await sendCopy(keepRequest(scope, source, editor, draft));
+      const answer = await sendCopy(
+        keepRequest(scope, source, editor, draft, proposalId),
+      );
       count.current = {
         ...count.current,
         answered: count.current.answered + 1,
@@ -362,6 +382,7 @@ export function useKeeping(
           text: "text" in payload ? payload.text : null,
           rows: "rows" in payload ? payload.rows : null,
           updatedAt: at,
+          proposalId,
         });
         if (!same(editor)) {
           return;
@@ -372,7 +393,8 @@ export function useKeeping(
         const after = latest.current;
         // Typed on while it was out: the newer text is on its way after its own pause.
         setKeeping(
-          after !== null && keyOf(after.editor, after.draft) === key
+          after !== null &&
+            keyOf(after.editor, after.draft, after.proposalId) === key
             ? { state: "kept", at }
             : { state: "keeping" },
         );
@@ -383,7 +405,12 @@ export function useKeeping(
       }
       setKeeping({ state: "failed", detail: problem.detail });
       window.clearTimeout(retry.current);
-      if (problem.retry) {
+      if (proposalId !== null && draftChanged(answer.status, answer.detail)) {
+        // The draft it named changed (section 3.11): the page keeps the link and shows
+        // the ways on; nothing more is kept naming it.
+        refusedDraft.current = proposalId;
+        told.current.onDraftChanged(proposalId);
+      } else if (problem.retry) {
         retry.current = window.setTimeout(() => {
           void request();
         }, KEEP_RETRY_MS);
@@ -461,7 +488,7 @@ export function useKeeping(
         now !== null &&
         now.phase !== "refreshing" &&
         changed(now.editor, now.draft) &&
-        keyOf(now.editor, now.draft) !== kept.current
+        keyOf(now.editor, now.draft, now.proposalId) !== kept.current
       );
     };
     /** As the page goes, the tab is hidden, or the editor goes without being asked: what
@@ -477,8 +504,9 @@ export function useKeeping(
         keepBasis(now.source, now.restored),
         now.editor,
         now.draft,
+        now.proposalId,
       );
-      const key = keyOf(now.editor, now.draft);
+      const key = keyOf(now.editor, now.draft, now.proposalId);
       const plan = goingKeep({
         when,
         may: may(now),
@@ -521,6 +549,7 @@ export function useKeeping(
     kept.current = null;
     keptAt.current = "";
     blocked.current = false;
+    refusedDraft.current = null;
     savedFor.current = null;
     setKeeping({ state: "none" });
   }, [session]);
@@ -534,7 +563,8 @@ export function useKeeping(
     if (now === null || holding === null) {
       return;
     }
-    kept.current = keyOf(now.editor, now.draft);
+    // What the server holds, the draft it names included.
+    kept.current = keyOf(now.editor, now.draft, holding.proposalId);
     keptAt.current = holding.updatedAt;
     setKeeping({ state: "kept", at: holding.updatedAt });
   }, [session, holding]);
@@ -542,13 +572,21 @@ export function useKeeping(
   // The pause after the last change. Paused while a save is out or the views read again;
   // the timer goes with the editor that set it.
   const phase = open?.phase ?? null;
-  const key = open === null ? null : keyOf(open.editor, open.draft);
+  const key =
+    open === null ? null : keyOf(open.editor, open.draft, open.proposalId);
   const hasCopy = open?.hasCopy ?? false;
   const off = open?.off ?? null;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a change of the text, the phase, the copy or keeping off is what starts the pause again.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a change of the text, the draft it names, the phase, the copy or keeping off is what starts the pause again.
   useEffect(() => {
     const now = latest.current;
-    if (now === null || now.phase !== "editing" || blocked.current) {
+    if (
+      now === null ||
+      now.phase !== "editing" ||
+      blocked.current ||
+      // Refused as the draft it names changed: the bar keeps saying so until the editor
+      // names another draft or none.
+      keepRefusedDraft(now.proposalId, refusedDraft.current)
+    ) {
       return;
     }
     if (now.off !== null) {

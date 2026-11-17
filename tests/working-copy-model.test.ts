@@ -42,6 +42,7 @@ import {
   keepingOff,
   keepingWords,
   keepProblem,
+  keepRefusedDraft,
   keepRequest,
   keptWhen,
   LEAVE,
@@ -135,6 +136,10 @@ const sent = (over: Record<string, unknown> = {}) => ({
 
 describe("reading the working copies", () => {
   it("reads the caller's own, one per section, exactly one of a text or rows", () => {
+    // Rewritten for the working copy that names the agent's draft (section 3.11, 16
+    // November 2026). Old expectation: a copy is its section, version, text or rows and
+    // time. New expectation: the same, and the draft it names (`proposalId`), null for a
+    // copy that names none or was kept before it was recorded.
     assert.deepEqual(
       parseWorkingCopies([
         sent(),
@@ -151,6 +156,7 @@ describe("reading the working copies", () => {
           text: "Typed, not saved.",
           rows: null,
           updatedAt: "2026-11-15T10:42:00Z",
+          proposalId: null,
         },
         {
           section: "walkthrough-of-one-instance",
@@ -158,8 +164,35 @@ describe("reading the working copies", () => {
           text: null,
           rows: [["a", "b", "c"]],
           updatedAt: "2026-11-15T10:42:00Z",
+          proposalId: null,
         },
       ],
+    );
+  });
+
+  it("reads the agent's draft a copy's text came from, and nothing that is not one (section 3.11)", () => {
+    const named = parseWorkingCopies([
+      sent({ proposal_id: uuid(900) }),
+      sent({ section: "understanding-of-the-control", proposal_id: null }),
+    ]);
+    assert.equal(named[0]?.proposalId, uuid(900));
+    assert.equal(named[1]?.proposalId, null);
+    // A copy kept before the draft was recorded names none.
+    assert.equal(parseWorkingCopies([sent()])[0]?.proposalId, null);
+    // Anything but a proposal's id is not opened as the person's own text: left out.
+    for (const bad of ["900", 900, "", { id: uuid(900) }, true]) {
+      assert.deepEqual(
+        parseWorkingCopies([sent({ proposal_id: bad })]),
+        [],
+        String(bad),
+      );
+    }
+    // Only a text comes from the agent's draft.
+    assert.deepEqual(
+      parseWorkingCopies([
+        sent({ text: null, rows: [["a"]], proposal_id: uuid(900) }),
+      ]),
+      [],
     );
   });
 
@@ -315,14 +348,20 @@ describe("when a working copy is kept", () => {
   });
 
   it("posts a save's own body with the intent, and a discard with the ids and the key", () => {
+    // Rewritten for the working copy that names the agent's draft (section 3.11, 16
+    // November 2026). Old expectation: a keep is a save's body and the intent, and the
+    // route sends the based_on and the text or rows. New expectation: the same, and the
+    // draft its text came from, always said (null for none), so a copy that names none
+    // replaces one that did.
     const draft = {
       kind: "grid",
       rows: setCell(walk.rows, 0, 2, "Done"),
     } as const;
-    const keep = keepRequest(scope, SOURCE, walk, draft);
+    const keep = keepRequest(scope, SOURCE, walk, draft, null);
     assert.deepEqual(keep, {
       intent: "keep",
       ...saveRequest(scope, SOURCE, walk, draft),
+      proposal_id: null,
     });
     assert.deepEqual(discardRequest(scope, SOURCE, walk), {
       intent: "discard",
@@ -339,6 +378,7 @@ describe("when a working copy is kept", () => {
       body: {
         based_on: 3,
         rows: [["HR starts the termination", "L. Moreno", "Done"]],
+        proposal_id: null,
       },
     });
     assert.deepEqual(copyWrite(discardRequest(scope, SOURCE, walk)), {
@@ -351,11 +391,67 @@ describe("when a working copy is kept", () => {
     );
   });
 
-  it("refuses what a save would refuse, and anything that is not keep or discard", () => {
-    const keep = keepRequest(scope, SOURCE, conclusion, {
-      kind: "text",
-      text: "Words.",
+  it("keeps the agent's draft a text came from with the copy (section 3.11)", () => {
+    // The gap this closes: "Use the draft", "Leave without saving", back; the copy held
+    // the agent's text and not the draft, so the next Save was a person's own edit.
+    const base = `/organizations/${ORG}/projects/${PROJECT}/workpapers/${PAPER}`;
+    const text = { kind: "text", text: "The agent's words." } as const;
+    const keep = keepRequest(scope, SOURCE, conclusion, text, uuid(900));
+    assert.equal(keep.proposal_id, uuid(900));
+    assert.deepEqual(copyWrite(JSON.parse(JSON.stringify(keep))), {
+      method: "PUT",
+      path: `${base}/sections/design-conclusion/draft`,
+      body: { based_on: 3, text: "The agent's words.", proposal_id: uuid(900) },
     });
+    // None: said as null, never left out.
+    const mine = copyWrite(keepRequest(scope, SOURCE, conclusion, text, null));
+    assert.ok("body" in mine);
+    assert.equal(mine.body.proposal_id, null);
+    // Absent reads as none, as a save's does.
+    const { proposal_id: _drop, ...absent } = keep;
+    const read = copyWrite(absent);
+    assert.ok("body" in read);
+    assert.equal(read.body.proposal_id, null);
+    // Not a proposal's id, or a draft named for rows: never sent.
+    for (const fields of [
+      { ...keep, proposal_id: "900" },
+      { ...keep, proposal_id: 900 },
+      { ...keep, proposal_id: "" },
+      {
+        ...keepRequest(
+          scope,
+          SOURCE,
+          walk,
+          { kind: "grid", rows: walk.rows },
+          uuid(900),
+        ),
+      },
+    ] as Array<Record<string, unknown>>) {
+      assert.deepEqual(copyWrite(fields), { error: "invalid" });
+    }
+    // The discard carries nothing of it.
+    assert.ok(!("proposal_id" in discardRequest(scope, SOURCE, conclusion)));
+  });
+
+  it("stops keeping a copy naming a draft the server said changed, until it names another or none", () => {
+    assert.equal(keepRefusedDraft(uuid(900), uuid(900)), true);
+    assert.equal(keepRefusedDraft(uuid(901), uuid(900)), false);
+    assert.equal(keepRefusedDraft(null, uuid(900)), false);
+    assert.equal(keepRefusedDraft(null, null), false);
+    assert.equal(keepRefusedDraft(uuid(900), null), false);
+  });
+
+  it("refuses what a save would refuse, and anything that is not keep or discard", () => {
+    const keep = keepRequest(
+      scope,
+      SOURCE,
+      conclusion,
+      {
+        kind: "text",
+        text: "Words.",
+      },
+      null,
+    );
     for (const fields of [
       {},
       { ...keep, intent: "save" },
@@ -684,6 +780,7 @@ describe("what the page's queue may send", () => {
         keepBasis(SOURCE, restored),
         conclusion,
         typed,
+        null,
       );
       assert.equal(body.based_on, 1);
     }

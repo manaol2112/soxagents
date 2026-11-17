@@ -179,9 +179,14 @@ describe("keeping as they type", () => {
     // sync look at the phase and a refusal only. New expectation: the pause also stops
     // where keeping is off (and says so), and every send asks `mayKeep` (the phase,
     // keeping off, a refusal, a save the server confirmed), tested in the model.
+    // Rewritten for the working copy that names the agent's draft (section 3.11, 16
+    // November 2026). Old expectation: the pause stops on the phase or a refusal, and
+    // `may` asks `mayKeep` with the refusal alone. New expectation: also where a keep was
+    // refused because the draft it names changed (`keepRefusedDraft`), until the editor
+    // names another draft or none.
     assert.match(
       hook,
-      /const now = latest\.current;\s*if \(now === null \|\| now\.phase !== "editing" \|\| blocked\.current\) \{\s*return;\s*\}\s*if \(now\.off !== null\) \{\s*(?:\/\/ [^\n]*\n\s*)+setKeeping\(\s*changed\(now\.editor, now\.draft\)\s*\? \{ state: "off", why: now\.off \}\s*: \{ state: "none" \},\s*\);\s*return;\s*\}\s*const action = keepAction\(now\.editor, now\.draft, now\.hasCopy\);/,
+      /const now = latest\.current;\s*if \(\s*now === null \|\|\s*now\.phase !== "editing" \|\|\s*blocked\.current \|\|\s*(?:\/\/ [^\n]*\n\s*)+keepRefusedDraft\(now\.proposalId, refusedDraft\.current\)\s*\) \{\s*return;\s*\}\s*if \(now\.off !== null\) \{\s*(?:\/\/ [^\n]*\n\s*)+setKeeping\(\s*changed\(now\.editor, now\.draft\)\s*\? \{ state: "off", why: now\.off \}\s*: \{ state: "none" \},\s*\);\s*return;\s*\}\s*const action = keepAction\(now\.editor, now\.draft, now\.hasCopy\);/,
     );
     const sync = hook.slice(hook.indexOf("const sync = async"));
     assert.match(
@@ -190,7 +195,7 @@ describe("keeping as they type", () => {
     );
     assert.match(
       hook,
-      /const may = \(now: KeepingOpen\) =>\s*mayKeep\(now, \{\s*blocked: blocked\.current,\s*saved: savedFor\.current === now\.editor,\s*\}\);/,
+      /const may = \(now: KeepingOpen\) =>\s*mayKeep\(now, \{\s*blocked:\s*blocked\.current \|\|\s*keepRefusedDraft\(now\.proposalId, refusedDraft\.current\),\s*saved: savedFor\.current === now\.editor,\s*\}\);/,
     );
     // A new editor (or none) starts again: its own timers gone, nothing kept but its copy.
     assert.match(
@@ -230,10 +235,31 @@ describe("keeping as they type", () => {
   });
 
   it("sends the model's bodies through the page's route, never a save", () => {
+    // Rewritten for the working copy that names the agent's draft (section 3.11, 16
+    // November 2026). Old expectation: `keepRequest(scope, source, editor, draft)`. New
+    // expectation: the same, with the draft the editor's text came from (null for none),
+    // so the copy keeps it; and what is kept and compared (`keyOf`) includes it.
     assert.match(
       hook,
-      /sendCopy\(keepRequest\(scope, source, editor, draft\)\)/,
+      /sendCopy\(\s*keepRequest\(scope, source, editor, draft, proposalId\),?\s*\)/,
     );
+    assert.match(
+      hook,
+      /const \{ proposalId \} = now;\s*const key = keyOf\(editor, draft, proposalId\);/,
+    );
+    assert.match(
+      hook,
+      /const keyOf = \(\s*editor: SectionEditor,\s*draft: Draft,\s*proposalId: string \| null,\s*\) => JSON\.stringify\(\[savePayload\(editor, draft\), proposalId\]\);/,
+    );
+    // The copy the page remembers names it too, and a copy taken up is what the server
+    // holds, the draft it names included.
+    assert.match(hook, /updatedAt: at,\s*proposalId,\s*\}\);/);
+    assert.match(
+      hook,
+      /kept\.current = keyOf\(now\.editor, now\.draft, holding\.proposalId\);/,
+    );
+    // The page hands the draft the editor's text came from to the keeper.
+    assert.match(view, /proposalId: namedDraft\(usedNow\)\?\.id \?\? null,/);
     assert.match(hook, /sendCopy\(discardRequest\(scope, source, editor\)\)/);
     assert.match(
       component(hook, "sendCopy"),
@@ -252,9 +278,23 @@ describe("keeping as they type", () => {
       hook,
       /const problem = keepProblem\(answer\.status, answer\.detail\);/,
     );
+    // Rewritten for the working copy that names the agent's draft (section 3.11, 16
+    // November 2026). Old expectation: a refusal is retried or blocks. New expectation:
+    // the same, except a 409 that the draft the keep named changed, which marks that
+    // draft refused (nothing more is kept naming it) and tells the page, which keeps the
+    // link and shows the ways on.
     assert.match(
       hook,
-      /setKeeping\(\{ state: "failed", detail: problem\.detail \}\);\s*window\.clearTimeout\(retry\.current\);\s*if \(problem\.retry\) \{\s*retry\.current = window\.setTimeout\(\(\) => \{\s*void request\(\);\s*\}, KEEP_RETRY_MS\);\s*\} else \{\s*blocked\.current = true;\s*\}/,
+      /setKeeping\(\{ state: "failed", detail: problem\.detail \}\);\s*window\.clearTimeout\(retry\.current\);\s*if \(proposalId !== null && draftChanged\(answer\.status, answer\.detail\)\) \{\s*(?:\/\/ [^\n]*\n\s*)+refusedDraft\.current = proposalId;\s*told\.current\.onDraftChanged\(proposalId\);\s*\} else if \(problem\.retry\) \{\s*retry\.current = window\.setTimeout\(\(\) => \{\s*void request\(\);\s*\}, KEEP_RETRY_MS\);\s*\} else \{\s*blocked\.current = true;\s*\}/,
+    );
+    assert.match(
+      view,
+      /onDraftChanged: \(id\) => \{\s*setUsed\(\(before\) => draftRefused\(before, id\)\);\s*setProposalRead\(\(count\) => count \+ 1\);\s*\},/,
+    );
+    // A new editor starts with no draft refused.
+    assert.match(
+      hook,
+      /blocked\.current = false;\s*refusedDraft\.current = null;/,
     );
     // Kept: the time the server gave, and the copy known locally (so a change back is a
     // discard).
@@ -327,10 +367,12 @@ describe("saving, and Cancel", () => {
       hook,
       /const saved = \(\s*scope: Scope,\s*workpaperId: string,\s*section: string,\s*atSave: KeepCount,\s*\) => \{\s*kept\.current = null;\s*savedFor\.current = latest\.current\?\.editor \?\? null;\s*window\.clearTimeout\(wait\.current\);\s*window\.clearTimeout\(retry\.current\);\s*told\.current\.onDiscarded\(section\);\s*if \(copyMayOutliveSave\(atSave, count\.current\)\) \{\s*void enqueue\(discardOp\(scope, workpaperId, section\)\);\s*\}\s*\};/,
     );
-    // Every keep is counted as it is sent and as it answers.
+    // Every keep is counted as it is sent and as it answers. (Rewritten for section 3.11,
+    // 16 November 2026: old, `keepRequest(scope, source, editor, draft)`; new, with the
+    // draft the editor's text came from.)
     assert.match(
       hook,
-      /count\.current = \{ \.\.\.count\.current, sent: count\.current\.sent \+ 1 \};\s*const answer = await sendCopy\(keepRequest\(scope, source, editor, draft\)\);\s*count\.current = \{\s*\.\.\.count\.current,\s*answered: count\.current\.answered \+ 1,\s*\};/,
+      /count\.current = \{ \.\.\.count\.current, sent: count\.current\.sent \+ 1 \};\s*const answer = await sendCopy\(\s*keepRequest\(scope, source, editor, draft, proposalId\),?\s*\);\s*count\.current = \{\s*\.\.\.count\.current,\s*answered: count\.current\.answered \+ 1,\s*\};/,
     );
   });
 
@@ -542,7 +584,10 @@ describe("closing or reloading the tab", () => {
     );
     assert.match(
       hook,
-      /const unkept = \(\): boolean => \{\s*const now = latest\.current;\s*return \(\s*now !== null &&\s*now\.phase !== "refreshing" &&\s*changed\(now\.editor, now\.draft\) &&\s*keyOf\(now\.editor, now\.draft\) !== kept\.current\s*\);\s*\};/,
+      // Rewritten for section 3.11 (16 November 2026). Old: `keyOf(now.editor,
+      // now.draft)`. New: the key includes the draft the editor's text came from, so a
+      // change of it alone is not kept yet either.
+      /const unkept = \(\): boolean => \{\s*const now = latest\.current;\s*return \(\s*now !== null &&\s*now\.phase !== "refreshing" &&\s*changed\(now\.editor, now\.draft\) &&\s*keyOf\(now\.editor, now\.draft, now\.proposalId\) !== kept\.current\s*\);\s*\};/,
     );
   });
 

@@ -27,9 +27,13 @@ export type WorkingCopy = {
   rows: string[][] | null;
   /** When it was last kept (a UTC timestamp). */
   updatedAt: string;
+  /** The agent's draft its text came from ("Use the draft", section 3.11), which a save
+   * of it names; null where none (and for a copy kept before it was recorded). */
+  proposalId: string | null;
 };
 
 const KEY = /^[a-z0-9-]{1,60}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** The caller's working copies, read cautiously: an entry that is not one is left out,
  * never guessed at. */
@@ -45,6 +49,14 @@ export function parseWorkingCopies(value: unknown): WorkingCopy[] {
     const entry = item as Record<string, unknown>;
     const { section, based_on: basedOn, text, rows } = entry;
     const updatedAt = entry.updated_at;
+    const named = entry.proposal_id;
+    // Absent or null: the copy names no draft. Anything but a proposal's id is not a copy
+    // this page can open: it is left out, never opened as the person's own text.
+    const proposalId =
+      typeof named === "string" && UUID.test(named) ? named : null;
+    if (named !== undefined && named !== null && proposalId === null) {
+      continue;
+    }
     if (
       typeof section !== "string" ||
       !KEY.test(section) ||
@@ -68,14 +80,25 @@ export function parseWorkingCopies(value: unknown): WorkingCopy[] {
       )
         ? rows.map((row) => [...row])
         : null;
-    // Exactly one of them: anything else is not a working copy this page can open.
-    if ((asText === null) === (asRows === null)) {
+    // Exactly one of them: anything else is not a working copy this page can open. Only
+    // a text comes from the agent's draft.
+    if (
+      (asText === null) === (asRows === null) ||
+      (proposalId !== null && asText === null)
+    ) {
       continue;
     }
     if (found.some((other) => other.section === section)) {
       continue;
     }
-    found.push({ section, basedOn, text: asText, rows: asRows, updatedAt });
+    found.push({
+      section,
+      basedOn,
+      text: asText,
+      rows: asRows,
+      updatedAt,
+      proposalId,
+    });
   }
   return found;
 }
@@ -153,14 +176,20 @@ export const KEEP_RETRY_MS = 15_000;
 type Scope = { organizationId: string; projectId: string };
 
 /** The body the page posts to `/workspace/workpapers/draft` to keep a working copy: a
- * save's own body, and the intent. */
+ * save's own body, the intent, and the agent's draft its text came from (section 3.11),
+ * so a save after "Leave without saving" and back still names it; null where none. */
 export function keepRequest(
   scope: Scope,
   source: EditSource,
   editor: SectionEditor,
   draft: Draft,
+  proposalId: string | null,
 ): Record<string, unknown> {
-  return { intent: "keep", ...saveRequest(scope, source, editor, draft) };
+  return {
+    intent: "keep",
+    ...saveRequest(scope, source, editor, draft),
+    proposal_id: proposalId,
+  };
 }
 
 export function discardRequest(
@@ -186,8 +215,6 @@ export function copiesQuery(scope: Scope, workpaperId: string): string {
   }).toString();
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /** The API path of a workpaper's working copies, or null when an id is not one. */
 export function copiesPath(params: URLSearchParams): string | null {
   const id = (key: string) => {
@@ -210,17 +237,31 @@ export type CopyWrite =
 /**
  * The API call for keeping or discarding a working copy, from what the page posted. A
  * copy is kept under the same checks as a save (three ids, the section's key, the version,
- * a text or rows within the limits, never a credential); discarding takes the ids and the
- * key. Anything else is refused here and never sent.
+ * a text or rows within the limits, never a credential, and the agent's draft it came from
+ * as a proposal's id or none); discarding takes the ids and the key. Anything else is
+ * refused here and never sent.
  */
 export function copyWrite(fields: Record<string, unknown>): CopyWrite {
   if (fields.intent === "keep") {
-    // A working copy never names the agent's draft (section 3.11): only a save does.
-    const { intent: _intent, proposal_id: _proposal, ...rest } = fields;
+    // Rewritten for the working copy that names the agent's draft (section 3.11, 16
+    // November 2026). Old: the proposal was stripped, so a copy taken up again was saved
+    // as a person's own text. New: it is kept with the copy, and always said (null for
+    // none), so a copy that no longer names one replaces one that did.
+    const { intent: _intent, ...rest } = fields;
     const write = sectionWrite(rest);
-    return "error" in write
-      ? write
-      : { method: "PUT", path: `${write.path}/draft`, body: write.body };
+    if ("error" in write) {
+      return write;
+    }
+    const named = write.body.proposal_id ?? null;
+    // Only a text section's copy comes from the agent's draft.
+    if (named !== null && !("text" in write.body)) {
+      return { error: "invalid" };
+    }
+    return {
+      method: "PUT",
+      path: `${write.path}/draft`,
+      body: { ...write.body, proposal_id: named },
+    };
   }
   if (fields.intent === "discard") {
     // The same ids and key, checked by the same reader: a discard carries nothing else.
@@ -583,6 +624,16 @@ export function goingKeep(input: {
     return large ? "queue" : "none";
   }
   return "queue";
+}
+
+/** The keep was refused because the agent's draft it names changed (a 409 in the
+ * server's words): nothing more is kept naming that draft, and the page shows the ways on;
+ * keeping goes on once the editor names another draft or none. */
+export function keepRefusedDraft(
+  proposalId: string | null,
+  refused: string | null,
+): boolean {
+  return proposalId !== null && proposalId === refused;
 }
 
 /** A working copy discarded by any way (Discard them, Cancel, a change back to what is

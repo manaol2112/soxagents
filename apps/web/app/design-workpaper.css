@@ -2717,6 +2717,16 @@ button.se-redraft[aria-disabled="true"]:hover {
   border-left: 3px solid var(--accent);
 }
 
+/* Above the draft: where the editor's text came from, or that its draft changed. */
+.se-proposal-lead {
+  margin: 0 0 0.625rem;
+  padding-bottom: 0.625rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
 .se-proposal-head {
   display: flex;
   flex-wrap: wrap;

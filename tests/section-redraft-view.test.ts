@@ -157,14 +157,33 @@ describe("its states", () => {
       /\{proposal\.removedNote !== "" \? \(\s*<p className="se-proposal-note">\{proposal\.removedNote\}<\/p>/,
     );
     assert.match(card, /\{KEEP_MINE\}/);
-    assert.match(card, /\{USE_DRAFT\}/);
+    // Rewritten for the ways on after the draft changed (section 3.11, 16 November
+    // 2026). Old expectation: the second button reads `{USE_DRAFT}`. New expectation:
+    // `USE_DRAFT`, or `USE_NEW` where the draft the editor holds changed (the model's
+    // `cardShows`).
+    assert.match(
+      card,
+      /\{shows\.choices === "changed" \? USE_NEW : USE_DRAFT\}/,
+    );
     assert.match(model, /export const PROPOSAL_TITLE = "The agent's draft";/);
   });
 
   it("says a failed run in one line with Try again", () => {
+    // Rewritten for the ways on after the draft changed (section 3.11, 16 November
+    // 2026). Old expectation: the card itself branches on FAILED and returns the line.
+    // New expectation: what it shows is the model's `cardShows` (a FAILED run is a line
+    // with "Try again", tested in the model), and the card draws that line.
     assert.match(
       card,
-      /if \(proposal\.status === "FAILED"\) \{\s*return line\(\s*problem !== "" \? problem : failureLine\(proposal\),\s*<button[\s\S]{0,260}onClick=\{redraft\.ask\}\s*>\s*\{TRY_AGAIN\}/,
+      /const shows = cardShows\(\{\s*proposal,\s*problem,\s*held: offer\.used,\s*refused: offer\.refused,\s*\}\);/,
+    );
+    assert.match(
+      card,
+      /shows\.action === "try" \? \(\s*<button[\s\S]{0,260}onClick=\{redraft\.ask\}\s*>\s*\{TRY_AGAIN\}/,
+    );
+    assert.match(
+      component(model, "cardShows"),
+      /if \(proposal\.status === "FAILED"\) \{\s*return \{\s*kind: "line",\s*words: problem !== "" \? problem : failureLine\(proposal\),\s*action: "try",\s*\};/,
     );
   });
 
@@ -193,9 +212,12 @@ describe("the choices", () => {
     );
     // The owner replaces the draft the editor holds: the same draft the working copy is
     // kept from and the leave guard asks about, written as the editor writes it back.
+    // Rewritten for section 3.11's ways on (16 November 2026). Old expectation:
+    // `draftUsed(proposal, open.draft.text)`. New expectation: with the draft the editor
+    // already holds, so an undo back to the earlier draft's text still names a draft.
     assert.match(
       component(view, "DesignWorkpaper"),
-      /const made = draftUsed\(proposal, open\.draft\.text\);\s*setEditing\(\{\s*\.\.\.open,\s*draft: \{ kind: "text", text: made\.text \},\s*refusal: "",\s*\}\);\s*setUsed\(\{ \.\.\.made, editor: open\.editor \}\);/,
+      /const made = draftUsed\(proposal, open\.draft\.text, usedNow\);\s*setEditing\(\{\s*\.\.\.open,\s*draft: \{ kind: "text", text: made\.text \},\s*refusal: "",\s*\}\);\s*setUsed\(\{ \.\.\.made, editor: open\.editor \}\);/,
     );
     assert.match(
       component(model, "draftUsed"),
@@ -238,9 +260,12 @@ describe("the choices", () => {
       button,
       /title=\{used && !drafting \? SAVE_FIRST : undefined\}/,
     );
+    // Rewritten for section 3.11's ways on (16 November 2026). Old expectation: the card
+    // returns the IN_EDITOR line where it holds the shown draft. New expectation: the
+    // model's `cardShows` says so (tested in the model), and the card draws its line.
     assert.match(
-      card,
-      /if \(offer\.used === proposal\.id\) \{\s*return line\(IN_EDITOR\);/,
+      component(model, "cardShows"),
+      /if \(held === proposal\.id\) \{\s*return \{ kind: "line", words: IN_EDITOR, action: null \};/,
     );
     assert.match(
       body,
@@ -257,7 +282,38 @@ describe("the choices", () => {
       body,
       /if \(draft\.kind === "text"\) \{\s*setUsed\(\(before\) => usedAfter\(before, draft\.text\)\);\s*\}/,
     );
-    assert.equal(count(body, /setUsed\(null\);/g), 3);
+    // Rewritten for the working copy that names the agent's draft (section 3.11, 16
+    // November 2026). Old expectation: three `setUsed(null)` (discard, "Use them", the 409
+    // after a save). New expectation: two, "Discard them" and "Discard" (the way on after
+    // the draft changed); "Use them" and opening "Edit" with a copy take up the draft the
+    // copy names (`heldFrom`), and a 409 keeps the link (`draftRefused`).
+    assert.equal(count(body, /setUsed\(null\);/g), 2);
+    assert.match(
+      body,
+      /setUsed\(copy === null \? null : heldFrom\(editor, copy\)\);/,
+    );
+    assert.match(body, /setUsed\(heldFrom\(open\.editor, copy\)\);/);
+    assert.match(
+      component(view, "heldFrom"),
+      /const from = editor\.kind === "text" \? draftRestored\(copy, editor\.text\) : null;/,
+    );
+  });
+
+  it("takes the draft up again with a working copy that names it, and says where the text came from", () => {
+    // "Use the draft", "Leave without saving", back (section 3.11): the copy names the
+    // draft, the editor holds it again, and its Save names it.
+    assert.match(
+      component(model, "draftRestored"),
+      /if \(copy\.proposalId === null \|\| copy\.text === null\) \{\s*return null;\s*\}/,
+    );
+    assert.match(
+      component(model, "cardShows"),
+      /return held === null\s*\? \{ kind: "none" \}\s*: \{ kind: "line", words: FROM_DRAFT, action: null \};/,
+    );
+    assert.match(
+      card,
+      /\{shows\.lead !== "" \? \(\s*<p className="se-proposal-lead">\{shows\.lead\}<\/p>\s*\) : null\}/,
+    );
   });
 });
 
@@ -271,10 +327,33 @@ describe("the Save after Use the draft", () => {
   });
 
   it("says the server's sentence where the draft changed, and reads the proposal again", () => {
+    // Rewritten for the ways on (section 3.11, 16 November 2026). Old expectation: after
+    // the 409 the link to the draft is dropped (`setUsed(null)`) and the agent's text
+    // stays, so a second Save was a person's plain edit. New expectation: the link is
+    // kept and marked refused, the proposal is read again, and the card offers only
+    // "Use the new draft" (where a new one is shown) or "Discard".
     assert.match(
       body,
-      /if \(draftChanged\(answer\.status, answer\.detail\)\) \{\s*setUsed\(null\);\s*setProposalRead\(\(count\) => count \+ 1\);\s*\}/,
+      /const named = namedDraft\(usedNow\);\s*if \(named !== null && draftChanged\(answer\.status, answer\.detail\)\) \{\s*setUsed\(\(before\) => draftRefused\(before, named\.id\)\);\s*setProposalRead\(\(count\) => count \+ 1\);\s*\}/,
     );
+    assert.match(
+      body,
+      /refused: usedNow !== null && !usedNow\.off && usedNow\.refused,/,
+    );
+    assert.match(body, /onDiscard: discardHeld,/);
+    // "Discard" is the existing discard: asked first, back to what is stored, the
+    // working copy discarded, and only then is the link dropped.
+    assert.match(
+      body,
+      /const discardHeld = \(\) => \{\s*const open = editing;\s*if \(open === null \|\| open\.phase !== "editing" \|\| usedNow === null\) \{\s*return;\s*\}\s*if \(changed\(open\.editor, open\.draft\) && !window\.confirm\(DISCARD_QUESTION\)\) \{\s*return;\s*\}\s*setEditing\(\{\s*\.\.\.open,\s*draft: draftOf\(open\.editor\),\s*restored: null,\s*refusal: "",\s*\}\);\s*setUsed\(null\);\s*(?:\/\/ [^\n]*\n\s*)+if \(open\.known\.state === "known"\) \{\s*keeper\.discard\(/,
+    );
+    // The card's two ways on.
+    assert.match(
+      card,
+      /\{shows\.choices === "changed" \? \(\s*discard\s*\) : \(/,
+    );
+    assert.match(card, /shows\.action === "discard" \? \(\s*discard\s*\)/);
+    assert.match(card, /offer\.onDiscard\(\);\s*focusBox\(here\);/);
     assert.match(body, /reread: proposalRead,/);
   });
 });

@@ -229,8 +229,12 @@ describe("Cancel, Escape and leaving the page", () => {
     // Rewritten after the independent review (15 November 2026). Old expectation: two.
     // New expectation: three, with "Use them" over a working copy found after the editor
     // opened, which also gives up what was typed only where the person says so.
-    assert.equal(count(view, /window\.confirm\(/g), 3);
-    assert.equal(count(view, /!window\.confirm\(DISCARD_QUESTION\)/g), 3);
+    // Rewritten for the ways on after the agent's draft changed (section 3.11, 16 November
+    // 2026). Old expectation: three. New expectation: four, with "Discard" where the
+    // draft the editor's text came from changed, which gives up what was typed only where
+    // the person says so, as "Discard them" does.
+    assert.equal(count(view, /window\.confirm\(/g), 4);
+    assert.equal(count(view, /!window\.confirm\(DISCARD_QUESTION\)/g), 4);
     assert.match(
       model,
       /DISCARD_QUESTION = "Discard your changes to this section\?"/,
@@ -345,9 +349,13 @@ describe("saving", () => {
     // New expectation: the same, and where the 409 says the agent's draft the save named
     // changed, the editor keeps its text, no longer named as that draft, and the proposal
     // is read again.
+    // Rewritten again for the ways on (section 3.11, 16 November 2026). Old expectation:
+    // after that 409 the link to the draft is dropped (`setUsed(null)`). New expectation:
+    // it is kept and marked refused (`draftRefused`), so a second Save still names it,
+    // and the proposal is read again.
     assert.match(
       body,
-      /sending\.current = false;\s*const refusal = saveProblem\(answer\.status, answer\.detail\);[\s\S]{0,420}if \(!mounted\.current\) \{\s*return;\s*\}\s*(?:\/\/ [^\n]*\n\s*)+const then = afterSave\.current;\s*afterSave\.current = null;\s*if \(refusal !== ""\) \{\s*setEditing\(\(before\) =>\s*before === null \? before : \{ \.\.\.before, phase: "editing", refusal \},\s*\);\s*if \(then !== null\) \{\s*(?:\/\/ [^\n]*\n\s*)+proceed\.current = then;\s*setWaited\(false\);\s*setAsking\(true\);\s*\}\s*if \(answer\.status === 409\) \{\s*(?:\/\/ [^\n]*\n\s*)+refreshRecords\(\);\s*setAttempt\(\(count\) => count \+ 1\);\s*\}\s*(?:\/\/ [^\n]*\n\s*)+if \(draftChanged\(answer\.status, answer\.detail\)\) \{\s*setUsed\(null\);\s*setProposalRead\(\(count\) => count \+ 1\);\s*\}\s*return;\s*\}/,
+      /sending\.current = false;\s*const refusal = saveProblem\(answer\.status, answer\.detail\);[\s\S]{0,420}if \(!mounted\.current\) \{\s*return;\s*\}\s*(?:\/\/ [^\n]*\n\s*)+const then = afterSave\.current;\s*afterSave\.current = null;\s*if \(refusal !== ""\) \{\s*setEditing\(\(before\) =>\s*before === null \? before : \{ \.\.\.before, phase: "editing", refusal \},\s*\);\s*if \(then !== null\) \{\s*(?:\/\/ [^\n]*\n\s*)+proceed\.current = then;\s*setWaited\(false\);\s*setAsking\(true\);\s*\}\s*if \(answer\.status === 409\) \{\s*(?:\/\/ [^\n]*\n\s*)+refreshRecords\(\);\s*setAttempt\(\(count\) => count \+ 1\);\s*\}\s*(?:\/\/ [^\n]*\n\s*)+const named = namedDraft\(usedNow\);\s*if \(named !== null && draftChanged\(answer\.status, answer\.detail\)\) \{\s*setUsed\(\(before\) => draftRefused\(before, named\.id\)\);\s*setProposalRead\(\(count\) => count \+ 1\);\s*\}\s*return;\s*\}/,
     );
     const bar = component(editor, "EditorBar");
     assert.match(

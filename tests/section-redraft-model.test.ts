@@ -4,12 +4,19 @@ import { describe, it } from "node:test";
 import { sectionWrite } from "../apps/web/src/section-edit-model.ts";
 import {
   answered,
+  CHANGED_DISCARD,
+  CHANGED_NEW,
+  cardShows,
   citedIn,
   draftChanged,
+  draftRefused,
+  draftRestored,
   draftUsed,
   editorText,
   FOLDED_BLOCKS,
+  FROM_DRAFT,
   folded,
+  IN_EDITOR,
   keepMineRequest,
   keepMineWrite,
   mayRead,
@@ -336,10 +343,13 @@ describe("the requests and the routes' checks", () => {
     }
     assert.equal(proposalIdOf(undefined), null);
     assert.equal(proposalIdOf(PROPOSAL), PROPOSAL);
-    // A working copy is never the save that names it.
+    // Rewritten for the working copy that names the agent's draft (section 3.11, 16
+    // November 2026). Old expectation: a working copy never names the draft (the route
+    // stripped it). New expectation: the copy keeps the draft its text came from, so a
+    // save after "Leave without saving" and back still names it; only a save ends it.
     const kept = copyWrite({ intent: "keep", ...named });
     assert.ok(!("error" in kept));
-    assert.ok(kept.method === "PUT" && !("proposal_id" in kept.body));
+    assert.ok(kept.method === "PUT" && kept.body.proposal_id === PROPOSAL);
   });
 });
 
@@ -539,5 +549,164 @@ describe("using the draft", () => {
     assert.deepEqual(namedDraft(redone), { id: PROPOSAL });
     assert.equal(usedAfter(null, "x"), null);
     assert.equal(namedDraft(null), null);
+  });
+});
+
+describe("the draft the editor holds, kept and taken up again (section 3.11)", () => {
+  const proposal = parseProposal(wire());
+  assert.ok(proposal !== null);
+  const other = parseProposal(wire({ id: uuid(10), text: "A newer draft." }));
+  assert.ok(other !== null);
+
+  it("over a draft it already holds, keeps what the person had before any draft", () => {
+    const first = draftUsed(proposal, "Mine.");
+    const second = draftUsed(other, first.text, first);
+    assert.equal(second.id, uuid(10));
+    assert.equal(second.before, "Mine.");
+    assert.equal(second.refused, false);
+    // Undo back to the first draft's text: still the agent's, still named.
+    assert.deepEqual(namedDraft(usedAfter(second, first.text)), {
+      id: uuid(10),
+    });
+    // Back to the person's own: named no more.
+    assert.equal(namedDraft(usedAfter(second, "Mine.")), null);
+  });
+
+  it("takes up a working copy that names the draft: a save names it again", () => {
+    const held = draftRestored(
+      { proposalId: PROPOSAL, text: READY_TEXT },
+      "The stored text.",
+    );
+    assert.ok(held !== null);
+    assert.equal(held.id, PROPOSAL);
+    assert.equal(held.text, editorText(READY_TEXT));
+    assert.equal(held.before, "The stored text.");
+    assert.equal(held.at, "");
+    assert.deepEqual(namedDraft(held), { id: PROPOSAL });
+    // Edited on after coming back: still from the draft.
+    assert.deepEqual(namedDraft(usedAfter(held, `${held.text}\n\nMore.`)), {
+      id: PROPOSAL,
+    });
+    // A copy that names none, or rows: nothing held.
+    assert.equal(
+      draftRestored({ proposalId: null, text: "Mine." }, "Stored."),
+      null,
+    );
+    assert.equal(draftRestored({ proposalId: PROPOSAL, text: null }, ""), null);
+  });
+
+  it("keeps the link when the server says the draft changed, and marks it", () => {
+    const used = draftUsed(proposal, "Mine.");
+    const refused = draftRefused(used, PROPOSAL);
+    assert.ok(refused !== null);
+    assert.equal(refused.refused, true);
+    // Never dropped: a save still names it, so the agent's text is never a person's.
+    assert.deepEqual(namedDraft(refused), { id: PROPOSAL });
+    // Kept through edits.
+    assert.equal(usedAfter(refused, `${used.text} More.`)?.refused, true);
+    // Another draft's refusal is not this one's.
+    assert.equal(draftRefused(used, uuid(10)), used);
+    assert.equal(draftRefused(null, PROPOSAL), null);
+    // Using the new draft starts again, not refused.
+    assert.equal(draftUsed(other, used.text, refused).refused, false);
+  });
+});
+
+describe("what the card under the editor shows (section 3.11)", () => {
+  const ready = { id: PROPOSAL, status: "READY" as const, failure: "" };
+  const newer = { id: uuid(10), status: "READY" as const, failure: "" };
+
+  it("after the draft changed, offers only the two ways on", () => {
+    assert.deepEqual(
+      cardShows({
+        proposal: newer,
+        problem: "",
+        held: PROPOSAL,
+        refused: true,
+      }),
+      { kind: "draft", lead: CHANGED_NEW, choices: "changed" },
+    );
+    for (const proposal of [
+      null,
+      ready,
+      { id: uuid(10), status: "PENDING" as const, failure: "" },
+      { id: uuid(10), status: "FAILED" as const, failure: "No model." },
+    ]) {
+      assert.deepEqual(
+        cardShows({ proposal, problem: "x", held: PROPOSAL, refused: true }),
+        { kind: "line", words: CHANGED_DISCARD, action: "discard" },
+        JSON.stringify(proposal),
+      );
+    }
+  });
+
+  it("says where the editor's text came from when the draft it holds is not shown", () => {
+    assert.deepEqual(
+      cardShows({
+        proposal: null,
+        problem: "",
+        held: PROPOSAL,
+        refused: false,
+      }),
+      { kind: "line", words: FROM_DRAFT, action: null },
+    );
+    assert.deepEqual(
+      cardShows({
+        proposal: newer,
+        problem: "",
+        held: PROPOSAL,
+        refused: false,
+      }),
+      { kind: "draft", lead: FROM_DRAFT, choices: "first" },
+    );
+    assert.deepEqual(
+      cardShows({
+        proposal: ready,
+        problem: "",
+        held: PROPOSAL,
+        refused: false,
+      }),
+      { kind: "line", words: IN_EDITOR, action: null },
+    );
+  });
+
+  it("as before where the editor holds none", () => {
+    assert.deepEqual(
+      cardShows({ proposal: null, problem: "", held: null, refused: false }),
+      { kind: "none" },
+    );
+    assert.deepEqual(
+      cardShows({
+        proposal: null,
+        problem: "Nope.",
+        held: null,
+        refused: false,
+      }),
+      { kind: "line", words: "Nope.", action: "try" },
+    );
+    assert.deepEqual(
+      cardShows({
+        proposal: { id: PROPOSAL, status: "FAILED", failure: "No model." },
+        problem: "",
+        held: null,
+        refused: false,
+      }),
+      { kind: "line", words: "No model.", action: "try" },
+    );
+    assert.deepEqual(
+      cardShows({ proposal: ready, problem: "", held: null, refused: false }),
+      { kind: "draft", lead: "", choices: "first" },
+    );
+    // `refused` without a held draft is nothing.
+    assert.deepEqual(
+      cardShows({ proposal: ready, problem: "", held: null, refused: true }),
+      { kind: "draft", lead: "", choices: "first" },
+    );
+  });
+
+  it("never says 'the client'", () => {
+    for (const words of [FROM_DRAFT, CHANGED_DISCARD, CHANGED_NEW]) {
+      assert.ok(!/the client/i.test(words), words);
+    }
   });
 });

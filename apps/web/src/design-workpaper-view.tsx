@@ -158,6 +158,8 @@ import {
 } from "./section-editor";
 import {
   draftChanged,
+  draftRefused,
+  draftRestored,
   draftUsed,
   namedDraft,
   type Proposal,
@@ -465,6 +467,16 @@ type Editing = {
 
 const KNOWN: CopyKnown = { state: "known" };
 
+/** The agent's draft an editor holds, and the editor it was put in. */
+type HeldDraft = UsedDraft & { editor: SectionEditor };
+
+/** What an editor that takes up a working copy holds of the agent's draft (section
+ * 3.11): the draft the copy names, so a save names it; null where it names none. */
+function heldFrom(editor: SectionEditor, copy: WorkingCopy): HeldDraft | null {
+  const from = editor.kind === "text" ? draftRestored(copy, editor.text) : null;
+  return from === null ? null : { ...from, editor };
+}
+
 /** "Leave without saving" waits no longer than this for the latest working copy to be
  * kept before the page goes on (section 3.4). */
 const LEAVE_WAIT_MS = 1000;
@@ -553,9 +565,7 @@ export function DesignWorkpaper({
   // The agent's draft the open editor holds, not saved yet (section 3.11): the editor it
   // was put in, so it is never named by a save of another editor. Read again: the count
   // the editor's proposal is read again by.
-  const [used, setUsed] = useState<
-    (UsedDraft & { editor: SectionEditor }) | null
-  >(null);
+  const [used, setUsed] = useState<HeldDraft | null>(null);
   const [proposalRead, setProposalRead] = useState(0);
   // Another control is another mount: an answer for the last one is dropped.
   const mounted = useRef(true);
@@ -867,6 +877,11 @@ export function DesignWorkpaper({
   const hasCopy =
     editing !== null &&
     copies.some((copy) => copy.section === editing.editor.key);
+  // The agent's draft the open editor holds, if it does: never one put in another editor.
+  const usedNow =
+    used !== null && editing !== null && used.editor === editing.editor
+      ? used
+      : null;
   const keeper = useKeeping(
     editing === null
       ? null
@@ -879,6 +894,8 @@ export function DesignWorkpaper({
           hasCopy,
           restored: editing.restored,
           off: keepingOff(editing.known),
+          // The agent's draft its text came from is kept with the copy (section 3.11).
+          proposalId: namedDraft(usedNow)?.id ?? null,
         },
     {
       onKept: working.remember,
@@ -888,6 +905,12 @@ export function DesignWorkpaper({
         setEditing((before) => dropRestored(before, section));
       },
       onGone: working.reread,
+      // A keep refused as the draft it named changed: the link is kept, the ways on are
+      // shown, and the proposal is read again (section 3.11).
+      onDraftChanged: (id) => {
+        setUsed((before) => draftRefused(before, id));
+        setProposalRead((count) => count + 1);
+      },
     },
   );
   // A read that answered after an editor opened that did not know what the server holds
@@ -1017,11 +1040,6 @@ export function DesignWorkpaper({
     [selection],
   );
 
-  // The agent's draft the open editor holds, if it does: never one put in another editor.
-  const usedNow =
-    used !== null && editing !== null && used.editor === editing.editor
-      ? used
-      : null;
   const redraft = (draft: Draft) => {
     setEditing((before) =>
       before === null || before.phase !== "editing"
@@ -1048,7 +1066,9 @@ export function DesignWorkpaper({
     ) {
       return;
     }
-    const made = draftUsed(proposal, open.draft.text);
+    // Over a draft the editor already holds, what it held before that one is kept: an
+    // undo back to the earlier draft's text still names a draft, never none.
+    const made = draftUsed(proposal, open.draft.text, usedNow);
     setEditing({
       ...open,
       draft: { kind: "text", text: made.text },
@@ -1102,6 +1122,34 @@ export function DesignWorkpaper({
     // Everything is replaced again: the agent's draft is no longer what it holds.
     setUsed(null);
   };
+  /** "Discard" where the draft the editor's text came from changed (section 3.11): back to
+   * what is stored, asked first, and the working copy discarded, as "Discard them" does.
+   * Only now does the editor stop naming the draft. */
+  const discardHeld = () => {
+    const open = editing;
+    if (open === null || open.phase !== "editing" || usedNow === null) {
+      return;
+    }
+    if (changed(open.editor, open.draft) && !window.confirm(DISCARD_QUESTION)) {
+      return;
+    }
+    setEditing({
+      ...open,
+      draft: draftOf(open.editor),
+      restored: null,
+      refusal: "",
+    });
+    setUsed(null);
+    // Never a copy the editor did not know of (as Cancel).
+    if (open.known.state === "known") {
+      keeper.discard(
+        scope,
+        open.source.workpaperId,
+        open.editor.key,
+        copies.some((copy) => copy.section === open.editor.key),
+      );
+    }
+  };
   /** "Use them" over a working copy found after the editor opened: the editor takes it up,
    * asked first where that gives up a change; keeping goes on from it. */
   const useFound = () => {
@@ -1124,8 +1172,8 @@ export function DesignWorkpaper({
       known: KNOWN,
       refusal: "",
     });
-    // Everything is replaced again: the agent's draft is no longer what it holds.
-    setUsed(null);
+    // Everything is replaced again: it holds the agent's draft the copy names, or none.
+    setUsed(heldFrom(open.editor, copy));
   };
   /** "Discard them" over a working copy found after the editor opened: it is discarded,
    * and what the editor holds stays; keeping goes on from it, after the discard. */
@@ -1199,11 +1247,13 @@ export function DesignWorkpaper({
         refreshRecords();
         setAttempt((count) => count + 1);
       }
-      // The agent's draft the save named is no longer the one standing (section 3.11):
-      // the server's sentence is said, the editor keeps its text, no longer named as the
-      // draft, and the proposal is read again.
-      if (draftChanged(answer.status, answer.detail)) {
-        setUsed(null);
+      // The agent's draft the save named may not be saved from (section 3.11): the
+      // server's sentence is said, the editor keeps its text and the link to that draft
+      // (never dropped in silence), the proposal is read again, and the card offers the
+      // ways on: the new draft, or Discard.
+      const named = namedDraft(usedNow);
+      if (named !== null && draftChanged(answer.status, answer.detail)) {
+        setUsed((before) => draftRefused(before, named.id));
         setProposalRead((count) => count + 1);
       }
       return;
@@ -1242,8 +1292,10 @@ export function DesignWorkpaper({
           },
           workpaperVersion,
           used: usedNow === null || usedNow.off ? null : usedNow.id,
+          refused: usedNow !== null && !usedNow.off && usedNow.refused,
           reread: proposalRead,
           onUse: takeProposal,
+          onDiscard: discardHeld,
         }
       : null;
 
@@ -1320,6 +1372,10 @@ export function DesignWorkpaper({
               restored: copy,
               known: gate === "open" ? KNOWN : { state: "unknown" },
             });
+            // A copy taken up again that names the agent's draft (section 3.11: "Use the
+            // draft", "Leave without saving", back): the editor holds that draft, so the
+            // next Save names it and is never recorded as the person's own text.
+            setUsed(copy === null ? null : heldFrom(editor, copy));
           },
     editing:
       editing === null
