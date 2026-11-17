@@ -248,6 +248,68 @@ The workflow reads today's records honestly. Three of the product owner's decisi
 - A person rates each deficiency's severity, with the agent's suggestion (from likelihood and magnitude) and its reason pre-filled. Ratings are kept as made (trigger-enforced). A significant deficiency or material weakness still waits for the reviewer through the existing change request; a rating answers a severity requested when the deficiency was logged.
 - The control's review is not signed off while a deficiency is unrated, and its sign-off records the proposed conclusion and each severity in its coverage.
 
+**B1j. The understanding is asked once; after it, the agents never send the person back. Agreed 16 November 2026.** Asked for by the product owner on ITGC-CM-06 (Patch Testing and Approval): "This is so annoying. Keeps going back and forth to the control understanding and attributes. Also whenever I make an update on the control understanding after it ask the question, does the criteria identified initially currently being saved or are overwritten and start again? This could be a never ending loop so I want you to really address the issue here." Approved after a prototype (scratchpad brief-proto/loop.png), with the answer "On the attribute" to: after the understanding is finished, how is a gap an agent finds later handled.
+
+What happened on ITGC-CM-06 (dev data, 16 November 2026, 4:01 to 4:12 pm):
+- the person answered 11 walkthrough questions and set 3 values;
+- the attribute run that followed re-tailored A1's criteria in place and raised one question;
+- the person answered it;
+- the page then asked for a process narrative redraft, although an ITGC needs none;
+- the redraft's reviewer raised three new questions;
+- every open question holds Control Understanding, so step 3 read "Waiting on understanding" again.
+
+The investigation (four readers, each verified) found:
+- **The hinge.** `phase_release.understanding_waits` counts every OPEN question on the control, whoever raised it and whenever (the rule of 4 November, docs/phase-plan.md: "the step opens again when an agent raises one later").
+- **Nothing bounds the questions.**
+  - The attribute agent may raise up to five per run with no limit on rounds.
+  - The page redrafts the narrative after every single answer, which keeps its first round, in which anything may be asked, open.
+  - A topic is blocked only when worded identically, and questions closed by acceptance (SUPERSEDED) are forgotten and may return.
+  - Each attribute run closes its own unanswered questions while being told not to repeat them, so they can vanish and come back.
+- **Finishing is itself a trigger.** An edit held while questions are open replays as a full run when the last one is answered, or when the attributes are accepted.
+- **Answers do not reach the attributes.** Answers to the agents' questions do not start the follow-up of B1d (`_UNDERSTANDING_CHANGED_SQL` reads only values and walkthrough answers).
+- **Criteria are rewritten without a record.** Agent criteria still to accept are rewritten in place on every run, with no earlier version kept.
+- **Rewording loses criteria.** Rewording an approved attribute (`edit_attribute`) drops its criteria, even criteria a person wrote or accepted.
+
+Decided, superseding the rule of 4 November and B1e's rule 5 ("a missing or ambiguous fact is always asked") for any agent question raised after the understanding is complete:
+
+1. **One pass.**
+   - When the walkthrough's required answers and the statement's values are in, the attribute agent's first run is the question pass. It is shown in Control Understanding as "Checking what else the agents need…".
+   - The run's ATTRIBUTES stage may raise questions (at most five, as today). When it does, the run stops there: no criteria are tailored and no set review runs until they are answered.
+   - The questions join the same Control Understanding course, labelled "Added by the agents · for the attributes".
+   - For a business process control, the narrative's points are asked in the same pass, under its existing round rules.
+2. **Complete once.**
+   - The understanding is complete when the question pass has run and nothing in Control Understanding is open. The time is recorded as `engagement_controls.understanding_completed_at`.
+   - From then on no agent writes an OPEN question on the control: not the attribute agent, the set reviewer, the narrative, or the late points. A person may still change any answer in Control Understanding.
+   - The Attributes step never reads "Waiting on understanding" again, and the D&I release reads the understanding as today.
+   - A question raised by the rules (a frequency conflict, "Changed after testing") still shows in Control Understanding. It does not put the Attributes step back to waiting.
+3. **A later gap is an assumption on the attribute.**
+   - After completion, where an agent finds a missing or ambiguous fact, it states its assumption on the attribute it bears on (`attribute_assumptions`). The table holds: the matter, the assumption in one sentence, the attribute or attributes, and the model call.
+   - The attribute shows "The agent assumed: …" with **That's right** and **Change…** (the person's own words, 10 to 1,000 characters).
+   - **That's right** records a confirmed fact. It is read as a PERSON fact of the understanding, newest first, as B1e.
+   - **Change…** records the person's fact and starts one attribute update that re-tailors only the attributes that assumption names.
+   - Accepting an attribute with an open assumption records it as accepted with the attribute, never as the person's own answer.
+   - A CONFLICT found after completion (evidence or a source that contradicts a confirmed fact) is also stated on the attribute, never as a reopening question.
+4. **Asked once, in code.**
+   - A matter is never asked again on a control once it was asked: answered, dismissed, superseded or closed by acceptance. The check covers the fingerprint and the normalised topic, and counts SUPERSEDED rows too.
+   - A run no longer closes the earlier round's unanswered questions. They stay until they are answered or the attributes are accepted.
+   - Questions closed by acceptance are kept as settled facts ("Closed when the attributes were accepted"), so no agent asks them again.
+5. **No narrative for an ITGC.**
+   - A process narrative is drafted only for a control that needs one (`needs_process_understanding`). The server refuses the redraft otherwise.
+   - The page never asks for a redraft after each single answer: the server's rule of redrafting after the last point stays.
+6. **Answers apply, and nothing is lost.**
+   - An answer to an agent's question counts as a change to the understanding for B1d's follow-up.
+   - A rerun keeps an undecided proposal whose wording it would draft again, instead of replacing it with an identical one.
+   - Every change to an attribute's criteria keeps the previous criteria (`attribute_criteria_versions`, written by a trigger on every update, whoever made it). The attribute shows "Previous criteria" and, where an answer or a changed assumption caused it, "Updated from your answer on <matter>".
+   - Rewording an approved attribute carries its criteria to the new wording.
+
+Not changed: B1b (criteria never written over a person's, an accepted or the demo's), B1e's precedence (the newer confirmed answer wins), the 14 November rule (no follow-up questions once the attributes are accepted), and the D&I release rules.
+
+Migration 0172 adds:
+- `engagement_controls.understanding_completed_at`, null until completed, with no backfill: a control is completed the next time its understanding is found complete with no run pending;
+- `attribute_assumptions`, written once and ended once, no delete, with the archived guard;
+- `attribute_criteria_versions` and its trigger;
+- the asked-matters check, as a column or view if needed.
+
 ## The step panels (built 8 November 2026)
 
 The product owner: the panels "look like a traditional view which does not align with my new workflow and design". Decided: a decision-first layout for every panel, an agent strip in each panel, the agent proposes the conclusion and a person rates, and everything built at once.
