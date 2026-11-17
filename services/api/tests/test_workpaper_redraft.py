@@ -124,7 +124,9 @@ class _Bench:
         return f"{self.base}/{self.paper_id}/sections/{key}"
 
     def ask(self, key: str | None = None, client: TestClient | None = None, **body: Any) -> Any:
-        body.setdefault("workpaper_version", self.current)
+        # Read only when not given (setdefault would read it even then).
+        if "workpaper_version" not in body:
+            body["workpaper_version"] = self.current
         return (client or self.owner).post(f"{self.url(key or self.key)}/redraft", json=body)
 
     def asked(self, key: str | None = None, client: TestClient | None = None) -> dict[str, Any]:
