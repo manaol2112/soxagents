@@ -318,8 +318,11 @@ def test_a_version_says_who_wrote_it_and_the_cause_reads_as_one_line() -> None:
 def test_the_attribute_agents_prompt_keeps_every_rule_of_5_word_for_word() -> None:
     # Old: attributes/5 had no rule for a completed understanding or a named update. New:
     # attributes/6 adds those two rules and changes nothing else (B1j).
+    # attributes/7 (after the review of B1k, 16 November 2026): the system prompt is
+    # unchanged; only the correction carries the previous answer as escaped data
+    # (agent_answers.correction_prompt). Old: "attributes/6". New: "attributes/7".
     prompt = control_attributes.SYSTEM_PROMPT
-    assert control_attributes.PROMPT_VERSION == "attributes/6"
+    assert control_attributes.PROMPT_VERSION == "attributes/7"
     assert prompt.count(ADDED_IN_6) == 1
     without = prompt.replace(ADDED_IN_6, "")
     assert hashlib.sha256(without.encode()).hexdigest() == PROMPT_5_SHA256

@@ -657,12 +657,26 @@ def test_a_matter_is_asked_once_superseded_closed_by_acceptance_or_reworded(
     # A run no longer closes the earlier round's unanswered question: it stays until a
     # person answers it or the attributes are accepted. Old (before B1j): every run
     # superseded its own open ATTRIBUTES questions first. New: the question stays OPEN.
+    # Rewritten again after the review of B1k (16 November 2026: the attribute agent never
+    # asks before completion on any path, generate_reviewed included). Old: the agent's own
+    # run raised the question it then kept. New: the question is one raised before (an
+    # agent's, before B1k), and the agent's runs keep it open; the same matter returned by
+    # the agent is not assumed either, since it was asked.
+    with connect(migrated.url) as connection:
+        with connection.transaction():
+            assert raise_issues(
+                connection.cursor(), org, project, UUID(control),
+                [Issue("ATTRIBUTES", "MISSING", _GRANT_RECORD["topic"], _GRANT_RECORD["detail"],
+                       _GRANT_RECORD["why"], "")],
+                "AGENT",
+            ) == 1  # fmt: skip
     asking = _Agents(migrated, team, control)
     asking.issues = [{**_GRANT_RECORD}]
     with connect(migrated.url) as connection:
         generate_reviewed(connection, asking, org, project, UUID(control), team["owner_id"])
         connection.commit()
     [kept] = [row for row in _open_issues(migrated, control) if row[1] == _GRANT_RECORD["topic"]]
+    assert _GRANT_RECORD["topic"] not in {row[0] for row in _assumptions(migrated, control)}
     silent = _Agents(migrated, team, control)
     with connect(migrated.url) as connection:
         generate_reviewed(connection, silent, org, project, UUID(control), team["owner_id"])

@@ -39,7 +39,7 @@ shown as words, never read as instructions.
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
@@ -122,10 +122,19 @@ class Draft:
     assumed: str
     codes: tuple[str, ...] = ()
     # B1l: the key of a question the specialist did not ask, and the question a person left
-    # as not known (migration 0173).
+    # as not known (migration 0173): an issue, or a walkthrough question or value
+    # (understanding_not_known).
     asks_code: str | None = None
     asks_fact: str | None = None
     source_issue: UUID | None = None
+    source_not_known: UUID | None = None
+    # A matter still not established after it was asked as a question: assumed all the same
+    # (B1l point 3), although the asked-once rule otherwise never assumes a matter asked.
+    after_asked: bool = False
+
+    @property
+    def not_known(self) -> bool:
+        return self.source_issue is not None or self.source_not_known is not None
 
 
 def drafted(
@@ -171,15 +180,7 @@ def shaped(drafts: list[Draft | None], approved_codes: set[str]) -> list[Draft]:
             continue
         seen.add(key)
         found.append(
-            Draft(
-                draft.kind,
-                draft.matter,
-                draft.assumed,
-                tuple(code for code in draft.codes if code in approved_codes),
-                draft.asks_code,
-                draft.asks_fact,
-                draft.source_issue,
-            )
+            replace(draft, codes=tuple(code for code in draft.codes if code in approved_codes))
         )
     return found
 
@@ -221,25 +222,25 @@ def record(
     }
     recorded = 0
     for draft in shaped(drafts, approved_codes(cursor, control_id)):
-        if draft.source_issue is None and matter_key(draft.matter) in asked:
+        if not draft.not_known and not draft.after_asked and matter_key(draft.matter) in asked:
             continue
-        if (draft.kind == "NOT_KNOWN") != (draft.source_issue is not None):
+        if (draft.kind == "NOT_KNOWN") != draft.not_known:
             continue
         row = cursor.execute(
             """
             INSERT INTO attribute_assumptions (
                 organization_id, project_id, engagement_control_id, matter, assumed, kind,
                 attribute_codes, raised_by_agent, model_call_id, asks_code, asks_fact,
-                source_issue_id
+                source_issue_id, source_not_known_id
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT DO NOTHING
             RETURNING id
             """,
             (organization_id, project_id, control_id, draft.matter, draft.assumed, draft.kind,
              Json(list(draft.codes)), line(agent, 60) or "agent", call_id,
              None if draft.asks_code is None else line(draft.asks_code, 80) or None,
-             draft.asks_fact, draft.source_issue),
+             draft.asks_fact, draft.source_issue, draft.source_not_known),
         ).fetchone()  # fmt: skip
         if row is not None:
             recorded += 1
@@ -318,17 +319,28 @@ _KEEP_ACCEPTANCE = (
 )
 
 
+@dataclass(frozen=True)
+class Opened:
+    """The assumption a person decides, as read under its lock."""
+
+    matter: str
+    assumed: str
+    codes: list[str]
+    kind: str
+    status: str
+
+
 def _open_one(
     cursor: psycopg.Cursor[Any], control_id: UUID, assumption_id: UUID, version: int
-) -> tuple[str, str, list[str]]:
-    """The assumption a person decides, locked: its matter, what it assumed and its codes.
-    404 when it is not this control's; 409 when it is decided or changed. One accepted with
-    its attribute may still be confirmed or changed, once (B1l: the D&I workpaper's point)."""
+) -> Opened:
+    """The assumption a person decides, locked. 404 when it is not this control's; 409 when
+    it is decided or changed. One accepted with its attribute may still be confirmed or
+    changed, once (B1l: the D&I workpaper's point)."""
     from ai_workforce_api.authorization import NotVisible
 
     row = cursor.execute(
-        "SELECT status, version, matter, assumed, attribute_codes FROM attribute_assumptions "
-        "WHERE id = %s AND engagement_control_id = %s FOR UPDATE",
+        "SELECT status, version, matter, assumed, attribute_codes, kind "
+        "FROM attribute_assumptions WHERE id = %s AND engagement_control_id = %s FOR UPDATE",
         (assumption_id, control_id),
     ).fetchone()
     if row is None:
@@ -337,7 +349,35 @@ def _open_one(
         raise ContextState(DECIDED)
     if int(row[1]) != version:
         raise ContextState(STALE)
-    return str(row[2]), str(row[3]), [str(code) for code in (row[4] or [])]
+    return Opened(
+        str(row[2]), str(row[3]), [str(code) for code in (row[4] or [])], str(row[5]),
+        str(row[0]),
+    )  # fmt: skip
+
+
+def _matter_words(text: str) -> set[str]:
+    return {word for word in matter_key(text).split() if len(word) > 3}
+
+
+def upheld(matter: str, facts: list[Any], limit: int = 6) -> list[dict[str, Any]]:
+    """The confirmed facts a person upholds by deciding a conflict "The confirmed
+    understanding stands": the PERSON facts of the understanding (understanding_authority.
+    facts, newest first) whose question or answer shares a word of the conflict's matter, at
+    most `limit`, by reference (kind, key, when confirmed), never their words. Pure."""
+    words = _matter_words(matter)
+    found: list[dict[str, Any]] = []
+    for fact in facts:
+        if fact.confirmed_by != "PERSON":
+            continue
+        if words & _matter_words(f"{fact.question} {fact.answer}"):
+            found.append(
+                {"ref": fact.ref, "kind": fact.kind, "key": fact.key,
+                 "confirmed_at": None if fact.confirmed_at is None
+                 else fact.confirmed_at.isoformat()}
+            )  # fmt: skip
+        if len(found) >= limit:
+            break
+    return found
 
 
 def confirm(
@@ -350,19 +390,35 @@ def confirm(
     body: ConfirmBody,
 ) -> None:
     """That's right: the person confirms what the agent assumed. From now on it is a
-    confirmed fact of the understanding (understanding_authority.facts), the person's."""
+    confirmed fact of the understanding (understanding_authority.facts), the person's.
+
+    For a CONFLICT the button reads "The confirmed understanding stands": the person decides
+    the conflict, and confirms no agent text (B1l point 6; decided by the product owner
+    after the review of B1k, 16 November 2026). The decision is kept on the row and in its
+    audit record, which references the confirmed facts it upholds (`upheld`); the agent's
+    statement of the conflict never becomes a fact (understanding_authority.facts leaves a
+    confirmed CONFLICT out)."""
     from ai_workforce_api.db import transaction
 
+    upholds: list[dict[str, Any]] = []
     with transaction(connection) as cursor:
-        matter, _assumed, codes = _open_one(cursor, control_id, assumption_id, body.version)
+        opened = _open_one(cursor, control_id, assumption_id, body.version)
+        if opened.kind == "CONFLICT":
+            from ai_workforce_api.understanding_authority import facts
+
+            upholds = upheld(opened.matter, list(facts(connection, control_id)))
         cursor.execute(
             f"UPDATE attribute_assumptions SET status = 'CONFIRMED', {_KEEP_ACCEPTANCE}, "
             "decided_by = %s, decided_at = clock_timestamp(), version = version + 1 "
             "WHERE id = %s",
             (actor, assumption_id),
         )
+        payload: dict[str, Any] = {"matter": opened.matter, "codes": opened.codes}
+        if opened.kind == "CONFLICT":
+            payload["decision"] = "CONFIRMED_UNDERSTANDING_STANDS"
+            payload["upholds"] = upholds
         _audit(cursor, organization_id, project_id, actor, "attribute_assumption.confirmed",
-               assumption_id, {"matter": matter, "codes": codes})  # fmt: skip
+               assumption_id, payload)  # fmt: skip
 
 
 def change(
@@ -386,20 +442,85 @@ def change(
     if contains_secret({"answer": answer}):
         raise ValueError("an answer must be plain text")
     with transaction(connection) as cursor:
-        matter, _assumed, codes = _open_one(cursor, control_id, assumption_id, body.version)
+        opened = _open_one(cursor, control_id, assumption_id, body.version)
+        matter, codes = opened.matter, opened.codes
         cursor.execute(
             "UPDATE attribute_assumptions SET status = 'CHANGED', answer = %s, "
             f"{_KEEP_ACCEPTANCE}, decided_by = %s, decided_at = clock_timestamp(), "
             "version = version + 1 WHERE id = %s",
             (answer, actor, assumption_id),
         )
+        named = approved_codes(cursor, control_id)
+        kept = [code for code in codes if code in named]
+        # Accepted criteria never silently rest on an assumption a person changed: each
+        # named attribute whose criteria are accepted (or a person's) is opened for
+        # acceptance again by a proposed change (B1d style).
+        reopened = reopen_accepted(
+            cursor, organization_id, project_id, control_id, kept, actor, matter
+        )
         # The person's words stay in their row: the audit record keeps how long they were.
         _audit(
             cursor, organization_id, project_id, actor, "attribute_assumption.changed",
-            assumption_id, {"matter": matter, "codes": codes, "length": len(answer)},
+            assumption_id,
+            {"matter": matter, "codes": codes, "length": len(answer),
+             "reopened": [str(item) for item in reopened]},
         )  # fmt: skip
-        named = approved_codes(cursor, control_id)
-    return matter, [code for code in codes if code in named]
+    return matter, kept
+
+
+# The note on the change proposed when an assumption the criteria rest on was changed.
+REOPENED_NOTE = "Its criteria rested on an assumption a person changed: accept them again."
+
+
+def reopen_accepted(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    codes: list[str],
+    actor: UUID,
+    matter: str,
+) -> list[UUID]:
+    """A person changed an assumption the named attributes' accepted criteria rest on
+    (decided by the product owner after the review of B1k, 16 November 2026: the accepted
+    criteria never silently rest on a rejected assumption). For each named approved
+    attribute whose criteria are accepted, or a person's, and that has no change proposed
+    already, a change is proposed in its own wording with its criteria as they stand, to
+    accept again (B1d: nothing approved changes without a person; the attributes then read as
+    not accepted until it is decided). The update the change starts may propose its own
+    re-tailored change of the attribute in its place (control_attributes.generate). The
+    accepted row is never written over: its acceptance and criteria history stay. Returns the
+    proposals' ids."""
+    if not codes:
+        return []
+    rows = cursor.execute(
+        """
+        INSERT INTO control_attributes (
+            organization_id, project_id, engagement_control_id, position, text, status,
+            basis, source_kind, note, proposal, replaces_id, created_by, definition_key,
+            objective, condition, pass_criteria, fail_criteria, judgment_required,
+            automatable, phases, criteria_origin
+        )
+        SELECT a.organization_id, a.project_id, a.engagement_control_id, 1000 + a.position,
+               a.text, 'PROPOSED', 'DOCUMENTED', 'MANUAL', %s, 'CHANGE', a.id, %s,
+               a.definition_key, a.objective, a.condition, a.pass_criteria, a.fail_criteria,
+               a.judgment_required, a.automatable, a.phases, a.criteria_origin
+        FROM control_attributes a
+        WHERE a.engagement_control_id = %s AND a.status = 'APPROVED' AND a.code = ANY(%s)
+          AND (a.criteria_accepted_at IS NOT NULL OR a.criteria_origin = 'PERSON')
+          AND NOT EXISTS (SELECT 1 FROM control_attributes p
+                          WHERE p.replaces_id = a.id AND p.status = 'PROPOSED')
+        RETURNING id
+        """,
+        (line(f"{REOPENED_NOTE} ({matter})", 300), actor, control_id, codes),
+    ).fetchall()
+    found = [UUID(str(row[0])) for row in rows]
+    if found:
+        _audit_control(
+            cursor, organization_id, project_id, actor, "attribute.criteria_reopened",
+            control_id, {"matter": matter, "codes": codes, "proposals": [str(i) for i in found]},
+        )  # fmt: skip
+    return found
 
 
 def accept_with(

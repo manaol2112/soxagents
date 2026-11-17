@@ -182,15 +182,17 @@ def facts(connection: psycopg.Connection[Any], control_id: UUID) -> tuple[Fact, 
             ("ANSWERED_QUESTION", str(issue_id), str(question) or str(topic), answer, at,
              "PERSON" if by is not None else "RECORDS")
         )  # fmt: skip
-    for assumption_id, matter, assumed, status, answer_text, at in connection.execute(
-        "SELECT id, matter, assumed, status, answer, decided_at FROM attribute_assumptions "
+    for assumption_id, matter, assumed, status, answer_text, at, kind in connection.execute(
+        "SELECT id, matter, assumed, status, answer, decided_at, kind FROM attribute_assumptions "
         "WHERE engagement_control_id = %s AND status IN ('CONFIRMED', 'CHANGED') "
         "AND decided_by IS NOT NULL ORDER BY decided_at",
         (control_id,),
     ).fetchall():
+        said = assumption_fact(str(kind), str(status), str(assumed), str(answer_text))
+        if said is None:
+            continue
         found.append(
-            ("ANSWERED_QUESTION", str(assumption_id), str(matter),
-             str(answer_text) if status == "CHANGED" else str(assumed), at, "PERSON")
+            ("ANSWERED_QUESTION", str(assumption_id), str(matter), said, at, "PERSON")
         )  # fmt: skip
     oldest = datetime.min.replace(tzinfo=UTC)
     # Newest first; facts confirmed at the same moment keep the order they were read in.
@@ -207,6 +209,27 @@ def facts(connection: psycopg.Connection[Any], control_id: UUID) -> tuple[Fact, 
         )
         for index, (kind, key, question, answer, at, by) in enumerate(ordered, start=1)
     )
+
+
+def assumption_fact(kind: str, status: str, assumed: str, answer: str) -> str | None:
+    """What a person's decision on an agent's assumption adds to the understanding, as a
+    PERSON fact (attribute_assumptions), or None. Change... adds the person's own words. That's
+    right adds what the agent assumed, which the person confirmed, except (after the review
+    of B1k, 16 November 2026: agent output is never recorded as a person's):
+    - a CONFLICT decided "The confirmed understanding stands" adds nothing: the confirmed
+      facts it upholds already stand, and the decision stays on its row and in its audit
+      record; the agent's statement of the conflict is no fact;
+    - a question left as not known with no statement of the agent's (its fixed sentence,
+      understanding_review.NOT_KNOWN_ASSUMED) adds nothing either: the person confirmed that
+      the usual practice is followed until it is known, not a fact of this control.
+    Pure."""
+    from ai_workforce_api.understanding_review import NOT_KNOWN_ASSUMED
+
+    if status == "CHANGED":
+        return answer
+    if kind == "CONFLICT" or (kind == "NOT_KNOWN" and assumed == NOT_KNOWN_ASSUMED):
+        return None
+    return assumed
 
 
 def for_agents(found: tuple[Fact, ...], answer_limit: int = ANSWER_LIMIT) -> list[dict[str, Any]]:

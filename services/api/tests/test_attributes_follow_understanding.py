@@ -1251,8 +1251,11 @@ def test_a_duplicate_the_drafts_reviewer_returns_as_criteria_never_becomes_a_pro
     # which this test is about, are unchanged in both prompts. Old "attributes/5", new
     # "attributes/6" since B1j (16 November 2026): two rules added (a completed
     # understanding, a named update); the duplicate rules unchanged.
+    # Old "attributes/6" and "attribute-review/3"; new "attributes/7" and
+    # "attribute-review/4" after the review of B1k (16 November 2026): the corrections
+    # carry the previous answer as escaped data; nothing else changed.
     assert (control_attributes.PROMPT_VERSION, control_attributes.REVIEW_PROMPT_VERSION) == (
-        "attributes/6", "attribute-review/3",
+        "attributes/7", "attribute-review/4",
     )  # fmt: skip
 
 

@@ -338,6 +338,14 @@ def unanswered_values(connection: psycopg.Connection[Any], project_id: UUID) -> 
         (project_id,),
     ).fetchall():
         filled.setdefault(UUID(str(control_id)), set()).add(str(key))
+    # A value a person left as not known yet is closed for the gates while no value is given
+    # (B1l point 1; understanding_review.answer_not_known): never a value.
+    for control_id, key in connection.execute(
+        "SELECT engagement_control_id, subject_key FROM understanding_not_known "
+        "WHERE project_id = %s AND subject = 'VALUE'",
+        (project_id,),
+    ).fetchall():
+        filled.setdefault(UUID(str(control_id)), set()).add(str(key))
     found: dict[UUID, int] = {}
     for control_id, library_key in rows:
         statement = statement_for(str(library_key))

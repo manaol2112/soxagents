@@ -3,9 +3,10 @@ agreed by the product owner on 16 November 2026, docs/control-workflow-plan.md).
 
 The questions B1k added (Question.since) are required of a control still in progress, and
 hold its Control Understanding until answered. They never hold a control whose attributes
-are accepted (it counts as completed), nor one whose understanding was completed
-(engagement_controls.understanding_completed_at, migration 0172) before the day they were
-added. A question in the bank from the start holds every control as before.
+are accepted (it counts as completed), nor one whose understanding is completed
+(engagement_controls.understanding_completed_at, migration 0172), whatever the day (since the
+review of B1k, 16 November 2026; before, only one completed before the day they were added).
+A question in the bank from the start holds every control as before.
 
 Database tests: walkthrough_answers.unanswered_required, the engagement-wide read and the
 one control's, and the waits of Control Understanding it feeds."""
@@ -206,9 +207,12 @@ def test_a_question_added_later_holds_a_control_in_progress_only(migrated: Datab
         "Control Understanding is not complete: 1 walkthrough question is not answered."
     )
 
-    # Completed the day the questions were added: they were asked before it, so they hold.
+    # Rewritten after the review of B1k (16 November 2026; B1l point 2 and B1j point 2: a
+    # completion is never reopened). Old: completed the day the questions were added, they
+    # were taken to have been asked before it and still held ITGC-CM-06 ({cm06: 3, ac02: 1}).
+    # New: a completed control is never held by a question added later, whatever the day.
     _complete_on(migrated, ids[CM06], "2026-11-16T18:00:00+00:00")
-    assert _held(migrated, team, controls) == {cm06: 3, ac02: 1}
+    assert _held(migrated, team, controls) == {ac02: 1}
     # Answered: nothing holds ITGC-CM-06 any more, and the answers stand as given.
     saved = team["owner"].put(
         f"{_project(team)}/controls/{ids[CM06]}/walkthrough-answers",

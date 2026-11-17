@@ -54,8 +54,10 @@ from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 # /2 (12 November 2026): duplicates are merged, never left for the person. /3 (the same day,
 # B1e): the reviewer is given the confirmed understanding with its dates, the precedence,
 # and what an attribute's agent says it follows, with the fact as recorded. Every verdict and
-# every power it had stays: what an agent says it follows exempts nothing from review.
-PROMPT_VERSION = "attribute-set-review/3"
+# every power it had stays: what an agent says it follows exempts nothing from review. /4 (16
+# November 2026, after the review of B1k): its correction carries the previous answer as
+# escaped data (agent_answers.correction_prompt); every verdict and power of /3 stays.
+PROMPT_VERSION = "attribute-set-review/4"
 REVIEWER = "Reviewer agent"
 NOT_REVIEWED = (
     "The reviewer agent did not finish, so the attributes and criteria are as drafted and "

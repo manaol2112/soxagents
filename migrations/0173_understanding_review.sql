@@ -33,9 +33,18 @@
 --    walkthrough answer. And the guarantee of B1l point 8: once a control's understanding is
 --    completed, an OPEN question raised by an agent is refused (agent_question_once_completed).
 --
+-- 2b. understanding_not_known: a person's "Not known yet, proceed" on a required walkthrough
+--    question or a client value of the statement (B1l point 1: every question in Control
+--    Understanding offers it). Who, when and an optional note; never an answer and never a
+--    fact: no agent reads it as one. It closes the question for the gates (the review is due,
+--    the understanding may complete) while no answer is given; an answer given later stands
+--    over it. Written once, never changed or deleted; read-only once archived. One per
+--    control and question.
+--
 -- 3. attribute_assumptions:
 --      kind NOT_KNOWN           what a question a person left as not known bears on;
---      source_issue_id          that question;
+--      source_issue_id          that question (an agent's or the review's);
+--      source_not_known_id      or that walkthrough question or value (section 2b);
 --      asks_code, asks_fact     the key of a question the specialist did not ask (beyond the
 --                               seven asked, or after its second read), so it is assumed once;
 --      accepted_by, accepted_at who had accepted it with its attribute, kept when a person
@@ -50,8 +59,19 @@
 -- 5. evidence_plans.run_stage QUESTIONS: the plan run is reading the questions asked (the
 --    specialist's review), before any attribute is drafted.
 --
+-- 6. Controls already past this stage are complete (B1l point 2; the product owner's
+--    decision, 16 November 2026, after the review of B1k: completed by a backfill, not
+--    lazily). Every control whose attributes are accepted (the rule of
+--    control_context.attributes_accepted: approved attributes, none proposed, and every
+--    approved one's criteria accepted by a person or written by one) gets
+--    understanding_completed_at = the time of its last acceptance, with one audit record
+--    each (control.understanding_completed, by ATTRIBUTES_ACCEPTED, backfilled). Archived
+--    engagements are left as they are (read-only). Once set it is never cleared (0172's
+--    guard): a lapse of acceptance later never un-completes it.
+--
 -- Additive except where a CHECK constraint, the assumptions' matter index and their guard
--- functions are replaced by wider ones. No existing row is changed.
+-- functions are replaced by wider ones, and the backfill of section 6 (which only sets a
+-- null understanding_completed_at).
 --
 -- Rollback: DROP TRIGGER control_context_issues_once_completed ON control_context_issues;
 -- DROP TRIGGER control_context_issues_review_kept ON control_context_issues; DROP TABLE
@@ -64,7 +84,11 @@
 -- 0172 kind CHECK and guard functions of attribute_assumptions and DROP its columns of section
 -- 3 (rows of kind NOT_KNOWN must be removed first, which the 0172 guard refuses: a rollback
 -- needs the guard dropped while it runs); restore design_point_considerations_kind and
--- evidence_plans_run_stage as 0169 and 0148 have them; delete the
+-- evidence_plans_run_stage as 0169 and 0148 have them; DROP TABLE understanding_not_known
+-- (after dropping attribute_assumptions.source_not_known_id) and its guard functions
+-- guard_understanding_not_known_update() and prevent_understanding_not_known_deletion();
+-- the backfill of section 6 is not undone (a completion is never cleared: 0172's guard), and
+-- its audit records say which were backfilled (payload backfilled true); delete the
 -- '0173_understanding_review' row from schema_migrations. A rollback loses the specialist's
 -- reviews, which questions it asked and why, and every "not known yet".
 
@@ -331,10 +355,79 @@ CREATE TRIGGER control_context_issues_once_completed
 BEFORE INSERT OR UPDATE OF status ON control_context_issues
 FOR EACH ROW EXECUTE FUNCTION refuse_agent_question_once_completed();
 
+-- 2b. Not known yet, on a walkthrough question or a value of the statement
+
+CREATE TABLE understanding_not_known (
+    id uuid PRIMARY KEY DEFAULT uuidv7(),
+    organization_id uuid NOT NULL,
+    project_id uuid NOT NULL,
+    engagement_control_id uuid NOT NULL,
+    subject text NOT NULL,
+    subject_key text NOT NULL,
+    noted_by uuid NOT NULL,
+    noted_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+    note text NOT NULL DEFAULT '',
+    CONSTRAINT understanding_not_known_subject CHECK (subject IN ('WALKTHROUGH', 'VALUE')),
+    -- A walkthrough question's key (migration 0147) or a statement slot's (migration 0064).
+    CONSTRAINT understanding_not_known_key CHECK (
+        (subject = 'WALKTHROUGH' AND subject_key ~ '^wt-[a-z0-9-]{2,60}$')
+        OR (subject = 'VALUE' AND subject_key ~ '^[a-z][a-z0-9-]{1,40}$')
+    ),
+    CONSTRAINT understanding_not_known_note CHECK (char_length(note) <= 500),
+    CONSTRAINT understanding_not_known_once UNIQUE (engagement_control_id, subject, subject_key),
+    CONSTRAINT understanding_not_known_project_fk
+        FOREIGN KEY (project_id, organization_id) REFERENCES projects (id, organization_id)
+        ON DELETE RESTRICT ON UPDATE RESTRICT,
+    CONSTRAINT understanding_not_known_control_fk
+        FOREIGN KEY (project_id, engagement_control_id)
+        REFERENCES engagement_controls (project_id, id)
+        ON DELETE RESTRICT ON UPDATE RESTRICT,
+    CONSTRAINT understanding_not_known_by_fk
+        FOREIGN KEY (noted_by) REFERENCES users (id)
+        ON DELETE RESTRICT ON UPDATE RESTRICT
+);
+
+CREATE INDEX understanding_not_known_project_idx
+    ON understanding_not_known (project_id, engagement_control_id);
+
+CREATE FUNCTION guard_understanding_not_known_update()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog
+AS $$
+BEGIN
+    RAISE EXCEPTION 'a person''s not known yet is kept as written';
+END;
+$$;
+
+CREATE TRIGGER understanding_not_known_guard
+BEFORE UPDATE ON understanding_not_known
+FOR EACH ROW EXECUTE FUNCTION guard_understanding_not_known_update();
+
+CREATE FUNCTION prevent_understanding_not_known_deletion()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = pg_catalog
+AS $$
+BEGIN
+    RAISE EXCEPTION 'a person''s not known yet is kept, never deleted';
+END;
+$$;
+
+CREATE TRIGGER understanding_not_known_kept
+BEFORE DELETE ON understanding_not_known
+FOR EACH ROW EXECUTE FUNCTION prevent_understanding_not_known_deletion();
+
+CREATE TRIGGER understanding_not_known_archived_guard
+BEFORE INSERT OR UPDATE OR DELETE ON understanding_not_known
+FOR EACH ROW EXECUTE FUNCTION refuse_archived_writes();
+
 -- 3. Assumptions: not known yet, by key, and settled after acceptance
 
 ALTER TABLE attribute_assumptions
     ADD COLUMN source_issue_id uuid REFERENCES control_context_issues (id) ON DELETE RESTRICT,
+    ADD COLUMN source_not_known_id uuid
+        REFERENCES understanding_not_known (id) ON DELETE RESTRICT,
     ADD COLUMN asks_code text,
     ADD COLUMN asks_fact text,
     ADD COLUMN accepted_by uuid REFERENCES users (id) ON DELETE RESTRICT,
@@ -348,7 +441,11 @@ ALTER TABLE attribute_assumptions
             'PERFORMER', 'APPROVER', 'SYSTEM', 'RECORD', 'TIMING', 'POPULATION', 'EXCEPTION',
             'OTHER'))
         AND (asks_code IS NULL OR char_length(asks_code) BETWEEN 1 AND 80)
-        AND ((kind = 'NOT_KNOWN') = (source_issue_id IS NOT NULL))
+        -- A not known yet comes from one question: an issue, or a walkthrough question or
+        -- value (section 2b); nothing else is of that kind.
+        AND ((kind = 'NOT_KNOWN')
+             = (source_issue_id IS NOT NULL OR source_not_known_id IS NOT NULL))
+        AND (source_issue_id IS NULL OR source_not_known_id IS NULL)
     ),
     -- Who had accepted it with its attribute, once a person confirmed or changed it since.
     ADD CONSTRAINT attribute_assumptions_accepted CHECK (
@@ -364,12 +461,14 @@ CREATE UNIQUE INDEX attribute_assumptions_matter_once
     ON attribute_assumptions (
         engagement_control_id, (btrim(regexp_replace(lower(matter), '[^a-z0-9]+', ' ', 'g')))
     )
-    WHERE source_issue_id IS NULL AND asks_fact IS NULL;
+    WHERE source_issue_id IS NULL AND source_not_known_id IS NULL AND asks_fact IS NULL;
 CREATE UNIQUE INDEX attribute_assumptions_key_once
     ON attribute_assumptions (engagement_control_id, coalesce(asks_code, ''), asks_fact)
-    WHERE asks_fact IS NOT NULL AND source_issue_id IS NULL;
+    WHERE asks_fact IS NOT NULL AND source_issue_id IS NULL AND source_not_known_id IS NULL;
 CREATE UNIQUE INDEX attribute_assumptions_not_known_once
     ON attribute_assumptions (source_issue_id) WHERE source_issue_id IS NOT NULL;
+CREATE UNIQUE INDEX attribute_assumptions_not_known_answer_once
+    ON attribute_assumptions (source_not_known_id) WHERE source_not_known_id IS NOT NULL;
 
 -- Written OPEN, with nothing decided or accepted, at version 1.
 CREATE OR REPLACE FUNCTION guard_attribute_assumption_insert()
@@ -423,6 +522,7 @@ BEGIN
         OR NEW.model_call_id IS DISTINCT FROM OLD.model_call_id
         OR NEW.created_at IS DISTINCT FROM OLD.created_at
         OR NEW.source_issue_id IS DISTINCT FROM OLD.source_issue_id
+        OR NEW.source_not_known_id IS DISTINCT FROM OLD.source_not_known_id
         OR NEW.asks_code IS DISTINCT FROM OLD.asks_code
         OR NEW.asks_fact IS DISTINCT FROM OLD.asks_fact
     THEN
@@ -453,3 +553,37 @@ ALTER TABLE evidence_plans
     ADD CONSTRAINT evidence_plans_run_stage CHECK (
         run_stage IN ('', 'ATTRIBUTES', 'CRITERIA', 'REVIEW', 'QUESTIONS')
     );
+
+-- 6. Controls already past this stage are complete (B1l point 2)
+
+WITH accepted AS (
+    SELECT c.id, c.organization_id, c.project_id,
+           (SELECT coalesce(max(a.criteria_accepted_at), max(a.decided_at), max(a.updated_at))
+            FROM control_attributes a
+            WHERE a.engagement_control_id = c.id AND a.status = 'APPROVED') AS at
+    FROM engagement_controls c
+    JOIN projects j ON j.id = c.project_id
+    WHERE c.understanding_completed_at IS NULL
+      AND j.status <> 'ARCHIVED'
+      AND EXISTS (SELECT 1 FROM control_attributes a
+                  WHERE a.engagement_control_id = c.id AND a.status = 'APPROVED')
+      AND NOT EXISTS (SELECT 1 FROM control_attributes a
+                      WHERE a.engagement_control_id = c.id AND a.status = 'PROPOSED')
+      AND NOT EXISTS (SELECT 1 FROM control_attributes a
+                      WHERE a.engagement_control_id = c.id AND a.status = 'APPROVED'
+                        AND a.criteria_accepted_at IS NULL
+                        AND a.criteria_origin IS DISTINCT FROM 'PERSON')
+),
+completed AS (
+    UPDATE engagement_controls c
+    SET understanding_completed_at = coalesce(accepted.at, clock_timestamp())
+    FROM accepted
+    WHERE c.id = accepted.id
+    RETURNING c.id, c.organization_id, c.project_id
+)
+INSERT INTO audit_events (
+    organization_id, project_id, actor_user_id, action, target_type, target_id, payload
+)
+SELECT organization_id, project_id, NULL, 'control.understanding_completed',
+       'engagement_control', id, '{"by": "ATTRIBUTES_ACCEPTED", "backfilled": true}'::jsonb
+FROM completed;

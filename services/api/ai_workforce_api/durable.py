@@ -215,6 +215,7 @@ async def serve(
     policy: Callable[[UUID], str] | None = None,
     assess: Callable[[UUID], str] | None = None,
     redraft: Callable[[UUID], str] | None = None,
+    reviewing: bool = False,
 ) -> AsyncIterator[None]:
     client = await Client.connect(address)
     worker = Worker(
@@ -271,7 +272,7 @@ async def serve(
         await resume_setups(client, database_url)
         await resume_reviews(client, database_url)
         await resume_scopings(client, database_url)
-        await resume_plan_runs(client, database_url)
+        await resume_plan_runs(client, database_url, reviewing)
         await resume_prior_year_runs(client, database_url)
         await resume_narrative_runs(client, database_url)
         await resume_policy_evidence_runs(client, database_url)
@@ -418,11 +419,16 @@ async def _schedule_prior_year_runs(address: str, document_ids: list[UUID]) -> N
         await start_prior_year_run(client, document_id)
 
 
-async def resume_plan_runs(client: Client, database_url: str) -> int:
-    from ai_workforce_api.evidence_plans import open_plan_runs
+async def resume_plan_runs(client: Client, database_url: str, reviewing: bool = False) -> int:
+    """Plan runs waiting or interrupted, started again. With `reviewing` (a model is
+    configured), a specialist's read due by the rules and never queued is queued first (B1l
+    point 1; evidence_plans.queue_due_reads), so it resumes with them."""
+    from ai_workforce_api.evidence_plans import open_plan_runs, queue_due_reads
 
     try:
         with connect(database_url) as connection:
+            if reviewing:
+                queue_due_reads(connection)
             ids = open_plan_runs(connection)
         for plan_id in ids:
             await start_plan_run(client, plan_id)

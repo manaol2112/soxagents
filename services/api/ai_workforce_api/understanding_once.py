@@ -30,7 +30,10 @@ copied understanding is never copied as completed: the column is never copied, s
 whose answers were copied from another is reviewed where it lands. It is checked wherever it
 can become true: after every save on the control (context_routes.changed), inside the plan
 run once the review is read (understanding_review.perform), at the end of a plan run
-(run_plan) and of a narrative run (run_narrative).
+(run_plan) and of a narrative run (run_narrative), and, since the review of B1k (16 November
+2026), in the same step as an acceptance that leaves the attributes accepted
+(record_accepted); the controls accepted before that release were completed by migration
+0173's backfill.
 
 From then on no agent writes an open question on the control (control_context.raise_issues;
 and the database refuses one, migration 0173): a gap is an assumption on the attribute
@@ -177,12 +180,57 @@ def record_completion(
     return True
 
 
+def record_accepted(cursor: psycopg.Cursor[Any], project_id: UUID, control_id: UUID) -> bool:
+    """A person's decision just left the control's attributes accepted: the understanding
+    counts as completed (B1l point 2), recorded in the caller's transaction, the same step as
+    the acceptance (control_attributes.close_questions_once_accepted, master_plans.
+    set_criteria), so no review or question is ever started on the control afterwards, even
+    once its acceptance lapses. Decided by the product owner after the review of B1k (16
+    November 2026): before, it was recorded only at the next save or run, so a control whose
+    acceptance lapsed first could be reviewed. True when it was recorded now."""
+    from psycopg.types.json import Json
+
+    row = cursor.execute(
+        """
+        UPDATE engagement_controls c SET understanding_completed_at = clock_timestamp()
+        WHERE c.id = %s AND c.project_id = %s AND c.understanding_completed_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM projects j
+                          WHERE j.id = c.project_id AND j.status = 'ARCHIVED')
+        RETURNING c.organization_id
+        """,
+        (control_id, project_id),
+    ).fetchone()
+    if row is None:
+        return False
+    cursor.execute(
+        """
+        INSERT INTO audit_events (
+            organization_id, project_id, action, target_type, target_id, payload
+        )
+        VALUES (%s, %s, 'control.understanding_completed', 'engagement_control', %s, %s)
+        """,
+        (row[0], project_id, control_id, Json({"by": "ATTRIBUTES_ACCEPTED"})),
+    )
+    return True
+
+
+def complete_if_accepted(cursor: psycopg.Cursor[Any], project_id: UUID, control_id: UUID) -> bool:
+    """record_accepted, when the control's attributes are accepted now."""
+    from ai_workforce_api.control_context import attributes_accepted
+
+    return attributes_accepted(cursor, control_id) and record_accepted(
+        cursor, project_id, control_id
+    )
+
+
 def after_agents(
     connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
 ) -> UUID | None:
     """After an agent run on the control ended (a narrative run, in the local worker, with a
-    model): the understanding may be complete now, and the review or what the attributes
-    follow may be due. Returns the plan run queued, for the worker to take."""
+    model; a plan run that failed): the understanding may be complete now, and the review or
+    what the attributes follow may be due (B1l point 1: a read that fell due while the run
+    was busy is queued now, never left unqueued). Returns the plan run queued, for the worker
+    to take."""
     from ai_workforce_api.evidence_plans import queue_for_understanding
 
     complete(connection, project_id, control_id)

@@ -157,15 +157,19 @@ class ObservationBody(BaseModel):
 
 
 class AssumedRecord(BaseModel):
-    """An assumption a person accepted with its attribute, not confirmed
-    (attribute_assumptions, status ACCEPTED_WITH_ATTRIBUTE): what the agent assumed and the
-    attribute codes it names (none: the set as a whole)."""
+    """An assumption that is a point to settle (attribute_assumptions; `accepted_assumptions`
+    reads which): what the agent assumed, the attribute codes it names (none: the set as a
+    whole), its status and kind. ACCEPTED_WITH_ATTRIBUTE: a person accepted it with its
+    attribute, not confirmed. OPEN: still open on an attribute whose criteria are accepted
+    (or on an accepted set), or a conflict nobody decided."""
 
     model_config = ConfigDict(frozen=True)
 
     id: UUID
     assumed: str
     codes: tuple[str, ...] = ()
+    status: Literal["OPEN", "ACCEPTED_WITH_ATTRIBUTE"] = "ACCEPTED_WITH_ATTRIBUTE"
+    kind: Literal["MISSING", "AMBIGUOUS", "CONFLICT", "NOT_KNOWN"] = "MISSING"
 
 
 def assumption_points(
@@ -187,14 +191,26 @@ def assumption_points(
             continue
         assumed = _sentence(item.assumed, 500).rstrip(" .")
         accepted_with = f"attribute {named[0].code}" if named else "the attributes"
+        if item.kind == "CONFLICT":
+            said = (
+                f"A conflict is not decided: {assumed}. It holds {accepted_with} until a "
+                "person decides it."
+            )
+        elif item.status == "OPEN":
+            said = (
+                f"The agent assumed: {assumed}. It is open on {accepted_with}, accepted "
+                "since, not confirmed."
+            )
+        else:
+            said = (
+                f"The agent assumed: {assumed}. It was accepted with {accepted_with}, "
+                "not confirmed."
+            )
         found.append(
             PointBody(
                 key=point_key("ASSUMPTION", item.id),
                 kind="ASSUMPTION",
-                text=_sentence(
-                    f"The agent assumed: {assumed}. It was accepted with {accepted_with}, "
-                    "not confirmed."
-                ),
+                text=_sentence(said),
                 place=PlaceBody(at="ATTRIBUTE", attribute_id=on.id),
                 settle=_settle("ASSUMPTION"),
             )
@@ -583,10 +599,46 @@ def considerations_standing(
     return _tolerant(connection, read, {})
 
 
+# The assumptions that are points to settle before the preparer signs (B1l point 6), read
+# from their state, not from the moment of an acceptance (after the review of B1k, 16 November
+# 2026: before, only one accepted with its attribute was a point, so one recorded after the
+# attribute was accepted, a "Review again" on an accepted control among them, held nothing):
+# one accepted with its attribute and not confirmed since; one still open that names an
+# attribute whose criteria are accepted (or a person's), or names none on an accepted set;
+# and every open conflict.
+_POINT_ASSUMPTIONS_SQL = """
+    SELECT s.id, s.assumed, s.attribute_codes, s.status, s.kind
+    FROM attribute_assumptions s
+    WHERE s.engagement_control_id = %(c)s
+      AND (s.status = 'ACCEPTED_WITH_ATTRIBUTE'
+           OR (s.status = 'OPEN'
+               AND (s.kind = 'CONFLICT'
+                    OR EXISTS (SELECT 1 FROM control_attributes a
+                               WHERE a.engagement_control_id = s.engagement_control_id
+                                 AND a.status = 'APPROVED' AND a.code IS NOT NULL
+                                 AND s.attribute_codes ? a.code
+                                 AND (a.criteria_accepted_at IS NOT NULL
+                                      OR a.criteria_origin = 'PERSON'))
+                    OR (s.attribute_codes = '[]'::jsonb
+                        AND EXISTS (SELECT 1 FROM control_attributes a
+                                    WHERE a.engagement_control_id = %(c)s
+                                      AND a.status = 'APPROVED')
+                        AND NOT EXISTS (SELECT 1 FROM control_attributes a
+                                        WHERE a.engagement_control_id = %(c)s
+                                          AND a.status = 'PROPOSED')
+                        AND NOT EXISTS (SELECT 1 FROM control_attributes a
+                                        WHERE a.engagement_control_id = %(c)s
+                                          AND a.status = 'APPROVED'
+                                          AND a.criteria_accepted_at IS NULL
+                                          AND a.criteria_origin IS DISTINCT FROM 'PERSON')))))
+    ORDER BY s.created_at, s.id
+"""
+
+
 def accepted_assumptions(
     connection: psycopg.Connection[Any], control_id: UUID
 ) -> list[AssumedRecord]:
-    """The control's assumptions accepted with an attribute and not confirmed since, oldest
+    """The control's assumptions that are points to settle (_POINT_ASSUMPTIONS_SQL), oldest
     first. Nothing when migration 0173 is not applied."""
 
     def read() -> list[AssumedRecord]:
@@ -595,13 +647,10 @@ def accepted_assumptions(
                 id=UUID(str(row[0])),
                 assumed=str(row[1]),
                 codes=tuple(str(code) for code in (row[2] or []) if isinstance(code, str)),
+                status=row[3],
+                kind=row[4],
             )
-            for row in connection.execute(
-                "SELECT id, assumed, attribute_codes FROM attribute_assumptions "
-                "WHERE engagement_control_id = %s AND status = 'ACCEPTED_WITH_ATTRIBUTE' "
-                "ORDER BY created_at, id",
-                (control_id,),
-            ).fetchall()
+            for row in connection.execute(_POINT_ASSUMPTIONS_SQL, {"c": control_id}).fetchall()
         ]
 
     return _tolerant(connection, read, [])

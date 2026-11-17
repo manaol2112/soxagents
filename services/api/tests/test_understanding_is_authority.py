@@ -354,6 +354,17 @@ def _open(team: dict[str, Any], control: str) -> list[dict[str, Any]]:
     return [item for item in read.json()["issues"] if item["status"] == "OPEN"]
 
 
+def _assumed(migrated: Database, control: str) -> list[tuple[Any, ...]]:
+    """The agent's assumptions on the control (id, matter, kind, status, assumed, codes),
+    oldest first: where its gaps land since the review of B1k."""
+    return _rows(
+        migrated,
+        "SELECT id, matter, kind, status, assumed, attribute_codes FROM attribute_assumptions "
+        "WHERE engagement_control_id = %s ORDER BY created_at",
+        UUID(control),
+    )
+
+
 def _inline(migrated: Database, team: dict[str, Any], control: str, agents: Any) -> None:
     with connect(migrated.url) as connection:
         generate_reviewed(
@@ -542,13 +553,15 @@ def test_the_attribute_follows_the_understanding_and_the_conflict_is_never_raise
         "SELECT understanding_basis, model_call_id FROM control_attributes WHERE id = %s",
         UUID(proposed["id"]),
     )[0]
-    assert stored[0]["prompt_version"] == "attribute-review/3"
+    # Old "attribute-review/3"; new "attribute-review/4" after the review of B1k (16
+    # November 2026): its correction carries the previous answer as escaped data.
+    assert stored[0]["prompt_version"] == "attribute-review/4"
     assert stored[0]["model_call"] != str(stored[1])
     assert _rows(
         migrated,
         "SELECT agent_key, prompt_version FROM model_calls WHERE id = %s",
         UUID(stored[0]["model_call"]),
-    ) == [("independent-reviewer", "attribute-review/3")]
+    ) == [("independent-reviewer", "attribute-review/4")]
     assert _rows(migrated, "SELECT agent_key FROM model_calls WHERE id = %s", stored[1]) == [
         ("engagement-planner",)
     ]
@@ -561,7 +574,9 @@ def test_the_attribute_follows_the_understanding_and_the_conflict_is_never_raise
     # understanding is completed the agent states assumptions instead of asking, and a
     # named update changes only the attributes it names); the /5 rules this test reads
     # stand word for word (test_understanding_once_rules.py).
-    assert payload["by"] == "engagement-planner" and payload["prompt_version"] == "attributes/6"
+    # Old "attributes/6"; new "attributes/7" after the review of B1k (the correction carries
+    # the previous answer as escaped data).
+    assert payload["by"] == "engagement-planner" and payload["prompt_version"] == "attributes/7"
     assert payload["written_by"] == "independent-reviewer"
     [entry] = payload["followed"]
     assert (entry["attribute"], entry["change"]) == (proposed["id"], "CHANGE")
@@ -608,16 +623,16 @@ def test_a_one_source_conflict_is_dropped_only_when_a_confirmed_fact_is_shown_to
     # it: it is not dropped. It cannot stand as a conflict, so a person sees it as unclear.
     agents.answer = lambda facts: {"attributes": [], "issues": [NEUTRAL]}
     _inline(migrated, team, control, agents)
-    [issue] = _open(team, control)
-    assert (issue["kind"], issue["origin"], issue["topic"]) == (
-        "AMBIGUOUS",
-        "ATTRIBUTES",
-        "Record of the grant date",
-    )
-    assert [quote["source"] for quote in issue["quotes"]] == ["control"]
-    assert [need["key"] for need in _needs(team, control) if need["kind"] == "QUESTION"] == [
-        issue["id"]
-    ]
+    # Rewritten after the review of B1k (the product owner, 16 November 2026: the attribute
+    # agent never asks before completion on any path, generate_reviewed included; its gaps
+    # are assumptions). Old: it was raised as an open question of kind AMBIGUOUS, quoting
+    # the RCM record, among the understanding's needs. New: shaped the same way (rule 4: it
+    # reads as unclear, never as a conflict that would hold the set), it is the agent's
+    # assumption on the set; nothing is asked.
+    assert _open(team, control) == []
+    [assumed] = _assumed(migrated, control)
+    assert assumed[1:4] == ("Record of the grant date", "AMBIGUOUS", "OPEN")
+    assert [need for need in _needs(team, control) if need["kind"] == "QUESTION"] == []
     assert _followed_audit(migrated, control) == []
     # The same conflict with the confirmed fact that settles it named: not raised, kept on
     # the audit trail with the ref the agent gave.
@@ -631,7 +646,11 @@ def test_a_one_source_conflict_is_dropped_only_when_a_confirmed_fact_is_shown_to
     # accepted."). Old: the second run replaced the first run's question, so nothing was
     # open. New: the question asked before stays open, as it was, until a person answers it;
     # what this test is about holds: the conflict named as settled is not raised again.
-    assert [item["id"] for item in _open(team, control)] == [issue["id"]]
+    # Rewritten after the review of B1k (the product owner, 16 November 2026: the attribute
+    # agent never asks before completion on any path, generate_reviewed included; its gaps
+    # are assumptions). Old: the open question stayed. New: the assumption stays, alone: the
+    # conflict named as settled is not assumed either.
+    assert [row[0] for row in _assumed(migrated, control)] == [assumed[0]]
     [audit] = _followed_audit(migrated, control)
     [left] = audit[2]["not_raised"]
     assert left["covered_by"] == [_ref(agents.contexts[-1]["confirmed_understanding"], TICKETS)]
@@ -803,7 +822,12 @@ def test_an_invalid_follows_discards_only_itself(migrated: Database) -> None:
     _inline(migrated, team, control, agents)
     [proposed] = _attributes(team, control)["proposed"]
     assert proposed["text"] == proposal["text"] and proposed["understanding_basis"] is None
-    assert [issue["topic"] for issue in _open(team, control)] == ["Emergency access"]
+    # Rewritten after the review of B1k (the product owner, 16 November 2026: the attribute
+    # agent never asks before completion on any path, generate_reviewed included; its gaps
+    # are assumptions). Old: the missing fact was raised as an open question. New: it is the
+    # agent's assumption; nothing is asked.
+    assert _open(team, control) == []
+    assert [row[1] for row in _assumed(migrated, control)] == ["Emergency access"]
 
 
 # The guard, with no model in it
@@ -1145,20 +1169,29 @@ def test_a_conflict_between_two_documents_is_raised_with_one_statement_per_side(
         ],
     }
     _inline(migrated, team, control, agents)
-    [issue] = _open(team, control)
-    assert (issue["kind"], issue["origin"], issue["topic"]) == (
-        "CONFLICT",
-        "ATTRIBUTES",
-        "Retention of approved requests",
-    )
-    # Every side is a ready choice, beside the quotes; a conflict asks no open question.
-    assert issue["suggestions"] == statements
-    assert [quote["source"] for quote in issue["quotes"]] == [policy, procedure]
-    assert (issue["question"], issue["proposal"], issue["proposal_basis"]) == ("", "", "")
-    # A real conflict is a question for the person, and it does hold the attributes.
-    assert [need["key"] for need in _needs(team, control) if need["kind"] == "QUESTION"] == [
-        issue["id"]
+    # Rewritten after the review of B1k (the product owner, 16 November 2026: the attribute
+    # agent never asks before completion on any path, generate_reviewed included; its gaps
+    # are assumptions). Old: a conflict between two documents was raised as an open CONFLICT
+    # question, among the understanding's needs, holding the attributes. New: it is the
+    # agent's assumption of kind CONFLICT, on the set (it names no attribute), which holds the
+    # whole set's acceptance until a person decides it (B1l point 6); nothing is asked. Its
+    # shaping (rule 6: every side a ready statement, beside the quotes) is checked on the
+    # shaped issue the assumption is made from (control_attributes._issues).
+    assert _open(team, control) == []
+    conflicts = [row for row in _assumed(migrated, control) if row[2] == "CONFLICT"]
+    assert [row[1:4] for row in conflicts] == [
+        ("Retention of approved requests", "CONFLICT", "OPEN")
     ]
+    assert _attributes(team, control)["set_held_by_conflict"] is True
+    assert [need for need in _needs(team, control) if need["kind"] == "QUESTION"] == []
+    sources = [replace(_POLICY, key=policy), replace(_PROCEDURE, key=procedure)]
+    [issue] = control_attributes._issues(
+        [AnswerIssue.model_validate(_retention(policy, procedure, statements))],
+        sources,
+    )
+    assert issue.kind == "CONFLICT" and list(issue.suggestions) == statements
+    assert [quote.source for quote in issue.quotes] == [policy, procedure]
+    assert (issue.question, issue.proposal, issue.proposal_basis) == ("", "", "")
     [audit] = _followed_audit(migrated, control)
     assert [item["topic"] for item in audit[2]["not_raised"]] == [TOPIC]
 
@@ -1182,10 +1215,16 @@ def test_a_conflict_between_two_documents_is_raised_with_one_statement_per_side(
             "issues": [_retention(policy, procedure, given, topic=topic)],
         }
         _inline(migrated, team, control, agents)
-        again = next(item for item in _open(team, control) if item["topic"] == topic)
-        assert again["id"] != issue["id"] and again["kind"] == "CONFLICT"
-        assert again["suggestions"] == by_quote
-    assert issue["id"] in [item["id"] for item in _open(team, control)]
+        # Old: each was a new open CONFLICT question offering by_quote. New: each is a
+        # CONFLICT assumption of its own, and its sides are shaped as before.
+        assert (topic, "CONFLICT", "OPEN") in [row[1:4] for row in _assumed(migrated, control)]
+        [shaped] = control_attributes._issues(
+            [AnswerIssue.model_validate(
+                _retention(policy, procedure, given, topic=topic))],
+            sources,
+        )  # fmt: skip
+        assert list(shaped.suggestions) == by_quote
+    assert conflicts[0][0] in [row[0] for row in _assumed(migrated, control)]
 
 
 # What the rules settle is closed by the agent's next run
@@ -1373,20 +1412,18 @@ def test_a_missing_fact_is_asked_even_when_the_agent_names_a_fact_for_it(
         "issues": [gap, {**gap, "topic": "Grant record", "covered_by": [facts[0]["ref"]]}],
     }
     _inline(migrated, team, control, agents)
-    opened = [row for row in _issues(migrated, control) if row[3] == "OPEN"]
-    assert [(row[0], row[1], row[2]) for row in opened] == [
-        ("Emergency access", "ATTRIBUTES", "MISSING"),
-        ("Grant record", "ATTRIBUTES", "MISSING"),
+    # Rewritten after the review of B1k (the product owner, 16 November 2026: the attribute
+    # agent never asks before completion on any path, generate_reviewed included; its gaps
+    # are assumptions). Old: rule 5, "a missing or ambiguous fact is always asked": both were
+    # raised as open questions with the usual practice to confirm. New: neither is asked;
+    # both are the agent's assumptions, each stating the usual practice as what it assumed,
+    # and naming a confirmed fact still suppresses nothing (both are kept).
+    assert [row for row in _issues(migrated, control) if row[3] == "OPEN"] == []
+    assert [row[1:5] for row in _assumed(migrated, control)] == [
+        ("Emergency access", "MISSING", "OPEN", gap["proposal"]),
+        ("Grant record", "MISSING", "OPEN", gap["proposal"]),
     ]
-    questions = [need for need in _needs(team, control) if need["kind"] == "QUESTION"]
-    assert [need["question"] for need in questions] == [gap["question"], gap["question"]]
-    issue = _open(team, control)[0]
-    # The usual practice to confirm, and another answer to pick.
-    assert (issue["proposal"], issue["proposal_basis"], issue["suggestions"]) == (
-        gap["proposal"],
-        "TYPICAL",
-        gap["suggestions"],
-    )
+    assert [need for need in _needs(team, control) if need["kind"] == "QUESTION"] == []
     # Nothing was left unraised, so the run has nothing to record about the understanding.
     assert _followed_audit(migrated, control) == []
 
@@ -1691,7 +1728,10 @@ def test_every_agent_that_reads_the_understanding_is_given_the_precedence(
         # failing places): nothing this test reads changed. "attributes/6" since B1j (16
         # November 2026; old "attributes/5"): two rules added for a completed understanding
         # and a named update, the precedence and every other rule word for word.
-    ) == ("attributes/6", "attribute-review/3", "attribute-set-review/3", "engagement-planner/10")
+        # Old ("attributes/6", "attribute-review/3", "attribute-set-review/3"); new /7, /4
+        # and /4 after the review of B1k (16 November 2026): their corrections carry the
+        # previous answer as escaped data; nothing this test reads changed.
+    ) == ("attributes/7", "attribute-review/4", "attribute-set-review/4", "engagement-planner/10")
     team, control, client, _a3 = _case(migrated, "uia-inputs")
     _walkthrough_confirmed(migrated, team, control, client)
     with connect(migrated.url) as connection:

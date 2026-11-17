@@ -2613,6 +2613,9 @@ def queue_for_understanding(
         due = review.due_round(state)
         if due is None:
             return None
+        # Over an idle or a failed run (after the review of B1k, 16 November 2026: a due read
+        # is never left unqueued; a failed planner run no longer holds it, and a read that
+        # fails again ends FAILED, which holds the next until a person decides).
         with transaction(connection) as cursor:
             row = cursor.execute(
                 f"""
@@ -2620,7 +2623,7 @@ def queue_for_understanding(
                 SET run_status = 'PENDING', run_attempts = 0, run_lease_until = NULL,
                     run_note = '', run_stage = 'ATTRIBUTES', run_codes = '{{}}', run_cause = ''
                 WHERE p.project_id = %s AND p.engagement_control_id = %s
-                  AND p.run_status = 'IDLE' AND NOT {_AGENTS_AT_WORK_SQL}
+                  AND p.run_status IN ('IDLE', 'FAILED') AND NOT {_AGENTS_AT_WORK_SQL}
                 RETURNING p.id
                 """,
                 (project_id, control_id),
@@ -2651,6 +2654,53 @@ def queue_for_understanding(
             (codes, cause[:300], project_id, control_id),
         ).fetchone()
     return None if row is None else UUID(str(row[0]))
+
+
+def queue_due_reads(connection: psycopg.Connection[Any], limit: int = 200) -> list[UUID]:
+    """At the worker's start (resume), with a model: queue the specialist's read on every
+    control where one is due by the rules and none is queued (B1l point 1; after the review of
+    B1k, 16 November 2026: a due review is never left unqueued, also for a control whose
+    answers were all in before this release, or whose read fell due while its run was busy
+    and that nothing has saved since). Read cheaply first (not completed, a plan run idle or
+    failed, no read waiting, and no read yet or the review's questions all closed), then
+    checked by the rules (queue_for_understanding). Returns the plan runs queued."""
+    candidates = connection.execute(
+        """
+        SELECT c.project_id, c.id FROM engagement_controls c
+        JOIN projects j ON j.id = c.project_id
+        JOIN evidence_plans p ON p.engagement_control_id = c.id
+        WHERE c.understanding_completed_at IS NULL AND c.included
+          AND j.status <> 'ARCHIVED' AND j.deleted_at IS NULL
+          AND p.run_status IN ('IDLE', 'FAILED')
+          AND NOT EXISTS (SELECT 1 FROM understanding_reviews r
+                          WHERE r.engagement_control_id = c.id AND r.status = 'PENDING')
+          AND (NOT EXISTS (SELECT 1 FROM understanding_reviews r
+                           WHERE r.engagement_control_id = c.id)
+               OR EXISTS (SELECT 1 FROM understanding_reviews r
+                          WHERE r.engagement_control_id = c.id AND r.status = 'READY'
+                            AND r.round = 1 AND r.asked > 0
+                            AND NOT EXISTS (SELECT 1 FROM control_context_issues i
+                                            WHERE i.review_id = r.id AND i.status = 'OPEN')
+                            AND NOT EXISTS (SELECT 1 FROM understanding_reviews later
+                                            WHERE later.engagement_control_id = c.id
+                                              AND later.requested_at > r.requested_at)))
+        ORDER BY c.created_at
+        LIMIT %s
+        """,
+        (limit,),
+    ).fetchall()
+    queued: list[UUID] = []
+    for project_id, control_id in candidates:
+        try:
+            planned = queue_for_understanding(
+                connection, UUID(str(project_id)), UUID(str(control_id))
+            )
+        except psycopg.Error:
+            logger.warning("a due review could not be queued at the worker's start")
+            continue
+        if planned is not None:
+            queued.append(planned)
+    return queued
 
 
 def queue_assumption_update(
@@ -2932,8 +2982,15 @@ def open_plan_runs(
     ]
 
 
+# How many times one run goes on with what fell due while it worked (run_plan).
+FOLLOW_DEPTH = 2
+
+
 def run_plan(
-    connection: psycopg.Connection[Any], provider: ModelProvider | None, plan_id: UUID
+    connection: psycopg.Connection[Any],
+    provider: ModelProvider | None,
+    plan_id: UUID,
+    _depth: int = 0,
 ) -> str:
     """The planner agent plans one control again, from its records, over the rules' plan.
     The plan stays proposed until a person approves it. A plan a person approved
@@ -3004,22 +3061,29 @@ def run_plan(
         # before anything else, so no read is made on it.
         complete(connection, project_id, control_id, reviewing=True, in_run=True)
         was_completed = completed_at(connection, control_id) is not None
+        # Every run makes a read that is due, a plain one too (after the review of B1k, 16
+        # November 2026: before, a plain run made only a read already queued, so one that
+        # fell due while the run was queued was never made).
         reviewed = perform(
             connection, provider, organization_id, project_id, control_id, requester,
-            create=str(row[5]) != "",
+            create=True,
         )  # fmt: skip
         completed = completed_at(connection, control_id) is not None
+        plain = str(row[5]) == ""
         if reviewed.status != "NONE":
             follows = completed and not was_completed
         elif str(row[5]) == "QUESTIONS":
+            # A "Review again" whose read is already made: the read alone. A read that
+            # completed the understanding set the stage back to ATTRIBUTES (perform), so a
+            # run resumed after it still follows the understanding.
             follows = False
         elif not completed:
             # Not completed and no read due (its answers are not in): only a person's
             # explicit run drafts the attributes; their agent asks nothing.
-            follows = str(row[5]) != ""
-        if reviewed.status != "NONE" and not follows:
+            follows = not plain
+        if reviewed.status != "NONE" and not follows and not plain:
             note = reviewed.note
-        elif follows or (str(row[3]) == "PROPOSED" and reviewed.status == "NONE"):
+        elif follows or (str(row[3]) == "PROPOSED" and (reviewed.status == "NONE" or plain)):
             began = _now(connection)
             read = agents_read(connection, project_id, control_id)
             note, finished = _plan_pass(
@@ -3059,6 +3123,16 @@ def run_plan(
     # still to answer, and no run is left at work (B1j and B1k, understanding_once.complete);
     # without a model, by the rules.
     complete(connection, project_id, control_id, reviewing=provider is not None)
+    # What fell due while the run was busy is queued now and run in this same run, so it is
+    # never left unqueued and no worker has to be handed it (after the review of B1k, 16
+    # November 2026): the specialist's read whose last answer was saved meanwhile, or what
+    # the attributes follow once completed (a save the run did not read, which changed()
+    # could not queue over it). At most FOLLOW_DEPTH times, so a run always ends; the reads
+    # are bounded by their own budget (understanding_review.READS).
+    if provider is not None and _depth < FOLLOW_DEPTH:
+        again = queue_for_understanding(connection, project_id, control_id)
+        if again is not None:
+            return run_plan(connection, provider, again, _depth + 1)
     return "DONE"
 
 
@@ -3092,7 +3166,7 @@ def _plan_pass(
     question pass while the understanding was not completed, and the run stopped there when
     it asked. Now the specialist's review is the pass (run_plan reads it first), and the
     attribute agent asks nothing in a run: what it would ask is its assumption on the
-    attributes (control_attributes.generate with asks=False). Every criteria write of the
+    attributes (control_attributes.generate, on every path). Every criteria write of the
     pass carries what it follows (`cause`, else the matters of the answers given since the
     plan was last generated), and the one update a changed assumption or an answer changed
     after completion starts changes only the attributes it names (`only`;
@@ -3158,9 +3232,8 @@ def _staged_pass(
 
     _run_stage(connection, control_id, "ATTRIBUTES")
     attribute_note = _generate(
-        connection, provider, organization_id, project_id, control_id, requester, only,
-        asks=False,
-    )  # fmt: skip
+        connection, provider, organization_id, project_id, control_id, requester, only
+    )
     _run_stage(connection, control_id, "CRITERIA")
     _, _drafts, note = generate(
         connection, provider, organization_id, project_id, control_id, requester

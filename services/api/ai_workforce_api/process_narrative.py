@@ -548,7 +548,7 @@ def _plan_from_narrative(
         )  # fmt: skip
     _stage(connection, control_id, "ATTRIBUTES", 0)
     attribute_note = _generate(
-        connection, provider, organization_id, project_id, control_id, requester, asks=False
+        connection, provider, organization_id, project_id, control_id, requester
     )
     _stage(connection, control_id, "EVIDENCE", 0)
     changes, _drafts, evidence_note = plan_evidence(

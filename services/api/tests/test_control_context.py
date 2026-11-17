@@ -23,6 +23,7 @@ from ai_workforce_api.control_context import (
     Source,
     checked_issues,
     context_package,
+    raise_issues,
 )
 from ai_workforce_api.db import connect
 from ai_workforce_api.pbc_drafting import load_context
@@ -492,10 +493,18 @@ def test_a_narrative_added_later_proposes_and_never_overwrites(migrated: Databas
     assert unproven["basis"] == "INFERRED" and "not found in the source" in unproven["note"]
     change = next(a for a in proposed.values() if a["proposal"] == "CHANGE")
     assert change["replaces_id"] == before[0]["id"]
-    # A conflict nobody can point to in the sources is raised as ambiguity.
-    [issue] = [i for i in context["issues"] if i["status"] == "OPEN"]
-    assert (issue["kind"], issue["origin"]) == ("AMBIGUOUS", "ATTRIBUTES")
-    assert context["readiness"]["state"] == "NEEDS_INFORMATION"
+    # Rewritten after the review of B1k (the product owner, 16 November 2026: the attribute
+    # agent never asks before completion on any path, the review of a control's documents
+    # included). Old: a conflict nobody can point to in the sources was raised as an open
+    # question (ambiguity), and the control read NEEDS_INFORMATION. New: nothing is asked;
+    # the gap is the agent's assumption on the set, shaped as the question would have been
+    # (a conflict quoting no source reads as unclear: kind ASSUMPTION, never a CONFLICT that
+    # would hold the set).
+    assert [i for i in context["issues"] if i["status"] == "OPEN"] == []
+    [assumed] = context["set_assumptions"]
+    assert (assumed["matter"], assumed["kind"], assumed["status"]) == (
+        "Approver", "ASSUMPTION", "OPEN",
+    )  # fmt: skip
     assert all(d["reviewed"] for d in context["documents"])
     base = f"{_base(team)}/controls/{first['id']}/attributes"
     decided = client.post(f"{base}/{change['id']}/decide",
@@ -510,9 +519,10 @@ def test_a_narrative_added_later_proposes_and_never_overwrites(migrated: Databas
                 json={"decision": "REJECT", "version": unproven["version"]})  # fmt: skip
     client.post(f"{base}/{documented['id']}/decide",
                 json={"decision": "APPROVE", "version": documented["version"]})  # fmt: skip
+    # Old: the person resolved the open question. New: the person confirms the assumption.
     client.post(
-        f"{_base(team)}/controls/{first['id']}/issues/{issue['id']}/resolve",
-        json={"status": "RESOLVED", "note": "The manager approves.", "version": issue["version"]},
+        f"{_base(team)}/controls/{first['id']}/assumptions/{assumed['id']}/confirm",
+        json={"version": assumed["version"]},
     )
     after = _context(client, team, first["id"])
     assert after["attributes"]["proposed"] == []
@@ -524,7 +534,10 @@ def test_a_narrative_added_later_proposes_and_never_overwrites(migrated: Databas
                        UUID(first["id"]), team["owner_id"])  # fmt: skip
     again = _context(client, team, first["id"])
     assert again["attributes"]["proposed"] == []
-    assert [i["status"] for i in again["issues"]] == ["RESOLVED"]
+    # Old: the one issue stayed RESOLVED. New: no issue at all, and the matter is assumed
+    # once (the confirmed assumption), never again.
+    assert again["issues"] == []
+    assert [a["status"] for a in again["set_assumptions"]] == ["CONFIRMED"]
 
 
 def test_an_attribute_gap_arrives_with_its_answer_and_is_not_asked_again(
@@ -554,9 +567,31 @@ def test_an_attribute_gap_arrives_with_its_answer_and_is_not_asked_again(
              "proposal_basis": "TYPICAL", "suggestions": []},
         ],
     }  # fmt: skip
+    # Rewritten after the review of B1k (the product owner, 16 November 2026: the attribute
+    # agent never asks before completion on any path, review_control included). Old: the
+    # review raised these as the agent's open questions. New: they are the agent's
+    # assumptions on the set, with its statement, and no credential reaches the screen; the
+    # shaping a question gets (checked_issues, still applied to every agent question, the
+    # specialist's included) is checked by raising them as the questions raised before were.
     with connect(migrated.url) as connection:
         review_control(connection, _Provider([answer]), team["org"], team["project"], UUID(cid),
                        team["owner_id"])  # fmt: skip
+    reviewed = _context(client, team, cid)
+    assert [i for i in reviewed["issues"] if i["status"] == "OPEN"] == []
+    assumed = {a["matter"]: a for a in reviewed["set_assumptions"]}
+    assert assumed["Contractors in scope"]["assumed"] == "Contractors are in scope."
+    assert "hunter2secret" not in str(reviewed["set_assumptions"])
+    cid = _new_control(client, team, control_ref="REV-32", domain="ORDER_TO_CASH")["id"]
+    with connect(migrated.url) as connection:
+        with connection.transaction():
+            raise_issues(
+                connection.cursor(), team["org"], team["project"], UUID(cid),
+                checked_issues(
+                    [AnswerIssue.model_validate(item) for item in answer["issues"]], [],
+                    "ATTRIBUTES",
+                ),
+                "AGENT",
+            )  # fmt: skip
     opened = {i["topic"]: i for i in _context(client, team, cid)["issues"]}
     gap = opened["Contractors in scope"]
     assert gap["origin"] == "ATTRIBUTES"
@@ -957,23 +992,36 @@ def test_a_later_review_replaces_the_agents_earlier_conflicts(migrated: Database
                         {"source": "control", "quote": control["control_ref"]}]},
         ],
     }  # fmt: skip
+    # Rewritten again after the review of B1k (the product owner, 16 November 2026: the
+    # attribute agent never asks before completion on any path). Old: the conflict that
+    # stands was raised as an open CONFLICT question that held the control
+    # (CONFLICT_REQUIRES_REVIEW) and stayed open across reviews. New: it is the agent's
+    # assumption of kind CONFLICT on the set, which holds the whole set's acceptance until a
+    # person decides it (B1l point 6), and a later review neither replaces nor repeats it.
+    # The shaping of each side (rule 6) is checked on the question as raised before.
     with connect(migrated.url) as connection:
         review_control(connection, _Provider([conflict]), team["org"], team["project"],
                        UUID(control["id"]), team["owner_id"])  # fmt: skip
     first = _context(client, team, control["id"])
-    [issue] = [i for i in first["issues"] if i["status"] == "OPEN"]
-    assert (issue["kind"], issue["origin"]) == ("CONFLICT", "ATTRIBUTES")
-    assert {quote["source"] for quote in issue["quotes"]} == {document, "control"}
-    # Each side is offered as a statement to pick (rule 6): the sources' own words, when
-    # the agent gave none.
-    assert len(issue["suggestions"]) == 2
-    assert first["readiness"]["state"] == "CONFLICT_REQUIRES_REVIEW"
+    assert [i for i in first["issues"] if i["status"] == "OPEN"] == []
+    [held] = first["set_assumptions"]
+    assert (held["matter"], held["kind"], held["status"]) == ("Approver", "CONFLICT", "OPEN")
+    assert first["attributes"]["set_held_by_conflict"] is True
+    with connect(migrated.url) as connection:
+        loaded = load_context(connection, team["project"], UUID(control["id"]))
+        sources = [Source(document, "Access policy", "POLICY",
+                          "New access is approved by the IT director."),
+                   Source("control", loaded.control_ref, "RCM", loaded.control_ref)]  # fmt: skip
+    [issue] = checked_issues(
+        [AnswerIssue.model_validate(conflict["issues"][0])], sources, "ATTRIBUTES"
+    )
+    assert issue.kind == "CONFLICT"
+    assert {quote.source for quote in issue.quotes} == {document, "control"}
     with connect(migrated.url) as connection:
         review_control(connection, _Provider([{"attributes": [], "issues": []}]), team["org"],
                        team["project"], UUID(control["id"]), team["owner_id"])  # fmt: skip
     second = _context(client, team, control["id"])
-    assert [i["id"] for i in second["issues"] if i["status"] == "OPEN"] == [issue["id"]]
-    assert second["readiness"]["state"] == "CONFLICT_REQUIRES_REVIEW"
+    assert [a["id"] for a in second["set_assumptions"] if a["status"] == "OPEN"] == [held["id"]]
 
 
 def test_a_policy_screenshot_on_the_control_is_read_by_ocr(migrated: Database) -> None:

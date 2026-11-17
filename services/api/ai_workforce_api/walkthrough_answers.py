@@ -243,15 +243,18 @@ def holds(item: Question, completed_on: date | None, accepted: bool) -> bool:
     """Whether a required question left unanswered holds a control's Control Understanding
     (B1k and B1l, 16 November 2026: a question added to the bank does not disturb finished
     work). A question in the bank from the start (`since` None) holds every control, as
-    before. One added later holds a control still in progress, and never one whose
-    attributes are accepted (they count as completed, B1l point 2), nor one whose
-    understanding was completed (`completed_on`, its UTC day) before the day the question
-    was added. Pure."""
+    before. One added later holds only a control still in progress: never one whose
+    understanding is completed (`completed_on`, whatever the day: a completion is never
+    reopened, B1j point 2), nor one whose attributes are accepted (they count as completed,
+    B1l point 2). Pure.
+
+    Rewritten after the review of B1k (16 November 2026). Before, one added later still held
+    a control completed on or after the day it was added; as the questions and the
+    completion ship together, that held every control completed by acceptance once its
+    acceptance lapsed."""
     if item.since is None:
         return True
-    if accepted:
-        return False
-    return completed_on is None or item.since <= completed_on
+    return completed_on is None and not accepted
 
 
 # Whether each control's understanding was completed (B1j, migration 0172) and whether its
@@ -303,6 +306,15 @@ def unanswered_required(
     was completed before the question was added)."""
     params = {"p": project_id, "c": control_id}
     which = " AND engagement_control_id = %(c)s" if control_id is not None else ""
+    # A question a person left as not known yet is closed for the gates while no answer is
+    # given (B1l point 1; understanding_review.answer_not_known): never an answer.
+    left: dict[UUID, set[str]] = {}
+    for cid, key in connection.execute(
+        "SELECT engagement_control_id, subject_key FROM understanding_not_known "
+        "WHERE project_id = %(p)s AND subject = 'WALKTHROUGH'" + which,
+        params,
+    ).fetchall():
+        left.setdefault(UUID(str(cid)), set()).add(str(key))
     held: dict[UUID, dict[str, Row]] = {}
     for cid, key, value, not_applicable in connection.execute(
         "SELECT engagement_control_id, question_key, value, not_applicable "
@@ -316,10 +328,11 @@ def unanswered_required(
     waiting: dict[UUID, list[Question]] = {}
     for control, library_key, nature, frequency in controls:
         rows = held.get(control, {})
+        closed = left.get(control, set())
         items = [
             item
             for item in asked(library_key, nature, frequency, confirmed_values(rows))
-            if item.required and not stands(rows.get(item.key), item)
+            if item.required and not stands(rows.get(item.key), item) and item.key not in closed
         ]
         if items:
             waiting[control] = items

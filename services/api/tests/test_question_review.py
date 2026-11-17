@@ -19,6 +19,7 @@ from test_testing_engine import _base
 
 import ai_workforce_api
 from ai_workforce_api.context_routes import review_control
+from ai_workforce_api.control_context import AnswerIssue, checked_issues, raise_issues
 from ai_workforce_api.db import connect
 from ai_workforce_api.models import ModelConfig, ModelRaw, ModelRequest
 from ai_workforce_api.process_narrative import DRAFTER_PROMPT
@@ -98,9 +99,29 @@ GAP = {
 DRAFT = {"attributes": [], "issues": [GAP]}
 
 
+def _ask_first(migrated: Database, team: dict[str, Any], cid: str, raw: dict[str, Any]) -> None:
+    """An agent's question on the control, shaped as the attribute agent's were
+    (control_context.checked_issues) and raised before the review runs.
+
+    After the review of B1k (the product owner, 16 November 2026: the attribute agent never
+    asks before completion on any path, review_control included) the review no longer raises
+    its gaps as questions: they are its assumptions. Old: review_control raised the GAP
+    itself. New: the question is raised here first, as one raised before B1k, and the
+    review's wording pass (question_review, which every agent question still goes through,
+    the specialist's included) runs on it in the same review; the agent's answer still
+    carries the GAP, which is not assumed since it was asked."""
+    with connect(migrated.url) as connection:
+        with connection.transaction():
+            raise_issues(
+                connection.cursor(), team["org"], team["project"], UUID(cid),
+                checked_issues([AnswerIssue.model_validate(raw)], [], "ATTRIBUTES"), "AGENT",
+            )  # fmt: skip
+
+
 def _raised(provider: _Provider, migrated: Database, ref: str) -> tuple[Any, dict[str, Any], str]:
     team, client, _scheduler = _engagement(migrated, f"question-review-{ref}")
     cid = _new_control(client, team, control_ref=f"REV-{ref}", domain="ORDER_TO_CASH")["id"]
+    _ask_first(migrated, team, cid, GAP)
     with connect(migrated.url) as connection:
         review_control(connection, provider, team["org"], team["project"], UUID(cid),
                        team["owner_id"])  # fmt: skip
@@ -331,6 +352,7 @@ def test_what_fails_the_checks_goes_back_once_then_keeps_its_draft(migrated: Dat
     stuck = _Provider([DRAFT, _answer(bad)])
     team, client, _scheduler = _engagement(migrated, "question-review-stuck")
     cid = _control(client, team, "ITGC-AC-02")["id"]
+    _ask_first(migrated, team, cid, GAP)
     with connect(migrated.url) as connection:
         review_control(connection, stuck, team["org"], team["project"], UUID(cid),
                        team["owner_id"])  # fmt: skip
@@ -418,6 +440,7 @@ def test_a_conflict_is_corrected_but_has_no_interview(migrated: Database) -> Non
     }
     team, client, _scheduler = _engagement(migrated, "question-review-conflict")
     cid = _new_control(client, team, control_ref="REV-79", domain="ORDER_TO_CASH")["id"]
+    _ask_first(migrated, team, cid, conflict)
     with connect(migrated.url) as connection:
         review_control(connection, _Provider([{"attributes": [], "issues": [conflict]}, None]),
                        team["org"], team["project"], UUID(cid), team["owner_id"])  # fmt: skip

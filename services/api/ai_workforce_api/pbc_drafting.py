@@ -1376,6 +1376,34 @@ class LocalDraftScheduler:
         with connect(self._settings.database_url) as connection:
             fail_plan_run(connection, plan_id)
         self._draft_released(plan_id)
+        self._follow_plan(plan_id)
+
+    def _follow_plan(self, plan_id: UUID) -> None:
+        """A plan run that failed may have been busy when the specialist's read fell due (a
+        save it could not be queued over): it is queued now, over the failed run, and taken
+        here, so a due review is never left unqueued (after the review of B1k, 16 November
+        2026; understanding_once.after_agents). A run that ends normally does this itself
+        (evidence_plans.run_plan). Only with a model, as context_routes.changed queues it."""
+        if not live_model(self._settings):
+            return
+        from ai_workforce_api.understanding_once import after_agents
+
+        try:
+            with connect(self._settings.database_url) as connection:
+                found = connection.execute(
+                    "SELECT project_id, engagement_control_id FROM evidence_plans WHERE id = %s",
+                    (plan_id,),
+                ).fetchone()
+                planned = (
+                    None
+                    if found is None
+                    else after_agents(connection, UUID(str(found[0])), UUID(str(found[1])))
+                )
+        except psycopg.Error:
+            logger.warning("the understanding of a failed plan run's control could not be followed")
+            return
+        if planned is not None:
+            self.schedule_plan_runs([planned])
 
     def schedule_prior_year_runs(self, document_ids: list[UUID]) -> None:
         for document_id in document_ids:
@@ -1619,6 +1647,7 @@ class LocalDraftScheduler:
         from ai_workforce_api.evidence_assurance import backfill, open_assessments
         from ai_workforce_api.evidence_plans import (
             open_plan_runs,
+            queue_due_reads,
             reclaim_interrupted_plan_runs,
         )
         from ai_workforce_api.evidence_wizard import land_open_batches
@@ -1646,6 +1675,10 @@ class LocalDraftScheduler:
             # This worker is the API process: a plan run still marked working belongs to
             # the process that just ended, so it resumes now, not when its lease runs out.
             reclaim_interrupted_plan_runs(connection)
+            # A specialist's read due by the rules and never queued is queued now, with a
+            # model (B1l point 1; evidence_plans.queue_due_reads), and resumes with the rest.
+            if live_model(self._settings):
+                queue_due_reads(connection)
             plans = open_plan_runs(connection)
             priors = open_prior_year(connection)
             narratives = open_narratives(connection)

@@ -147,8 +147,22 @@ class ContextBody(BaseModel):
     # a read waits or works; DONE once read or once the understanding is completed; FAILED
     # when the last read could not be used (the page offers Run again and Proceed without it).
     question_pass: understanding_once.QuestionPass = "WAITING"
-    # The latest review of the control's questions (understanding_review.body), or null.
+    # The review of the control's questions the page shows (understanding_review.body): the
+    # latest read before completion; once completed the latest READY one, or null.
     review: understanding_review.ReviewBody | None = None
+    # After completion, a read a person asked for ("Review again") that is not READY yet:
+    # PENDING (the page shows it checking and reads again) or FAILED (Review again is still
+    # offered); null otherwise (understanding_review.request_body).
+    review_request: understanding_review.ReviewRequestBody | None = None
+    # Why a completed understanding has no review to show, for one quiet line (B1k "Without
+    # a model"): NO_MODEL, PROCEEDED or ACCEPTED; "" when there is a review or it is not
+    # completed (understanding_review.not_run).
+    review_not_run: understanding_review.NotRun = ""
+    # A read is due by the rules and none is queued or at work: the page asks for it with
+    # POST .../understanding/review/follow (explicit and idempotent), never by a read.
+    review_due: bool = False
+    # The walkthrough questions and values a person left as "Not known yet" (B1l point 1).
+    not_known: list[understanding_review.NotKnownItemBody] = []
     # What the agents assumed on the set as a whole (assumptions that name no attribute):
     # the open ones and those decided in the last 30 days, newest first, at most 10.
     set_assumptions: list[attribute_assumptions.AssumptionBody] = []
@@ -364,6 +378,7 @@ def register_control_context(
     ) -> ContextBody:
         def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
             _allowed(c, p, organization_id, project_id, control_id)
+            _completed_if_accepted(c, project_id, control_id)
             control_attributes.add_attribute(c, organization_id, project_id, control_id, p.id, body)
             changed(c, project_id, control_id, p.id)
             return _body(c, project_id, control_id)
@@ -537,12 +552,73 @@ def register_control_context(
         """The question is closed as the person's "not known", never as an answer, and the
         matter becomes an assumption on the attributes it bears on."""
 
+        asked: list[bool] = []
+
         def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
             _allowed(c, p, organization_id, project_id, control_id)
             understanding_review.not_known(
                 c, organization_id, project_id, control_id, issue_id, p.id, body
             )
+            # The last of the narrative's points closed: the narrative is drafted again from
+            # the answers, as confirm_points does (B1j point 5: the server's rule of
+            # redrafting after the last point stays).
+            if _last_point_closed(c, control_id, issue_id) and _needs_narrative(
+                c, project_id, control_id
+            ):
+                asked.append(
+                    process_narrative.request(
+                        c, organization_id, project_id, control_id, p.id, "DRAFT"
+                    )
+                )
             changed(c, project_id, control_id, p.id)
+            return _body(c, project_id, control_id)
+
+        result = run(request, work)
+        if any(asked):
+            process_narrative.schedule(scheduler, [control_id])
+        return result
+
+    @app.post(f"{control}/understanding/not-known")
+    def answer_not_known(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        body: understanding_review.AnswerNotKnownBody,
+        request: Request,
+    ) -> ContextBody:
+        """Not known yet, proceed, on a walkthrough question or a value of the statement (B1l
+        point 1): the person's not-known record, never an answer, and the matter becomes an
+        assumption on the attributes the question informs."""
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            understanding_review.answer_not_known(
+                c, organization_id, project_id, control_id, p.id, body
+            )
+            changed(c, project_id, control_id, p.id)
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    @app.post(f"{control}/understanding/review/follow")
+    def review_follow(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> ContextBody:
+        """The page's explicit request, when the context says review_due, that a read due by
+        the rules be queued (a read that fell due while the control's run was busy): queued
+        on the plan run and handed to the worker; a run already queued is handed over again.
+        Idempotent: nothing more is queued while one waits. Without a worker or a model the
+        understanding completes by the rules instead (B1k "Without a model")."""
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            plans = getattr(scheduler, "schedule_plan_runs", None)
+            if plans is None or model() is None:
+                understanding_once.complete(c, project_id, control_id, reviewing=False)
+                return _body(c, project_id, control_id)
+            planned = understanding_review.follow(c, project_id, control_id)
+            if planned is not None:
+                _after_commit(lambda: plans([planned]))
             return _body(c, project_id, control_id)
 
         return run(request, work)
@@ -608,6 +684,7 @@ def register_control_context(
 
         def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
             _allowed(c, p, organization_id, project_id, control_id)
+            _completed_if_accepted(c, project_id, control_id)
             # With a worker and a model the whole run is asked for, in the background:
             # proposals, tailored criteria and the reviewer's review, as after Control
             # Understanding (12 November 2026); the page shows it working and reads again.
@@ -1152,6 +1229,7 @@ def register_control_context(
     ) -> ContextBody:
         def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
             _allowed(c, p, organization_id, project_id, control_id)
+            _completed_if_accepted(c, project_id, control_id)
             note = review_control(c, model(), organization_id, project_id, control_id, p.id)
             return _body(c, project_id, control_id, note)
 
@@ -1337,6 +1415,36 @@ def register_control_context(
 # The work
 
 
+def _completed_if_accepted(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
+) -> None:
+    """A control whose attributes are accepted counts as completed (B1l point 2): recorded
+    before a path writes an attribute or a proposal that would end the acceptance, so no
+    review is ever started on it. Acceptances record it themselves
+    (understanding_once.record_accepted), and migration 0173 backfilled the controls
+    accepted before; this is the last net."""
+    with transaction(connection) as cursor:
+        understanding_once.complete_if_accepted(cursor, project_id, control_id)
+
+
+def _last_point_closed(
+    connection: psycopg.Connection[Any], control_id: UUID, issue_id: UUID
+) -> bool:
+    """The question just closed was one of the narrative's points (origin PROCESS) and none
+    is left open."""
+    row = connection.execute(
+        """
+        SELECT (SELECT origin = 'PROCESS' AND question <> '' FROM control_context_issues
+                WHERE id = %s),
+               (SELECT count(*) FROM control_context_issues
+                WHERE engagement_control_id = %s AND origin = 'PROCESS' AND status = 'OPEN'
+                  AND question <> '')
+        """,
+        (issue_id, control_id),
+    ).fetchone()
+    return row is not None and bool(row[0]) and int(row[1]) == 0
+
+
 def _generate(
     connection: psycopg.Connection[Any],
     provider: ModelProvider | None,
@@ -1345,10 +1453,9 @@ def _generate(
     control_id: UUID,
     actor: UUID,
     only: tuple[str, ...] = (),
-    asks: bool = True,
 ) -> str:
-    """The attribute agent's proposals for the control. `asks` False (a run's ATTRIBUTES
-    stage, B1k): the agent asks nothing; what it would ask is its assumption."""
+    """The attribute agent's proposals for the control. It asks nothing on any path (B1k,
+    extended after its review, 16 November 2026): what it would ask is its assumption."""
     context = load_context(connection, project_id, control_id)
     found = _classes(connection, control_id, context)
     sources = sources_for(connection, project_id, control_id, context)
@@ -1391,7 +1498,6 @@ def _generate(
         package,
         sources,
         only,
-        asks,
     )
     if not note and kept == 0:
         note = "The agent found nothing to add: the approved attributes cover the sources."
@@ -1532,6 +1638,7 @@ def _body(
     agent_notes = notes_for(connection, control_id)
     revision_pending, criteria_pending = pending_criteria(connection, control_id)
     _by_code, for_set = attribute_assumptions.shown(connection, control_id)
+    question_pass, review_due = understanding_review.page_state(connection, project_id, control_id)
     return ContextBody(
         control_id=control_id,
         classifications=current,
@@ -1559,8 +1666,12 @@ def _body(
             connection, control_id, agent_notes, running, run_note
         ),
         understanding_completed_at=understanding_once.completed_at(connection, control_id),
-        question_pass=understanding_once.question_pass(connection, project_id, control_id),
+        question_pass=question_pass,
         review=understanding_review.body(connection, control_id),
+        review_request=understanding_review.request_body(connection, control_id),
+        review_not_run=understanding_review.not_run(connection, control_id),
+        review_due=review_due,
+        not_known=understanding_review.not_known_items(connection, control_id),
         set_assumptions=for_set,
         note=note,
     )

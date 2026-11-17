@@ -337,6 +337,7 @@ def _lifespan(
             return
         from ai_workforce_api.durable import serve
         from ai_workforce_api.evidence_plans import plan_runner
+        from ai_workforce_api.model_providers import live_model
         from ai_workforce_api.policy_evidence import policy_evidence_runner
         from ai_workforce_api.prior_year import prior_year_runner
         from ai_workforce_api.process_narrative import narrative_runner
@@ -360,6 +361,7 @@ def _lifespan(
             policy_evidence_runner(settings),
             assessment_runner(settings),
             redraft_runner(settings),
+            reviewing=live_model(settings),
         ):
             yield
 

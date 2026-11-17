@@ -2733,7 +2733,7 @@ def set_criteria(
     with transaction(connection) as cursor:
         _plan_id(cursor, project_id, control_id)
         row = cursor.execute(
-            "SELECT version, status FROM control_attributes WHERE id = %s "
+            "SELECT version, status, code FROM control_attributes WHERE id = %s "
             "AND engagement_control_id = %s FOR UPDATE",
             (attribute_id, control_id),
         ).fetchone()
@@ -2743,6 +2743,9 @@ def set_criteria(
             raise PlanState("the attribute changed")
         if row[1] != "APPROVED":
             raise PlanState("decide the attribute first")
+        # A person's own criteria count as accepted, so a conflict that holds the attribute
+        # is decided first here too (B1l point 6; decided after the review of B1k).
+        _not_held_by_conflict(cursor, control_id, None if row[2] is None else str(row[2]))
         from ai_workforce_api.criteria_history import writing
 
         # The criteria history names the person as their writer (B1j, migration 0172).
@@ -2765,6 +2768,11 @@ def set_criteria(
             cursor, organization_id, project_id, actor, "control_attribute.criteria_set",
             "control_attribute", attribute_id, {},
         )  # fmt: skip
+        # The person's criteria may leave the attributes accepted: the understanding counts
+        # as completed from then on (B1l point 2), in the same step.
+        from ai_workforce_api.understanding_once import complete_if_accepted
+
+        complete_if_accepted(cursor, project_id, control_id)
 
 
 def accept_criteria(
@@ -2790,6 +2798,23 @@ def accept_criteria(
         from ai_workforce_api.control_attributes import close_questions_once_accepted
 
         close_questions_once_accepted(cursor, organization_id, project_id, control_id, actor)
+
+
+def _not_held_by_conflict(cursor: psycopg.Cursor[Any], control_id: UUID, code: str | None) -> None:
+    """409 when an open CONFLICT assumption holds the attribute (its code), or the whole set
+    (understanding_review.held_codes)."""
+    from ai_workforce_api.understanding_review import (
+        HELD_BY_CONFLICT,
+        SET_HELD,
+        SET_HELD_BY_CONFLICT,
+        held_codes,
+    )
+
+    held = held_codes(cursor, control_id)
+    if SET_HELD in held:
+        raise PlanState(SET_HELD_BY_CONFLICT)
+    if code is not None and code in held:
+        raise PlanState(HELD_BY_CONFLICT)
 
 
 def accept_one_criteria(
@@ -2820,6 +2845,10 @@ def accept_one_criteria(
     # the demo (SEEDED, migration 0130); their own need no acceptance.
     if row[2] not in ("AGENT", "SEEDED"):
         raise PlanState("the criteria are not the agent's")
+    # An open conflict holds the attribute's acceptance until a person decides it, on every
+    # route that accepts (B1l point 6; before the review of B1k only the Attributes step's
+    # routes checked it): one naming the attribute, or one naming none (the whole set).
+    _not_held_by_conflict(cursor, control_id, None if row[3] is None else str(row[3]))
     cursor.execute(
         """
         UPDATE control_attributes

@@ -132,14 +132,34 @@ def run_settings(
             pass
 
 
+# Each attribute of a control with the rows it replaced, back through every rewording and
+# approved change (replaces_id; at most 20 back): an attribute's criteria history is the
+# history of all of them (B1j point 6; after the review of B1k, 16 November 2026: before, a
+# rewording started the history again on the screen, the earlier versions kept but out of
+# reach). Over %(c)s, the control.
+_CHAIN_SQL = """
+    WITH RECURSIVE chain AS (
+        SELECT a.id AS attribute_id, a.id AS row_id, a.replaces_id, 0 AS depth
+        FROM control_attributes a WHERE a.engagement_control_id = %(c)s
+        UNION ALL
+        SELECT chain.attribute_id, p.id, p.replaces_id, chain.depth + 1
+        FROM chain JOIN control_attributes p
+             ON p.id = chain.replaces_id AND p.engagement_control_id = %(c)s
+        WHERE chain.depth < 20
+    )
+"""
+
+
 def counts(connection: psycopg.Connection[Any], control_id: UUID) -> dict[UUID, int]:
-    """How many earlier versions each of the control's attributes keeps."""
+    """How many earlier versions each of the control's attributes keeps, its earlier rows'
+    included (_CHAIN_SQL)."""
     return {
         UUID(str(row[0])): int(row[1])
         for row in connection.execute(
-            "SELECT attribute_id, count(*) FROM attribute_criteria_versions "
-            "WHERE engagement_control_id = %s GROUP BY attribute_id",
-            (control_id,),
+            _CHAIN_SQL + "SELECT chain.attribute_id, count(*) FROM chain "
+            "JOIN attribute_criteria_versions v ON v.attribute_id = chain.row_id "
+            "AND v.engagement_control_id = %(c)s GROUP BY chain.attribute_id",
+            {"c": control_id},
         ).fetchall()
     }
 
@@ -147,7 +167,8 @@ def counts(connection: psycopg.Connection[Any], control_id: UUID) -> dict[UUID, 
 def versions(
     connection: psycopg.Connection[Any], control_id: UUID, attribute_id: UUID
 ) -> CriteriaHistoryBody:
-    """An attribute's earlier criteria, newest first. 404 when the attribute is not this
+    """An attribute's earlier criteria, newest first, those of the rows it replaced included
+    (a rewording, an approved change; _CHAIN_SQL). 404 when the attribute is not this
     control's."""
     from ai_workforce_api.authorization import NotVisible
 
@@ -158,15 +179,18 @@ def versions(
     if found is None:
         raise NotVisible()
     rows = connection.execute(
-        """
+        _CHAIN_SQL
+        + """
         SELECT v.version, v.condition, v.pass_criteria, v.fail_criteria, v.judgment_required,
                v.criteria_origin, v.written_at, u.display_name, v.writer, v.cause
-        FROM attribute_criteria_versions v
+        FROM chain
+        JOIN attribute_criteria_versions v
+             ON v.attribute_id = chain.row_id AND v.engagement_control_id = %(c)s
         LEFT JOIN users u ON u.id = v.written_by
-        WHERE v.attribute_id = %s AND v.engagement_control_id = %s
-        ORDER BY v.version DESC
+        WHERE chain.attribute_id = %(a)s
+        ORDER BY chain.depth, v.version DESC
         """,
-        (attribute_id, control_id),
+        {"a": attribute_id, "c": control_id},
     ).fetchall()
     return CriteriaHistoryBody(
         versions=[

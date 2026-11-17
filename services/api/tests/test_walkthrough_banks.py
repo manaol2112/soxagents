@@ -344,9 +344,13 @@ def test_a_question_added_later_holds_only_a_control_still_in_progress() -> None
     assert holds(new, None, False)
     # Completed before the question was added: not held.
     assert not holds(new, date(2026, 11, 15), False)
-    # Completed the day it was added or later: it was asked before completion.
-    assert holds(new, date(2026, 11, 16), False)
-    assert holds(new, date(2026, 11, 20), False)
+    # Rewritten after the review of B1k (16 November 2026; B1l point 2, B1j point 2: a
+    # completion is never reopened). Old: a control completed the day the question was added
+    # or later was held by it ("it was asked before completion"), so a control completed by
+    # acceptance was held as soon as its acceptance lapsed. New: a completed control is never
+    # held by a question added later, whatever the day.
+    assert not holds(new, date(2026, 11, 16), False)
+    assert not holds(new, date(2026, 11, 20), False)
     # Attributes accepted: completed (B1l point 2), never held, whatever the date.
     assert not holds(new, None, True)
     assert not holds(new, date(2026, 11, 20), True)

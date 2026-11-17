@@ -818,26 +818,40 @@ def test_a_gap_found_after_the_narrative_is_approved_goes_back_to_it_as_a_point(
                 ).fetchall()
             }
 
-    # Before the narrative is approved, both stay with the attributes.
+    def assumed() -> dict[str, tuple[str, str, str]]:
+        with connect(migrated.url) as connection:
+            return {
+                str(row[0]): (str(row[1]), str(row[2]), str(row[3]))
+                for row in connection.execute(
+                    "SELECT matter, kind, assumed, status FROM attribute_assumptions "
+                    "WHERE engagement_control_id = %s",
+                    (UUID(cid),),
+                ).fetchall()
+            }
+
+    # Rewritten after the review of B1k (the product owner, 16 November 2026: the attribute
+    # agent never asks before completion on any path; its gaps are assumptions, and the two
+    # question sources never run together). Old: before the narrative was approved both
+    # stayed with the attributes as open questions, and once it was approved the missing
+    # fact went back to it as a narrative point with its statement. New: on neither path is
+    # anything asked: both are the agent's assumptions on the set (the missing fact stating
+    # its usual practice; the conflict quoting no source reads as unclear), and the same
+    # matter is never assumed twice. The narrative's own points are still asked by its
+    # agents (process_narrative), not by the attribute agent.
     with connect(migrated.url) as connection:
         _generate(connection, _Provider([answer]), org, project, UUID(cid), team["owner_id"])
-    before = raised()
-    assert before["Review frequency"][0] == "ATTRIBUTES"
-    assert before["Approver of record"][0] == "ATTRIBUTES"
-    # Approved: the missing fact becomes a narrative point with its statement.
+    assert raised() == {}
+    before = assumed()
+    assert before["Review frequency"] == ("MISSING", review, "OPEN")
+    assert before["Approver of record"][0] == "AMBIGUOUS"
     _approve_narrative(client, team, cid, _codes(migrated, cid))
     with connect(migrated.url) as connection:
         _generate(connection, _Provider([answer]), org, project, UUID(cid), team["owner_id"])
-    after = raised()
-    assert after["Review frequency"] == ("PROCESS", review, "TYPICAL", "OPEN")
-    assert after["Approver of record"][0] == "ATTRIBUTES"
-    [point] = [i for i in _open_points(client, team, cid) if i["topic"] == "Review frequency"]
-    assert point["question"] == "What is the review frequency?"
-    assert point["point_kind"] == "MISSING"
-    # Raised again, the same topic is not asked twice.
+    assert [i for i in _open_points(client, team, cid) if i["topic"] == "Review frequency"] == []
+    assert assumed() == before
     with connect(migrated.url) as connection:
         _generate(connection, _Provider([answer]), org, project, UUID(cid), team["owner_id"])
-    assert len([i for i in _open_points(client, team, cid) if i["origin"] == "PROCESS"]) == 1
+    assert len(assumed()) == 2
 
 
 def _drafted(text: str, passes: str, fails: str) -> dict[str, Any]:
@@ -917,7 +931,10 @@ def test_an_independent_agent_reviews_each_drafted_attribute_before_a_person_see
     # the authority); old: "attributes/4", "attribute-review/2". The behaviour this test
     # checks, an independent reviewer of each draft, is unchanged. Old "attributes/5", new
     # "attributes/6" since B1j (16 November 2026): two rules added, the reviewer unchanged.
-    assert {"attributes/6", "attribute-review/3"} <= agents
+    # Old {"attributes/6", "attribute-review/3"}; new {"attributes/7", "attribute-review/4"}
+    # after the review of B1k (16 November 2026): the corrections carry the previous answer
+    # as escaped data; nothing else changed.
+    assert {"attributes/7", "attribute-review/4"} <= agents
     # When the reviewer keeps none, the team is told why, not that nothing was found.
     dropped = {"attributes": [], "fixes": ["Left out the draft: it repeats A1."]}
     with connect(migrated.url) as connection:
