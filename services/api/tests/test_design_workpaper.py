@@ -974,7 +974,15 @@ def test_a_persons_dispositions_are_read_where_the_checks_do_not_show_the_attrib
         f"Tickmark: “Exception recorded by the auditor”, by {owner_name}, {day}. Reason: {REASON}"
     )
     assert [found[code]["tickmark_note"] for code in "ABCE"] == ["", "", "", ""]
-    assert {p["kind"] for p in body["points"]} == {"FINDING"}
+    # No disposition is a point: what is left is the check's own (its findings, and its
+    # follow-up on D, which a person's exception does not close: an exception is not a
+    # closing tickmark).
+    assert {p["kind"] for p in body["points"]} <= {"FINDING", "FOLLOW_UP"}
+    assert all(
+        p["place"]["attribute_id"] in (None, ids["D"])
+        for p in body["points"]
+        if p["kind"] == "FOLLOW_UP"
+    )
     # The check's own findings are still points: nothing of the check was closed.
     assert len([p for p in body["points"] if p["kind"] == "FINDING"]) == 3
 

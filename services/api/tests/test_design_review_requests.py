@@ -687,6 +687,9 @@ def test_agents_and_an_archived_engagement_are_refused(
 ) -> None:
     case = _Review(migrated, "drr-who")
     bench = case.bench
+    # The points are considered by the owner first (section 3.9), so that what is refused
+    # below is the agent's send itself, not the fixture's considering on its behalf.
+    case.settle_points()
     # The routes take their principal from the session, always a person's: an agent
     # principal reaching them is refused before anything is read or written.
     agent = Principal(kind=PrincipalKind.AGENT, id=bench.team["owner_id"])

@@ -784,7 +784,18 @@ def test_exceptions_noted_is_signed_over_a_persons_exception_and_effective_is_no
     assert _reopen_tickmark(case.bench, ids["B"], str(disposition)).status_code == 200
     case.chosen("EFFECTIVE")
     assert _tickmark(case.bench, ids["B"], "EXCEPTION").status_code == 200
-    case.prepare()
+    # Rewritten for section 3.9 (product owner, 16 November 2026: the conclusion is read
+    # again at the preparer's sign-off). Old: the preparer prepared on the Effective choice
+    # and only the reviewer's sign-off refused it; new: the preparer's sign-off already
+    # refuses it with the rule's own sentence, and the reviewer's sign-off still refuses a
+    # workpaper prepared on it before that rule (kept: Effective is never signed over a
+    # person's exception).
+    case.settle_points()
+    case.prepare_refused(
+        "The conclusion no longer fits the records: an exception stands on attribute B, so "
+        "the conclusion cannot be \u201cEffective\u201d. Record it again."
+    )
+    case.prepared_before_the_rule()
     body = case.body(case.reviewer)
     assert (body["blocking"], body["can_sign"]) == ([EXCEPTION_ON.format(code="B")], False)
     _refused(case.sign_as("EFFECTIVE"), 409, EXCEPTION_ON.format(code="B"))
