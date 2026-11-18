@@ -35,7 +35,36 @@ CI until a run on GitHub shows it; record the run below when it does.
 | --- | --- | --- | --- | --- |
 | B4 | 24 node tests in 9 files; `biome check` reports about 290 formatting errors | No `.gitattributes`, so a Windows checkout is CRLF; one test builds a path from a URL | Windows only | `.gitattributes` is merged and the checkout refreshed; `tests/evidence-wizard-contract.test.ts:29` uses `fileURLToPath` |
 | B6 | Intermittent "Address already in use (10048)" under parallel pytest | Hypothesis: ephemeral-port exhaustion | Windows only | Measured; until then lower `WORKERS` on Windows and rerun the failed file alone |
-| B7 | 3 tests outside the critical tier fail on Windows, the same way with and without the governance changes (checked on a clean checkout, 18 Nov 2026): `test_understanding_is_authority.py::test_an_open_conflict_from_before_is_closed_only_for_a_reason_that_is_true_of_it`, `test_question_review.py::test_many_questions_are_written_in_small_batches`, `test_attributes_follow_understanding.py::test_a_failed_planner_run_reads_as_stopped_once_the_understanding_is_complete` | Undiagnosed | Seen on Windows; Linux not run | Diagnosed and fixed with the assertions kept |
+| B7 | 3 tests in the fast tier (`make test-fast` has been red since 16 Nov 2026 because of them): `test_understanding_is_authority.py::test_an_open_conflict_from_before_is_closed_only_for_a_reason_that_is_true_of_it`, `test_question_review.py::test_many_questions_are_written_in_small_batches`, `test_attributes_follow_understanding.py::test_a_failed_planner_run_reads_as_stopped_once_the_understanding_is_complete` | Diagnosed 18 Nov 2026: each expects behaviour from before B1j/B1k (16 Nov) that its rewrite missed; no product defect, not a platform issue. See "B7: causes and plan" below | All (deterministic) | Each fixed as below, assertions kept; the third after the owner confirms the behaviour it tests |
+
+### B7: causes and plan
+
+Diagnosed on 18 November 2026; the fixes were each tried in a scratch copy and passed. Not yet
+applied.
+
+1. **Open conflict closed only for a true reason.** The last assertion (line ~1389) expects
+   the attribute run to leave no question open, while a few lines earlier the same test
+   asserts that two of them stay open under B1j rule 4 (commit 1e3bee6: a run no longer
+   closes the earlier round's unanswered questions). The line predates that rule.
+   *Fix:* assert the exact set left open (those two), with an Old/New note. Low risk.
+2. **Many questions written in small batches.** Since B1k (49503f5) the review turns the
+   model's gaps into assumptions rather than questions, so the helper `_raised` now raises
+   one question, and one batch is written. The batching itself (`question_review.BATCH`)
+   is intact. *Fix:* let `_raised` take the questions to raise, and give this test five;
+   every assertion as written. Low risk.
+3. **A failed planner run reads as stopped once the understanding is complete.** Since
+   B1k, completion waits for the specialist's review, so after the test's answers the
+   understanding is not complete and the specialist's read is queued over the failed run
+   (`evidence_plans.py` ~2639-2660). *Fix:* complete the understanding first (run the
+   plan through), then fail the run and change an answer, and keep every original
+   assertion. Low risk. **Owner decision first:** "a failed run is queued over before the
+   understanding is complete" is recorded only in commit 49503f5 and a code comment, not
+   in the approved B1k/B1l plan (`docs/control-workflow-plan.md`); confirm it, and record it
+   in the plan, before a test is built on it. That plan's line ~133 ("nothing is queued
+   over a failed run") is true only after completion.
+
+Verification: the three tests, their three files, then `make test-fast`. The critical tier
+is not affected.
 
 ## Tiers
 
