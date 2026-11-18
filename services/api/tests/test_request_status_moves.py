@@ -46,7 +46,7 @@ def _text(node: ast.AST) -> str | None:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
     if isinstance(node, ast.JoinedStr):
-        return "".join(v.value if isinstance(v, ast.Constant) else "{}" for v in node.values)
+        return "".join(str(v.value) if isinstance(v, ast.Constant) else "{}" for v in node.values)
     return None
 
 
@@ -94,9 +94,10 @@ def test_every_status_write_follows_the_table_or_a_named_service_move() -> None:
 
 
 def test_the_named_moves_are_still_made_and_not_already_in_the_table() -> None:
-    made = set()
+    made: set[tuple[str, str]] = set()
     for module, _line, to, froms in _writes():
-        made.update((state, to) for state in froms or GUARDED_ELSEWHERE.get((module, to), ()))
+        states = froms or sorted(GUARDED_ELSEWHERE.get((module, to), frozenset()))
+        made.update((state, to) for state in states)
     for state, to in SERVICE_TRANSITIONS:
         assert (state, to) in made, f"{state} -> {to} is no longer made: remove it"
         assert to not in _TRANSITIONS.get(state, set()), f"{state} -> {to} is in the table"
