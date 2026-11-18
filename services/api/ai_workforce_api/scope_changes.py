@@ -368,9 +368,12 @@ def start_waiting_scope(
     try:
         rows = _waiting(connection, limit)
         connection.commit()
-    except psycopg.Error:
+    except psycopg.Error as error:
         connection.rollback()
-        logger.warning("engagements waiting for their scope work could not be read")
+        logger.warning(
+            "engagements waiting for their scope work could not be read (%s)",
+            type(error).__name__,
+        )
         return []
     started_now: list[UUID] = []
     for organization_id, project_id, actor_id in rows:
@@ -379,9 +382,13 @@ def start_waiting_scope(
                 connection, organization_id, project_id, actor_id, source="scope_catch_up"
             )
             connection.commit()
-        except Exception:  # noqa: BLE001 - one engagement's failure leaves the others
+        except Exception as error:  # noqa: BLE001 - one engagement's failure leaves the others
             connection.rollback()
-            logger.warning("an engagement's scope work could not be started at the worker start")
+            logger.warning(
+                "the scope work of engagement %s could not be started at the worker start (%s)",
+                project_id,
+                type(error).__name__,
+            )
             continue
         if refine:
             from ai_workforce_api.evidence_plans import queue_unrefined_plans
@@ -389,8 +396,14 @@ def start_waiting_scope(
             try:
                 queue_unrefined_plans(connection, project_id)
                 connection.commit()
-            except psycopg.Error:
+            except psycopg.Error as error:
+                # The rules' plans stand; the planner is queued on them at a later start.
                 connection.rollback()
+                logger.warning(
+                    "the planner could not be queued on engagement %s (%s)",
+                    project_id,
+                    type(error).__name__,
+                )
         started_now.append(UUID(str(project_id)))
     return started_now
 

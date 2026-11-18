@@ -292,8 +292,8 @@ def start_scope_work(database_url: str, refine: bool) -> int:
     try:
         with connect(database_url) as connection:
             return len(start_waiting_scope(connection, refine=refine))
-    except Exception:
-        logger.warning("scope work could not be started")
+    except Exception as error:
+        logger.warning("scope work could not be started (%s)", type(error).__name__)
         return 0
 
 

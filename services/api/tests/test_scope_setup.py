@@ -11,9 +11,11 @@ later too, and one removed has its open work cancelled. Engagements whose scope 
 under SP6 and never finalized get their controls' work when the worker starts
 (scope_changes.start_waiting_scope)."""
 
+import logging
 from typing import Any
 from uuid import UUID, uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 from support import Database
 from test_engagement_close import _launched
@@ -21,6 +23,7 @@ from test_execution import _add_project_member, _add_user
 from test_onboarding import _base, _choose_methodology, _new_engagement
 from test_outbound import _session, migrated
 
+from ai_workforce_api import scope_changes
 from ai_workforce_api.db import connect
 from ai_workforce_api.scope_changes import start_waiting_scope
 from ai_workforce_api.system_scoping import include_control
@@ -314,6 +317,49 @@ def test_a_never_finalized_engagement_gets_its_work_at_the_worker_start(
     with connect(migrated.url) as connection:
         assert project not in start_waiting_scope(connection)
     assert _work(migrated, project) == (2, 1, requests)
+
+
+class _Connection:
+    """A connection that only counts commits and rollbacks."""
+
+    def __init__(self) -> None:
+        self.rollbacks = 0
+
+    def commit(self) -> None:
+        pass
+
+    def rollback(self) -> None:
+        self.rollbacks += 1
+
+
+def test_an_engagement_whose_catch_up_fails_is_named_with_its_cause_and_the_rest_start(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Added 18 November 2026, after the independent review of this change: a failure was
+    logged without saying which engagement or why (docs/engineering-standards.md section 4).
+    One engagement's failure is rolled back and named, with the error's type (never its
+    message, which can carry data), and the next engagement still gets its work."""
+    failing, starting = uuid4(), uuid4()
+    monkeypatch.setattr(
+        scope_changes,
+        "_waiting",
+        lambda _c, _l: [(uuid4(), failing, uuid4()), (uuid4(), starting, uuid4())],
+    )
+
+    def reconcile(_c: Any, _o: Any, project_id: UUID, _a: Any, source: str) -> list[UUID]:
+        assert source == "scope_catch_up"
+        if project_id == failing:
+            raise RuntimeError("the database said something")
+        return []
+
+    monkeypatch.setattr(scope_changes, "reconcile_scope", reconcile)
+    connection = _Connection()
+    with caplog.at_level(logging.WARNING, logger=scope_changes.logger.name):
+        started = start_waiting_scope(connection)  # type: ignore[arg-type]
+    assert started == [starting] and connection.rollbacks == 1
+    (said,) = [r.getMessage() for r in caplog.records]
+    assert str(failing) in said and "RuntimeError" in said
+    assert "the database said something" not in said
 
 
 def test_selection_before_launch_creates_no_work(migrated: Database) -> None:
