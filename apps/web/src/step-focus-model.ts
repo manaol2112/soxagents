@@ -175,6 +175,13 @@ export function stepStripOf(
 }
 
 /** The control a focused step belongs to, said before the step's title. */
+/** The system the control is tested on, named first in focus mode's crumb (product owner,
+ * 17 November 2026: "I'm having a hard time identifying which application it is"). Empty
+ * where the control names none. */
+export function focusSystemOf(control: { system?: string | null }): string {
+  return (control.system ?? "").trim();
+}
+
 export function focusCrumbOf(control: { ref: string; title: string }): string {
   const ref = control.ref.trim();
   const title = control.title.trim();

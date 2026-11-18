@@ -1904,6 +1904,52 @@
   text-overflow: ellipsis;
 }
 
+/* The crumb is navigation (product owner, 17 November 2026): the system opens its page, the
+   control goes back to its workflow; the step, where the person is, is not a link. */
+.wf a.wf-crumb,
+.wf a.wf-crumb-system,
+.wf-panel a.wf-crumb,
+.wf-panel a.wf-crumb-system {
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+  transition: color 120ms ease;
+}
+
+.wf-panel a.wf-crumb:hover,
+.wf-panel a.wf-crumb-system:hover {
+  color: var(--text-strong);
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.wf-panel a.wf-crumb:focus-visible,
+.wf-panel a.wf-crumb-system:focus-visible {
+  outline: 0;
+  box-shadow: var(--ring);
+}
+
+/* In a kicker line the crumb takes the line's own size, so the line is one size. */
+.wf-panel-kicker .wf-crumb,
+.wf-panel-kicker .wf-crumb-system,
+.wf-panel-kicker .wf-crumb-sep,
+.wf-panel-kicker .wf-crumb-dot {
+  font-size: inherit;
+}
+
+.wf-crumb-dot {
+  color: var(--text-tertiary);
+}
+
+/* The system the control is tested on: never cut, so the application is always named; the
+   control's own name gives way first (17 November 2026). */
+.wf-crumb-system {
+  flex: none;
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
 .wf-crumb-sep {
   color: var(--border-strong, var(--text-tertiary));
   font-size: var(--fs-lg);
@@ -1953,9 +1999,19 @@
     margin-top: 0;
   }
 
+  /* One line, read as a breadcrumb: the control, then the step, at one size; the step in
+     the strong colour (product owner, 17 November 2026: the step's title was larger than
+     the control's name beside it). */
   .wf-panel.is-focus .wf-panel-line h2 {
     flex: none;
-    font-size: var(--fs-title);
+    font-size: var(--fs-lg);
+    letter-spacing: -0.01em;
+  }
+
+  .wf-panel.is-focus .wf-panel-line .wf-crumb,
+  .wf-panel.is-focus .wf-panel-line .wf-crumb-system,
+  .wf-panel.is-focus .wf-panel-line .wf-crumb-sep {
+    font-size: var(--fs-lg);
   }
 
   .wf-panel.is-focus .wf-panel-body {

@@ -27,6 +27,7 @@ import { useGuardedRouter } from "./guarded-router";
 import { FocusSide, setStepFocus, useStepFocus } from "./step-focus";
 import {
   focusCrumbOf,
+  focusSystemOf,
   focusToggleOf,
   isFocusShortcut,
   type StepPill,
@@ -396,7 +397,13 @@ export function WorkflowPanel({
   previous: { title: string; href: string } | null;
   next: { title: string; href: string } | null;
   /** The control the step belongs to: focus mode names it before the step's title. */
-  control?: { ref: string; title: string } | null;
+  control?: {
+    ref: string;
+    title: string;
+    system?: string | null;
+    /** The system's own page: the crumb's system goes there (17 November 2026). */
+    systemHref?: string | null;
+  } | null;
   /** Every step, in order, with its address: focus mode's step strip. */
   strip?: {
     steps: readonly StripStep[];
@@ -461,6 +468,25 @@ export function WorkflowPanel({
   const pills =
     strip === null ? [] : stepStripOf(strip.steps, step, strip.hrefs);
   const crumb = control === null ? "" : focusCrumbOf(control);
+  const system = control === null ? "" : focusSystemOf(control);
+  const systemHref = control?.systemHref ?? null;
+  // Outside focus the panel covers the page's own "System: …" crumb, so its kicker names the
+  // system first (design review of the owner's request, 17 November 2026).
+  const kickerSystem =
+    !focus && system !== "" ? (
+      <>
+        {systemHref !== null ? (
+          <Link className="wf-crumb-system" href={systemHref}>
+            {system}
+          </Link>
+        ) : (
+          <span className="wf-crumb-system">{system}</span>
+        )}
+        <span className="wf-crumb-dot" aria-hidden="true">
+          ·
+        </span>
+      </>
+    ) : null;
   const focusClass = focus ? " is-focus" : "";
   // The person's focus moves to the step they opened (the panel is keyed by its step, so it
   // mounts again for each).
@@ -537,6 +563,7 @@ export function WorkflowPanel({
         <header className="wf-panel-head is-minimal">
           <div className="wf-panel-titles">
             <p className="wf-panel-kicker">
+              {kickerSystem}
               <span
                 className={`wf-panel-kind kind-${head.kind}`}
                 aria-hidden="true"
@@ -548,9 +575,28 @@ export function WorkflowPanel({
             <div className="wf-panel-line">
               {focus && crumb !== "" ? (
                 <>
-                  <span className="wf-crumb" title={crumb}>
+                  {system !== "" ? (
+                    <>
+                      {systemHref !== null ? (
+                        <Link className="wf-crumb-system" href={systemHref}>
+                          {system}
+                        </Link>
+                      ) : (
+                        <span className="wf-crumb-system">{system}</span>
+                      )}
+                      <span className="wf-crumb-sep" aria-hidden="true">
+                        /
+                      </span>
+                    </>
+                  ) : null}
+                  <Link
+                    className="wf-crumb"
+                    href={closeHref}
+                    scroll={false}
+                    title={`Back to ${crumb}`}
+                  >
                     {crumb}
-                  </span>
+                  </Link>
                   <span className="wf-crumb-sep" aria-hidden="true">
                     /
                   </span>
@@ -586,11 +632,31 @@ export function WorkflowPanel({
       <header className="wf-panel-head">
         <div className="wf-panel-titles">
           <p className={head !== null ? "wf-panel-kicker" : "wf-peek-kicker"}>
+            {kickerSystem}
             {focus && crumb !== "" ? (
               <>
-                <span className="wf-crumb" title={crumb}>
+                {system !== "" ? (
+                  <>
+                    {systemHref !== null ? (
+                        <Link className="wf-crumb-system" href={systemHref}>
+                          {system}
+                        </Link>
+                      ) : (
+                        <span className="wf-crumb-system">{system}</span>
+                      )}
+                    <span className="wf-crumb-sep" aria-hidden="true">
+                      /
+                    </span>
+                  </>
+                ) : null}
+                <Link
+                  className="wf-crumb"
+                  href={closeHref}
+                  scroll={false}
+                  title={`Back to ${crumb}`}
+                >
                   {crumb}
-                </span>
+                </Link>
                 <span className="wf-crumb-sep" aria-hidden="true">
                   /
                 </span>

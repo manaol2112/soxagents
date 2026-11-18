@@ -3659,7 +3659,15 @@ function ControlRecord({
           next={around(1)}
           // Focus mode: the control named before the step, and every step's address
           // (the arrows' own) for the step strip (16 November 2026).
-          control={{ ref: control.controlRef, title: control.title }}
+          control={{
+            ref: control.controlRef,
+            title: control.title,
+            system: control.applicationName,
+            systemHref:
+              control.applicationId !== null
+                ? `${href(model, {})}&pane=systems&system=${control.applicationId}`
+                : null,
+          }}
           strip={{ steps: workflow, hrefs: stepHrefsWf }}
         >
           {stepPanel}

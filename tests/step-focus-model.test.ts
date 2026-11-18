@@ -9,6 +9,7 @@ import {
   FOCUS_KEY,
   FOCUS_NARROW,
   focusCrumbOf,
+  focusSystemOf,
   focusToggleOf,
   inTextBox,
   isFocusShortcut,
@@ -108,6 +109,15 @@ describe("the control's name before the step", () => {
     );
     assert.equal(focusCrumbOf({ ref: " ", title: "Access" }), "Access");
     assert.equal(focusCrumbOf({ ref: "ITGC-AC-01", title: "" }), "ITGC-AC-01");
+  });
+
+  // Product owner, 17 November 2026: "I'm having a hard time identifying which application
+  // it is." The crumb names the system first, where the control has one.
+  it("names the system the control is tested on, or nothing where it has none", () => {
+    assert.equal(focusSystemOf({ system: " SAP ERP " }), "SAP ERP");
+    assert.equal(focusSystemOf({ system: "" }), "");
+    assert.equal(focusSystemOf({ system: null }), "");
+    assert.equal(focusSystemOf({}), "");
   });
 });
 
@@ -318,9 +328,12 @@ describe("wired into the panel, the shell and the notes", () => {
       controls,
       /strip=\{\{ steps: workflow, hrefs: stepHrefsWf \}\}/,
     );
+    // Rewritten 17 November 2026. Old: control={{ ref, title }}. New: the system too, which
+    // the crumb names first (product owner: "I'm having a hard time identifying which
+    // application it is").
     assert.match(
       controls,
-      /control=\{\{ ref: control\.controlRef, title: control\.title \}\}/,
+      /control=\{\{\s*ref: control\.controlRef,\s*title: control\.title,\s*system: control\.applicationName,\s*\}\}/,
     );
     assert.match(panel, /stepStripOf\(strip\.steps, step, strip\.hrefs\)/);
     assert.match(
