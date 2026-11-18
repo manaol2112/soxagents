@@ -105,10 +105,10 @@ A change is done when all of these hold:
 | --- | --- |
 | Every test file belongs to a tier | `services/api/tests/test_test_tiers.py` |
 | `make reset` cannot delete data by accident | `tests/data-protection.test.ts` |
+| No API route serves another firm, and every route outside an organization is listed with a reason | `services/api/tests/test_route_authorization.py` |
 | Applied migrations are contiguous and unchanged | `services/api/tests/test_migrations.py` |
 | Line endings | `.gitattributes` |
 | Format, lint, types, critical tests, all node tests | `.github/workflows/ci.yml` |
 | Client-facing copy, design tokens, button hover | The guard tests under `tests/` |
 
-Planned, not yet built: a test that every API route is authorized or listed as public; a
-test that web proxies call routes that exist; a secret scan in CI.
+Planned, not yet built: a test that web proxies call routes that exist; a secret scan in CI.
