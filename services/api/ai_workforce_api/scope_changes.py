@@ -169,7 +169,7 @@ def reconcile_scope(
         (c.included and c.id not in live) or (not c.included and c.id in live) for c in controls
     ):
         return []
-    from ai_workforce_api.evidence_plans import plan_and_issue
+    from ai_workforce_api.evidence_plans import issue, plan_and_issue
     from ai_workforce_api.library_definitions import link_definitions
     from ai_workforce_api.onboarding import (
         _audit,
@@ -188,6 +188,22 @@ def reconcile_scope(
         tzinfo=UTC,
     )
     drafts: list[UUID] = []
+    # Who the audit trail names (after the review of PR #3, 18 November 2026, finding C1).
+    # A person's scope change is theirs. The worker-start catch-up is the workspace acting
+    # for the person who launched the engagement, who did nothing at that moment: no person
+    # is the actor; the record says who authorized the work and what triggered it.
+    catch_up = source == "scope_catch_up"
+    audit_actor: UUID | None = None if catch_up else actor_id
+    on_behalf: dict[str, Any] | None = (
+        {
+            "trigger": {"kind": "WORKER_START", "by": None},
+            "authorized_by": str(actor_id),
+            "catch_up": True,
+        }
+        if catch_up
+        else None
+    )
+    basis: dict[str, Any] = {"source": source, **(on_behalf or {})}
     with transaction(connection) as cursor:
         # One reconciliation at a time per engagement; the work is read again under the lock.
         cursor.execute(
@@ -235,8 +251,8 @@ def reconcile_scope(
                 (organization_id, project_id, report[0], project_id),
             )
             _audit_target(
-                cursor, organization_id, project_id, actor_id, "task.created", "task",
-                report[0], {"status": "READY", "source": source},
+                cursor, organization_id, project_id, audit_actor, "task.created", "task",
+                report[0], {"status": "READY", **basis},
             )  # fmt: skip
         for control in joining:
             items = [
@@ -290,17 +306,33 @@ def reconcile_scope(
                         (organization_id, project_id, report[0], row[0]),
                     )
                 _audit_target(
-                    cursor, organization_id, project_id, actor_id, "task.created", "task",
-                    row[0], {"status": "READY", "source": source},
+                    cursor, organization_id, project_id, audit_actor, "task.created", "task",
+                    row[0], {"status": "READY", **basis},
                 )  # fmt: skip
             # As at kickoff: attributes follow their testing definitions, and the evidence
             # is planned by phase.
             link_definitions(cursor, control.id, actor_id)
-            # The rules plan it now; once the change commits, the planner agent refines the
-            # plan when a model is configured (onboarding.schedule_started_work).
-            created = plan_and_issue(
-                cursor, organization_id, project_id, control.id, actor_id, "scope_change"
-            )
+            if _has_plan(cursor, control.id):
+                # Planned already (evidence_plans.plan_to_follow, or before it left scope and
+                # came back): the plan stands as the agents and the people left it, and only
+                # what its gates allow is requested. Planning it again with the rules wrote
+                # over the planner agent's work and withdrew its pending proposals on a plan
+                # no person approved (after the review of PR #3, 18 November 2026, finding
+                # E1; the approved workflow plans a control once, and a plan changes only
+                # through the planner's run or a person).
+                created = issue(
+                    cursor, organization_id, project_id, control.id, actor_id,
+                    source if catch_up else "scope_change", on_behalf=on_behalf,
+                ).created  # fmt: skip
+                plan = "KEPT"
+            else:
+                # The rules plan it now; once the change commits, the planner agent refines
+                # the plan when a model is configured (onboarding.schedule_started_work).
+                created = plan_and_issue(
+                    cursor, organization_id, project_id, control.id, actor_id,
+                    source if catch_up else "scope_change", on_behalf=on_behalf,
+                )  # fmt: skip
+                plan = "DRAWN_UP"
             drafts.extend(
                 queue_kickoff_drafts(
                     cursor,
@@ -311,8 +343,8 @@ def reconcile_scope(
                 )
             )
             _audit(
-                cursor, organization_id, project_id, actor_id, "scope.control_added",
-                {"control_id": str(control.id), "tasks": len(task_ids)},
+                cursor, organization_id, project_id, audit_actor, "scope.control_added",
+                {"control_id": str(control.id), "tasks": len(task_ids), "plan": plan, **basis},
             )  # fmt: skip
         for control in leaving:
             cancelled = cursor.execute(
@@ -337,14 +369,25 @@ def reconcile_scope(
                 (project_id, control.id, list(UNSENT_REQUESTS)),
             ).fetchall()
             _audit(
-                cursor, organization_id, project_id, actor_id, "scope.control_removed",
+                cursor, organization_id, project_id, audit_actor, "scope.control_removed",
                 {
                     "control_id": str(control.id),
                     "tasks_cancelled": len(cancelled),
                     "requests_cancelled": len(withdrawn),
+                    **basis,
                 },
             )  # fmt: skip
     return drafts
+
+
+def _has_plan(cursor: psycopg.Cursor[Any], control_id: UUID) -> bool:
+    """Whether the control has its evidence plan already."""
+    return (
+        cursor.execute(
+            "SELECT 1 FROM evidence_plans WHERE engagement_control_id = %s", (control_id,)
+        ).fetchone()
+        is not None
+    )
 
 
 # How many engagements one worker start catches up at most; the rest follow at the next.

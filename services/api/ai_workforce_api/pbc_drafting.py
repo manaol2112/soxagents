@@ -1359,18 +1359,11 @@ class LocalDraftScheduler:
             self._pool.submit(self._attempt_plan, plan_id)
 
     def _attempt_plan(self, plan_id: UUID) -> None:
-        from ai_workforce_api.evidence_plans import PLAN_RUN_ATTEMPTS, REQUEUED, fail_plan_run
+        from ai_workforce_api.evidence_plans import PLAN_RUN_ATTEMPTS, fail_plan_run
 
         for _ in range(PLAN_RUN_ATTEMPTS):
             try:
                 result = self._plan(plan_id)
-                self._draft_released(plan_id)
-                self._assess_planned(plan_id)
-                if result == REQUEUED:
-                    # The run's end queued what fell due while it worked: a new job, never
-                    # run inside this one (evidence_plans.run_plan).
-                    self.schedule_plan_runs([plan_id])
-                return
             except Exception:
                 logger.warning("planning a control's evidence failed; retrying")
                 try:
@@ -1397,10 +1390,42 @@ class LocalDraftScheduler:
                         break
                 except psycopg.Error:
                     logger.warning("an evidence plan run could not be reset for retry")
+                continue
+            self._after_plan(plan_id, result)
+            return
         with connect(self._settings.database_url) as connection:
             fail_plan_run(connection, plan_id)
         self._draft_released(plan_id)
         self._follow_plan(plan_id)
+
+    def _after_plan(self, plan_id: UUID, result: str) -> None:
+        """What a finished plan run hands on: its released drafts, the checks it planned, and
+        the run its end queued. Outside the run's retries (after the investigation of B8, 18
+        November 2026): a hand-off that fails, as when the worker stops while the job ends,
+        never counts as a failed run, so the planner is never run again for it nor the run
+        ended failed. The work it would hand on stays queued in the database, and the
+        worker's start resumes it."""
+        from ai_workforce_api.evidence_plans import REQUEUED
+
+        # Each hand-off on its own (after the review, 18 November 2026): one that fails does
+        # not keep the next from being handed on. The failure is logged with its traceback,
+        # so a defect is never mistaken for a stopped pool.
+        hand_offs: list[Callable[[], None]] = [
+            lambda: self._draft_released(plan_id),
+            lambda: self._assess_planned(plan_id),
+        ]
+        if result == REQUEUED:
+            # The run's end queued what fell due while it worked: a new job, never run inside
+            # this one (evidence_plans.run_plan).
+            hand_offs.append(lambda: self.schedule_plan_runs([plan_id]))
+        for hand_off in hand_offs:
+            try:
+                hand_off()
+            except Exception:  # noqa: BLE001 - the run finished; only a hand-off failed
+                logger.exception(
+                    "a finished plan run's follow-up work could not be handed on; it stays "
+                    "queued for the worker's start"
+                )
 
     def _follow_plan(self, plan_id: UUID) -> None:
         """A plan run that failed may have been busy when the specialist's read fell due (a

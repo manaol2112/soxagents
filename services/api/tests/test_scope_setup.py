@@ -194,8 +194,16 @@ def test_selected_controls_start_their_work_at_once(migrated: Database) -> None:
             "AND action = 'scope.control_added'",
             (project,),
         ).fetchone()
+        # A person's own scope change is theirs on the record (18 November 2026: only the
+        # worker-start catch-up names no person).
+        actors = connection.execute(
+            "SELECT DISTINCT actor_user_id, payload->>'source', payload ? 'authorized_by' "
+            "FROM audit_events WHERE project_id = %s AND action = 'scope.control_added'",
+            (project,),
+        ).fetchall()
     # The report waits for every control's review.
     assert waits == (4,) and added == (4,)
+    assert actors == [(team["owner_id"], "scope_change", False)]
     # Idempotent: the same selection again creates no second round of work.
     again = owner.post(f"{base}/scope/select", json={"system_id": sap["id"], "library_keys": keys})
     assert again.status_code == 200, again.text
@@ -305,14 +313,25 @@ def test_a_never_finalized_engagement_gets_its_work_at_the_worker_start(
         plans = connection.execute(
             "SELECT count(*) FROM evidence_plans WHERE project_id = %s", (project,)
         ).fetchone()
-        audit = connection.execute(
-            "SELECT actor_user_id, payload->>'source' FROM audit_events WHERE project_id = %s "
-            "AND action = 'task.created' ORDER BY created_at LIMIT 1",
+        records = connection.execute(
+            "SELECT DISTINCT action, actor_user_id, payload->>'source', "
+            "payload->>'authorized_by', payload->'trigger'->>'kind' FROM audit_events "
+            "WHERE project_id = %s AND action IN ('task.created', 'scope.control_added', "
+            "'evidence_plan.generated') ORDER BY action",
             (project,),
-        ).fetchone()
+        ).fetchall()
     assert plans == (2,)
-    # Recorded as made by the person who launched the engagement, as a catch-up.
-    assert audit == (team["owner_id"], "scope_catch_up")
+    # Rewritten 18 November 2026 (the independent review of PR #3, finding C1). Old: every
+    # record named the person who launched the engagement as its actor, as if they had
+    # acted at the worker's start, and only task.created said it was a catch-up. New: the
+    # workspace acted, so no person is the actor; each record says it was the catch-up,
+    # what triggered it (the worker's start) and who authorized the work (the launcher).
+    # evidence_plan.generated keeps its own "source" (RULES), the plan's origin.
+    assert records == [
+        ("evidence_plan.generated", None, "RULES", str(team["owner_id"]), "WORKER_START"),
+        ("scope.control_added", None, "scope_catch_up", str(team["owner_id"]), "WORKER_START"),
+        ("task.created", None, "scope_catch_up", str(team["owner_id"]), "WORKER_START"),
+    ]
     # Idempotent: the next start finds nothing waiting.
     with connect(migrated.url) as connection:
         assert project not in start_waiting_scope(connection)
@@ -403,9 +422,18 @@ def test_the_catch_up_keeps_a_plan_the_control_already_has(migrated: Database) -
             "RETURNING id, title",
             (control,),
         ).fetchall()
+        # And one of its proposals waits for a person's decision.
+        connection.execute(
+            "UPDATE evidence_requirements SET pending_change = '{\"add\": true}', "
+            "needs_review = true, origin = 'AGENT' WHERE id = (SELECT id FROM "
+            "evidence_requirements WHERE engagement_control_id = %s AND id <> %s "
+            "AND status <> 'REMOVED' ORDER BY phase, requirement_key LIMIT 1)",
+            (control, requirement),
+        )
         connection.commit()
+        [(since,)] = connection.execute("SELECT clock_timestamp()").fetchall()
         plan_before = connection.execute(
-            "SELECT id, source, status, understanding, version FROM evidence_plans "
+            "SELECT id, source, status, understanding, model_call_id FROM evidence_plans "
             "WHERE engagement_control_id = %s",
             (control,),
         ).fetchone()
@@ -421,7 +449,7 @@ def test_the_catch_up_keeps_a_plan_the_control_already_has(migrated: Database) -
     assert _work(migrated, project)[0] == 1
     with connect(migrated.url) as connection:
         plan_after = connection.execute(
-            "SELECT id, source, status, understanding, version FROM evidence_plans "
+            "SELECT id, source, status, understanding, model_call_id FROM evidence_plans "
             "WHERE engagement_control_id = %s",
             (control,),
         ).fetchone()
@@ -430,7 +458,23 @@ def test_the_catch_up_keeps_a_plan_the_control_already_has(migrated: Database) -
             "WHERE engagement_control_id = %s ORDER BY id",
             (control,),
         ).fetchall()
+    # The catch-up names no person as the actor of anything it recorded.
+    with connect(migrated.url) as connection:
+        named = connection.execute(
+            "SELECT action FROM audit_events WHERE project_id = %s AND occurred_at > %s "
+            "AND actor_user_id IS NOT NULL",
+            (project, since),
+        ).fetchall()
+        pending = connection.execute(
+            "SELECT count(*) FROM evidence_requirements WHERE engagement_control_id = %s "
+            "AND pending_change ? 'add' AND needs_review AND status <> 'REMOVED'",
+            (control,),
+        ).fetchone()
+    assert named == [] and pending == (1,)
     # The plan, its content and every request are as the agent and the people left them.
+    # (Its version moves once, with the kickoff's own step that links the control's
+    # attributes to their testing definitions, which this control had not had: the plan
+    # itself is not planned again.)
     assert plan_after == plan_before
     assert requirements_after == requirements_before
     assert (requirement, title) in [(r[0], r[2]) for r in requirements_after]
