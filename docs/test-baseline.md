@@ -9,7 +9,7 @@ commits). Update the date and the rows whenever one is fixed or found.
 
 ## State of the gate
 
-**CI is not healthy yet.** First observed run on 18 Nov 2026 (commit `6fefafc`): toolchain, install, lint, type check and PostgreSQL passed; the critical tier ran 1,335 tests in 31 minutes, 1,331 passed and 4 failed (row B5), so the node tests after it did not run. It has not run since 11 October 2026. The workflow now starts
+**CI is not healthy yet.** First observed run on 18 Nov 2026 (commit `6fefafc`): toolchain, install, lint, type check and PostgreSQL passed; the critical tier ran 1,335 tests in 31 minutes, 1,331 passed and 4 failed, so the node tests after it did not run. The four, and a fifth that failed on Windows only, were fixed on 18 November 2026: an assumption accepted with its attribute was matched by the workpaper's letter instead of its stable code and never became a point (a defect, fixed in `design_points.py`); two test expectations predated approved behaviour and were rewritten with dated notes; one test split a path on `/` and is now portable. It has not run since 11 October 2026. The workflow now starts
 PostgreSQL and runs on the working branches, and the lint and type failures
 that predated this work (B1 to B3) are fixed. Nothing here may be described as passing in
 CI until a run on GitHub shows it; record the run below when it does.
@@ -26,7 +26,7 @@ CI until a run on GitHub shows it; record the run below when it does.
 | `tsc` (root) | Windows | Pass (a test narrowed its type; assertion unchanged) |
 | `mypy` | Windows | Pass (one explicit re-export; one test imports `Json` from its library) |
 | Tier guard, safeguard tests, migration tests (46 tests) | Windows, real PostgreSQL | Pass |
-| Python critical tier | Windows, earlier the same day, on `windows-dev` with uncommitted work | 1,295 pass, 7 fail (rows B5, B6) |
+| Python critical tier | Windows, earlier the same day, on `windows-dev` with uncommitted work | 1,295 pass, 7 fail (5 in `test_understanding_review.py`, fixed 18 Nov; 2 were row B6) |
 | Python critical tier | Linux | Not run. Unknown |
 
 ## Known failures
@@ -34,7 +34,6 @@ CI until a run on GitHub shows it; record the run below when it does.
 | Id | Failure | Cause | Platform | Lifted when |
 | --- | --- | --- | --- | --- |
 | B4 | 24 node tests in 9 files; `biome check` reports about 290 formatting errors | No `.gitattributes`, so a Windows checkout is CRLF; one test builds a path from a URL | Windows only | `.gitattributes` is merged and the checkout refreshed; `tests/evidence-wizard-contract.test.ts:29` uses `fileURLToPath` |
-| B5 | 4 tests in `services/api/tests/test_understanding_review.py` fail on Linux (GitHub CI, 18 Nov 2026): `test_the_review_asks_before_any_attribute_is_drafted_and_answering_completes`, `test_an_assumption_accepted_with_its_attribute_waits_in_the_d_and_i_workpaper`, `test_review_again_on_an_accepted_control_keeps_the_last_review_and_its_findings_are_points`, `test_a_follow_on_run_has_its_own_attempts_and_the_chain_is_bounded`. A fifth fails on Windows only (a path split on `/services/`, line 1205) | Undiagnosed. They arrived with the B1k/B1l merge (4896597), before the governance work | All (the fifth Windows only) | Diagnosed and fixed with the assertions kept |
 | B6 | Intermittent "Address already in use (10048)" under parallel pytest | Hypothesis: ephemeral-port exhaustion | Windows only | Measured; until then lower `WORKERS` on Windows and rerun the failed file alone |
 
 ## Tiers

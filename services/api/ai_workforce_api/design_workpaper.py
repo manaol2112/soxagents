@@ -101,6 +101,7 @@ from ai_workforce_api.design_points import (
     ObservationBody,
     PointBody,
     accepted_assumptions,
+    attributes_coded,
     considerations_standing,
     observations_of,
     points_of,
@@ -2440,6 +2441,7 @@ def read_design_workpaper(
                 decisions,
                 closed_by_tickmark(applying),
                 accepted_assumptions(connection, control_id),
+                attributes_coded(connection, control_id, attributes),
             ),
             considerations_standing(connection, None if paper is None else paper.id),
         ),  # fmt: skip

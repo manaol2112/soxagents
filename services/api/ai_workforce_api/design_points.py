@@ -255,6 +255,7 @@ def points_of(
     decisions: Sequence[FileDecision] = (),
     closed: Mapping[UUID, frozenset[UUID]] | None = None,
     assumptions: Sequence[AssumedRecord] = (),
+    coded: Sequence[AttributeRecord] | None = None,
 ) -> list[PointBody]:
     """Everything that waits on a person, from the records, in the order a reviewer needs
     it: each check out of date, the open findings, the attributes a check leaves to a
@@ -486,8 +487,11 @@ def points_of(
                     settle=_settle("TICKMARK") if follow_up.attribute_ids else _settle(),
                 )
             )  # fmt: skip
-    # The agents' assumptions a person accepted with an attribute, not confirmed (B1l).
-    for point in assumption_points(assumptions, attributes):
+    # The agents' assumptions a person accepted with an attribute, not confirmed (B1l). An
+    # assumption names attributes by their stable code (A1, A2: control_attributes.code), not
+    # by the workpaper's letter, so it is matched against `coded`, the same attributes under
+    # those codes (attributes_coded); without it, `attributes` as given.
+    for point in assumption_points(assumptions, attributes if coded is None else coded):
         add(point)
     return found
 
@@ -702,8 +706,34 @@ def points_now(
         records.requests, records.checks, records.attributes, readings, findings, evidence,
         records.decisions, view.closed_by_tickmark(applying),
         accepted_assumptions(connection, control_id),
+        attributes_coded(connection, control_id, records.attributes),
     )  # fmt: skip
     return with_considerations(points, considerations_standing(connection, workpaper_id))
+
+
+def attributes_coded(
+    connection: psycopg.Connection[Any],
+    control_id: UUID,
+    attributes: Sequence[AttributeRecord],
+) -> list[AttributeRecord]:
+    """The workpaper's attributes under their stable codes (control_attributes.code: A1, A2),
+    the codes an assumption names them by; one without a stable code keeps its letter.
+
+    18 November 2026: the D&I workpaper letters its attributes by position (A, B, C:
+    evidence_assurance.attribute_letter), while an assumption records the stable codes. Matched
+    by letter, no assumption ever found its attribute, so an assumption accepted with its
+    attribute was never a point before the preparer signs (B1l point 6)."""
+    from ai_workforce_api.design_workpaper import AttributeRecord
+
+    rows = connection.execute(
+        "SELECT id, code FROM control_attributes "
+        "WHERE engagement_control_id = %s AND status = 'APPROVED' AND code IS NOT NULL",
+        (control_id,),
+    ).fetchall()
+    stable = {UUID(str(row[0])): str(row[1]) for row in rows}
+    return [
+        AttributeRecord(item.id, stable.get(item.id, item.code), item.text) for item in attributes
+    ]
 
 
 def demo_seeding(connection: psycopg.Connection[Any], project_id: UUID, user_id: UUID) -> bool:
@@ -1005,6 +1035,7 @@ __all__ = [
     "PlaceBody",
     "PointBody",
     "accepted_assumptions",
+    "attributes_coded",
     "assumption_points",
     "considerations_standing",
     "consider",
