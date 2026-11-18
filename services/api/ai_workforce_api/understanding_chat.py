@@ -31,6 +31,7 @@ from ai_workforce_api.control_design import CopyBody, SlotBody, copy_values, des
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.model_providers import call_note
 from ai_workforce_api.models import ModelProvider, ModelRequest
+from ai_workforce_api.prompt_data import neutral
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.slot_options import MULTIPLE_SLOTS
 from ai_workforce_api.walkthrough_questions import (
@@ -45,7 +46,9 @@ from ai_workforce_api.walkthrough_questions import (
 )
 
 AGENT = "engagement-planner"
-PROMPT_VERSION = "understanding-reply-v1"
+# v2 (18 November 2026, owner-approved S1): every tag-shaped token in the question and the
+# reply is made inert (prompt_data.neutral); the wording is as v1.
+PROMPT_VERSION = "understanding-reply-v2"
 REPLY_SECONDS = 30
 REPLY_TOKENS = 600
 MAX_OPTIONS = 12
@@ -205,6 +208,29 @@ def _checked(result: InterpretResult, asked: _Asked) -> InterpretResult:
     return result.model_copy(update={"value": matched or value, "reply": ""})
 
 
+def reply_prompt(asked: _Asked, text: str) -> str:
+    """The prompt for the person's reply to one point: the question and the reply as data,
+    every tag in them made inert (prompt_data; 18 November 2026, owner-approved S1). Pure."""
+    question = json.dumps(
+        {
+            "question": asked.question,
+            "offered_answers": asked.options,
+            "why_it_is_asked": asked.why,
+            "hint": asked.hint,
+            "required": asked.required,
+        },
+        ensure_ascii=False,
+        indent=1,
+    )
+    return (
+        "<question>\n"
+        + neutral(question)
+        + "\n</question>\n\n<reply>\n"
+        + neutral(clean_line(text, 600))
+        + "\n</reply>"
+    )
+
+
 def interpret(
     connection: psycopg.Connection[Any],
     provider: ModelProvider | None,
@@ -241,23 +267,7 @@ def interpret(
     ).generate(
         ModelRequest(
             operation="generate",
-            prompt=(
-                "<question>\n"
-                + json.dumps(
-                    {
-                        "question": asked.question,
-                        "offered_answers": asked.options,
-                        "why_it_is_asked": asked.why,
-                        "hint": asked.hint,
-                        "required": asked.required,
-                    },
-                    ensure_ascii=False,
-                    indent=1,
-                )
-                + "\n</question>\n\n<reply>\n"
-                + clean_line(body.text, 600)
-                + "\n</reply>"
-            ),
+            prompt=reply_prompt(asked, body.text),
             output_schema=REPLY_SCHEMA,
             allowed_tool_ids=(),
             timeout_seconds=REPLY_SECONDS,
@@ -1291,8 +1301,10 @@ def _walkthrough(
 
 # v2 (11 November 2026): the walkthrough's open questions are read from the notes too, each
 # with its answer_kind. v3 (the same day): a walkthrough question that allows_other takes an
-# answer its options do not offer as "Other: <the notes' words>".
-NOTES_PROMPT_VERSION = "understanding-notes-v3"
+# answer its options do not offer as "Other: <the notes' words>". v4 (18 November 2026,
+# owner-approved S1): every tag-shaped token in the questions and the text is made inert
+# (prompt_data.neutral); the wording is as v3.
+NOTES_PROMPT_VERSION = "understanding-notes-v4"
 NOTES_SECONDS = 90
 NOTES_TOKENS = 2500
 MAX_NOTES = 20_000
@@ -1371,10 +1383,12 @@ def _sentences(text: str) -> list[str]:
 
 
 def _found(quote: str, notes: str) -> bool:
-    """The quote is in the notes, allowing for spacing and case."""
+    """The quote is in the notes, allowing for spacing and case. The notes' tags were shown
+    inert (notes_prompt), so "‹" in either folds back to "<"."""
     squeeze = re.compile(r"\s+")
-    wanted = squeeze.sub(" ", quote).strip().casefold()
-    return len(wanted) >= 3 and wanted in squeeze.sub(" ", notes).casefold()
+    fold = {0x2039: "<"}
+    wanted = squeeze.sub(" ", quote.translate(fold)).strip().casefold()
+    return len(wanted) >= 3 and wanted in squeeze.sub(" ", notes.translate(fold)).casefold()
 
 
 def _notes_questions(
@@ -1484,6 +1498,19 @@ def read_notes(
     )
 
 
+def notes_prompt(questions: list[dict[str, Any]], tag: str, text: str) -> str:
+    """The prompt for a text read for answers: the questions and the text (inside `tag`) as
+    data, every tag in them made inert (prompt_data; 18 November 2026, owner-approved S1).
+    Pure."""
+    return (
+        "<questions>\n"
+        + neutral(json.dumps(questions, ensure_ascii=False, indent=1))
+        + f"\n</questions>\n\n<{tag}>\n"
+        + neutral(text)
+        + f"\n</{tag}>"
+    )
+
+
 def answers_from_text(
     connection: psycopg.Connection[Any],
     provider: ModelProvider | None,
@@ -1524,13 +1551,7 @@ def answers_from_text(
         ).generate(
             ModelRequest(
                 operation="generate",
-                prompt=(
-                    "<questions>\n"
-                    + json.dumps(questions, ensure_ascii=False, indent=1)
-                    + f"\n</questions>\n\n<{tag}>\n"
-                    + text
-                    + f"\n</{tag}>"
-                ),
+                prompt=notes_prompt(questions, tag, text),
                 output_schema=NOTES_SCHEMA,
                 allowed_tool_ids=(),
                 timeout_seconds=NOTES_SECONDS,

@@ -634,8 +634,9 @@ def test_the_planner_reads_the_confirmed_answers_as_the_control_environment(
     # "/9" since the planner proposes the attributes every D&I request addresses (12
     # November 2026), "/10" since B1h the same day (the schema states its limits and a
     # correction names the failing places): the prompt changed there, not in what this
-    # test reads.
-    assert PLANNER_PROMPT_VERSION == "engagement-planner/10"
+    # test reads. "/11" (18 November 2026, owner-approved S1: the data's tags are made inert,
+    # nothing else changed).
+    assert PLANNER_PROMPT_VERSION == "engagement-planner/11"
     # A follow-up whose parent changed no longer reaches the planner.
     assert _put(team, control, {"wt-ac01-sod-check": _answer("No")}).status_code == 200
     with connect(migrated.url) as connection:

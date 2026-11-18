@@ -399,7 +399,8 @@ def test_an_analysis_the_agent_could_not_give_is_said_on_the_reference(migrated:
     with connect(migrated.url) as connection:
         rejected = connection.execute(
             "SELECT o.outcome FROM model_calls m JOIN model_call_outcomes o "
-            "ON o.model_call_id = m.id WHERE m.prompt_version = 'prior-year-analysis/1' "
+            # Old 'prior-year-analysis/1'; new /2 (18 November 2026, owner-approved S1).
+            "ON o.model_call_id = m.id WHERE m.prompt_version = 'prior-year-analysis/2' "
             "AND m.target_id = %s",
             (UUID(reference["id"]),),
         ).fetchall()

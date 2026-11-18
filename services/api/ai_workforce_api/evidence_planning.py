@@ -38,6 +38,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from ai_workforce_api.controls import DOMAIN_LABELS, ITGC_DOMAINS
 from ai_workforce_api.methodology import PLATFORM_DEFAULT, Rules
+from ai_workforce_api.prompt_data import neutral
 from ai_workforce_api.understanding_authority import PRECEDENCE, Fact, for_agents
 
 Phase = Literal["DESIGN", "INTERIM", "ROLLFORWARD"]
@@ -2529,10 +2530,11 @@ def _normal(text: str) -> str:
 
 
 # Typographic punctuation a model writes for the plain kind its source has, or the other way
-# round: the same words (console_citations folds a citation's quotes the same way).
+# round: the same words (console_citations folds a citation's quotes the same way). The
+# records' tags are shown inert (prompt_data.neutral), so "‹" folds back to "<".
 _QUOTE_FOLD = str.maketrans(
     {"’": "'", "‘": "'", "“": '"', "”": '"', "–": "-",
-     "—": "-", " ": " "}
+     "—": "-", " ": " ", "\u2039": "<"}
 )  # fmt: skip
 # The escapes of the JSON the records were shown to the planner in, as a model may copy
 # them into a quote: a quoted word, a line break, a tab.
@@ -2998,4 +3000,8 @@ def prompt_for(facts: PlanFacts) -> str:
         },
     }
     text = json.dumps(_with_understanding(data, facts), ensure_ascii=False, indent=1)[:PROMPT_LIMIT]
-    return f"Plan the testing and evidence for this control.\n\n<control>\n{text}\n</control>"
+    # The records are the client's and the team's words: every tag in them is made inert
+    # (prompt_data; 18 November 2026, owner-approved S1).
+    return (
+        f"Plan the testing and evidence for this control.\n\n<control>\n{neutral(text)}\n</control>"
+    )

@@ -269,15 +269,17 @@ def test_an_agents_question_becomes_an_interview_before_a_person_sees_it(
         ).fetchone()
         calls = connection.execute(
             "SELECT agent_key, prompt_version FROM model_calls WHERE target_id = %s "
-            "AND prompt_version IN ('question-interview/1', 'question-review/3') "
+            # Old ('question-interview/1', 'question-review/3'); new /2 and /4 (18 November
+            # 2026, owner-approved S1: the data's tags are made inert, nothing else changed).
+            "AND prompt_version IN ('question-interview/2', 'question-review/4') "
             "ORDER BY created_at",
             (cid,),
         ).fetchall()
     assert audit is not None and audit[0]["reviewed"] == 1 and audit[0]["unreviewed"] == 0
     assert audit[0]["fixes"] == ["Split the question into two steps."]
     assert calls == [
-        ("engagement-planner", "question-interview/1"),
-        ("independent-reviewer", "question-review/3"),
+        ("engagement-planner", "question-interview/2"),
+        ("independent-reviewer", "question-review/4"),
     ]
     # Written once: another review of the control does not pay to write it again.
     again = _Provider([{"attributes": [], "issues": []}])

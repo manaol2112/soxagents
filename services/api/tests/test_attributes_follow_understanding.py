@@ -1257,8 +1257,10 @@ def test_a_duplicate_the_drafts_reviewer_returns_as_criteria_never_becomes_a_pro
     # carry the previous answer as escaped data; nothing else changed.
     # Old "attributes/7"; new "attributes/8" in the second fix round of B1k (16 November
     # 2026): each issue names the attribute codes it bears on; nothing else changed.
+    # Old "attributes/8" and "attribute-review/4"; new /9 and /5 (18 November 2026, owner-approved
+    # S1: the data's tags are made inert, nothing else changed).
     assert (control_attributes.PROMPT_VERSION, control_attributes.REVIEW_PROMPT_VERSION) == (
-        "attributes/8", "attribute-review/4",
+        "attributes/9", "attribute-review/5",
     )  # fmt: skip
 
 

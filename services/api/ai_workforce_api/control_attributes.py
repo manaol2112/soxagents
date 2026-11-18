@@ -70,6 +70,7 @@ from ai_workforce_api.db import transaction
 from ai_workforce_api.definition_registry import attribute_for
 from ai_workforce_api.library_definitions import DefinitionBody, definition_body
 from ai_workforce_api.models import ModelProvider, ModelRequest
+from ai_workforce_api.prompt_data import neutral
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.question_review import review_open_questions
 
@@ -93,13 +94,16 @@ MAX_ATTRIBUTES = 12
 # attributes/7 (16 November 2026, after the review of B1k): the one correction carries the
 # previous answer as escaped data, said to be data (agent_answers.correction_prompt). Every
 # rule of /6 is kept word for word.
-PROMPT_VERSION = "attributes/8"
+# attributes/9 (18 November 2026, owner-approved S1): every tag-shaped token in the control's
+# context is made inert (prompt_data.neutral). Every rule of /8 is kept word for word.
+PROMPT_VERSION = "attributes/9"
 # attribute-review/2 (the same day): the reviewer of the drafts checks every ADD against the
 # approved attributes and the other drafts. /3 (B1e): it is given the confirmed understanding
 # with its dates and the precedence; every check it had stays. /4 (16 November 2026, after the
 # review of B1k): its correction carries the previous answer as escaped data; every check of
-# /3 stays.
-REVIEW_PROMPT_VERSION = "attribute-review/4"
+# /3 stays. /5 (18 November 2026, owner-approved S1): every tag-shaped token in the drafts
+# and the control's context is made inert (prompt_data.neutral); every check of /4 stays.
+REVIEW_PROMPT_VERSION = "attribute-review/5"
 # The agents of the attribute run, on the audit trail and on what they record: the drafter,
 # and the independent reviewer of its drafts.
 ATTRIBUTE_AGENT = "engagement-planner"
@@ -1157,11 +1161,7 @@ def generate(
         ),
         ModelRequest(
             operation="generate",
-            prompt=(
-                "Propose test attributes for this control.\n\n<control_context>\n"
-                f"{_json(package)}\n</control_context>\n\n<sources>\n{source_blocks(sources)}\n"
-                "</sources>"
-            ),
+            prompt=attributes_prompt(package, sources),
             output_schema=ATTRIBUTES_SCHEMA,
             allowed_tool_ids=(),
             max_tokens=ATTRIBUTE_TOKENS,
@@ -1941,6 +1941,30 @@ REVIEW_SCHEMA: dict[str, Any] = {
 }
 
 
+def attributes_prompt(package: dict[str, Any], sources: list[Source]) -> str:
+    """The attribute agent's prompt: the control's context and its sources as data, every
+    tag in them made inert (prompt_data; 18 November 2026, owner-approved S1). Pure."""
+    return (
+        "Propose test attributes for this control.\n\n<control_context>\n"
+        f"{neutral(_json(package))}\n</control_context>\n\n<sources>\n"
+        f"{source_blocks(sources)}\n</sources>"
+    )
+
+
+def drafts_review_prompt(
+    drafted: list[_Proposal], package: dict[str, Any], sources: list[Source]
+) -> str:
+    """The drafts' reviewer's prompt: the drafts, the control's context and its sources as
+    data, every tag in them made inert (prompt_data; 18 November 2026, owner-approved S1).
+    Pure."""
+    return (
+        "Review the drafted attributes for this control.\n\n<drafted_attributes>\n"
+        f"{neutral(_json([item.model_dump() for item in drafted]))}\n</drafted_attributes>\n\n"
+        f"<control_context>\n{neutral(_json(package))}\n</control_context>\n\n<sources>\n"
+        f"{source_blocks(sources)}\n</sources>"
+    )
+
+
 class _Reviewed(BaseModel):
     attributes: list[_Proposal] = Field(max_length=MAX_ATTRIBUTES)
     fixes: list[str] = []
@@ -1979,12 +2003,7 @@ def _review(
         ),
         ModelRequest(
             operation="generate",
-            prompt=(
-                "Review the drafted attributes for this control.\n\n<drafted_attributes>\n"
-                f"{_json([item.model_dump() for item in drafted])}\n</drafted_attributes>\n\n"
-                f"<control_context>\n{_json(package)}\n</control_context>\n\n<sources>\n"
-                f"{source_blocks(sources)}\n</sources>"
-            ),
+            prompt=drafts_review_prompt(drafted, package, sources),
             output_schema=REVIEW_SCHEMA,
             allowed_tool_ids=(),
             max_tokens=ATTRIBUTE_TOKENS,

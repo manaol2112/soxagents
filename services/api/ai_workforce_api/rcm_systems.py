@@ -35,6 +35,7 @@ from ai_workforce_api.db import (
 )
 from ai_workforce_api.model_providers import fallback_note, live_model, provider_for
 from ai_workforce_api.models import ModelProvider, ModelRequest
+from ai_workforce_api.prompt_data import neutral
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.rcm_import import FIELD_KEYS, Sheet, data_rows, headers
 from ai_workforce_api.settings import Settings
@@ -478,11 +479,13 @@ def scan_prompt(rows: list[ScanRow]) -> str:
             break
         lines.append(line)
     data = json.dumps({"systems_column_values": cells[:300]}, ensure_ascii=False)
+    # The RCM is the client's: every tag in it is made inert (prompt_data; 18 November 2026,
+    # owner-approved S1).
     return (
         "List the in-scope systems in this RCM.\n\n<rcm>\n"
-        + data
+        + neutral(data)
         + "\n"
-        + "\n".join(lines)
+        + neutral("\n".join(lines))
         + "\n</rcm>"
     )
 
@@ -634,6 +637,7 @@ def run_scan(
             cancelled=False,
             system=SYSTEM_PROMPT,
         )
+        # The prompt is /2 (18 November 2026, owner-approved S1): the RCM's tags are made inert.
         call = AgentCaller(
             connection,
             provider,
@@ -646,7 +650,7 @@ def run_scan(
                 requester,
                 agent_instance_id=agent_actor(connection, project_id, "evidence-coordinator"),
             ),  # fmt: skip
-        ).generate(request, "rcm-systems/1", {"import": str(import_id), "rows": len(rows)})
+        ).generate(request, "rcm-systems/2", {"import": str(import_id), "rows": len(rows)})
         status, raw, call_id = call.status, call.raw, call.call_id
         if status == "SUCCEEDED" and raw.output is not None:
             try:

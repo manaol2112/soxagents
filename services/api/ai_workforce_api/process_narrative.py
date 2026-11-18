@@ -64,6 +64,7 @@ from ai_workforce_api.process_understanding import (
     checked_steps,
     composed,
 )
+from ai_workforce_api.prompt_data import neutral
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.question_review import review_open_questions
 from ai_workforce_api.settings import Settings
@@ -949,6 +950,29 @@ def _waiting(connection: psycopg.Connection[Any], control_id: UUID) -> list[_Que
     ]
 
 
+def draft_prompt(inputs: dict[str, Any]) -> str:
+    """The drafter's prompt: the control's context and its sources as data, every tag in
+    them made inert (prompt_data; 18 November 2026, owner-approved S1). Pure."""
+    package = json.dumps(inputs["package"], ensure_ascii=False, indent=1, default=str)
+    return (
+        "Write the process narrative for this control.\n\n<control_context>\n"
+        f"{neutral(package)}\n"
+        f"</control_context>\n\n<sources>\n{source_blocks(inputs['sources'])}\n</sources>"
+    )
+
+
+def review_prompt(draft: dict[str, Any], inputs: dict[str, Any]) -> str:
+    """The reviewer's prompt: the draft, the control's context and its sources as data,
+    every tag in them made inert (prompt_data; 18 November 2026, owner-approved S1). Pure."""
+    package = json.dumps(inputs["package"], ensure_ascii=False, indent=1, default=str)
+    return (
+        "Review and fix this process narrative.\n\n<draft>\n"
+        f"{neutral(json.dumps(draft, ensure_ascii=False, indent=1))}\n</draft>\n\n"
+        f"<control_context>\n{neutral(package)}\n"
+        f"</control_context>\n\n<sources>\n{source_blocks(inputs['sources'])}\n</sources>"
+    )
+
+
 def _call(
     connection: psycopg.Connection[Any],
     provider: ModelProvider,
@@ -1072,10 +1096,9 @@ def _draft(
     output = _call(
         connection, provider, "engagement-planner", organization_id, project_id, control_id,
         requester,
-        "Write the process narrative for this control.\n\n<control_context>\n"
-        f"{json.dumps(inputs['package'], ensure_ascii=False, indent=1, default=str)}\n"
-        f"</control_context>\n\n<sources>\n{source_blocks(inputs['sources'])}\n</sources>",
-        DRAFTER_PROMPT, DRAFT_SCHEMA, "process-narrative/4", DRAFT_TOKENS, DRAFT_SECONDS,
+        draft_prompt(inputs),
+        # /5 (18 November 2026, owner-approved S1): the context's tags are made inert.
+        DRAFTER_PROMPT, DRAFT_SCHEMA, "process-narrative/5", DRAFT_TOKENS, DRAFT_SECONDS,
     )  # fmt: skip
     if output is None:
         return None
@@ -1118,11 +1141,10 @@ def _review(
     output = _call(
         connection, provider, "independent-reviewer", organization_id, project_id,
         control_id, requester,
-        "Review and fix this process narrative.\n\n<draft>\n"
-        f"{json.dumps(draft, ensure_ascii=False, indent=1)}\n</draft>\n\n<control_context>\n"
-        f"{json.dumps(inputs['package'], ensure_ascii=False, indent=1, default=str)}\n"
-        f"</control_context>\n\n<sources>\n{source_blocks(inputs['sources'])}\n</sources>",
-        REVIEWER_PROMPT, REVIEW_SCHEMA, "process-narrative-review/4", REVIEW_TOKENS,
+        review_prompt(draft, inputs),
+        # /5 (18 November 2026, owner-approved S1): the draft's and the context's tags are
+        # made inert.
+        REVIEWER_PROMPT, REVIEW_SCHEMA, "process-narrative-review/5", REVIEW_TOKENS,
         REVIEW_SECONDS,
     )  # fmt: skip
     if output is None:

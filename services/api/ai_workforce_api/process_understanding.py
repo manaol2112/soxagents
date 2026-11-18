@@ -50,6 +50,7 @@ from ai_workforce_api.control_context import (
 from ai_workforce_api.db import transaction
 from ai_workforce_api.model_providers import fallback_note
 from ai_workforce_api.models import ModelProvider, ModelRequest
+from ai_workforce_api.prompt_data import neutral
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.question_review import review_open_questions
 
@@ -914,6 +915,16 @@ class _Answer(BaseModel):
     issues: list[AnswerIssue] = []
 
 
+def map_prompt(package: dict[str, Any], sources: list[Source]) -> str:
+    """The process map's prompt: the control's context and its sources as data, every tag in
+    them made inert (prompt_data; 18 November 2026, owner-approved S1). Pure."""
+    return (
+        "Build the process understanding for this control.\n\n<control_context>\n"
+        f"{neutral(json.dumps(package, ensure_ascii=False, indent=1, default=str))}\n"
+        f"</control_context>\n\n<sources>\n{source_blocks(sources)}\n</sources>"
+    )
+
+
 def build(
     connection: psycopg.Connection[Any],
     provider: ModelProvider | None,
@@ -950,18 +961,15 @@ def build(
         ).generate(
             ModelRequest(
                 operation="generate",
-                prompt=(
-                    "Build the process understanding for this control.\n\n<control_context>\n"
-                    f"{json.dumps(package, ensure_ascii=False, indent=1, default=str)}\n"
-                    f"</control_context>\n\n<sources>\n{source_blocks(sources)}\n</sources>"
-                ),
+                prompt=map_prompt(package, sources),
                 output_schema=PROCESS_SCHEMA,
                 allowed_tool_ids=(),
                 timeout_seconds=90,
                 cancelled=False,
                 system=SYSTEM_PROMPT,
             ),
-            "process-map/3",
+            # /4 (18 November 2026, owner-approved S1): the context's tags are made inert.
+            "process-map/4",
             {"control": str(control_id), "sources": len(sources)},
         )
         status, raw, call_id = call.status, call.raw, call.call_id

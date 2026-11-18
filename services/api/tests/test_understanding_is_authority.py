@@ -554,14 +554,16 @@ def test_the_attribute_follows_the_understanding_and_the_conflict_is_never_raise
         UUID(proposed["id"]),
     )[0]
     # Old "attribute-review/3"; new "attribute-review/4" after the review of B1k (16
-    # November 2026): its correction carries the previous answer as escaped data.
-    assert stored[0]["prompt_version"] == "attribute-review/4"
+    # November 2026): its correction carries the previous answer as escaped data. Old
+    # "attribute-review/4"; new /5 (18 November 2026, owner-approved S1: the data's tags are made
+    # inert, nothing else changed).
+    assert stored[0]["prompt_version"] == "attribute-review/5"
     assert stored[0]["model_call"] != str(stored[1])
     assert _rows(
         migrated,
         "SELECT agent_key, prompt_version FROM model_calls WHERE id = %s",
         UUID(stored[0]["model_call"]),
-    ) == [("independent-reviewer", "attribute-review/4")]
+    ) == [("independent-reviewer", "attribute-review/5")]
     assert _rows(migrated, "SELECT agent_key FROM model_calls WHERE id = %s", stored[1]) == [
         ("engagement-planner",)
     ]
@@ -576,8 +578,10 @@ def test_the_attribute_follows_the_understanding_and_the_conflict_is_never_raise
     # stand word for word (test_understanding_once_rules.py).
     # Old "attributes/6"; new "attributes/7" after the review of B1k (the correction carries
     # the previous answer as escaped data). Old "attributes/7"; new "attributes/8" in the
-    # second fix round of B1k (each issue names the attribute codes it bears on).
-    assert payload["by"] == "engagement-planner" and payload["prompt_version"] == "attributes/8"
+    # second fix round of B1k (each issue names the attribute codes it bears on). Old
+    # "attributes/8"; new "attributes/9" (18 November 2026, owner-approved S1: the data's tags are
+    # made inert, nothing else changed).
+    assert payload["by"] == "engagement-planner" and payload["prompt_version"] == "attributes/9"
     assert payload["written_by"] == "independent-reviewer"
     [entry] = payload["followed"]
     assert (entry["attribute"], entry["change"]) == (proposed["id"], "CHANGE")
@@ -1733,7 +1737,10 @@ def test_every_agent_that_reads_the_understanding_is_given_the_precedence(
         # and /4 after the review of B1k (16 November 2026): their corrections carry the
         # previous answer as escaped data; nothing this test reads changed. Old "attributes/7";
         # new "attributes/8" in the second fix round of B1k (each issue names its codes).
-    ) == ("attributes/8", "attribute-review/4", "attribute-set-review/4", "engagement-planner/10")
+        # Old ("attributes/8", "attribute-review/4", "attribute-set-review/4",
+        # "engagement-planner/10"); new /9, /5, /5 and /11 (18 November 2026, owner-approved
+        # S1: the data's tags are made inert, nothing this test reads changed).
+    ) == ("attributes/9", "attribute-review/5", "attribute-set-review/5", "engagement-planner/11")
     team, control, client, _a3 = _case(migrated, "uia-inputs")
     _walkthrough_confirmed(migrated, team, control, client)
     with connect(migrated.url) as connection:

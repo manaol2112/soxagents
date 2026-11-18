@@ -334,9 +334,11 @@ def test_the_attribute_agents_prompt_keeps_every_rule_of_5_word_for_word() -> No
     # (agent_answers.correction_prompt). Old: "attributes/6". New: "attributes/7".
     # attributes/8 (the second fix round of B1k): one sentence asks each issue for the codes
     # it bears on (ADDED_IN_8); every other word of /7 is kept. Old: "attributes/7". New:
-    # "attributes/8".
+    # "attributes/8". Old: "attributes/8". New: "attributes/9" (18 November 2026, owner-approved S1:
+    # the data's tags are made inert, nothing else changed; the
+    # system prompt this test reads is word for word /8).
     prompt = control_attributes.SYSTEM_PROMPT
-    assert control_attributes.PROMPT_VERSION == "attributes/8"
+    assert control_attributes.PROMPT_VERSION == "attributes/9"
     assert prompt.count(ADDED_IN_6) == 1 and prompt.count(ADDED_IN_8) == 1
     without = prompt.replace(ADDED_IN_8, "").replace(ADDED_IN_6, "")
     assert hashlib.sha256(without.encode()).hexdigest() == PROMPT_5_SHA256

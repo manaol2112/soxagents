@@ -86,6 +86,7 @@ from ai_workforce_api.model_providers import (
 )
 from ai_workforce_api.models import ModelProvider, ModelRequest
 from ai_workforce_api.pbc import Delivery, delivery_of
+from ai_workforce_api.prompt_data import neutral
 from ai_workforce_api.provenance import AgentCaller, Call, Job, agent_actor
 from ai_workforce_api.settings import Settings
 
@@ -426,7 +427,9 @@ class Planned:
 # /10 (12 November 2026, B1h): the schema states every limit the plan is checked against,
 # a linked procedure is said to be one of the phase's procedures, and a correction names
 # the exact places that failed.
-PLANNER_PROMPT_VERSION = "engagement-planner/10"
+# /11 (18 November 2026, owner-approved S1): every tag-shaped token in the control's records
+# and in a rejected plan sent back is made inert (prompt_data.neutral); the wording is as /10.
+PLANNER_PROMPT_VERSION = "engagement-planner/11"
 # Room for a whole plan: three phases, their procedures and evidence. At the provider's
 # default of 4,096 a plan built on an approved narrative was cut off and the rules stood in
 # (26 October 2026). The limit also holds the model's reasoning: on ITGC-AC-01 an answer
@@ -444,7 +447,8 @@ def _correction(facts: PlanFacts, previous: Any, problem: str) -> str:
     14 evidence items a phase where the schema allows four)."""
     return (
         f"{prompt_for(facts)}\n\n<your_previous_plan>\n"
-        f"{json.dumps(previous, ensure_ascii=False, default=str)}\n</your_previous_plan>\n\n"
+        f"{neutral(json.dumps(previous, ensure_ascii=False, default=str))}\n"
+        "</your_previous_plan>\n\n"
         f"That plan was rejected: {problem}. Each place is named as it is in your answer "
         "(for example phases[1].requirements[0].title). Return the whole plan again with "
         "every problem fixed and everything else kept. understanding is an object and "
