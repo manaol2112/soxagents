@@ -173,8 +173,12 @@ export type BatchFile = {
   /** The attributes whose verified passages are in this file (once its items' checks are
    * reviewed): unique code and verdict pairs. */
   addresses: Address[];
-  /** Already held before this session: shown where it is, and not moved here. */
+  /** Already held before this session: shown where it is, and not moved here. A file
+   * restored by this session is not one: it is read again as a file added now. */
   duplicate: boolean;
+  /** Withdrawn from this control and restored by being dropped in this session (product
+   * owner, 17 November 2026, "Restore and read"): read again, as a file added now. */
+  restored: boolean;
   /** The server's word on where the file stands, where this page reads it: it left the
    * control's D&I items (NOT_DESIGN), or its reading ended (SORTED, NEEDS_PERSON,
    * FAILED, READ); "" for anything else. */
@@ -395,7 +399,10 @@ function parseFile(value: unknown): BatchFile | null {
         ? { ...placement, status: "NOT_DESIGN", requirementIds: [] }
         : placement,
     addresses: parseAddresses(value.addresses),
-    duplicate: value.duplicate === true,
+    // A restored file stores nothing new, but it is no longer the one held as it was: it
+    // goes through the stages again, so it is not shown as already held.
+    duplicate: value.duplicate === true && value.restored !== true,
+    restored: value.restored === true,
     stage,
   };
 }
@@ -700,6 +707,14 @@ export type Upload = {
   /** When the server answered it (this browser's clock): a batch read after that which
    * no longer lists the file means it is gone from this upload (removed). */
   answeredAt?: number;
+  /** Withdrawn from this control earlier, and restored by this drop: read again. */
+  restored?: boolean;
+  /** Refused because it stays withdrawn (withdrawn from another control): its row links
+   * to the withdrawn files. */
+  withdrawn?: boolean;
+  /** The control it was withdrawn from, as the server names it ("ITGC-AC-02 (SAP ERP)");
+   * null where it was on no control, or was not refused as withdrawn. */
+  withdrawnFrom?: string | null;
 };
 
 /** A file this browser stored that the server's batch, read after the file was stored,
@@ -725,59 +740,90 @@ export function goneFromBatch(
   );
 }
 
-/** The upload route's answer for one file: stored, already held, refused with the
- * server's sentence, or not reached (which can be tried again). */
+/** The upload route's answer for one file, as its row's state: stored (or restored),
+ * already held, refused with the server's sentence, or not reached (which can be tried
+ * again). Every answer says `restored` and `withdrawn`, so an answer replaces what an
+ * earlier try of the same row said. */
 export function uploadAnswer(
   status: number,
   body: unknown,
-): { state: UploadState; fileId: string | null; detail: string } {
+): {
+  state: UploadState;
+  fileId: string | null;
+  detail: string;
+  restored: boolean;
+  withdrawn: boolean;
+  withdrawnFrom: string | null;
+} {
   const raw = isRecord(body) ? body : {};
+  const answer = (
+    state: UploadState,
+    fileId: string | null,
+    detail: string,
+  ) => ({
+    state,
+    fileId,
+    detail,
+    restored: false,
+    withdrawn: false,
+    withdrawnFrom: null as string | null,
+  });
   const fileId = uuidOrNull(raw.file_id);
   if (status === 200 && fileId !== null) {
-    return {
-      state: raw.duplicate === true ? "duplicate" : "stored",
-      fileId,
-      detail: "",
-    };
+    // Withdrawn from this control and restored by the drop (17 November 2026): it is
+    // secured and read again as a file added now, not one already held.
+    if (raw.restored === true) {
+      return { ...answer("stored", fileId, ""), restored: true };
+    }
+    return answer(raw.duplicate === true ? "duplicate" : "stored", fileId, "");
   }
   if (status === 409) {
     const said = str(raw.detail);
     return {
-      state: "refused",
-      fileId: null,
-      detail:
+      ...answer(
+        "refused",
+        null,
         said !== ""
           ? sentence(said)
           : "The upload was refused. Start the wizard again.",
+      ),
+      // It stays withdrawn (withdrawn from another control): its row links to the
+      // withdrawn files, where it is restored; files withdrawn from the same control
+      // are said once, together (refusalBlocks).
+      withdrawn: raw.withdrawn === true,
+      withdrawnFrom:
+        raw.withdrawn === true && str(raw.withdrawn_from) !== ""
+          ? str(raw.withdrawn_from).slice(0, 200)
+          : null,
     };
   }
   if (status === 413) {
-    return {
-      state: "refused",
-      fileId: null,
-      // As the upload plan and the drop zone say the limit (25 MB, decimal).
-      detail: `It is larger than ${MAX_UPLOAD_BYTES / 1_000_000} MB, so it was not added.`,
-    };
+    // As the upload plan and the drop zone say the limit (25 MB, decimal).
+    return answer(
+      "refused",
+      null,
+      `It is larger than ${MAX_UPLOAD_BYTES / 1_000_000} MB, so it was not added.`,
+    );
   }
   if (status === 400 || status === 422) {
-    return {
-      state: "refused",
-      fileId: null,
-      detail: "Its name or contents were not accepted, so it was not added.",
-    };
+    return answer(
+      "refused",
+      null,
+      "Its name or contents were not accepted, so it was not added.",
+    );
   }
   if (status === 403 || status === 404) {
-    return {
-      state: "refused",
-      fileId: null,
-      detail: "Your role cannot add evidence to this control.",
-    };
+    return answer(
+      "refused",
+      null,
+      "Your role cannot add evidence to this control.",
+    );
   }
-  return {
-    state: "failed",
-    fileId: null,
-    detail: "It did not reach the evidence store. Try again.",
-  };
+  return answer(
+    "failed",
+    null,
+    "It did not reach the evidence store. Try again.",
+  );
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1143,13 +1189,20 @@ export type FileLine = {
   mark: FileMark;
   meta: string;
   track: [TrackState, TrackState, TrackState, TrackState];
+  /** The track's step names: Secured, Read, Classified, then Sorted, or "Needs you"
+   * while a person must place the file (one meaning for Sorted: placed or ruled out). */
+  trackLabels: [string, string, string, string];
+  /** It never reached the evidence store (refused, or not reached): the row shows one
+   * red "Not added" chip in place of the track. */
+  notAdded: boolean;
   /** The share of its bytes sent, while it is being sent. */
   sent: number | null;
   /** What is happening to it now, in words; null once it is sorted. */
   activity: {
     text: string;
     on: boolean;
-    tone: "plain" | "warning" | "danger";
+    /** "note": the reason a file was not added, beside its red "Not added" chip. */
+    tone: "plain" | "warning" | "danger" | "note";
   } | null;
   kind: { label: string; confidence: string; low: boolean } | null;
   dest: Destination | null;
@@ -1157,6 +1210,18 @@ export type FileLine = {
   suggestion: { requirementId: string; text: string } | null;
   /** Already held: shown where it is, with no action here. */
   duplicate: boolean;
+  /** Withdrawn from this control and restored by this drop: read again as a file added
+   * now (product owner, 17 November 2026). */
+  restored: boolean;
+  /** Not added because it stays withdrawn (withdrawn from another control): the row
+   * offers the way to the withdrawn files (withdrawnFilesHref). */
+  withdrawn: boolean;
+  /** The control it was withdrawn from, when it stays withdrawn; else null. */
+  withdrawnFrom: string | null;
+  /** Set when two or more rows were refused for the same reason (withdrawn from the same
+   * control): the reason and the link are said once, above them (refusalBlocks), and
+   * the row shows only its name, its size and its "Not added" chip. Null otherwise. */
+  group: string | null;
   /** It did not reach the server: it can be sent again. */
   retry: boolean;
   /** A person can move it here: its own file of this upload, read. */
@@ -1230,6 +1295,40 @@ export function choicesFor(
   return { choices, preselect: suggested[0]?.requirementId ?? "" };
 }
 
+/** A restored file before its new reading starts. */
+export const RESTORED_WAITING =
+  "Restored from the withdrawn files. Waiting for a reader";
+/** Said after a restored file's type and size, for as long as its row is shown. */
+export const RESTORED_META = "Restored";
+/** The link a row refused because the file stays withdrawn offers. */
+export const WITHDRAWN_LINK = "Open withdrawn files";
+/** The chip a row that never reached the evidence store shows in place of its track. */
+export const NOT_ADDED_CHIP = "Not added";
+/** The track's last step while a person must place the file. */
+export const NEEDS_YOU_STEP = "Needs you";
+
+/** The Evidence library's Withdrawn list, searched for the file: where a file withdrawn
+ * from another control is restored (Evidence, Evidence library, Withdrawn). The page's
+ * own address for that view (evidence-model parseEvidenceView: tab, queue, q). */
+export function withdrawnFilesHref(
+  organizationId: string,
+  projectId: string,
+  fileName: string,
+): string {
+  const params = new URLSearchParams({
+    organization: organizationId,
+    project: projectId,
+    section: "evidence",
+    tab: "files",
+    queue: "withdrawn",
+  });
+  const query = fileName.trim().slice(0, 120);
+  if (query !== "") {
+    params.set("q", query);
+  }
+  return `/?${params.toString()}`;
+}
+
 function activityOf(
   upload: Upload | null,
   file: BatchFile | null,
@@ -1256,7 +1355,10 @@ function activityOf(
             };
       case "stored":
         return {
-          text: "Secured. Waiting for a reader",
+          text:
+            upload.restored === true
+              ? RESTORED_WAITING
+              : "Secured. Waiting for a reader",
           on: false,
           tone: "plain",
         };
@@ -1267,10 +1369,11 @@ function activityOf(
           tone: "plain",
         };
       default:
+        // The row's "Not added" chip says what happened; this is only the reason.
         return {
-          text: `Not added. ${upload.detail}`,
+          text: upload.detail,
           on: false,
-          tone: "danger",
+          tone: "note",
         };
     }
   }
@@ -1283,7 +1386,11 @@ function activityOf(
   }
   const read = file.read;
   if (read.status === "PENDING") {
-    return { text: "Secured. Waiting for a reader", on: false, tone: "plain" };
+    return {
+      text: file.restored ? RESTORED_WAITING : "Secured. Waiting for a reader",
+      on: false,
+      tone: "plain",
+    };
   }
   if (read.status === "WORKING") {
     if (read.startedAt !== null && now - read.startedAt > STALLED_AFTER_MS) {
@@ -1455,14 +1562,29 @@ export function fileLines(
     const name = file?.name ?? upload?.name ?? "A file";
     const mark = fileMark(name, file?.extension ?? "", file?.read.method);
     const size = file?.sizeBytes ?? upload?.size ?? null;
+    const restored = file?.restored ?? upload?.restored === true;
+    const meta = fileMeta(mark, size, file?.read.pages ?? null);
     return {
       key: upload?.key ?? `file-${file?.fileId ?? name}`,
       fileId: file?.fileId ?? upload?.fileId ?? null,
       name,
       folder: upload?.folder ?? "",
       mark,
-      meta: fileMeta(mark, size, file?.read.pages ?? null),
+      meta: restored ? [meta, RESTORED_META].filter(Boolean).join(" · ") : meta,
       track: trackOf(upload, file),
+      trackLabels: [
+        "Secured",
+        "Read",
+        "Classified",
+        file !== null &&
+        file.placement.status === "NEEDS_PERSON" &&
+        readEnded(file)
+          ? NEEDS_YOU_STEP
+          : "Sorted",
+      ],
+      notAdded:
+        file === null &&
+        (upload?.state === "refused" || upload?.state === "failed"),
       sent:
         file === null && upload?.state === "sending" && upload.size > 0
           ? Math.min(1, upload.sent / upload.size)
@@ -1481,6 +1603,18 @@ export function fileLines(
       dest: file === null ? null : destinationOf(file, batch, facts),
       suggestion: file === null ? null : suggestionOf(file, batch, facts),
       duplicate: file?.duplicate ?? upload?.state === "duplicate",
+      restored,
+      withdrawn:
+        file === null &&
+        upload?.state === "refused" &&
+        upload.withdrawn === true,
+      withdrawnFrom:
+        file === null &&
+        upload?.state === "refused" &&
+        upload.withdrawn === true
+          ? (upload.withdrawnFrom ?? null)
+          : null,
+      group: null,
       retry: file === null && upload?.state === "failed",
       // A file already held stays where it is, unless it needs a person: then the
       // person chooses here, where the list sends them.
@@ -1503,7 +1637,7 @@ export function fileLines(
       upload.fileId === null ? null : (byId.get(upload.fileId) ?? null);
     // The same file added twice is one entry: the second upload reads as already held.
     if (file !== null && sent.has(file.fileId)) {
-      return [line({ ...upload, state: "duplicate" }, null)];
+      return [line({ ...upload, state: "duplicate", restored: false }, null)];
     }
     if (file !== null) {
       sent.add(file.fileId);
@@ -1515,14 +1649,97 @@ export function fileLines(
       lines.push(line(null, file));
     }
   }
-  return lines;
+  return groupRefusals(lines);
+}
+
+/** The key two refused rows share when one sentence says why for both: withdrawn from
+ * the same named control. A file withdrawn before it was filed, or refused for any other
+ * reason, keeps its own sentence. */
+function refusalKey(line: FileLine): string | null {
+  return line.withdrawn && line.withdrawnFrom !== null
+    ? `withdrawn:${line.withdrawnFrom}`
+    : null;
+}
+
+function groupRefusals(lines: FileLine[]): FileLine[] {
+  const counts = new Map<string, number>();
+  for (const line of lines) {
+    const key = refusalKey(line);
+    if (key !== null) {
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+  }
+  return lines.map((line) => {
+    const key = refusalKey(line);
+    return key !== null && (counts.get(key) ?? 0) > 1
+      ? { ...line, group: key }
+      : line;
+  });
+}
+
+/** The control ref a Withdrawn list is searched by ("ITGC-AC-02" of "ITGC-AC-02 (SAP
+ * ERP)"): the list matches it in its control column (evidence-model filterWithdrawn). */
+export function withdrawnQuery(withdrawnFrom: string): string {
+  const at = withdrawnFrom.indexOf(" (");
+  return (at > 0 ? withdrawnFrom.slice(0, at) : withdrawnFrom).trim();
+}
+
+/** A run of rows as a list shows them: a row, or a group of rows refused for one reason,
+ * said once above them with one link to the withdrawn files of that control. */
+export type RefusalBlock =
+  | { kind: "line"; key: string; line: FileLine }
+  | {
+      kind: "group";
+      key: string;
+      /** "9 files were withdrawn from ITGC-AC-02 (SAP ERP). Restoring them returns
+       * them to that control, not this one." */
+      note: string;
+      /** What the Withdrawn list is searched for (the control's ref). */
+      query: string;
+      lines: FileLine[];
+    };
+
+/** The rows in their order, each group of refused rows gathered where its first row is,
+ * with its one sentence and its one link. */
+export function refusalBlocks(lines: readonly FileLine[]): RefusalBlock[] {
+  const blocks: RefusalBlock[] = [];
+  const groups = new Map<string, Extract<RefusalBlock, { kind: "group" }>>();
+  for (const line of lines) {
+    if (line.group === null || line.withdrawnFrom === null) {
+      blocks.push({ kind: "line", key: line.key, line });
+      continue;
+    }
+    const known = groups.get(line.group);
+    if (known !== undefined) {
+      known.lines.push(line);
+      continue;
+    }
+    const block: Extract<RefusalBlock, { kind: "group" }> = {
+      kind: "group",
+      key: `group-${line.key}`,
+      note: "",
+      query: withdrawnQuery(line.withdrawnFrom),
+      lines: [line],
+    };
+    groups.set(line.group, block);
+    blocks.push(block);
+  }
+  for (const block of groups.values()) {
+    const from = block.lines[0]?.withdrawnFrom ?? "";
+    block.note = `${block.lines.length} files were withdrawn from ${from}. Restoring them returns them to that control, not this one.`;
+  }
+  return blocks;
 }
 
 // ---------------------------------------------------------------------------------------
 // Step 2: the pipeline, the elapsed time and the estimate
 // ---------------------------------------------------------------------------------------
 
-export type StageState = "wait" | "active" | "done";
+/** A stage's state; "problem" where it ended with nothing done (the Secure stage when no
+ * file was secured): red, never the done tick; "partial" where it ended with something
+ * left for a person (files not added, files to place): amber (docs/design-system.md, the
+ * meaning map). */
+export type StageState = "wait" | "active" | "done" | "partial" | "problem";
 
 export type StageLine = {
   key: "secure" | "read" | "sort" | "check";
@@ -1550,7 +1767,11 @@ export type Progress = {
   notDesign: number;
   placed: number;
   items: number;
+  /** Items whose check gave a verdict (reviewed or held). */
   checked: number;
+  /** Items whose check did not finish (FAILED, e.g. no model): never counted as checked,
+   * and never shown as done (design review round 4, 18 November 2026). */
+  failedChecks: number;
   /** Items whose check is queued, at work, or about to be queued: exactly. */
   checkingItems: number;
   uploading: boolean;
@@ -1559,6 +1780,9 @@ export type Progress = {
   /** An item's check is queued or at work, or about to be queued. */
   checking: boolean;
   done: boolean;
+  /** The session ended with no file added: every file it sent was refused or did not
+   * reach the server. Its stages, its finished line and its footer all say so. */
+  nothingAdded: boolean;
   stages: StageLine[];
 };
 
@@ -1640,7 +1864,12 @@ export function progressOf(
     (file) => readEnded(file) && file.placement.status === "PLACED",
   ).length;
   const items = batch?.items ?? [];
-  const checked = items.filter((item) => checkEnded(item.check)).length;
+  const failedChecks = items.filter(
+    (item) => item.check?.status === "FAILED",
+  ).length;
+  // A failed check ended, but it gave no verdict: it is not "checked".
+  const checked =
+    items.filter((item) => checkEnded(item.check)).length - failedChecks;
   const uploading = sending.length > 0;
   const reading =
     arriving.length > 0 ||
@@ -1651,9 +1880,19 @@ export function progressOf(
   const checking = coming.length > 0;
   const allSorted = !uploading && !reading;
   const done = allSorted && !checking && (batch !== null || uploads.length > 0);
+  // Nothing reached the evidence store: no stage after Secure has anything to do.
+  const nothingAdded = done && total === 0 && secured === 0 && notAdded > 0;
 
   const secureState: StageState =
-    secureTotal === 0 ? "wait" : uploading ? "active" : "done";
+    secureTotal === 0
+      ? "wait"
+      : uploading
+        ? "active"
+        : secured === 0 && notAdded > 0
+          ? "problem"
+          : notAdded > 0
+            ? "partial"
+            : "done";
   const readState: StageState =
     total === 0
       ? "wait"
@@ -1666,17 +1905,22 @@ export function progressOf(
     total === 0
       ? "wait"
       : allSorted
-        ? "done"
+        ? needs > 0
+          ? "partial"
+          : "done"
         : sorted > 0 || read > 0
           ? "active"
           : "wait";
+  // With no item to check while files wait for a person, the check waits for them.
   const checkState: StageState =
     items.length === 0
-      ? allSorted && total > 0
+      ? allSorted && total > 0 && needs === 0
         ? "done"
         : "wait"
       : allSorted && !checking
-        ? "done"
+        ? failedChecks > 0
+          ? "problem"
+          : "done"
         : checked > 0 || items.some((item) => item.check?.status === "CHECKING")
           ? "active"
           : "wait";
@@ -1695,8 +1939,9 @@ export function progressOf(
       key: "read",
       name: "Read",
       state: readState,
-      count:
-        readState === "wait"
+      count: nothingAdded
+        ? "Nothing to read"
+        : readState === "wait"
           ? total > 0
             ? "Waiting for a reader"
             : "Waiting"
@@ -1707,7 +1952,11 @@ export function progressOf(
       key: "sort",
       name: "Classify and sort",
       state: sortState,
-      count: sortState === "wait" ? "Waiting" : `Sorted ${sorted} of ${total}`,
+      count: nothingAdded
+        ? "Nothing to sort"
+        : sortState === "wait"
+          ? "Waiting"
+          : `Sorted ${sorted - needs} of ${total}`,
       flag: needs > 0 ? `${needs} ${needs === 1 ? "needs" : "need"} you` : "",
     },
     {
@@ -1716,14 +1965,18 @@ export function progressOf(
       state: checkState,
       count:
         items.length === 0
-          ? checkState === "done"
+          ? checkState === "done" || nothingAdded
             ? "No item to check"
-            : "Waiting for sorted files"
+            : allSorted && needs > 0
+              ? `Waiting for ${plural(needs, "file")} to be placed`
+              : "Waiting for sorted files"
           : checkState === "wait"
             ? allSorted
               ? "Waiting to start"
               : "Waiting for sorted files"
-            : `Checked ${checked} of ${plural(items.length, "item")}`,
+            : checkState === "problem"
+              ? `${failedChecks} of ${plural(items.length, "item")} not checked`
+              : `Checked ${checked} of ${plural(items.length, "item")}`,
       flag: "",
     },
   ];
@@ -1738,11 +1991,13 @@ export function progressOf(
     placed,
     items: items.length,
     checked,
+    failedChecks,
     checkingItems: coming.length,
     uploading,
     reading,
     checking,
     done,
+    nothingAdded,
     stages,
   };
 }
@@ -1864,7 +2119,7 @@ export function announcement(
     return `${plural(now.needs, "file")} ${now.needs === 1 ? "needs" : "need"} you: choose where ${now.needs === 1 ? "it goes" : "they go"}.`;
   }
   if (now.sorted > before.sorted) {
-    return `Sorted ${now.sorted} of ${plural(now.files, "file")}.`;
+    return `Sorted ${now.sorted - now.needs} of ${plural(now.files, "file")}.`;
   }
   if (now.read > before.read) {
     return `Read ${now.read} of ${plural(now.files, "file")}.`;
@@ -2651,14 +2906,27 @@ export function resultsSummary(
       ? `${notAdded} ${notAdded === 1 ? "was" : "were"} not added`
       : "",
   ].filter((part) => part !== "");
+  const notAddedLine =
+    notAdded > 0
+      ? ` ${plural(notAdded, "file")} ${notAdded === 1 ? "was" : "were"} not added.`
+      : "";
+  // Never "None of the 1 file" (design review, 17 November 2026).
+  const noneSorted =
+    n === 1
+      ? "The file could not be sorted into an item."
+      : n === 2
+        ? "Neither file could be sorted into an item."
+        : `None of the ${n} files could be sorted into an item.`;
   const lead =
     n === 0
       ? notAdded > 0
-        ? `No file was added. ${capital(plural(notAdded, "file"))} could not be added: each says why.`
+        ? `${noneAdded(notAdded)}. The list shows why.`
         : "No file has been added yet."
-      : placed === 0
-        ? `None of the ${plural(n, "file")} could be sorted into an item.${extra.length > 0 ? ` ${capital(extra.join("; "))}.` : ""}`
-        : `${placed === n ? plural(n, "file") : `${placed} of ${plural(n, "file")}`} sorted into ${plural(itemsWith, "item")}.${extra.length > 0 ? ` ${capital(extra.join("; "))}.` : ""}`;
+      : placed === 0 && needs === n
+        ? `${n === 1 ? "The file needs you: choose where it goes." : `${n} files need you: choose where they go.`}${notAddedLine}`
+        : placed === 0
+          ? `${noneSorted}${extra.length > 0 ? ` ${capital(extra.join("; "))}.` : ""}`
+          : `${placed === n ? plural(n, "file") : `${placed} of ${plural(n, "file")}`} sorted into ${plural(itemsWith, "item")}.${extra.length > 0 ? ` ${capital(extra.join("; "))}.` : ""}`;
   const lines: ResultsSummary["lines"] = [];
   const add = (key: AttrState, text: string) => {
     if (text !== "") {
@@ -2720,22 +2988,27 @@ export function resultsSummary(
 /** The files Results sets apart, before the items: those a person must place, those
  * that are not D&I evidence, and those this browser could not add. */
 export function filesApart(lines: readonly FileLine[]): FileLine[] {
-  const rank = (line: FileLine) =>
-    line.dest?.kind === "needs"
-      ? 0
-      : line.activity?.tone === "danger" && line.file === null
-        ? 2
-        : 1;
+  // Design review, 17 November 2026: the files not added are a section of their own
+  // (filesNotAdded); these are the files in the control that are not in an item.
+  const rank = (line: FileLine) => (line.dest?.kind === "needs" ? 0 : 1);
   return lines
     .filter(
       (line) =>
-        line.dest?.kind === "needs" ||
-        line.dest?.kind === "out" ||
-        (line.file === null &&
-          (line.upload?.state === "refused" ||
-            line.upload?.state === "failed")),
+        !line.notAdded &&
+        (line.dest?.kind === "needs" || line.dest?.kind === "out"),
     )
     .sort((a, b) => rank(a) - rank(b));
+}
+
+/** The files this browser could not add (refused, or not reached): Results' own
+ * section, headed "{n} not added". */
+export function filesNotAdded(lines: readonly FileLine[]): FileLine[] {
+  return lines.filter((line) => line.notAdded);
+}
+
+/** "2 not added". */
+export function notAddedTitle(count: number): string {
+  return `${count} not added`;
 }
 
 /** "2 files are not in an item". */
@@ -2909,16 +3182,140 @@ export function resultsNote(progress: Progress): string {
     progress.needs > 0
       ? ` · ${plural(progress.needs, "file")} ${progress.needs === 1 ? "needs" : "need"} you`
       : "";
+  // Design review, 17 November 2026: no "0 items checked by two readings".
+  if (progress.checked === 0) {
+    return progress.needs > 0
+      ? `${plural(progress.needs, "file")} ${progress.needs === 1 ? "needs" : "need"} you. Nothing is accepted until you accept it.`
+      : "Nothing is accepted until you accept it.";
+  }
   return `${plural(progress.checked, "item")} checked by two readings${needs}. Nothing is accepted until you accept it.`;
+}
+
+/** Results' line on how long it took: "Analyzed in 0:42", "Analyzed in under a
+ * second"; "" when no file was added (nothing was analyzed). */
+export function analyzedLine(seconds: number, progress: Progress): string {
+  if (progress.nothingAdded) {
+    return "";
+  }
+  return seconds < 1
+    ? "Analyzed in under a second"
+    : `Analyzed in ${formatElapsed(seconds)}`;
+}
+
+/** How the Analyze step says it ended, once it is done: the line under the elapsed time,
+ * whether the clock is shown, the footer's note and its tone, the footer's main action,
+ * and whether See results is the primary button. One story (the owner's rule, 17
+ * November 2026; the design review the same day): green only when every file was added
+ * and none waits for a person; amber when some were not added or files need a person;
+ * red when none was added, where the clock is hidden (nothing ran) and the main action
+ * adds files instead of opening results there are none of. */
+export type Finish = {
+  /** Where the elapsed clock was while work ran (the clock is not shown once it is
+   * done); "" when no file was added (the red Secure stage and the footer say it). */
+  short: string;
+  /** The footer's note. */
+  note: string;
+  tone: "success" | "warning" | "problem";
+  action: "results" | "add";
+  /** See results is the primary button, unless a file waits for a person: then the
+   * row's own choice is the one primary action. */
+  primary: boolean;
+};
+
+/** "None of the 9 files were added", "Neither file was added", "The file was not added". */
+export function noneAdded(count: number): string {
+  return count === 1
+    ? "The file was not added"
+    : count === 2
+      ? "Neither file was added"
+      : `None of the ${count} files were added`;
+}
+
+/** "Finished in 0:42", or "Finished in under a second" (never "0:00", which reads as
+ * never read). The seconds are the server's: the batch's start to its last reading. */
+export function tookLine(seconds: number): string {
+  return seconds < 1
+    ? "Finished in under a second"
+    : `Finished in ${formatElapsed(seconds)}`;
+}
+
+export function finishOf(seconds: number, progress: Progress): Finish {
+  const took = tookLine(seconds);
+  const needs =
+    progress.needs > 0
+      ? ` ${plural(progress.needs, "file")} ${progress.needs === 1 ? "needs" : "need"} you.`
+      : "";
+  const primary = progress.needs === 0;
+  // A check that did not finish is said, and the finish is never green over it.
+  const failed =
+    progress.failedChecks > 0
+      ? ` ${plural(progress.failedChecks, "check")} did not finish.`
+      : "";
+  if (progress.nothingAdded) {
+    return {
+      short: "",
+      // Design review round 3: the reason may sit on the row or in a group's note
+      // (several files withdrawn from one control), so the line points at the list.
+      note: `${noneAdded(progress.notAdded)}. The list shows why.`,
+      tone: "problem",
+      action: "add",
+      primary: true,
+    };
+  }
+  if (progress.notAdded > 0) {
+    const of = progress.secured + progress.notAdded;
+    return {
+      short: took,
+      note: `${took}. ${progress.notAdded} of ${plural(of, "file")} ${progress.notAdded === 1 ? "was" : "were"} not added.${needs}${failed}`,
+      tone: "warning",
+      action: "results",
+      primary,
+    };
+  }
+  return {
+    short: took,
+    note: `${took}.${needs}${failed}`,
+    tone:
+      progress.needs > 0 || progress.failedChecks > 0 ? "warning" : "success",
+    action: "results",
+    primary,
+  };
+}
+
+/** The Files pane's count: what is sorted (placed, or ruled out) of the files, and how
+ * many wait for a person; when none was added, how many were not. */
+export function filesCount(progress: Progress): string {
+  if (progress.nothingAdded) {
+    return `${plural(progress.notAdded, "file")} not added`;
+  }
+  const placedOrOut = progress.sorted - progress.needs;
+  return `${placedOrOut} of ${progress.files} sorted${
+    progress.needs > 0
+      ? ` · ${progress.needs} ${progress.needs === 1 ? "needs" : "need"} you`
+      : ""
+  }`;
+}
+
+/** The D&I items pane: its note ("Two readings each", or nothing when no file was added)
+ * and what it says while it holds no item. */
+export function itemsPane(progress: Progress): { note: string; empty: string } {
+  if (progress.nothingAdded) {
+    return { note: "", empty: "Nothing to check. No file was added." };
+  }
+  return {
+    note: "Two readings each",
+    empty:
+      progress.needs > 0
+        ? "Files appear here once placed."
+        : progress.done
+          ? "No file went to a D&I item, so nothing is checked against the attributes."
+          : "Each D&I item appears here as files are sorted into it.",
+  };
 }
 
 /** The footer note on Analyze once it is done. */
 export function finishedNote(seconds: number, progress: Progress): string {
-  return `Finished in ${formatElapsed(seconds)}.${
-    progress.needs > 0
-      ? ` ${plural(progress.needs, "file")} ${progress.needs === 1 ? "needs" : "need"} you.`
-      : ""
-  }`;
+  return finishOf(seconds, progress).note;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -2931,7 +3328,14 @@ export function progressLine(facts: {
   progress: Progress | null;
   summary: BatchSummary | null;
   seconds: number;
-}): { text: string; done: boolean; action: string } | null {
+}): {
+  text: string;
+  done: boolean;
+  action: string;
+  /** How the line is marked: under way, or, once done, as the window's finish says it
+   * (green, amber, red). */
+  tone: "working" | "success" | "warning" | "problem";
+} | null {
   const p = facts.progress;
   const s = facts.summary;
   if (p === null && s === null) {
@@ -2962,18 +3366,47 @@ export function progressLine(facts: {
         .join(" · "),
       done: false,
       action: "Show progress",
+      tone: "working",
+    };
+  }
+  if (p?.nothingAdded === true) {
+    // As the window says it: nothing was added, so there is nothing analyzed.
+    return {
+      text: "No file was added.",
+      done: true,
+      action: "See why",
+      tone: "problem",
     };
   }
   const needs = p?.needs ?? s?.needsPerson ?? 0;
   const placed = p?.placed ?? null;
+  const notAdded = p?.notAdded ?? 0;
+  const failedChecks = p?.failedChecks ?? 0;
+  const failed =
+    failedChecks > 0 ? ` ${plural(failedChecks, "check")} did not finish.` : "";
   const by =
     s !== null && s.createdBy !== "" ? ` Added by ${s.createdBy}.` : "";
+  const needsYou = `${plural(needs, "file")} ${needs === 1 ? "needs" : "need"} you`;
+  // Nothing placed: no "0 sorted" clause (design review, 17 November 2026).
+  const unplaced = [
+    needs > 0 ? needsYou : "",
+    notAdded > 0 ? `${notAdded} not added` : "",
+  ]
+    .filter((part) => part !== "")
+    .join("; ");
   return {
-    text: `${plural(files, "file")} analyzed${
-      placed !== null ? `: ${placed} sorted into the items` : ""
-    }${needs > 0 ? `${placed !== null ? "," : ":"} ${needs} ${needs === 1 ? "needs" : "need"} you` : ""}.${by}`,
+    text:
+      placed === 0 && unplaced !== ""
+        ? `${capital(unplaced)}.${failed}${by}`
+        : `${plural(files, "file")} analyzed${
+            placed !== null ? `: ${placed} sorted into the items` : ""
+          }${needs > 0 ? `${placed !== null ? "," : ":"} ${needs} ${needs === 1 ? "needs" : "need"} you` : ""}.${
+            notAdded > 0 ? ` ${notAdded} not added.` : ""
+          }${failed}${by}`,
     done: true,
     action: "See results",
+    // Green only when every file was added and none waits for a person.
+    tone: notAdded > 0 || needs > 0 || failedChecks > 0 ? "warning" : "success",
   };
 }
 

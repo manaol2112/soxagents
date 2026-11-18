@@ -71,8 +71,19 @@
   color: var(--accent-text);
 }
 
-.de-progress.is-done > svg {
+.de-progress.is-done > svg,
+.de-progress.is-success > svg {
   color: var(--success);
+}
+
+/* Done with files not added or waiting for a person (amber), or with none added (red),
+   as the wizard's finish says it (evidence-wizard-model progressLine). */
+.de-progress.is-warning > svg {
+  color: var(--warning);
+}
+
+.de-progress.is-problem > svg {
+  color: var(--danger);
 }
 
 .de-progress-text {
@@ -669,8 +680,59 @@ button.ep-file-open:focus-visible {
   list-style: none;
 }
 
-.de-left-out > li > svg {
+.de-left-out > li > svg,
+.de-left-group > .de-check-line > svg {
   color: var(--warning);
+}
+
+/* Files left out for the same reason: one line, their names on request. */
+.de-left-group {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.de-left-files {
+  min-width: 0;
+  padding-left: calc(13px + 0.5rem);
+  font-size: var(--fs-sm);
+}
+
+.de-left-files > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+  cursor: pointer;
+  list-style: none;
+}
+
+.de-left-files > summary::-webkit-details-marker {
+  display: none;
+}
+
+.de-left-files > summary:hover {
+  color: var(--text-strong);
+}
+
+.de-left-files > summary:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.de-left-files[open] > summary .de-attr-caret > svg {
+  transform: rotate(90deg);
+}
+
+.de-left-files > ul {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0.3rem 0 0.1rem;
+  list-style: none;
+  animation: tar-open 200ms ease;
 }
 
 .de-check-part {
@@ -1194,6 +1256,10 @@ button.de-copy {
   }
 
   .de-unasked-list {
+    animation: none;
+  }
+
+  .de-left-files > ul {
     animation: none;
   }
 

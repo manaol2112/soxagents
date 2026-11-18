@@ -2,10 +2,14 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
-import { uploadTarget } from "../apps/web/src/evidence-model.ts";
+import {
+  parseEvidenceView,
+  uploadTarget,
+} from "../apps/web/src/evidence-model.ts";
 import {
   ASKED_AGAIN,
   addressesLine,
+  analyzedLine,
   analyzeLabel,
   announcement,
   apartTitle,
@@ -24,15 +28,23 @@ import {
   fileMark,
   fileMeta,
   filesApart,
+  filesCount,
+  filesNotAdded,
   finishedAt,
   finishedNote,
+  finishOf,
   formatElapsed,
   goneFromBatch,
   hintKey,
   itemCards,
   itemResults,
+  itemsPane,
   leftWithout,
+  NEEDS_YOU_STEP,
+  NOT_ADDED_CHIP,
   needsFix,
+  noneAdded,
+  notAddedTitle,
   OUT,
   OUT_LABEL,
   parseBatch,
@@ -45,20 +57,26 @@ import {
   progressOf,
   type Queued,
   queueHead,
+  RESTORED_WAITING,
   readHint,
   readingProblem,
+  refusalBlocks,
   resultsNote,
   resultsSummary,
   retryDelay,
   STALLED_AFTER_MS,
   serverClock,
   steadySeconds,
+  tookLine,
   UNREACHABLE,
   UNREACHABLE_AFTER,
   type Upload,
   uploadAnswer,
+  WITHDRAWN_LINK,
   type WizardItem,
   windowHeading,
+  withdrawnFilesHref,
+  withdrawnQuery,
   withoutRepeats,
   wizardItems,
   writeHint,
@@ -1032,10 +1050,16 @@ describe("the routes", () => {
   });
 
   it("reads the upload's answer: stored, already held, refused in the server's words, or not reached", () => {
+    // 17 November 2026 (owner decision "Restore and read"): every answer also says
+    // `restored` and `withdrawn`, so a retried row never keeps an earlier try's word.
+    // Old: { state, fileId, detail }; new: the same three, with both false here.
     assert.deepEqual(uploadAnswer(200, { file_id: F1, duplicate: false }), {
       state: "stored",
       fileId: F1,
       detail: "",
+      restored: false,
+      withdrawn: false,
+      withdrawnFrom: null,
     });
     assert.equal(
       uploadAnswer(200, { file_id: F1, duplicate: true }).state,
@@ -1051,6 +1075,9 @@ describe("the routes", () => {
         fileId: null,
         detail:
           "This batch was opened for another item; start the wizard again.",
+        restored: false,
+        withdrawn: false,
+        withdrawnFrom: null,
       },
     );
     assert.equal(
@@ -1577,9 +1604,18 @@ describe("step 2: the pipeline, each file's row, the elapsed time", () => {
         ["failed", true],
       ],
     );
+    // Design review, 17 November 2026 (one screen, one story): the row's red "Not added" chip says what happened, in place of its
+    // track; the activity is only the reason, in plain text. Old: the activity
+    // "Not added. This batch was opened ..." in red; new: the reason alone (tone
+    // "note") and `notAdded` true. The facts shown are unchanged.
     assert.equal(
       lines[0]?.activity?.text,
-      "Not added. This batch was opened for another item; start the wizard again.",
+      "This batch was opened for another item; start the wizard again.",
+    );
+    assert.equal(lines[0]?.activity?.tone, "note");
+    assert.deepEqual(
+      lines.map((line) => line.notAdded),
+      [true, true],
     );
     const progress = progressOf(
       [upload({ state: "refused" }), upload({ key: "u2", state: "failed" })],
@@ -1590,15 +1626,51 @@ describe("step 2: the pipeline, each file's row, the elapsed time", () => {
     assert.equal(progress.done, true);
   });
 
+  it("never shows a check that did not finish as checked, done or green (design review round 4, 18 November 2026)", () => {
+    // A failed check (no model, provider down) ended without a verdict. Before, it counted as
+    // checked: a done tick and "Checked 1 of 1 item" sat over an item card saying the check
+    // did not finish, and once every file was placed the finish would have turned green.
+    const raw = finishedBatch();
+    const failedItem = {
+      ...raw.items[0],
+      assurance: { ...POLICY_CHECK, status: "FAILED" },
+    };
+    const batch = batchOf({ ...raw, items: [failedItem, raw.items[1]] });
+    const progress = progressOf([], batch, NOW);
+    assert.equal(progress.failedChecks, 1);
+    assert.equal(progress.checked, 1);
+    const check = progress.stages.find((stage) => stage.key === "check");
+    assert.deepEqual(
+      [check?.state, check?.count],
+      ["problem", "1 of 2 items not checked"],
+    );
+    const finish = finishOf(0, progress);
+    assert.notEqual(finish.tone, "success");
+    assert.match(finish.note, /1 check did not finish\./);
+    const line = progressLine({ progress, summary: null, seconds: 0 });
+    assert.equal(line?.tone, "warning");
+    assert.match(line?.text ?? "", /1 check did not finish\./);
+    // Every file placed, a check failed: still amber, never green.
+    const placedOnly = { ...progress, needs: 0, notAdded: 0 };
+    assert.equal(finishOf(0, placedOnly).tone, "warning");
+    assert.equal(
+      finishOf(0, { ...placedOnly, failedChecks: 0 }).tone,
+      "success",
+    );
+  });
+
   it("finishes when every file is read and sorted and every item's check has ended", () => {
     const batch = batchOf(finishedBatch());
     const progress = progressOf([], batch, NOW);
     assert.deepEqual(
       progress.stages.map((stage) => [stage.state, stage.count, stage.flag]),
+      // Design review, 17 November 2026 (one screen, one story): "Sorted" means placed or ruled out, so a file
+      // that needs a person is not counted, and the stage waits on the person (amber,
+      // "partial"). Old: ["done", "Sorted 7 of 7", "1 needs you"]; new: the row below.
       [
         ["done", "Secured 7 of 7", ""],
         ["done", "Read 7 of 7", ""],
-        ["done", "Sorted 7 of 7", "1 needs you"],
+        ["partial", "Sorted 6 of 7", "1 needs you"],
         ["done", "Checked 2 of 2 items", ""],
       ],
     );
@@ -2457,12 +2529,27 @@ describe("step 3: the results", () => {
         facts(),
       ),
     );
+    // Design review round 2, 17 November 2026: the files not added have their own section ("1 not added"),
+    // and "not in an item" counts only the files in the control. Old: [Scan, photo,
+    // Big.zip] and "3 files are not in an item"; new: the two files in the control.
     assert.deepEqual(
       apart.map((line) => line.name),
-      ["Scan_0042.pdf", "Team offsite photo.jpg", "Big.zip"],
+      ["Scan_0042.pdf", "Team offsite photo.jpg"],
     );
-    assert.equal(apartTitle(apart.length), "3 files are not in an item");
+    assert.equal(apartTitle(apart.length), "2 files are not in an item");
     assert.equal(apartTitle(1), "1 file is not in an item");
+    const out = filesNotAdded(
+      fileLines(
+        [upload({ key: "u9", name: "Big.zip", state: "refused", detail: "x" })],
+        batch,
+        facts(),
+      ),
+    );
+    assert.deepEqual(
+      out.map((line) => line.name),
+      ["Big.zip"],
+    );
+    assert.equal(notAddedTitle(out.length), "1 not added");
   });
 
   it("says a batch where nothing could be placed plainly", () => {
@@ -2490,7 +2577,11 @@ describe("step 3: the results", () => {
     });
     const progress = progressOf([], nothing, CREATED + 30_000);
     assert.equal(progress.done, true);
-    assert.equal(progress.stages[3]?.count, "No item to check");
+    // Design review, 17 November 2026 (one screen, one story): with files waiting for a person, the check
+    // waits for them rather than being ticked. Old: "No item to check", done; new:
+    // waiting, "Waiting for 2 files to be placed".
+    assert.equal(progress.stages[3]?.count, "Waiting for 2 files to be placed");
+    assert.equal(progress.stages[3]?.state, "wait");
     const summary = resultsSummary(nothing, [], progress);
     assert.equal(
       summary.lead,
@@ -2508,7 +2599,12 @@ describe("step 3: the results", () => {
         [],
         progressOf([upload({ state: "refused" })], null, NOW),
       ).lead,
-      "No file was added. 1 file could not be added: each says why.",
+      // Design review round 2, 17 November 2026: the same sentence as the footer. Old: "No file was added. 1
+      // file could not be added: each says why."
+      // 18 November 2026, design review round 3: the closing sentence was "Its row gives the
+      // reason." / "Each row gives the reason."; it is now "The list shows why.", because the
+      // reason of several files withdrawn from one control sits in one group note, not on each row.
+      "The file was not added. The list shows why.",
     );
   });
 });
@@ -2635,10 +2731,13 @@ describe("the list's line and the session remembered here", () => {
     );
     assert.deepEqual(
       progressLine({ progress: running, summary: null, seconds: 42 }),
+      // Design review, 17 November 2026 (one screen, one story): every line carries its tone. Old: text,
+      // done, action; new: the same, with `tone`.
       {
         text: "Analyzing 7 files · Checking 1 item against the attributes · 0:42",
         done: false,
         action: "Show progress",
+        tone: "working",
       },
     );
     const reading = progressOf(
@@ -2668,6 +2767,8 @@ describe("the list's line and the session remembered here", () => {
         text: "7 files analyzed: 5 sorted into the items, 1 needs you.",
         done: true,
         action: "See results",
+        // A file waits for a person: amber, never green.
+        tone: "warning",
       },
     );
     // Reopened from the server's list, its state not read yet.
@@ -2692,6 +2793,7 @@ describe("the list's line and the session remembered here", () => {
         text: "7 files analyzed: 1 needs you. Added by Robert John.",
         done: true,
         action: "See results",
+        tone: "warning",
       },
     );
     // Reopened from the list before its state is read, with no file at work but not
@@ -3225,5 +3327,623 @@ describe("the joint review's decisions", () => {
       (view.match(/onClick=\{wizard\.requestClose\}/g) ?? []).length,
       2,
     );
+  });
+});
+
+// Restore and read (product owner, 17 November 2026). The owner withdrew screenshots
+// from ITGC-AC-01, dropped the same files into Add evidence to have them read again, and
+// every row was refused with no way to the withdrawn files, while the Analyze step showed
+// a done tick on Secure ("Secured 0 of 9"), "Finished in 0:00" in green and "See results".
+// Now a file withdrawn from the control is restored and read as a file added now; one
+// withdrawn from another control links to the withdrawn files; and the stages, the
+// finished line and the footer tell one story.
+describe("restore and read: a withdrawn file dropped again, and one story when files are not added", () => {
+  const withdrawnElsewhere =
+    "Withdrawn from ITGC-AC-02 (SAP ERP). Restoring it returns it to that control, not this one.";
+
+  it("reads a restored answer as a stored file and a withdrawn refusal as one with a way to the withdrawn files", () => {
+    assert.deepEqual(
+      uploadAnswer(200, { file_id: F1, duplicate: true, restored: true }),
+      {
+        state: "stored",
+        fileId: F1,
+        detail: "",
+        restored: true,
+        withdrawn: false,
+        withdrawnFrom: null,
+      },
+    );
+    assert.deepEqual(
+      uploadAnswer(409, {
+        detail: withdrawnElsewhere,
+        withdrawn: true,
+        withdrawn_from: "ITGC-AC-02 (SAP ERP)",
+      }),
+      {
+        state: "refused",
+        fileId: null,
+        detail: withdrawnElsewhere,
+        restored: false,
+        withdrawn: true,
+        // Passed through, so rows withdrawn from one control are said once.
+        withdrawnFrom: "ITGC-AC-02 (SAP ERP)",
+      },
+    );
+    // Still a duplicate where the server says it was not restored.
+    assert.equal(
+      uploadAnswer(200, { file_id: F1, duplicate: true, restored: false })
+        .state,
+      "duplicate",
+    );
+  });
+
+  it("shows a restored file through the stages of a file added now, never as already held", () => {
+    const restored = upload({ state: "stored", fileId: F1, restored: true });
+    // Before the batch lists it: secured, waiting for its new reading.
+    const [first] = fileLines([restored], null, facts());
+    assert.ok(first !== undefined);
+    assert.equal(first.activity?.text, RESTORED_WAITING);
+    assert.deepEqual(first.track, ["done", "wait", "wait", "wait"]);
+    assert.equal(first.duplicate, false);
+    assert.equal(first.restored, true);
+    assert.match(first.meta, / · Restored$/);
+    // Listed by the server (duplicate and restored), its reading not started yet.
+    const waiting = batchOf(
+      finishedBatch({
+        files: [
+          file({
+            duplicate: true,
+            restored: true,
+            read: {
+              status: "PENDING",
+              method: "NONE",
+              pages: null,
+              started_at: null,
+              finished_at: null,
+              note: "",
+            },
+            classification: null,
+          }),
+        ],
+        items: [],
+      }),
+    );
+    const [pending] = fileLines([restored], waiting, facts());
+    assert.ok(pending !== undefined);
+    assert.equal(waiting.files[0]?.duplicate, false);
+    assert.equal(pending.activity?.text, RESTORED_WAITING);
+    assert.equal(pending.dest, null);
+    assert.equal(pending.duplicate, false);
+    assert.equal(pending.movable, false);
+    // Read and sorted: every stage done, and it can be moved as the session's own file.
+    const read = batchOf(
+      finishedBatch({
+        files: [file({ duplicate: true, restored: true })],
+        items: [],
+      }),
+    );
+    const [sorted] = fileLines([restored], read, facts());
+    assert.ok(sorted !== undefined);
+    assert.deepEqual(sorted.track, ["done", "done", "done", "done"]);
+    assert.equal(sorted.activity, null);
+    assert.equal(sorted.dest?.kind, "placed");
+    assert.equal(sorted.movable, true);
+    assert.match(sorted.meta, / · Restored$/);
+    // A file already held, never withdrawn, is still shown as already held.
+    const held = batchOf(
+      finishedBatch({ files: [file({ duplicate: true })], items: [] }),
+    );
+    const [kept] = fileLines([], held, facts());
+    assert.equal(kept?.duplicate, true);
+    assert.equal(kept?.restored, false);
+    assert.equal(
+      kept?.activity?.text,
+      "Already added earlier: shown where it is",
+    );
+    for (const line of [first, pending, sorted]) {
+      assert.doesNotMatch(texts(line).join(" "), CODES);
+    }
+  });
+
+  it("links a file withdrawn from another control to the Withdrawn list, searched for it", () => {
+    const refused = upload({
+      name: "6_mfa-config.png",
+      ...uploadAnswer(409, { detail: withdrawnElsewhere, withdrawn: true }),
+    });
+    const [line] = fileLines([refused], null, facts());
+    assert.ok(line !== undefined);
+    assert.equal(line.withdrawn, true);
+    // One red chip in place of the track; the reason in plain text beside it.
+    assert.equal(line.notAdded, true);
+    assert.equal(NOT_ADDED_CHIP, "Not added");
+    assert.equal(line.activity?.text, withdrawnElsewhere);
+    assert.equal(line.activity?.tone, "note");
+    assert.equal(WITHDRAWN_LINK, "Open withdrawn files");
+    const href = withdrawnFilesHref(ORG, PROJECT, line.name);
+    assert.equal(
+      href,
+      `/?organization=${ORG}&project=${PROJECT}&section=evidence&tab=files&queue=withdrawn&q=6_mfa-config.png`,
+    );
+    // The page reads that address as the Evidence library's Withdrawn list, searched.
+    const params = new URLSearchParams(href.slice(2));
+    assert.deepEqual(
+      parseEvidenceView({
+        tab: params.get("tab"),
+        queue: params.get("queue"),
+        q: params.get("q"),
+        group: params.get("group"),
+        file: params.get("file"),
+      }),
+      {
+        tab: "files",
+        queue: "withdrawn",
+        query: "6_mfa-config.png",
+        group: "list",
+        file: null,
+      },
+    );
+    // Any other refusal offers no such link.
+    const other = upload({
+      ...uploadAnswer(409, { detail: "the engagement is not active" }),
+    });
+    assert.equal(fileLines([other], null, facts())[0]?.withdrawn, false);
+  });
+
+  it("agrees when no file was added: Secure is a problem, nothing is finished in green, the footer adds files", () => {
+    const uploads = Array.from({ length: 9 }, (_, at) =>
+      upload({
+        key: `u${at}`,
+        ...uploadAnswer(409, { detail: withdrawnElsewhere, withdrawn: true }),
+      }),
+    );
+    const progress = progressOf(uploads, null, NOW);
+    assert.equal(progress.done, true);
+    assert.equal(progress.nothingAdded, true);
+    assert.deepEqual(
+      progress.stages.map((stage) => [stage.state, stage.count, stage.flag]),
+      [
+        ["problem", "Secured 0 of 9", "9 not added"],
+        ["wait", "Nothing to read", ""],
+        ["wait", "Nothing to sort", ""],
+        ["wait", "No item to check", ""],
+      ],
+    );
+    assert.ok(progress.stages.every((stage) => stage.state !== "done"));
+    const finish = finishOf(0, progress);
+    // Red throughout, with no clock (nothing ran).
+    assert.deepEqual(finish, {
+      // Round 2: no short line (the red stage and the footer say it); old "No file added".
+      short: "",
+      note: "None of the 9 files were added. The list shows why.",
+      tone: "problem",
+      action: "add",
+      primary: true,
+    });
+    assert.equal(finishedNote(0, progress), finish.note);
+    assert.doesNotMatch(`${finish.short} ${finish.note}`, /Finished/);
+    assert.equal(filesCount(progress), "9 files not added");
+    assert.deepEqual(itemsPane(progress), {
+      note: "",
+      empty: "Nothing to check. No file was added.",
+    });
+    // The list behind the window says the same, in red.
+    assert.deepEqual(progressLine({ progress, summary: null, seconds: 0 }), {
+      text: "No file was added.",
+      done: true,
+      action: "See why",
+      tone: "problem",
+    });
+    const one = progressOf([uploads[0] as Upload], null, NOW);
+    assert.equal(
+      finishOf(0, one).note,
+      "The file was not added. The list shows why.",
+    );
+    const two = progressOf(uploads.slice(0, 2), null, NOW);
+    assert.equal(
+      finishOf(0, two).note,
+      "Neither file was added. The list shows why.",
+    );
+    assert.equal(noneAdded(3), "None of the 3 files were added");
+  });
+
+  it("agrees when some files were not added: Secure is done with its flag, and the finished line says how many, in amber", () => {
+    const ids = [F1, F2, F3, F4, F5, F6, F7];
+    const uploads = [
+      ...ids.map((fileId, at) =>
+        upload({ key: `s${at}`, state: "stored", fileId }),
+      ),
+      upload({ key: "r1", state: "refused", detail: "No." }),
+      upload({ key: "r2", state: "failed", detail: "Lost." }),
+    ];
+    const progress = progressOf(uploads, batchOf(finishedBatch()), NOW);
+    assert.equal(progress.done, true);
+    assert.equal(progress.nothingAdded, false);
+    // Secure ended with files not added: amber, never the done tick.
+    assert.deepEqual(
+      [
+        progress.stages[0]?.state,
+        progress.stages[0]?.count,
+        progress.stages[0]?.flag,
+      ],
+      ["partial", "Secured 7 of 9", "2 not added"],
+    );
+    assert.deepEqual(finishOf(33, progress), {
+      short: "Finished in 0:33",
+      note: "Finished in 0:33. 2 of 9 files were not added. 1 file needs you.",
+      tone: "warning",
+      action: "results",
+      // A file needs a person: its row's choice is the primary action.
+      primary: false,
+    });
+    assert.deepEqual(progressLine({ progress, summary: null, seconds: 33 }), {
+      text: "7 files analyzed: 5 sorted into the items, 1 needs you. 2 not added.",
+      done: true,
+      action: "See results",
+      tone: "warning",
+    });
+    assert.equal(filesCount(progress), "6 of 7 sorted · 1 needs you");
+  });
+
+  it("agrees when every file was added: amber while a file needs you, green once none does", () => {
+    const progress = progressOf([], batchOf(finishedBatch()), NOW);
+    assert.deepEqual(
+      progress.stages.map((stage) => stage.state),
+      ["done", "done", "partial", "done"],
+    );
+    assert.deepEqual(finishOf(33, progress), {
+      short: "Finished in 0:33",
+      note: "Finished in 0:33. 1 file needs you.",
+      tone: "warning",
+      action: "results",
+      primary: false,
+    });
+    // Every file placed or ruled out: green, See results the primary.
+    const batch = finishedBatch();
+    const placed = batchOf({
+      ...batch,
+      files: batch.files.filter(
+        (entry) =>
+          (entry.placement as { status: string }).status !== "NEEDS_PERSON",
+      ),
+    });
+    const settled = progressOf([], placed, NOW);
+    assert.equal(settled.needs, 0);
+    assert.ok(settled.stages.every((stage) => stage.state === "done"));
+    assert.deepEqual(finishOf(33, settled), {
+      short: "Finished in 0:33",
+      note: "Finished in 0:33.",
+      tone: "success",
+      action: "results",
+      primary: true,
+    });
+    assert.equal(
+      progressLine({ progress: settled, summary: null, seconds: 33 })?.tone,
+      "success",
+    );
+    assert.equal(itemsPane(settled).note, "Two readings each");
+    // Never "0:00", which reads as never read.
+    assert.equal(tookLine(0), "Finished in under a second");
+    assert.equal(tookLine(42), "Finished in 0:42");
+  });
+
+  it("waits for the files a person must place when no item holds a file yet", () => {
+    const batch = finishedBatch();
+    const waiting = batchOf({
+      ...batch,
+      files: batch.files.filter(
+        (entry) =>
+          (entry.placement as { status: string }).status === "NEEDS_PERSON",
+      ),
+      items: [],
+    });
+    const progress = progressOf([], waiting, NOW);
+    assert.equal(progress.needs, 1);
+    assert.deepEqual(
+      [progress.stages[3]?.state, progress.stages[3]?.count],
+      ["wait", "Waiting for 1 file to be placed"],
+    );
+    assert.equal(itemsPane(progress).empty, "Files appear here once placed.");
+    assert.equal(filesCount(progress), "0 of 1 sorted · 1 needs you");
+    // The row's last step says what it waits for.
+    const [line] = fileLines([], waiting, facts());
+    assert.equal(line?.trackLabels[3], NEEDS_YOU_STEP);
+    assert.equal(line?.track[3], "needs");
+    assert.equal(NEEDS_YOU_STEP, "Needs you");
+  });
+
+  it("holds the three cases to one rule, and the window reads the line from the model", () => {
+    const refused = (key: string) =>
+      upload({ key, state: "refused", detail: "No." });
+    const cases = [
+      progressOf([refused("a"), refused("b")], null, NOW),
+      progressOf(
+        [upload({ key: "s", state: "stored", fileId: F1 }), refused("b")],
+        batchOf(finishedBatch()),
+        NOW,
+      ),
+      progressOf([], batchOf(finishedBatch()), NOW),
+    ];
+    for (const progress of cases) {
+      assert.equal(progress.done, true);
+      const finish = finishOf(10, progress);
+      const line = progressLine({ progress, summary: null, seconds: 10 });
+      const secure = progress.stages[0]?.state;
+      // Green only when everything was added and none needs a person; red (Secure, the
+      // finish, the list line) exactly when nothing was; the footer adds files exactly
+      // when there are no results; the list line's tone is the finish's.
+      assert.equal(
+        finish.tone === "success",
+        secure === "done" && progress.notAdded === 0 && progress.needs === 0,
+      );
+      assert.equal(secure === "problem", progress.nothingAdded);
+      assert.equal(finish.tone === "problem", progress.nothingAdded);
+      assert.equal(finish.action === "add", progress.nothingAdded);
+      // Nothing added: no short line beside the (hidden) clock.
+      assert.equal(finish.short === "", progress.nothingAdded);
+      assert.equal(line?.tone, finish.tone);
+      assert.equal(
+        progress.stages.some((stage) => stage.state === "done"),
+        !progress.nothingAdded,
+      );
+    }
+    const view = readFileSync("apps/web/src/evidence-wizard.tsx", "utf8");
+    // The finished line and the footer both come from finishOf; neither says
+    // "Finished in" on its own.
+    assert.equal((view.match(/finishOf\(view\.seconds/g) ?? []).length, 2);
+    assert.doesNotMatch(view, /`Finished in \$\{formatElapsed/);
+    assert.match(view, /withdrawnFilesHref\(/);
+    // In-app navigation to the withdrawn files, never a full page load.
+    assert.match(view, /import Link from "next\/link";/);
+    assert.doesNotMatch(view, /<a\s+className="wz-fr-link"/);
+    // The panes read their counts and notes from the model.
+    assert.match(view, /filesCount\(progress\)/);
+    assert.match(view, /itemsPane\(progress\)/);
+    assert.doesNotMatch(view, /Two readings each/);
+    // The list line is marked by its tone, never a check because it is done.
+    assert.match(view, /LINE_ICONS\[line\.tone\]/);
+    assert.doesNotMatch(view, /line\.done \? "checkCircle"/);
+    // See results steps back while a file needs a person.
+    assert.match(
+      view,
+      /finish\?\.primary === false \? "btn btn-secondary" : "btn"/,
+    );
+    const css = readFileSync("apps/web/app/evidence-wizard.css", "utf8");
+    assert.match(css, /\.wz-stage\.is-problem \.wz-stage-mark \{/);
+    assert.match(css, /\.wz-stage\.is-partial \.wz-stage-mark \{/);
+    assert.match(css, /\.wz-est\.is-problem \{/);
+    assert.match(css, /\.wz-note\.is-problem > svg \{/);
+    assert.match(css, /\.wz-fr-act\.is-note \{/);
+    const list = readFileSync("apps/web/app/design-evidence.css", "utf8");
+    assert.match(list, /\.de-progress\.is-problem > svg \{/);
+    assert.match(list, /\.de-progress\.is-warning > svg \{/);
+    const route = readFileSync(
+      "apps/web/app/workspace/evidence-uploads/route.ts",
+      "utf8",
+    );
+    assert.match(route, /restored: body\.restored === true/);
+    assert.match(
+      route,
+      /withdrawn: response\.status === 409 && refused\.withdrawn === true/,
+    );
+  });
+});
+
+// Design review round 2 (17 November 2026): the owner's nine files withdrawn from one
+// control are said once, with one link; Results never says "None of the 1 file", sets
+// the files not added apart, and never "Analyzed in 0:00"; the list line drops a
+// "0 sorted" clause.
+describe("refusals said once, and the results in plain words", () => {
+  const from = "ITGC-AC-02 (SAP ERP)";
+  const sentence =
+    "Withdrawn from ITGC-AC-02 (SAP ERP). Restoring it returns it to that control, not this one.";
+  const refused = (key: string, name: string, over: Partial<Upload> = {}) =>
+    upload({
+      key,
+      name,
+      ...uploadAnswer(409, {
+        detail: sentence,
+        withdrawn: true,
+        withdrawn_from: from,
+      }),
+      ...over,
+    });
+
+  it("gathers files withdrawn from one control under one note and one link", () => {
+    const nine = Array.from({ length: 9 }, (_, at) =>
+      refused(`w${at}`, `${at + 1}_shot.png`),
+    );
+    const lines = fileLines(
+      [
+        ...nine.slice(0, 4),
+        upload({
+          key: "big",
+          name: "Big.zip",
+          ...uploadAnswer(413, {}),
+        }),
+        upload({
+          key: "early",
+          name: "early.png",
+          ...uploadAnswer(409, {
+            detail:
+              "Withdrawn before it was filed to a control. Restore it from the withdrawn files to use it again.",
+            withdrawn: true,
+            withdrawn_from: null,
+          }),
+        }),
+        ...nine.slice(4),
+      ],
+      null,
+      facts(),
+    );
+    const blocks = refusalBlocks(lines);
+    assert.deepEqual(
+      blocks.map((block) => block.kind),
+      ["group", "line", "line"],
+    );
+    const [group, big, early] = blocks;
+    assert.ok(group?.kind === "group");
+    assert.equal(
+      group.note,
+      "9 files were withdrawn from ITGC-AC-02 (SAP ERP). Restoring them returns them to that control, not this one.",
+    );
+    assert.equal(group.query, "ITGC-AC-02");
+    assert.equal(group.lines.length, 9);
+    // Grouped rows keep their name, size and chip; the reason and link are the note's.
+    for (const line of group.lines) {
+      assert.equal(line.group, "withdrawn:ITGC-AC-02 (SAP ERP)");
+      assert.equal(line.notAdded, true);
+    }
+    // A unique reason keeps its own sentence, and "before it was filed" never merges.
+    assert.ok(big?.kind === "line" && big.line.group === null);
+    assert.ok(early?.kind === "line" && early.line.group === null);
+    assert.equal(early.line.withdrawn, true);
+    assert.equal(early.line.withdrawnFrom, null);
+    // The link lists that control's withdrawn files: the page matches the ref there.
+    const href = withdrawnFilesHref(ORG, PROJECT, group.query);
+    const params = new URLSearchParams(href.slice(2));
+    assert.equal(params.get("q"), "ITGC-AC-02");
+    assert.equal(withdrawnQuery(from), "ITGC-AC-02");
+    assert.equal(withdrawnQuery("ITGC-AC-02"), "ITGC-AC-02");
+  });
+
+  it("keeps one file withdrawn from a control with its own sentence and link", () => {
+    const lines = fileLines([refused("w1", "one.png")], null, facts());
+    const [block] = refusalBlocks(lines);
+    assert.ok(block?.kind === "line");
+    assert.equal(block.line.group, null);
+    assert.equal(block.line.activity?.text, sentence);
+    assert.equal(block.line.withdrawn, true);
+    // Two from different controls are not gathered.
+    const two = refusalBlocks(
+      fileLines(
+        [
+          refused("a", "a.png"),
+          refused("b", "b.png", { withdrawnFrom: "ITGC-AC-03" }),
+        ],
+        null,
+        facts(),
+      ),
+    );
+    assert.deepEqual(
+      two.map((item) => item.kind),
+      ["line", "line"],
+    );
+  });
+
+  it("never says None of the 1 file, and says the files that need a person plainly", () => {
+    const batch = finishedBatch();
+    const needs = (count: number) =>
+      batchOf({
+        ...batch,
+        files: batch.files
+          .filter(
+            (entry) =>
+              (entry.placement as { status: string }).status === "NEEDS_PERSON",
+          )
+          .flatMap((entry) =>
+            Array.from({ length: count }, (_, at) => ({
+              ...entry,
+              file_id: uuid(80 + at),
+            })),
+          ),
+        items: [],
+      });
+    const one = needs(1);
+    const twoRefused = [
+      upload({ key: "r1", state: "refused", detail: "No." }),
+      upload({ key: "r2", state: "refused", detail: "No." }),
+    ];
+    assert.equal(
+      resultsSummary(one, [], progressOf(twoRefused, one, NOW)).lead,
+      "The file needs you: choose where it goes. 2 files were not added.",
+    );
+    const three = needs(3);
+    assert.equal(
+      resultsSummary(three, [], progressOf([], three, NOW)).lead,
+      "3 files need you: choose where they go.",
+    );
+    // One file not D&I evidence: "The file could not be sorted", never "None of the 1".
+    const outOnly = batchOf({
+      ...batch,
+      files: batch.files.filter(
+        (entry) =>
+          (entry.placement as { status: string }).status === "NOT_DESIGN",
+      ),
+      items: [],
+    });
+    const lead = resultsSummary(outOnly, [], progressOf([], outOnly, NOW)).lead;
+    assert.match(lead, /^The file could not be sorted into an item\./);
+    assert.doesNotMatch(lead, /None of the 1 /);
+    // The footer drops "0 items checked by two readings".
+    assert.equal(
+      resultsNote(progressOf([], one, NOW)),
+      "1 file needs you. Nothing is accepted until you accept it.",
+    );
+    assert.equal(
+      resultsNote(progressOf([], batchOf(finishedBatch()), NOW)),
+      "2 items checked by two readings · 1 file needs you. Nothing is accepted until you accept it.",
+    );
+    // The list line: no "0 sorted" clause.
+    assert.equal(
+      progressLine({
+        progress: progressOf(twoRefused, one, NOW),
+        summary: null,
+        seconds: 4,
+      })?.text,
+      "1 file needs you; 2 not added.",
+    );
+    assert.equal(
+      progressLine({
+        progress: progressOf([], needs(2), NOW),
+        summary: null,
+        seconds: 4,
+      })?.text,
+      "2 files need you.",
+    );
+  });
+
+  it("never says Analyzed in 0:00, and nothing when no file was added", () => {
+    const done = progressOf([], batchOf(finishedBatch()), NOW);
+    assert.equal(analyzedLine(0, done), "Analyzed in under a second");
+    assert.equal(analyzedLine(42, done), "Analyzed in 0:42");
+    const none = progressOf(
+      [upload({ key: "r", state: "refused", detail: "No." })],
+      null,
+      NOW,
+    );
+    assert.equal(analyzedLine(0, none), "");
+  });
+
+  it("shows the clock only while work runs, and the window reads the blocks from the model", () => {
+    const view = readFileSync("apps/web/src/evidence-wizard.tsx", "utf8");
+    // The ELAPSED clock is rendered only while there is no finish.
+    assert.match(view, /\{finish === null \? \(\s*<p className="wz-elapsed">/);
+    assert.doesNotMatch(view, /finish\.clock/);
+    assert.doesNotMatch(view, /Analyzed in \{formatElapsed/);
+    assert.match(view, /analyzedLine\(view\.seconds, view\.progress\)/);
+    // Analyze and Results both gather refusals; Results lists the files not added apart.
+    assert.equal((view.match(/refusalBlocks\(/g) ?? []).length, 2);
+    assert.match(view, /notAddedTitle\(view\.notAdded\.length\)/);
+    // One chip for "Not added" in both steps.
+    assert.equal(
+      (view.match(/className="pill tone-danger wz-fr-chip"/g) ?? []).length,
+      2,
+    );
+    const css = readFileSync("apps/web/app/evidence-wizard.css", "utf8");
+    assert.match(css, /a\.wz-fr-link \{[^}]*font-size: var\(--fs-sm\);/);
+    // The proxy passes the control a file was withdrawn from.
+    const route = readFileSync(
+      "apps/web/app/workspace/evidence-uploads/route.ts",
+      "utf8",
+    );
+    assert.match(route, /withdrawn_from:/);
+    // The withdrawn list's by-line is cut with an ellipsis, its title the whole name.
+    const list = readFileSync("apps/web/src/evidence-view.tsx", "utf8");
+    assert.match(
+      list,
+      /className="cell-sub" title=\{`by \$\{file\.withdrawnBy\}`\}/,
+    );
+    const globals = readFileSync("apps/web/app/globals.css", "utf8");
+    assert.match(globals, /\.is-fixed td > \.cell-sub\[title\] \{/);
   });
 });

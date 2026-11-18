@@ -270,6 +270,16 @@ button.wz-close {
   color: var(--warning);
 }
 
+/* No file was added. */
+.wz-note.is-problem {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.wz-note.is-problem > svg {
+  color: var(--danger);
+}
+
 .wz-acts {
   display: flex;
   flex-wrap: wrap;
@@ -430,6 +440,28 @@ button.wz-link:focus-visible:not(:disabled) {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
   box-shadow: none;
+}
+
+/* A row's way to the place its file is restored from (the withdrawn files). */
+a.wz-fr-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+a.wz-fr-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+a.wz-fr-link:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 button.wz-icon-btn {
@@ -870,6 +902,16 @@ button.wz-q-clear {
   border-bottom: 1px solid var(--border-subtle);
 }
 
+/* Nothing added: no time column, so the stage cards reach the edge. */
+.wz-pipe:not(:has(> .wz-pipe-time)) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* A grouped refused row keeps only its name and chip: no empty band under it. */
+.wz-fr-res:empty {
+  display: none;
+}
+
 .wz-stages {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1028,6 +1070,63 @@ button.wz-q-clear {
   background: var(--accent);
 }
 
+/* A stage that ended with something left for a person (files not added, files to
+   place): amber, a warning mark, never the tick. */
+.wz-stage.is-partial {
+  background: var(--surface);
+  border-color: var(--warning-border);
+}
+
+.wz-stage.is-partial .wz-stage-mark {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: var(--warning);
+}
+
+.wz-stage.is-partial .wz-stage-ic {
+  display: none;
+}
+
+.wz-stage.is-partial .wz-tick {
+  display: grid;
+}
+
+.wz-stage.is-partial .wz-stage-name {
+  color: var(--text-strong);
+}
+
+.wz-stage.is-partial .wz-stage-track {
+  background: var(--warning-border);
+}
+
+/* A stage that ended with nothing done (no file secured): red, a cross, never the tick. */
+.wz-stage.is-problem {
+  background: var(--surface);
+  border-color: var(--danger-border);
+}
+
+.wz-stage.is-problem .wz-stage-mark {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: var(--danger);
+}
+
+.wz-stage.is-problem .wz-stage-ic {
+  display: none;
+}
+
+.wz-stage.is-problem .wz-tick {
+  display: grid;
+}
+
+.wz-stage.is-problem .wz-stage-name {
+  color: var(--text-strong);
+}
+
+.wz-stage.is-problem .wz-stage-track {
+  background: var(--danger-border);
+}
+
 .wz-pipe-time {
   display: grid;
   justify-items: end;
@@ -1061,6 +1160,18 @@ button.wz-q-clear {
 
 .wz-est.is-done {
   color: var(--success);
+  font-weight: 600;
+}
+
+/* Finished with files not added or waiting for a person: amber, as the footer's note. */
+.wz-est.is-warning {
+  color: var(--warning);
+  font-weight: 600;
+}
+
+/* No file was added: red, as the Secure stage and the footer's note. */
+.wz-est.is-problem {
+  color: var(--danger);
   font-weight: 600;
 }
 
@@ -1120,6 +1231,40 @@ button.wz-q-clear {
   border-top: 1px solid var(--border-subtle);
 }
 
+/* Files refused for one reason (withdrawn from the same control): the reason once, with
+   one link, above their rows (evidence-wizard-model refusalBlocks). */
+.wz-fr + .wz-fr-group,
+.wz-fr-group + .wz-fr,
+.wz-fr-group + .wz-fr-group {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.wz-fr-group > .wz-fl {
+  border: 0;
+  border-radius: 0;
+}
+
+.wz-fr-group-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.75rem;
+  margin: 0;
+  padding: 0.6rem 0.9rem;
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+
+.wz-look-group + .wz-look-row,
+.wz-look-row + .wz-look-group,
+.wz-look-group + .wz-look-group {
+  border-top: 1px solid var(--border-subtle);
+}
+
 .wz-fr.is-needs {
   background: color-mix(in srgb, var(--warning-soft) 60%, var(--surface));
 }
@@ -1152,6 +1297,19 @@ button.wz-q-clear {
   display: grid;
   grid-template-columns: repeat(4, 4.4rem);
   gap: 0.3rem;
+}
+
+/* A file never secured: one red status in place of a track with nothing on it. */
+.wz-fr-track.is-out {
+  display: flex;
+  align-items: center;
+}
+
+.wz-fr-chip {
+  gap: 0.25rem;
+  /* A status, not a bar: never stretched by the grid it sits in (Results). */
+  justify-self: start;
+  width: fit-content;
 }
 
 .wz-tk {
@@ -1291,6 +1449,12 @@ button.wz-q-clear {
 .wz-fr-act.is-on {
   color: var(--accent-text);
   font-weight: 600;
+}
+
+/* Why a file was not added, beside its red chip: plain, readable text. */
+.wz-fr-act.is-note {
+  color: var(--text-secondary);
+  font-weight: 400;
 }
 
 .wz-fr-act.is-warning {

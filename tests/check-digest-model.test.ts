@@ -4462,3 +4462,100 @@ describe("the second review of the first screen (14 November 2026)", () => {
     assert.equal(new Set(all).size, all.length, JSON.stringify(all));
   });
 });
+
+// Owner's report, 17 November 2026: files left out for the same reason are one item
+// under "Needs attention", once, with the action for all of them where there is one; a
+// single file keeps its own item; files nobody can act on stay a caveat, counted.
+describe("files left out for the same reason, under Needs attention", () => {
+  const OCR =
+    "No OCR engine could read this file's images, so none of its text was read. A person reads it, or it is read again once OCR is available (local OCR on the server, or model OCR, which an owner or admin turns on under AI workforce).";
+  const shots: RowFile[] = Array.from({ length: 9 }, (_, at) => ({
+    id: uuid(200 + at),
+    name: `${at + 1}_screenshot.png`,
+  }));
+  const held = (
+    files: readonly RowFile[],
+    code = "UNREADABLE",
+    reason = OCR,
+    action: string | null = "READ_AGAIN",
+  ) => files.map((file) => ({ file_id: file.id, code, reason, action }));
+  const fileItems = (made: CheckDigest | null) =>
+    (made?.attention ?? []).filter((item) => item.kind === "FILE");
+
+  it("nine files for one reason are one item, with Read all 9 again", () => {
+    const files = [TICKET, ...shots];
+    const built = check({ held_files: held(shots) }, files);
+    const made = checkDigest(built, [], files);
+    const items = fileItems(made);
+    assert.equal(items.length, 1);
+    const [item] = items;
+    assert.equal(item?.headline, "9 files were left out.");
+    assert.equal(item?.mark, "");
+    assert.ok(item?.control.type === "ACT");
+    assert.equal(item.control.action.kind, "REREAD_ALL");
+    assert.equal(item.control.label, "Read all 9 again");
+    assert.deepEqual(
+      item.control.action.fileIds,
+      shots.map((file) => file.id),
+    );
+    // Not said again as a caveat.
+    assert.ok(
+      !(made?.quiet ?? []).some((each) => each.text.includes("left out")),
+    );
+  });
+
+  it("two reasons are two items; a group to replace file by file has no button of its own", () => {
+    const [one, two, three, four] = shots;
+    assert.ok(one && two && three && four);
+    const files = [TICKET, one, two, three, four];
+    const built = check(
+      {
+        held_files: [
+          ...held([one, two]),
+          ...held([three, four], "UNREADABLE", "", "REPLACE"),
+        ],
+      },
+      files,
+    );
+    const items = fileItems(checkDigest(built, [], files));
+    assert.deepEqual(
+      items.map((item) => [
+        item.headline,
+        item.control.type,
+        item.control.type === "ACT" ? item.control.label : "",
+      ]),
+      [
+        ["2 files were left out.", "ACT", "Read all 2 again"],
+        ["2 files were left out.", "NONE", ""],
+      ],
+    );
+  });
+
+  it("one file keeps its own item, as before", () => {
+    const [one] = shots;
+    assert.ok(one);
+    const files = [TICKET, one];
+    const built = check({ held_files: held([one]) }, files);
+    const items = fileItems(checkDigest(built, [], files));
+    assert.equal(items.length, 1);
+    assert.equal(items[0]?.headline, NEED_FILE_TITLE);
+    assert.equal(items[0]?.mark, "E2");
+    assert.ok(items[0]?.control.type === "ACT");
+    assert.equal(items[0].control.label, "Read the file again");
+  });
+
+  it("a group nobody can act on is the caveat, each of its files counted", () => {
+    const [one, two] = shots;
+    assert.ok(one && two);
+    const files = [TICKET, one, two];
+    const built = check(
+      { held_files: held([one, two], "SOMETHING_NEW", "", null) },
+      files,
+    );
+    const made = checkDigest(built, [], files);
+    assert.deepEqual(fileItems(made), []);
+    assert.ok(
+      (made?.quiet ?? []).some((each) => each.text === filesLeftOut(2)),
+    );
+  });
+});

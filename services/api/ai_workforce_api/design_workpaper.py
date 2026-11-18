@@ -2037,7 +2037,7 @@ def load_checks(
             ),
             held=tuple(
                 HeldFile(held.file_id, held.code, held.reason)
-                for held in assurance._held_files(run)
+                for held in assurance._held_files(run, request)
             ),
             outcome=outcome,
             review=review,

@@ -680,7 +680,7 @@ Decisions for 7.4, confirmed by the product owner:
 - For each screenshot or scanned page, the evidence coordinator reviews the evidence and tests it against the control's test attributes, then proposes a conclusion. A person signs it off or overrides it. Nothing is concluded without them.
 - The review reads the images with Claude vision. The product owner opted the preview firm into model OCR. A firm that stays local gets no visual review, and the file is marked for a person.
 - The review checks legibility, the system and environment, the date and period, signs of editing, and whether the screenshot applies to the control being tested.
-- When the agent finds a reading issue or an exception, the auditor sees plain feedback on the file, and the agent drafts a follow-up request to the control owner. The draft goes out only after the usual approval.
+- When the agent finds a reading issue or an exception, the auditor sees plain feedback on the file, and the agent drafts a follow-up request to the control owner. The draft goes out only after the usual approval. Superseded 18 November 2026 (product owner, "Only after the set"): no follow-up is drafted from one file; the client is asked only for what is still missing after the request's files are checked together ([evidence.md](evidence.md#first-pass-review-of-screenshots)).
 
 **Phase 7, Milestone 7.3 — Evidence reading and classification.** Complete, pending review. This is the Phase 7 remainder. See [evidence.md](evidence.md#reading-and-classification).
 
@@ -915,7 +915,7 @@ Objective: store evidence bytes privately, with a hash the service computes, and
 | 7.1f Client terms mapped by an agent | The agent maps blank client terms from their controls, with reasons, and remaps on request | Complete |
 | 7.2 Engagement workspace | Dashboard, controls register, project plan by phase, timeline with the standard SOX calendar, and the deficiency register with reviewer approval | Complete |
 | 7.3 Evidence reading and classification | Read stored files (spreadsheets, documents, PDFs, and images by pluggable OCR), suggest the evidence kind and request coverage with Claude or rules, and a person confirms | Complete |
-| 7.4 Agent first-pass review of screenshots | Claude reviews each screenshot (legibility, system, date, editing, applicability) and tests it against the control's attributes, drafts a follow-up when something is wrong, and a person signs off | Complete |
+| 7.4 Agent first-pass review of screenshots | Claude reviews each screenshot (legibility, system, date, editing, applicability) and tests it against the control's attributes, shows what is wrong to the auditor (no per-file follow-up since 18 November 2026), and a person signs off | Complete |
 
 ## Phase 8 — SOX testing and workpapers
 

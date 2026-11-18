@@ -984,7 +984,11 @@ function WithdrawnTable({
               </td>
               <td className="col-added">
                 <span>{formatDate(file.withdrawnAt)}</span>
-                <small className="cell-sub">by {file.withdrawnBy}</small>
+                {/* Its own line, cut with an ellipsis in the fixed grid; the title holds
+                    the whole name (.is-fixed td > .cell-sub[title]). */}
+                <small className="cell-sub" title={`by ${file.withdrawnBy}`}>
+                  by {file.withdrawnBy}
+                </small>
               </td>
               <td className="col-restore">
                 <span className="withdrawn-actions">

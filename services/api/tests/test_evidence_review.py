@@ -1,4 +1,18 @@
-"""Agent first-pass review of screenshots, and a person's sign-off."""
+"""Agent first-pass review of screenshots, and a person's sign-off.
+
+Rewritten 18 November 2026 for the product owner's decision "Only after the set": a
+per-file review no longer drafts a follow-up to the client. Old expectation: when a check
+found an issue or an attribute was an exception, the review drafted a `recapture-` request
+to the control owner (one per file), linked it from the review and audited
+`pbc.follow_up_drafted`. New expectation: the review is stored for a person (checks,
+attributes, proposed conclusion, feedback) with no follow-up request, no follow-up request
+is created or rewritten, and `evidence.reviewed` records `follow_up_drafted: false`. Why:
+each file is reviewed alone, so a draft per file asked the owner for evidence the request's
+other files already held (nine drafts to one person for one D&I request of ITGC-AC-01).
+The client is asked only for what is still missing after the request's files are checked
+together (the D&I assurance check's follow-ups; the findings a person sends as one
+message). Each test below that changed says what it expected before.
+"""
 
 import hashlib
 import io
@@ -11,6 +25,7 @@ from fastapi.testclient import TestClient
 from PIL import Image, ImageDraw
 from support import Database, approve_plans_over_api
 from test_evidence_analysis import _Engine, _engines, _no_ocr, _Provider
+from test_evidence_assurance import _add_png, _Bench, _reading, _Readings, _scripted
 from test_execution import _add_project_member, _add_user
 from test_onboarding import _base as _setup_base
 from test_onboarding import _complete_setup, _new_engagement
@@ -26,7 +41,6 @@ from ai_workforce_api.evidence_review import (
     Review,
     ReviewContext,
     check_review,
-    follow_up_message,
     proposed,
     unable_review,
 )
@@ -98,17 +112,13 @@ def test_the_conclusion_is_derived_from_the_results() -> None:
     assert proposed(review({}, [])) == "CANNOT_CONCLUDE"
 
 
-def test_a_follow_up_is_drafted_only_when_something_is_wrong_and_never_asks_for_access() -> None:
-    clean = check_review(
-        {
-            "checks": [{"check": key, "result": "OK"} for key in ("legibility", "system")],
-            "attributes": [{"index": 0, "result": "PASS"}, {"index": 1, "result": "PASS"}],
-            "feedback": "",
-            "follow_up": "",
-        },
-        _context(),
-    )
-    assert follow_up_message(clean, _context()) == ""
+def test_the_agents_message_never_asks_for_access_and_an_unreadable_image_is_an_issue() -> None:
+    # Rewritten 18 November 2026 ("Only after the set"). Old: follow_up_message built the
+    # per-file client follow-up (empty when nothing was wrong; from the issues and
+    # exceptions otherwise, "full resolution" for an unreadable image). That builder is
+    # removed with the per-file drafts. Kept: the model's message is still cleaned, so one
+    # that asks for credentials or carries a link is dropped; an unreadable image is a
+    # legibility issue the person sees; a review without a visual read cannot conclude.
     risky = check_review(
         {
             "checks": [{"check": "system", "result": "ISSUE"}],
@@ -119,16 +129,22 @@ def test_a_follow_up_is_drafted_only_when_something_is_wrong_and_never_asks_for_
         _context(),
     )
     assert risky.follow_up == ""
-    message = follow_up_message(risky, _context())
-    assert "ITGC-AC-05" in message
-    assert "production environment" in message
-    assert "Length 6" in message
-    assert "password" not in message.lower().replace("configured settings", "")
+    assert proposed(risky) == "EXCEPTION"
+    linked = check_review(
+        {
+            "checks": [],
+            "attributes": [],
+            "feedback": "See https://evil.example/x",
+            "follow_up": "Upload it at https://evil.example/upload",
+        },
+        _context(),
+    )
+    assert linked.follow_up == "" and "https://" not in linked.feedback
     unreadable = unable_review(_context(), "The image is too small to read.", unreadable=True)
     assert unreadable.checks[0].result == "ISSUE"
-    assert "full resolution" in follow_up_message(unreadable, _context())
+    assert "too small" in unreadable.feedback and unreadable.follow_up == ""
     local = unable_review(_context(), "The firm reads images locally.", unreadable=False)
-    assert follow_up_message(local, _context()) == ""
+    assert all(check.result == "UNCLEAR" for check in local.checks)
     assert proposed(local) == "CANNOT_CONCLUDE"
 
 
@@ -139,6 +155,7 @@ def test_the_tester_reviews_a_screenshot_and_a_person_signs_it_off(migrated: Dat
     team, client, request = _sent_engagement_request(migrated, "review")
     _opt_into_model(client, team)
     analysis_id = _store_screenshot(client, team, request, _png("Minimum length 12", 900, 300))
+    requests_before = _request_count(migrated, team["project"])
     provider = _Provider(
         [
             {"pages": [{"text": "Minimum password length: 12. Lockout: 5 attempts."}]},
@@ -191,16 +208,20 @@ def test_the_tester_reviews_a_screenshot_and_a_person_signs_it_off(migrated: Dat
     assert [check["result"] for check in review["checks"]][2] == "ISSUE"
     assert review["attributes"][0]["result"] == "PASS"
     assert review["feedback"].startswith("Settings look right")
-    assert len(follow_ups) == 1
-    assert follow_ups[0][0] == "DRAFT"
-    assert follow_ups[0][1] == request["recipient"]
-    assert "system clock visible" in follow_ups[0][2]
-    assert review["follow_up_request_id"] is not None
-    assert review["follow_up_status"] == "DRAFT"
+    # Rewritten 18 November 2026 ("Only after the set"). Old: one DRAFT follow-up request
+    # to the request's recipient carrying the agent's message ("system clock visible"),
+    # linked from the review, and `pbc.follow_up_drafted` audited. New: the date issue is
+    # the person's to see on the review; no request is drafted, linked or audited.
+    assert follow_ups == []
+    assert _request_count(migrated, team["project"]) == requests_before
+    assert review["follow_up_request_id"] is None
+    assert review["follow_up_status"] is None
     audit = _audit(migrated)
     assert "evidence.reviewed" in audit
     assert "itgc-access-tester" in audit
-    assert "pbc.follow_up_drafted" in audit
+    assert "pbc.follow_up_drafted" not in audit
+    [payload] = _reviewed_payloads(migrated)
+    assert payload["follow_up_drafted"] is False and payload["issues"] == ["date_period"]
     path = _decide_path(team, review["id"])
     with connect(migrated.url) as connection:
         contributor_id = _add_user(
@@ -282,8 +303,12 @@ def test_an_exception_is_proposed_and_a_person_can_override_it_with_a_reason(
         ).fetchone()
     review = _reviews(client, team)[0]
     assert review["proposed"] == "EXCEPTION"
-    # No message from the agent, so the follow-up is built from the exception.
-    assert drafted is not None and "Minimum length 6" in drafted[0]
+    # Rewritten 18 November 2026 ("Only after the set"). Old: with no message from the
+    # agent, a follow-up was built from the exception ("Minimum length 6") and drafted.
+    # New: the exception is on the review for the person to decide; nothing is drafted.
+    assert drafted is None
+    assert review["attributes"][0]["observed"] == "Minimum length 6"
+    assert review["follow_up_request_id"] is None
     overridden = client.post(
         _decide_path(team, review["id"]),
         json={
@@ -336,7 +361,7 @@ def test_a_firm_that_reads_locally_gets_feedback_instead_of_a_visual_review(
     assert drafts == (0,)
 
 
-def test_an_unreadable_screenshot_asks_the_owner_for_a_new_one(migrated: Database) -> None:
+def test_an_unreadable_screenshot_is_a_legibility_issue_for_a_person(migrated: Database) -> None:
     team, client, request = _sent_engagement_request(migrated, "tiny")
     _opt_into_model(client, team)
     analysis_id = _store_screenshot(client, team, request, _png("x", 20, 20))
@@ -353,7 +378,117 @@ def test_an_unreadable_screenshot_asks_the_owner_for_a_new_one(migrated: Databas
     assert review["status"] == "NEEDS_PERSON"
     assert review["checks"][0]["result"] == "ISSUE"
     assert "too small" in review["feedback"]
-    assert drafted is not None and "full resolution" in drafted[0]
+    # Rewritten 18 November 2026 ("Only after the set"). Old (named "asks the owner for a
+    # new one"): a follow-up asking for a full-resolution capture was drafted. New: the
+    # legibility issue and its reason are the person's to see; nothing is drafted.
+    assert drafted is None
+    assert review["follow_up_request_id"] is None
+
+
+def test_screenshots_each_incomplete_draft_nothing_per_file_and_are_checked_as_a_set(
+    migrated: Database,
+) -> None:
+    """Owner's report, 18 November 2026: screenshots re-added to one D&I request of
+    ITGC-AC-01, each reviewed alone and each found to show only part of the request, drafted
+    one follow-up to the process owner per file, each asking for what the other files
+    already showed. Decision "Only after the set": every file is still reviewed and its
+    review is stored for a person, but no request is created or rewritten for it; the
+    request's files are checked together in one run, and what that check still finds
+    missing is its follow-ups, listed once on the request for a person to send."""
+    bench = _Bench(migrated, "set")
+    path = f"/organizations/{bench.team['org']}/evidence-settings"
+    version = bench.owner.get(path).json()["version"]
+    turned = bench.owner.put(path, json={"ocr_engine": "MODEL", "version": version})
+    assert turned.status_code == 200, turned.text
+    names = ["1_ticket.png", "2_approval.png", "3_user-record.png"]
+    shots = [_add_png(bench, name) for name in names]
+    project = bench.team["project"]
+    keys_before = _request_keys(bench)
+    outbound_before = bench.count("outbound_messages")
+    partial = {
+        "checks": [
+            {"check": "legibility", "result": "OK"},
+            {"check": "system", "result": "OK"},
+            {"check": "date_period", "result": "OK"},
+            {"check": "editing", "result": "OK"},
+            {"check": "applicability", "result": "ISSUE", "note": "Shows one part only."},
+        ],
+        "attributes": [{"index": 0, "result": "NOT_DETERMINABLE", "note": "Needs more."}],
+        "feedback": "This screenshot shows one part of what the request asks for.",
+        "follow_up": "Please send the procedure and the screenshot of the user record.",
+    }
+    with connect(migrated.url) as connection:
+        pending = connection.execute(
+            "SELECT id, evidence_file_id FROM evidence_analyses WHERE status = 'PENDING' "
+            "ORDER BY created_at"
+        ).fetchall()
+        assert {str(row[1]) for row in pending} == set(shots)
+        for analysis_id, _file_id in pending:
+            provider = _Provider(
+                [
+                    {"pages": [{"text": "REQ-1041 approved by Priya Shah"}]},
+                    _reading("walkthrough"),
+                    partial,
+                ]
+            )
+            assert (
+                run_analysis(
+                    connection,
+                    Settings(database_url=migrated.url),
+                    provider,
+                    analysis_id,
+                    _engines(_Engine("LOCAL", ["unused"])),
+                )
+                == "READY"
+            )
+            assert any(request.images for request in provider.requests[1:])
+
+    # Every file was reviewed, and each review is the person's to see.
+    reviews = _reviews(bench.client, bench.team)
+    assert {r["evidence_file_id"] for r in reviews} == set(shots)
+    for review in reviews:
+        assert review["status"] == "READY" and review["proposed"] == "CANNOT_CONCLUDE"
+        assert review["checks"][4]["result"] == "ISSUE"
+        assert review["feedback"].startswith("This screenshot shows one part")
+        assert review["follow_up_request_id"] is None and review["follow_up_status"] is None
+        # On a request: before 18 November 2026 each of these drafted a follow-up.
+        assert review["pbc_request_id"] is not None
+    # No request was drafted for any file, and none was created or rewritten.
+    assert bench.rows(
+        "SELECT count(*) FROM pbc_requests WHERE project_id = %s "
+        "AND operation_key LIKE 'recapture-%%'",
+        project,
+    ) == [(0,)]
+    _no_follow_up_drafted(bench, keys_before)
+    payloads = _reviewed_payloads(migrated)
+    assert len(payloads) == 3 and {p["follow_up_drafted"] for p in payloads} == {False}
+    assert "pbc.follow_up_drafted" not in _audit(migrated)
+
+    # The set: one check of the request, reading the three files together.
+    [(run_id, status, stale, _held, _reused, _why)] = bench.runs()
+    assert (status, stale) == ("PENDING", False)
+    assert set(bench.entry()["file_ids"]) == set(shots)
+    shortfall = _scripted(
+        lambda _code, _facts: {
+            "result": "NOT_MET",
+            "quotes": [],
+            "reason": "not shown",
+            "absent": "No record that shows it.",
+        }
+    )
+    readings = _Readings(shortfall, shortfall)
+    assert bench.check(readings) == ["READY"]
+    assert all(name in readings.requests[0].prompt for name in names)
+    done = bench.entry()
+    assert done["run_id"] == str(run_id)
+    follow_ups = done["review"]["follow_ups"]
+    # What is still missing after the set is its follow-ups, once on the request: no two
+    # ask the same thing, and the check drafted and sent nothing.
+    assert follow_ups
+    assert len({f["request"] for f in follow_ups}) == len(follow_ups)
+    assert len(bench.runs()) == 1
+    _no_follow_up_drafted(bench, keys_before)
+    assert bench.count("outbound_messages") == outbound_before
 
 
 def test_a_spreadsheet_gets_no_screenshot_review(migrated: Database) -> None:
@@ -510,6 +645,48 @@ def _png(text: str, width: int, height: int) -> bytes:
     output = io.BytesIO()
     picture.save(output, format="PNG")
     return output.getvalue()
+
+
+def _request_count(database: Database, project_id: UUID) -> int:
+    with connect(database.url) as connection:
+        row = connection.execute(
+            "SELECT count(*) FROM pbc_requests WHERE project_id = %s", (project_id,)
+        ).fetchone()
+    assert row is not None
+    return int(row[0])
+
+
+def _request_keys(bench: _Bench) -> set[str]:
+    return {
+        str(row[0])
+        for row in bench.rows(
+            "SELECT operation_key FROM pbc_requests WHERE project_id = %s", bench.team["project"]
+        )
+    }
+
+
+def _no_follow_up_drafted(bench: _Bench, keys_before: set[str]) -> None:
+    """No follow-up request exists for the files: none keyed as one, and none carrying the
+    reviews' messages. A request the evidence plan drafts for an item it still asks for
+    (`plan-` keys, evidence_plans.issue) is the plan's, not a follow-up."""
+    added = _request_keys(bench) - keys_before
+    assert all(key.startswith("plan-") for key in added), added
+    assert bench.rows(
+        "SELECT count(*) FROM pbc_requests WHERE project_id = %s AND ("
+        "operation_key LIKE 'recapture-%%' "
+        "OR evidence_description LIKE '%%Follow-up on the evidence you sent%%' "
+        "OR evidence_description LIKE '%%the screenshot of the user record%%')",
+        bench.team["project"],
+    ) == [(0,)]
+
+
+def _reviewed_payloads(database: Database) -> list[dict[str, Any]]:
+    with connect(database.url) as connection:
+        rows = connection.execute(
+            "SELECT payload FROM audit_events WHERE action = 'evidence.reviewed' "
+            "ORDER BY created_at, id"
+        ).fetchall()
+    return [dict(row[0]) for row in rows]
 
 
 def _audit(database: Database) -> str:

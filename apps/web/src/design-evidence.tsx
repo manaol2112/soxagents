@@ -69,6 +69,8 @@ import {
   checkPollDelay,
   dispositionProblem,
   FILES_TITLE,
+  groupFiles,
+  leftOutFileIds,
   offeredAction,
   RESOLVED_TITLE,
   REVIEW_FOR,
@@ -77,9 +79,11 @@ import {
   type ReviewView,
   type RowFile,
   reliabilityProblem,
+  rereadAllOutcome,
   rereadProblem,
   type ShownPassage,
   STILL_CHECKING,
+  showFiles,
   UPGRADE_BODY,
   UPGRADE_CONFIRM,
   UPGRADE_DONE,
@@ -347,6 +351,48 @@ function useAssuranceAction(ids: Ids) {
     }
     return message === null;
   }
+  /** Reads a group's files again, one request per file in the group's order, through
+   * the same route as one file; the list is read again once, after the last answer.
+   * Says what the server confirmed, and which files did not start. */
+  async function rereadAll(
+    key: string,
+    group: readonly {
+      name: string;
+      analysis: { id: string; version: number };
+    }[],
+  ): Promise<string | null> {
+    setBusy(key);
+    out.current = key;
+    setProblem(null);
+    const results: { name: string; status: number }[] = [];
+    for (const file of group) {
+      let status = 0;
+      try {
+        const response = await fetch("/workspace/evidence-dialog", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            organization_id: ids.organizationId,
+            project_id: ids.projectId,
+            intent: "reanalyze",
+            analysis_id: file.analysis.id,
+            version: file.analysis.version,
+          }),
+        });
+        const body = (await response.json()) as { status?: unknown };
+        status = typeof body.status === "number" ? body.status : 0;
+      } catch {
+        status = 0;
+      }
+      results.push({ name: file.name, status });
+    }
+    setBusy("");
+    out.current = "";
+    const said = rereadAllOutcome(results);
+    setProblem(said.problem);
+    startTransition(() => router.refresh());
+    return said.done;
+  }
   /** "busy" where another call of the list's checks is still on its way: nothing was
    * sent, and the person is told so rather than left with a dialog that closed. */
   async function upgrade(
@@ -361,6 +407,7 @@ function useAssuranceAction(ids: Ids) {
     run,
     upgrade,
     reread,
+    rereadAll,
     busy,
     pending: pending || busy !== "",
     problem,
@@ -1717,6 +1764,20 @@ function Row({
       void checkAgain();
     } else if (act.kind === "UPGRADE") {
       setUpgrading("action");
+    } else if (act.kind === "REREAD_ALL") {
+      const group = (act.fileIds ?? []).flatMap((fileId) => {
+        const analysis = analysisOf(fileId);
+        const name =
+          rowFiles.find((file) => file.id === fileId)?.name ?? "a file";
+        return analysis === null ? [] : [{ name, analysis }];
+      });
+      if (group.length > 0) {
+        void checks.rereadAll(`reread-all-${item.id}`, group).then((done) => {
+          if (done !== null) {
+            onDone(done);
+          }
+        });
+      }
     } else if (act.fileId === null) {
       return;
     } else if (act.kind === "REREAD") {
@@ -2146,7 +2207,7 @@ function Row({
   );
   // A file the check left out is said there; it is not counted again here.
   const leftOutIds = new Set(
-    (assured?.check.leftOut ?? []).map((each) => each.fileId),
+    (assured?.check.leftOut ?? []).flatMap(leftOutFileIds),
   );
   const unread = item.files.filter(
     (file) => file.readStatus === "FAILED" && !leftOutIds.has(file.fileId),
@@ -3186,7 +3247,9 @@ function CheckOfRequest({
     >
       {act.kind === "RERUN" && busy === requirementId
         ? "Starting…"
-        : act.kind === "REREAD" && busy === `reread-${act.fileId ?? ""}`
+        : (act.kind === "REREAD" && busy === `reread-${act.fileId ?? ""}`) ||
+            (act.kind === "REREAD_ALL" &&
+              busy === `reread-all-${requirementId}`)
           ? "Reading…"
           : act.label}
     </button>
@@ -3197,6 +3260,45 @@ function CheckOfRequest({
     items.length === 0 ? null : (
       <ul className="de-left-out">
         {items.map((item) => {
+          const grouped = groupFiles(item);
+          if (grouped.length > 1) {
+            // Files left out for the same reason: one line, its action for all of
+            // them, and each file, with its own action, on request. Where the line is
+            // the check's own (its HELD line), only the files are here.
+            const all = acts ? offer(item.action) : null;
+            return (
+              <li key={item.fileId} className="de-left-group">
+                {item.line !== "" ? (
+                  <div className="de-check-line">
+                    <UiIcon name="info" size={13} />
+                    <span>{item.line}</span>
+                    {all !== null
+                      ? actButton(all, `${grouped.length} files`)
+                      : null}
+                  </div>
+                ) : null}
+                <details className="de-left-files">
+                  <summary>
+                    {showFiles(grouped.length)}
+                    <span className="de-attr-caret" aria-hidden="true">
+                      <UiIcon name="chevron" size={12} />
+                    </span>
+                  </summary>
+                  <ul>
+                    {grouped.map((file) => {
+                      const own = offer(file.action);
+                      return (
+                        <li key={file.fileId} className="de-check-line">
+                          <span>{file.name}</span>
+                          {own !== null ? actButton(own, file.name) : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </details>
+              </li>
+            );
+          }
           const act = acts ? offer(item.action) : null;
           const name =
             files.find((file) => file.id === item.fileId)?.name ?? "the file";

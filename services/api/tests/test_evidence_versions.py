@@ -99,7 +99,13 @@ def test_a_wrong_file_is_withdrawn_kept_and_restored(migrated: Database) -> None
         headers={"content-type": "text/csv"},
     )
     assert again.status_code == 409
-    assert "restore" in again.json()["detail"]
+    # 17 November 2026 (owner decision "Restore and read"; design review the same day):
+    # the refusal is a plain sentence starting with a capital that names the place. Old:
+    # "restore" (lower case) in "this file was withdrawn; restore it from the withdrawn
+    # files"; new: "Restore it from the Withdrawn list in the Evidence library" in it. The
+    # refusal itself (409, still withdrawn) is unchanged.
+    assert "Restore it from the Withdrawn list in the Evidence library" in (again.json()["detail"])
+    assert again.json()["withdrawn"] is True
     twice = client.post(f"{files}/{file_id}/withdraw", json={"reason": "Again please"})
     assert twice.status_code == 409
     download = client.get(f"{files}/{file_id}/content")

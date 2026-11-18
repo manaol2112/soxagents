@@ -470,8 +470,18 @@ function parseFileReliabilities(value: unknown): FileReliability[] {
   ).slice(0, RELIABILITY_BOUNDS.files);
 }
 
+/** What clears a file's hold, as the server says it (evidence_assurance.held_action):
+ * READ_AGAIN where reading the file again can read it, REPLACE where only another copy
+ * can; null where the hold has a step of its own, or the server said none. */
+export type HeldAction = "READ_AGAIN" | "REPLACE";
+
 /** A file the gate left out of the readings; the run went ahead on the rest. */
-export type HeldFile = { fileId: string; code: HeldCode; reason: string };
+export type HeldFile = {
+  fileId: string;
+  code: HeldCode;
+  reason: string;
+  action?: HeldAction | null;
+};
 
 // The review of a request's evidence (section 10.7)
 
@@ -966,9 +976,20 @@ function parseHeldFile(value: unknown): HeldFile | null {
     return null;
   }
   const fileId = uuidOrNull(value.file_id);
-  return fileId === null
-    ? null
-    : { fileId, code: heldCode(value.code), reason: str(value.reason) };
+  const action =
+    value.action === "READ_AGAIN" || value.action === "REPLACE"
+      ? value.action
+      : null;
+  if (fileId === null) {
+    return null;
+  }
+  const held = {
+    fileId,
+    code: heldCode(value.code),
+    reason: str(value.reason),
+  };
+  // Said only where the server says it: a file it gives no action keeps today's form.
+  return action === null ? held : { ...held, action };
 }
 
 const distinct = <T>(items: readonly T[], key: (item: T) => string): T[] => {
@@ -1811,6 +1832,8 @@ export type CheckActionKind =
   | "CONFIRM_TYPE"
   | "REPLACE"
   | "REREAD"
+  // Every file of a group left out for the same reason, read again one after another.
+  | "REREAD_ALL"
   | "PICK_INSTANCE"
   | "RERUN"
   // A finished check an earlier engine made, checked again by the current one
@@ -1848,6 +1871,8 @@ export type CheckAction = {
   kind: CheckActionKind;
   label: string;
   fileId: string | null;
+  /** REREAD_ALL's files, in the group's order; absent for every other action. */
+  fileIds?: readonly string[];
 };
 
 const FILE_ACTIONS: Partial<
@@ -1897,19 +1922,88 @@ const FILE_REASONS: Record<HeldCode, string> = {
 /** Said of a file of the row the server lists neither as read nor as left out. */
 export const NOT_LISTED = "It is not part of this check.";
 
+/** Before a group's reason, which the gate words for one file. */
+export const FOR_EACH = "For each file: ";
+/** The codes a file is held for by its own gate (the rest hold the whole run). */
+const PER_FILE_CODES: ReadonlySet<HeldCode> = new Set<HeldCode>([
+  "CUSTODY",
+  "READ_FAILED",
+  "UNREADABLE",
+  "KIND_UNSURE",
+  "POPULATION",
+]);
+/** The codes of a file nothing of which was read. */
+const NOT_READ_CODES: ReadonlySet<HeldCode> = new Set<HeldCode>([
+  "CUSTODY",
+  "READ_FAILED",
+  "UNREADABLE",
+]);
+
+/** The held files in groups of the same code and reason, each group where its first
+ * file is, the files in their own order. */
+export function heldGroups(
+  held: readonly HeldFile[],
+  reasonOf: (file: HeldFile) => string,
+): [HeldFile, ...HeldFile[]][] {
+  const groups = new Map<string, [HeldFile, ...HeldFile[]]>();
+  for (const file of held) {
+    const key = `${file.code}\u0000${reasonOf(file)}`;
+    const group = groups.get(key);
+    if (group === undefined) {
+      groups.set(key, [file]);
+    } else {
+      group.push(file);
+    }
+  }
+  return [...groups.values()];
+}
+
 const STAGE_WORDS: Partial<Record<Stage, string>> = {
   ASSESS: "first reading",
   VERIFY: "second, independent reading",
   COMPARE: "comparing the two readings",
 };
 
-/** A file left out of the readings, with why and the action that clears it. */
-export type LeftOutLine = {
+/** One file of a grouped line, named, with the action that clears it. */
+export type LeftOutFile = {
   fileId: string;
-  /** "Checked without SAP_ticket.pdf: Its type is not confirmed." */
-  line: string;
+  name: string;
   action: CheckAction | null;
 };
+
+/** A file left out of the readings, with why and the action that clears it; or, where
+ * two or more were left out for the same reason, one line for all of them. */
+export type LeftOutLine = {
+  /** The file's id; for a group, its first file's. */
+  fileId: string;
+  /** "Checked without SAP_ticket.pdf: Its type is not confirmed." For a group, "Left
+   * out of the check, 9 files. For each file: …"; "" where the group's sentence is the
+   * check's own line (requestCheck's HELD line), which then names it. */
+  line: string;
+  /** The file's action; for a group, "Read all 9 again" where every file of it can be
+   * read again, else null (each file's own action is in `files`). */
+  action: CheckAction | null;
+  /** A group's files, in the request's order ("Show the 9 files"); absent for a line
+   * about one file, which keeps its one-line form. */
+  files?: LeftOutFile[];
+};
+
+/** A grouped line's files; empty for a line about one file. */
+export const groupFiles = (line: LeftOutLine): LeftOutFile[] =>
+  line.files ?? [];
+
+/** Every file a left-out line is about: its own, or each of its group's. */
+export function leftOutFileIds(line: LeftOutLine): string[] {
+  const files = groupFiles(line);
+  return files.length > 0 ? files.map((file) => file.fileId) : [line.fileId];
+}
+
+/** "Show the 9 files", the disclosure of a grouped line. */
+export const showFiles = (count: number) => `Show the ${count} files`;
+/** The group action where every file can be read again. */
+export const readAllAgain = (count: number) => `Read all ${count} again`;
+export const READ_AGAIN_LABEL = "Read the file again";
+export const REPLACE_LABEL = "Replace the file";
 
 export type RequestCheck = {
   standing: CheckStanding;
@@ -1976,6 +2070,10 @@ function sentence(text: string): string {
   return text === "" || /[.!?…]$/.test(text) ? text : `${text}.`;
 }
 
+/** Said in place of the server's "No model is configured" for a check that did not run. */
+export const NO_CHECKER =
+  "The automated check is unavailable. No verdict was recorded; check the item again later or review its files against the attributes.";
+
 /** The check's one sentence for a run that ended without a usable answer (it failed), or
  * null: nothing of the run is shown, and the server's reason (its failure sentence, else
  * the run's note). The next action is the check's own "Check again", beside it
@@ -1987,10 +2085,12 @@ export function runFailureLine(
   if (request.status !== "FAILED") {
     return null;
   }
-  return [
-    "The check did not finish, so nothing of it is shown.",
-    plainNote(failureNote) || plainNote(request.note),
-  ]
+  const reason = plainNote(failureNote) || plainNote(request.note);
+  if (reason.startsWith("No model is configured")) {
+    // Said once, in what it means for the person (design review round 5).
+    return NO_CHECKER;
+  }
+  return ["The check did not finish, so nothing of it is shown.", reason]
     .filter((part) => part !== "")
     .join(" ");
 }
@@ -2027,6 +2127,13 @@ export function requestCheck(
     const action = FILE_ACTIONS[code];
     return action === undefined ? null : { ...action, fileId };
   };
+  // The server's own word on what clears the hold first; the code's otherwise.
+  const heldAction = (held: HeldFile): CheckAction | null =>
+    held.action === "READ_AGAIN"
+      ? { kind: "REREAD", label: READ_AGAIN_LABEL, fileId: held.fileId }
+      : held.action === "REPLACE"
+        ? { kind: "REPLACE", label: REPLACE_LABEL, fileId: held.fileId }
+        : fileAction(held.code, held.fileId);
   const reviewed = request.status === "REVIEWED";
   const working = request.status === "QUEUED" || request.status === "CHECKING";
   const lead = (name: string) =>
@@ -2035,12 +2142,40 @@ export function requestCheck(
       : working
         ? `Being checked without ${name}: `
         : `Left out of the check, ${name}: `;
+  const leadMany = (count: number) =>
+    `${reviewed ? `Checked without ${count} files` : working ? `Being checked without ${count} files` : `Left out of the check, ${count} files`}. ${FOR_EACH}`;
+  const reasonOf = (held: HeldFile) =>
+    sentence(held.reason) || FILE_REASONS[held.code];
   const leftOut: LeftOutLine[] = [
-    ...request.heldFiles.map((held) => ({
-      fileId: held.fileId,
-      line: `${lead(nameOf(held.fileId))}${sentence(held.reason) || FILE_REASONS[held.code]}`,
-      action: fileAction(held.code, held.fileId),
-    })),
+    // Files left out for the same reason are one line, their names on request.
+    ...heldGroups(request.heldFiles, reasonOf).map((group): LeftOutLine => {
+      const [first] = group;
+      if (group.length === 1) {
+        return {
+          fileId: first.fileId,
+          line: `${lead(nameOf(first.fileId))}${reasonOf(first)}`,
+          action: heldAction(first),
+        };
+      }
+      const each = group.map((held) => ({
+        fileId: held.fileId,
+        name: nameOf(held.fileId),
+        action: heldAction(held),
+      }));
+      return {
+        fileId: first.fileId,
+        line: `${leadMany(group.length)}${reasonOf(first)}`,
+        action: each.every((file) => file.action?.kind === "REREAD")
+          ? {
+              kind: "REREAD_ALL",
+              label: readAllAgain(group.length),
+              fileId: null,
+              fileIds: each.map((file) => file.fileId),
+            }
+          : null,
+        files: each,
+      };
+    }),
     // A file of the row the finished check lists neither as read nor as left out: said,
     // never passed over (the third error of section 1).
     ...(reviewed
@@ -2107,6 +2242,27 @@ export function requestCheck(
           ? files.map((file) => file.id)
           : [];
     const [only] = candidates;
+    // Held only because no file passed, every file for the one reason: the group's line
+    // is the check's line, said once, with the group's action and its files below.
+    const [group] = leftOut;
+    const [held] = request.heldFiles;
+    if (
+      group !== undefined &&
+      held !== undefined &&
+      leftOut.length === 1 &&
+      groupFiles(group).length > 1 &&
+      request.fileIds.length === 0 &&
+      PER_FILE_CODES.has(code) &&
+      request.heldFiles.every((each) => each.code === code)
+    ) {
+      return {
+        ...base,
+        standing: "HELD",
+        line: `Not checked: none of the ${groupFiles(group).length} files was ${NOT_READ_CODES.has(code) ? "read" : "checked"}. ${FOR_EACH}${reasonOf(held)}`,
+        action: group.action,
+        leftOut: [{ ...group, line: "", action: null }],
+      };
+    }
     return {
       ...base,
       standing: "HELD",
@@ -2735,7 +2891,39 @@ export function offeredAction(
       action.kind === "REPLACE" ? facts.replaceable : facts.rereadable;
     return action.fileId !== null && able(action.fileId) ? action : null;
   }
+  if (action.kind === "REREAD_ALL") {
+    // Offered only where every file of the group can be read again by this person.
+    const ids = action.fileIds ?? [];
+    return ids.length > 1 && ids.every(facts.rereadable) ? action : null;
+  }
   return action;
+}
+
+/** What the row says once "Read all N again" has been answered, one request per file
+ * in the group's order: success only for the files the server confirmed, and the files
+ * that did not start, by name, with the first refusal's own sentence. */
+export function rereadAllOutcome(
+  results: readonly { name: string; status: number }[],
+): { done: string | null; problem: string | null } {
+  const started = results.filter((each) => each.status === 200);
+  const refused = results.filter((each) => each.status !== 200);
+  const total = results.length;
+  const done =
+    started.length === 0
+      ? null
+      : started.length === total
+        ? `All ${total} files are being read again.`
+        : `${started.length} of ${total} files are being read again.`;
+  if (refused.length === 0) {
+    return { done, problem: null };
+  }
+  const named = refused.map((each) => each.name).join(", ");
+  const why = rereadProblem(refused[0]?.status ?? 0) ?? "";
+  return {
+    done,
+    problem:
+      `Reading again did not start for ${refused.length === 1 ? "" : `${refused.length} files: `}${named}. ${why}`.trim(),
+  };
 }
 
 // One request row

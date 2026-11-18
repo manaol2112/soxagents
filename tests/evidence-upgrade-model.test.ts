@@ -563,8 +563,12 @@ describe("the screen", () => {
       view,
       /if \(result === "busy"\) \{[\s\S]{0,120}sent\.current = false;\s*setHeld\(UPGRADE_WAIT\);\s*\} else \{\s*close\(\);/,
     );
-    // Both calls of the checks mark themselves out at once, and clear it when done.
-    assert.equal((view.match(/out\.current = "";/g) ?? []).length, 2);
+    // Every call of the checks marks itself out at once, and clears it when done.
+    // Rewritten 17 November 2026 (owner: "Read all N again"). Old: two calls (run,
+    // reread), so 2. New: a third, rereadAll, one request per file of a group, marks
+    // itself out the same way, so 3. Kept: each call clears its mark when done.
+    assert.equal((view.match(/out\.current = "";/g) ?? []).length, 3);
+    assert.equal((view.match(/out\.current = (`reread|key)/g) ?? []).length, 2);
   });
 
   it("gives focus back to where it was chosen, and says nothing of the client", () => {

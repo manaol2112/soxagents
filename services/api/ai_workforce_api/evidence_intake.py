@@ -18,7 +18,8 @@ from typing import Any, Literal
 from uuid import UUID, uuid4
 
 import psycopg
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from psycopg.errors import UniqueViolation
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field
@@ -91,11 +92,32 @@ class IntakeState(Exception):
         self.detail = detail
 
 
+class StillWithdrawn(IntakeState):
+    """A file added again that stays withdrawn: answered 409 with `withdrawn: true` beside
+    the sentence, so the screen can offer the way to the withdrawn files (Evidence,
+    Evidence library, Withdrawn), and `withdrawn_from`, the control it was withdrawn from
+    (None: it was on no control)."""
+
+    def __init__(self, detail: str, withdrawn_from: str | None) -> None:
+        super().__init__(detail)
+        self.withdrawn_from = withdrawn_from
+
+
+# Where a withdrawn file is restored from, as the sentences name it.
+WITHDRAWN_PLACE = "the Withdrawn list in the Evidence library"
+# The restore reason recorded when a person drops a file withdrawn from the same control
+# into its Add evidence dialog (product owner, 17 November 2026, "Restore and read").
+RESTORED_IN_ADD_EVIDENCE = "Added again in Add evidence."
+
+
 class UploadBody(BaseModel):
     file_id: UUID
     file_name: str
     folder_path: str
     duplicate: bool
+    # True when the file was withdrawn from this control and adding it again restored it
+    # (Add evidence): it is back where it was filed, and read again.
+    restored: bool = False
 
 
 class Suggestion(BaseModel):
@@ -219,10 +241,20 @@ def register_evidence_intake(
         principal = _session_principal(request)
         try:
             return _call(settings, lambda connection: work(connection, principal))
+        except StillWithdrawn:
+            # Answered by its own handler, with the way to the withdrawn files.
+            raise
         except (IntakeState, WizardState) as error:
             raise HTTPException(status_code=409, detail=error.detail) from None
         except StoreError as error:
             raise HTTPException(status_code=503, detail=error.detail) from None
+
+    @app.exception_handler(StillWithdrawn)
+    async def still_withdrawn(request: Request, error: StillWithdrawn) -> Response:
+        return JSONResponse(
+            {"detail": error.detail, "withdrawn": True, "withdrawn_from": error.withdrawn_from},
+            status_code=409,
+        )
 
     @app.post(f"{base}/evidence-uploads")
     async def upload(
@@ -492,15 +524,27 @@ def _store_upload(
     digest = digest_of(content)
     existing = _existing(connection, project_id, digest, folder, file_name)
     if existing is not None and scope is not None:
-        queued_again = _wizard_held(
+        queued_again, restored = _wizard_held(
             connection, principal, organization_id, project_id, scope, target, existing
         )
         return UploadBody(
-            file_id=existing, file_name=file_name, folder_path=folder, duplicate=True
-        ), queued_again
+            file_id=existing, file_name=file_name, folder_path=folder, duplicate=True,
+            restored=restored,
+        ), queued_again  # fmt: skip
     if existing is not None and is_withdrawn(connection, existing):
         if requirement_id is None or target is None:
-            raise IntakeState("this file was withdrawn; restore it from the withdrawn files")
+            # Named where it was withdrawn from and where it is restored (17 November
+            # 2026: the sentence pointed at "the withdrawn files" with no way there).
+            where = _withdrawn_where(connection, existing)
+            raise StillWithdrawn(
+                (
+                    f"Withdrawn from {where[1]}."
+                    if where[1] is not None
+                    else "Withdrawn before it was filed to a control."
+                )
+                + f" Restore it from {WITHDRAWN_PLACE} to use it again.",
+                where[1],
+            )
         # The same file added again on an item: a person restores it for that item.
         queued_again = _restore_for_item(
             connection, principal, organization_id, project_id, target, requirement_id, existing
@@ -674,27 +718,153 @@ def _wizard_held(
     scope: Scope,
     target: tuple[UUID, UUID] | None,
     file_id: UUID,
-) -> UUID | None:
+) -> tuple[UUID | None, bool]:
     """A file the engagement holds already, dropped in the wizard. In one transaction, the
-    session's batch first (evidence_wizard.open_batch): withdrawn, it is restored for the
-    row's item as before; held on this control, it stays as it is (from a row it serves the
-    row's item too); held anywhere else, it is not added, and nothing is recorded. The
-    session lists it with the placement it has (evidence_wizard.record_duplicate). Returns
-    the reading to run, if any."""
+    session's batch first (evidence_wizard.open_batch): withdrawn from this control, it is
+    restored and read again (_restore_in_wizard); withdrawn from anywhere else, it is not
+    added, the sentence names where it was withdrawn from, and nothing is recorded; held on
+    this control, it stays as it is (from a row it serves the row's item too); held
+    anywhere else, it is not added, and nothing is recorded. The session lists it with the
+    placement it has (evidence_wizard.record_duplicate). Returns the reading to run, if
+    any, and whether the file was restored."""
     queued: UUID | None = None
+    restored = False
     with transaction(connection) as cursor:
         batch = open_batch(cursor, organization_id, project_id, scope, principal.id)
-        if is_withdrawn(connection, file_id):
-            if scope.requirement_id is None or target is None:
-                raise IntakeState("this file was withdrawn; restore it from the withdrawn files")
-            queued = _restore_for_item(
-                connection, principal, organization_id, project_id, target,
-                scope.requirement_id, file_id,
+        # The withdrawal in force, held to the end of the transaction: the same file
+        # dropped twice at once is restored once (the second finds it restored, and is
+        # listed as a file held on this control).
+        withdrawal = cursor.execute(
+            "SELECT id FROM evidence_withdrawals "
+            "WHERE evidence_file_id = %s AND restored_at IS NULL FOR UPDATE",
+            (file_id,),
+        ).fetchone()
+        if withdrawal is not None:
+            control_id, where = _withdrawn_where(cursor, file_id)
+            if control_id != scope.control_id:
+                # Plain sentences (design review, 17 November 2026); the row links to the
+                # withdrawn files, so the place is not spelled out here.
+                raise StillWithdrawn(
+                    f"Withdrawn from {where}. Restoring it returns it to that control, "
+                    "not this one."
+                    if where is not None
+                    else "Withdrawn before it was filed to a control. Restore it from the "
+                    "withdrawn files to use it again.",
+                    where,
+                )
+            queued = _restore_in_wizard(
+                connection, cursor, principal, organization_id, project_id, scope, target,
+                batch.id, file_id,
             )  # fmt: skip
+            restored = True
         else:
             _wizard_duplicate(connection, principal, organization_id, project_id, scope, file_id)
         record_duplicate(cursor, batch, file_id, principal.id)
-    return queued
+    return queued, restored
+
+
+def _withdrawn_where(
+    connection: psycopg.Connection[Any] | psycopg.Cursor[Any], file_id: UUID
+) -> tuple[UUID | None, str | None]:
+    """The control a withdrawn file was filed to when it was withdrawn (its filing stays
+    while it is withdrawn), and how that control is named; (None, None) for a file that
+    was on no control. Named in a sentence as "ITGC-AC-02 (SAP ERP)": the control, then
+    its application in parentheses."""
+    row = connection.execute(
+        """
+        SELECT c.id, c.control_ref, a.name FROM evidence_matches m
+        JOIN engagement_controls c ON c.id = m.engagement_control_id
+        LEFT JOIN engagement_applications a ON a.id = c.engagement_application_id
+        WHERE m.evidence_file_id = %s AND m.status = 'FILED'
+        """,
+        (file_id,),
+    ).fetchone()
+    if row is None:
+        return None, None
+    ref = str(row[1])
+    return UUID(str(row[0])), ref if row[2] is None else f"{ref} ({row[2]})"
+
+
+def _restore_in_wizard(
+    connection: psycopg.Connection[Any],
+    cursor: psycopg.Cursor[Any],
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    scope: Scope,
+    target: tuple[UUID, UUID] | None,
+    batch_id: UUID,
+    file_id: UUID,
+) -> UUID | None:
+    """A file withdrawn from the wizard's control, dropped in its Add evidence dialog: the
+    person restores it (product owner, 17 November 2026, "Restore and read"). The
+    restoration is the withdrawn files' own (evidence_versions.restore_file: who, when,
+    why, the `evidence.restored` event naming this session, the request's receipt, the
+    assurance chain), so the file is back where it was filed; from a row it is for the
+    row's item too, as a file added again on an item is. Then it is read again from the
+    start, a fresh reading, as a new file is. Returns the reading to run."""
+    from ai_workforce_api.evidence_versions import restore_file
+
+    context = {"batch_id": str(batch_id), "via": "ADD_EVIDENCE"}
+    if scope.requirement_id is not None and target is not None:
+        queued = _restore_for_item(
+            connection, principal, organization_id, project_id, target,
+            scope.requirement_id, file_id, context=context, reason=RESTORED_IN_ADD_EVIDENCE,
+        )  # fmt: skip
+        if queued is not None:
+            return queued
+    else:
+        # Testing follows the new reading (evidence_analysis runs it), so the restore's
+        # own runs are not scheduled here, as on an item (_restore_for_item).
+        restore_file(
+            connection, principal, organization_id, project_id, file_id,
+            RESTORED_IN_ADD_EVIDENCE, context,
+        )  # fmt: skip
+        if scope.requirement_id is not None:
+            # A row's item not requested yet: the file is linked to it.
+            _serve_item(
+                connection, principal, organization_id, project_id, scope.control_id,
+                scope.requirement_id, file_id, placement_reason=ADDED_AGAIN,
+            )  # fmt: skip
+    return _read_again(cursor, organization_id, project_id, file_id, principal.id, batch_id)
+
+
+def _read_again(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    file_id: UUID,
+    actor: UUID,
+    batch_id: UUID,
+) -> UUID | None:
+    """A restored file's reading, run again from the start (extraction and OCR as for a new
+    file), recorded as asked for. Not where a reading is under way already, where the
+    reading is a kept demo example, or where its screenshot review is signed off (those
+    stand, as a person's Read again leaves them). A file never read is queued."""
+    row = cursor.execute(
+        "SELECT id, status, source FROM evidence_analyses WHERE evidence_file_id = %s FOR UPDATE",
+        (file_id,),
+    ).fetchone()
+    if row is None:
+        return queue_analysis(cursor, organization_id, project_id, file_id, actor)
+    analysis_id = UUID(str(row[0]))
+    if row[1] in ("PENDING", "WORKING") or row[2] == "SEEDED":
+        return None
+    if review_decided(cursor.connection, analysis_id):
+        return None
+    restart_analysis(cursor, analysis_id, actor)
+    cursor.execute(
+        """
+        INSERT INTO audit_events (
+            organization_id, project_id, actor_user_id, action, target_type, target_id,
+            payload
+        )
+        VALUES (%s, %s, %s, 'evidence.reanalysis_requested', 'evidence_file', %s, %s)
+        """,
+        (organization_id, project_id, actor, file_id,
+         Json({"batch_id": str(batch_id), "after": "restored"})),
+    )  # fmt: skip
+    return analysis_id
 
 
 def _wizard_duplicate(
@@ -777,19 +947,20 @@ def _restore_for_item(
     target: tuple[UUID, UUID],
     item: UUID,
     file_id: UUID,
+    context: dict[str, str] | None = None,
+    reason: str = "Added again on an item of its evidence request.",
 ) -> UUID | None:
     """A withdrawn file added again on an item of a request: the person restores it (the
-    restoration is recorded, with who and why), and it is for that item. On the same
-    request it is read again against that item only, which places it for testing; on
-    another request of the control it is linked to the item. Returns the reading to run."""
-    from ai_workforce_api.evidence_analysis import restart_analysis
-    from ai_workforce_api.evidence_versions import restore
+    restoration is recorded, with who and why, and `context`: where it was added again),
+    and it is for that item. On the same request it is read again against that item only,
+    which places it for testing; on another request of the control it is linked to the
+    item. Returns the reading to run."""
+    from ai_workforce_api.evidence_versions import restore_file
 
     # Testing follows the new reading (evidence_analysis runs it), so the restore's own
     # runs are not scheduled here.
-    restore(
-        connection, principal, organization_id, project_id, file_id,
-        "Added again on an item of its evidence request.",
+    restore_file(
+        connection, principal, organization_id, project_id, file_id, reason, context,
     )  # fmt: skip
     with transaction(connection) as cursor:
         row = cursor.execute(

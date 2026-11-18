@@ -330,7 +330,19 @@ def test_a_withdrawn_file_added_again_on_an_item_is_restored_for_it(migrated: Da
     # On the request itself: refused, with the way back named.
     refused = upload()
     assert refused.status_code == 409
-    assert refused.json()["detail"].startswith("this file was withdrawn")
+    # 17 November 2026 (owner decision "Restore and read", and the design review the same
+    # day): the sentence names where the file was withdrawn from and where it is
+    # restored, in plain sentences. Old: starts "this file was withdrawn" ("this file was
+    # withdrawn; restore it from the withdrawn files", a place the screen offered no way
+    # to); new: "Withdrawn from ITGC-AC-01 (<application>). Restore it from the Withdrawn
+    # list in the Evidence library to use it again.", with `withdrawn: true` so a screen
+    # can link there. The refusal itself is unchanged.
+    where = refused.json()["withdrawn_from"]
+    assert where.startswith("ITGC-AC-01") and refused.json()["withdrawn"] is True
+    assert refused.json()["detail"] == (
+        f"Withdrawn from {where}. Restore it from the Withdrawn list in the Evidence library "
+        "to use it again."
+    )
     # On an item: restored for it.
     again = upload(requirement_id=item["id"])
     assert again.status_code == 200, again.text

@@ -9,8 +9,10 @@ an upload, so no batch is empty); the batch keeps its control and its item. A fi
 whole control is filed to the control with its placement pending; a file from a row is
 placed on the row's item at once, a person's choice. A file the engagement holds already,
 dropped again, is listed in the session with the placement it has
-(evidence_batch_duplicates). Custody, de-duplication and the archived-engagement guard are
-evidence_intake's, unchanged.
+(evidence_batch_duplicates); one withdrawn from the control is restored by the drop and
+read again from the start, and is listed `restored` (product owner, 17 November 2026,
+"Restore and read"; one withdrawn from anywhere else stays withdrawn). Custody,
+de-duplication and the archived-engagement guard are evidence_intake's, unchanged.
 
 Reading (2.2). A wizard file is read by the evidence reader against every D&I item of the
 control that still expects evidence (evidence_analysis.run_analysis), so what the file
@@ -800,10 +802,12 @@ def plan_placement(
     text: str,
     listed: Sequence[Item],
     more: bool,
+    waiting_for_ocr: bool = False,
 ) -> Placing:
     """Decide where the reading puts the file. The agent places a file it has not placed
     yet, or could not place on an earlier reading; a person's placement, and one the agent
-    made, stand (a person moves a file)."""
+    made, stand (a person moves a file). `waiting_for_ocr`: the reading ended with the
+    file's images unread by any OCR engine, which the gate's sentence says."""
     confirmed_row = connection.execute(
         "SELECT confirmed_kind FROM evidence_analyses WHERE id = %s", (analysis_id,)
     ).fetchone()
@@ -817,6 +821,7 @@ def plan_placement(
             kind_confirmed=confirmed is not None,
             confidence=classification.confidence,
             source=source,
+            waiting_for_ocr=waiting_for_ocr,
         )
     )
     decision = decide(classification, kind, source, held, listed, more)
@@ -1799,6 +1804,9 @@ class FileBody(BaseModel):
     extension: str
     # True for a file the engagement held already, dropped again in this session.
     duplicate: bool
+    # True for a duplicate that was withdrawn from this control and restored by being
+    # dropped in this session: it is read again, as a file added now is (17 November 2026).
+    restored: bool = False
     stage: FileStage
     read: ReadBody
     # Null until the file is read.
@@ -1881,14 +1889,22 @@ _LISTED = f"""
            coalesce(btrim(a.extracted_text) <> '', false), coalesce(a.source, ''),
            EXISTS (SELECT 1 FROM evidence_batches ob WHERE ob.id = f.upload_batch_id),
            (SELECT m.filed_by FROM evidence_matches m
-            WHERE m.evidence_file_id = f.id AND m.status = 'FILED')
+            WHERE m.evidence_file_id = f.id AND m.status = 'FILED'),
+           listed.restored
     FROM (
         SELECT f.upload_batch_id AS batch_id, f.id AS file_id, false AS duplicate,
-               f.created_at AS listed_at
+               f.created_at AS listed_at, false AS restored
         FROM evidence_files f
         WHERE f.project_id = %(project)s AND f.upload_batch_id = ANY(%(batches)s)
         UNION ALL
-        SELECT d.batch_id, d.evidence_file_id, true, d.added_at
+        -- A file withdrawn from the control and restored by being dropped in this session
+        -- (evidence_intake._restore_in_wizard): its restoration's event names the session.
+        SELECT d.batch_id, d.evidence_file_id, true, d.added_at,
+               EXISTS (
+                   SELECT 1 FROM audit_events e
+                   WHERE e.target_type = 'evidence_file' AND e.target_id = d.evidence_file_id
+                     AND e.action = 'evidence.restored'
+                     AND e.payload ->> 'batch_id' = d.batch_id::text)
         FROM evidence_batch_duplicates d
         WHERE d.project_id = %(project)s AND d.batch_id = ANY(%(batches)s)
     ) listed
@@ -2011,6 +2027,7 @@ def _file_body(
         size_bytes=int(row[3]),
         extension=_extension(str(row[2])),
         duplicate=bool(row[12]),
+        restored=bool(row[17]),
         stage=stage,
         read=ReadBody(
             status=read_status,

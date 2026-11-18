@@ -490,6 +490,24 @@ def restore(
     file_id: UUID,
     reason: str,
 ) -> tuple[RegisterBody, list[UUID]]:
+    runs = restore_file(connection, principal, organization_id, project_id, file_id, reason)
+    return _register(connection, principal, organization_id, project_id, file_id), runs
+
+
+def restore_file(
+    connection: psycopg.Connection[Any],
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    file_id: UUID,
+    reason: str,
+    context: dict[str, str] | None = None,
+) -> list[UUID]:
+    """Restore a withdrawn file, whoever asks for it: the withdrawn files' Restore, or the
+    same file added again (on an item of its request, or in Add evidence on the control it
+    was withdrawn from). The restoration is recorded on the withdrawal (who, when, why) and
+    in an `evidence.restored` audit event, whose payload carries `context` beside the
+    reason (where it was added again). Returns the test runs to schedule."""
     _person(connection, principal, organization_id, project_id, Action.TASK_UPDATE)
     _require_active(connection, organization_id, project_id)
     with transaction(connection) as cursor:
@@ -519,12 +537,12 @@ def restore(
         runs = _test_again(cursor, project_id, control_id)
         _audit(
             cursor, organization_id, project_id, principal.id, "evidence.restored", file_id,
-            {"reason": reason},
+            {**(context or {}), "reason": reason},
         )  # fmt: skip
         # Back in force: the assurance chain checks its request again where it is D&I
         # evidence (a run of the very same basis is copied, never run twice).
         queue_safely(cursor, project_id, file_id, principal.id)
-    return _register(connection, principal, organization_id, project_id, file_id), runs
+    return runs
 
 
 # Replace

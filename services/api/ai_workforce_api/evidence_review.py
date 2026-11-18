@@ -8,14 +8,22 @@ observed and what was expected.
 
 The proposed conclusion is derived here from those results, never taken from the
 model. A person signs it off or overrides it with a reason. When something is wrong,
-the auditor gets plain feedback, and a follow-up request to the control owner is drafted.
-It goes out only after the usual approval. Nothing here changes a request's status.
+the auditor gets plain feedback on the file. Nothing here changes a request's status.
+
+No follow-up to the client is drafted from one file (product owner, 18 November 2026,
+"Only after the set"). A file is reviewed alone, so what it does not show is often shown
+by the other files of the same request, and a per-file draft asked the owner again for
+evidence already sent. The client is asked only for what is still missing once the
+request's files are checked together: the D&I assurance check's follow-ups
+(evidence_assurance.py, docs/evidence-assurance.md), and the findings of a control's
+evidence mapping and readings, which a person sends as one message on the request
+(evidence_findings.send_follow_up).
 """
 
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
@@ -49,7 +57,6 @@ CHECK_LABELS = {
 }
 MAX_ATTRIBUTES = 12
 MAX_IMAGES = 5
-FOLLOW_UP_DAYS = 7
 CheckKey = Literal["legibility", "system", "date_period", "editing", "applicability"]
 CHECKS: tuple[CheckKey, ...] = (
     "legibility",
@@ -66,15 +73,6 @@ _URL = re.compile(r"(?i)\b(?:https?://|www\.)\S*")
 _ASKS_FOR_ACCESS = re.compile(
     r"(?i)\b(?:send|share|provide|give)\b[^.\n]{0,40}\b(?:password|credential|login|log-in)s?\b"
 )
-
-# What to ask the control owner for when a check finds an issue.
-_ASKS: dict[str, str] = {
-    "legibility": "is full resolution and shows every field, without cropping or scrolling",
-    "system": "shows the system name and that it is the production environment",
-    "date_period": "shows the date and time it was taken, such as the system clock",
-    "editing": "is captured directly from the system, without edits or annotations",
-    "applicability": "shows the settings or records this control covers",
-}
 
 
 @dataclass(frozen=True)
@@ -343,31 +341,6 @@ def proposed(review: Review) -> Conclusion:
     return "CANNOT_CONCLUDE"
 
 
-def follow_up_message(review: Review, context: ReviewContext) -> str:
-    """The agent's message, or one built from the issues. Empty when nothing is needed."""
-    issues = [check for check in review.checks if check.result == "ISSUE"]
-    exceptions = [test for test in review.attributes if test.result == "EXCEPTION"]
-    if not issues and not exceptions:
-        return ""
-    if review.follow_up:
-        return review.follow_up
-    lines = [
-        f"Thank you for the screenshot you sent for control {context.control_ref}.",
-    ]
-    if issues:
-        lines.append("To complete our testing, please send a new screenshot that:")
-        lines += [f"- {_ASKS[check.check]}" for check in issues]
-    for test in exceptions:
-        lines.append(
-            f'The screenshot appears to show that "{test.attribute}" is not met'
-            + (f" ({test.observed})" if test.observed else "")
-            + ". Please confirm the setting in force during the audit period, or send "
-            "evidence of an approved exception."
-        )
-    lines.append("Thank you for your help.")
-    return "\n".join(lines)[:1500]
-
-
 def _clipped(output: dict[str, Any]) -> dict[str, Any]:
     data = dict(output)
     for key, limit in (("feedback", 1500), ("follow_up", 1500)):
@@ -419,36 +392,33 @@ def save_review(
     requester: UUID,
     review: Review,
     status: Literal["READY", "NEEDS_PERSON"],
-    context: ReviewContext,
     model_call_id: UUID | None,
     note: str,
     tester: str,
 ) -> UUID | None:
-    """Store the review and draft the follow-up. A signed-off review is never replaced."""
+    """Store the review for a person. A signed-off review is never replaced.
+
+    No follow-up to the client is drafted, and none is created or rewritten (product
+    owner, 18 November 2026, "Only after the set"): what the client is asked for comes
+    from the request's files checked together. `follow_up_request_id` is left as it is: a
+    review stored before that decision keeps the link to the draft it made, and a new one
+    has none.
+    """
     conclusion = proposed(review)
-    message = follow_up_message(review, context)
-    follow_up_id: UUID | None = None
-    if message and request is not None:
-        follow_up_id = _draft_follow_up(
-            cursor, organization_id, project_id, analysis_id, request, message, requester
-        )
     row = cursor.execute(
         """
         INSERT INTO evidence_reviews (
             organization_id, project_id, evidence_analysis_id, evidence_file_id,
             pbc_request_id, engagement_control_id, status, source, checks, attributes,
-            proposed, feedback, follow_up_request_id, model_call_id, note
+            proposed, feedback, model_call_id, note
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (evidence_analysis_id) DO UPDATE
         SET pbc_request_id = EXCLUDED.pbc_request_id,
             engagement_control_id = EXCLUDED.engagement_control_id,
             status = EXCLUDED.status, source = EXCLUDED.source, checks = EXCLUDED.checks,
             attributes = EXCLUDED.attributes, proposed = EXCLUDED.proposed,
             feedback = EXCLUDED.feedback,
-            follow_up_request_id = COALESCE(
-                EXCLUDED.follow_up_request_id, evidence_reviews.follow_up_request_id
-            ),
             model_call_id = EXCLUDED.model_call_id, note = EXCLUDED.note,
             version = evidence_reviews.version + 1, updated_at = clock_timestamp()
         WHERE evidence_reviews.decision IS NULL
@@ -467,7 +437,6 @@ def save_review(
             Json([test.model_dump() for test in review.attributes]),
             conclusion,
             review.feedback,
-            follow_up_id,
             model_call_id,
             note[:300],
         ),
@@ -494,86 +463,11 @@ def save_review(
                     "proposed": conclusion,
                     "issues": [c.check for c in review.checks if c.result == "ISSUE"],
                     "exceptions": sum(1 for t in review.attributes if t.result == "EXCEPTION"),
-                    "follow_up_drafted": follow_up_id is not None,
+                    # Kept in the payload's shape: a per-file review drafts no client
+                    # follow-up since 18 November 2026 ("Only after the set").
+                    "follow_up_drafted": False,
                 }
             ),
-        ),
-    )
-    return UUID(str(row[0]))
-
-
-def _draft_follow_up(
-    cursor: psycopg.Cursor[Any],
-    organization_id: UUID,
-    project_id: UUID,
-    analysis_id: UUID,
-    request: tuple[UUID, str, str, UUID | None],
-    message: str,
-    requester: UUID,
-) -> UUID | None:
-    """One draft per file. It is rewritten while still a draft, and sent only on approval."""
-    original = cursor.execute(
-        """
-        SELECT owner_user_id, recipient, follow_up_after_days, max_follow_ups, testing_phase
-        FROM pbc_requests WHERE id = %s AND project_id = %s
-        """,
-        (request[0], project_id),
-    ).fetchone()
-    if original is None:
-        return None
-    key = f"recapture-{analysis_id.hex}"
-    description = f"Follow-up on the evidence you sent for {request[1]}.\n\n{message}"[:4000]
-    row = cursor.execute(
-        """
-        INSERT INTO pbc_requests (
-            organization_id, project_id, operation_key, control_ref, owner_user_id,
-            recipient, due_at, evidence_description, follow_up_after_days, max_follow_ups,
-            engagement_control_id, testing_phase, drafted_by
-        )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'AGENT')
-        ON CONFLICT (project_id, operation_key) DO UPDATE
-        SET evidence_description = EXCLUDED.evidence_description,
-            version = pbc_requests.version + 1, updated_at = clock_timestamp()
-        WHERE pbc_requests.status = 'DRAFT'
-        RETURNING id
-        """,
-        (
-            organization_id,
-            project_id,
-            key,
-            request[1],
-            original[0],
-            original[1],
-            datetime.now(UTC) + timedelta(days=FOLLOW_UP_DAYS),
-            description,
-            original[2],
-            original[3],
-            request[3],
-            # A follow-up serves the phase of the request it follows up.
-            original[4],
-        ),
-    ).fetchone()
-    if row is None:
-        # Already submitted or sent. That request stands as it is.
-        existing = cursor.execute(
-            "SELECT id FROM pbc_requests WHERE project_id = %s AND operation_key = %s",
-            (project_id, key),
-        ).fetchone()
-        return None if existing is None else UUID(str(existing[0]))
-    cursor.execute(
-        """
-        INSERT INTO audit_events (
-            organization_id, project_id, actor_user_id, action, target_type, target_id,
-            payload
-        )
-        VALUES (%s, %s, %s, 'pbc.follow_up_drafted', 'pbc_request', %s, %s)
-        """,
-        (
-            organization_id,
-            project_id,
-            requester,
-            row[0],
-            Json({"agent": "evidence-coordinator", "status": "DRAFT"}),
         ),
     )
     return UUID(str(row[0]))
