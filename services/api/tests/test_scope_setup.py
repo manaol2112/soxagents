@@ -362,6 +362,80 @@ def test_an_engagement_whose_catch_up_fails_is_named_with_its_cause_and_the_rest
     assert "the database said something" not in said
 
 
+def test_the_catch_up_keeps_a_plan_the_control_already_has(migrated: Database) -> None:
+    """Regression (18 November 2026, the independent review of PR #3, finding E1): a control
+    selected under SP6 can get its evidence plan before the worker's start gives it its work
+    (evidence_plans.plan_to_follow, when the agents have something to do on it). The
+    catch-up then planned it again with the rules, writing over the planner agent's work on
+    a plan no person had approved. The approved workflow plans a control once and changes a
+    plan only through the planner's run or a person (agent proposes, the human approves):
+    the catch-up gives the control its tasks and keeps the plan as it stands."""
+    from ai_workforce_api.evidence_plans import generate
+
+    owner, base, team = _launched_empty(migrated, "catch-up-keeps-plan")
+    project = team["project"]
+    sap = owner.post(
+        f"{base}/systems",
+        json={"name": "SAP ERP", "layer": "APPLICATION", "approved_areas": ["ITGC"]},
+    ).json()["applications"][0]
+    key = next(c["library_key"] for c in _options(owner, base, system_id=sap["id"])["controls"]
+               if c["area"] == "ITGC")  # fmt: skip
+    with connect(migrated.url) as connection:
+        with connection.cursor() as cursor:
+            include_control(cursor, team["org"], project, UUID(sap["id"]), None, key)
+        connection.commit()
+        [(control,)] = connection.execute(
+            "SELECT id FROM engagement_controls WHERE project_id = %s AND included", (project,)
+        ).fetchall()
+        # Planned before the catch-up, then refined by the planner agent: its own words on
+        # the plan and on one request, on a plan no person approved.
+        generate(connection, None, team["org"], project, UUID(str(control)), team["owner_id"])
+        connection.execute(
+            "UPDATE evidence_plans SET source = 'MODEL', run_attempts = 1, "
+            "understanding = understanding || '{\"agent_note\": \"The planner''s reading\"}' "
+            "WHERE engagement_control_id = %s",
+            (control,),
+        )
+        [(requirement, title)] = connection.execute(
+            "UPDATE evidence_requirements SET title = 'The planner''s wording', origin = 'AGENT' "
+            "WHERE id = (SELECT id FROM evidence_requirements WHERE engagement_control_id = %s "
+            "AND status <> 'REMOVED' ORDER BY phase, requirement_key LIMIT 1) "
+            "RETURNING id, title",
+            (control,),
+        ).fetchall()
+        connection.commit()
+        plan_before = connection.execute(
+            "SELECT id, source, status, understanding, version FROM evidence_plans "
+            "WHERE engagement_control_id = %s",
+            (control,),
+        ).fetchone()
+        requirements_before = connection.execute(
+            "SELECT id, status, title, pending_change FROM evidence_requirements "
+            "WHERE engagement_control_id = %s ORDER BY id",
+            (control,),
+        ).fetchall()
+    assert _work(migrated, project)[0] == 0
+    with connect(migrated.url) as connection:
+        assert project in start_waiting_scope(connection)
+    # The control has its work now.
+    assert _work(migrated, project)[0] == 1
+    with connect(migrated.url) as connection:
+        plan_after = connection.execute(
+            "SELECT id, source, status, understanding, version FROM evidence_plans "
+            "WHERE engagement_control_id = %s",
+            (control,),
+        ).fetchone()
+        requirements_after = connection.execute(
+            "SELECT id, status, title, pending_change FROM evidence_requirements "
+            "WHERE engagement_control_id = %s ORDER BY id",
+            (control,),
+        ).fetchall()
+    # The plan, its content and every request are as the agent and the people left them.
+    assert plan_after == plan_before
+    assert requirements_after == requirements_before
+    assert (requirement, title) in [(r[0], r[2]) for r in requirements_after]
+
+
 def test_selection_before_launch_creates_no_work(migrated: Database) -> None:
     """Rewritten 17 November 2026 from test_finalizing_needs_a_launch_and_a_control. Old: the
     finalize route refused before the launch ("launch the engagement first") and with no
