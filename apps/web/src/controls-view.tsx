@@ -298,7 +298,7 @@ function RecordFold({
       <div className="stp-fold-body">{children}</div>
     </details>
   ) : (
-    <>{children}</>
+    children
   );
 }
 
@@ -3499,7 +3499,10 @@ function ControlRecord({
           // The conclusion's own card says what it waits on, and the header's pill its
           // status: the quiet line above would say it a third time (design review, 17
           // November 2026). A decision row (rate the deficiencies) stays.
-          !(openStep.key === "conclusion" && quietLineOf(openFrame.need) !== null)
+          !(
+            openStep.key === "conclusion" &&
+            quietLineOf(openFrame.need) !== null
+          )
         }
         stepHrefs={stepHrefsWf}
         askHref={askHref}

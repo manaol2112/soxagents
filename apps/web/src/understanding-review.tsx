@@ -1668,7 +1668,6 @@ export function UnderstandingReview({
               ))}
             </section>
           ) : null}
-
         </>
       ) : (
         <div className="ud-table-wrap">
@@ -2597,7 +2596,9 @@ export function UnderstandingReview({
             {/* What an optional question is used for ("Used for D&I evidence"), else
                 "Optional" (design review, 17 November 2026). */}
             {!need.required ? (
-              <span className="ur-chip">{neededForLine(need) || "Optional"}</span>
+              <span className="ur-chip">
+                {neededForLine(need) || "Optional"}
+              </span>
             ) : null}
             {onFile ? <span className="ur-chip is-ok">On record</span> : null}
             {reason !== "" ? (

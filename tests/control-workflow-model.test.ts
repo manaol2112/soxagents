@@ -572,11 +572,21 @@ describe("the control's workflow", () => {
     );
     // The planner drawing it up, or returned to the preparer: being drafted.
     assert.deepEqual(
-      at({ exists: false, approved: false, pendingReview: false, drafting: true }),
+      at({
+        exists: false,
+        approved: false,
+        pendingReview: false,
+        drafting: true,
+      }),
       ["active", "Plan being drafted"],
     );
     assert.deepEqual(
-      at({ exists: true, approved: false, pendingReview: false, drafting: true }),
+      at({
+        exists: true,
+        approved: false,
+        pendingReview: false,
+        drafting: true,
+      }),
       ["active", "Plan being drafted"],
     );
     assert.deepEqual(
