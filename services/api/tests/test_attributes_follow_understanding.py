@@ -1645,18 +1645,43 @@ def test_two_additions_written_from_one_library_attribute_do_not_both_land(
 def test_a_failed_planner_run_reads_as_stopped_once_the_understanding_is_complete(
     migrated: Database,
 ) -> None:
+    # Rewritten 18 November 2026 (docs/test-baseline.md, B7 item 3; the product owner
+    # confirmed the rule that day, docs/control-workflow-plan.md, B1k). Old: the walkthrough's
+    # answers alone completed the understanding, so no run was queued over the failed one.
+    # Since B1k completion waits for the specialist's review, and before completion a due
+    # review is queued over a failed planner run (evidence_plans.queue_for_understanding),
+    # so it is never left unqueued. New: that is asserted first; the understanding is then
+    # completed by the worker's run, the run fails again, and an answer changes: from here
+    # every original assertion holds as written.
     team, control, scheduler, client = _ready(migrated, "afu-failed-plain")
     plan_id = _plan_run(migrated, control)[0]
+
+    def failed_plain() -> None:
+        # The run failed: a plain run, with no stage.
+        with connect(migrated.url) as connection:
+            connection.execute(
+                "UPDATE evidence_plans SET run_status = 'FAILED', run_stage = '' WHERE id = %s",
+                (plan_id,),
+            )
+            connection.commit()
+
+    failed_plain()
     with connect(migrated.url) as connection:
-        # The launch's refinement failed: a plain run, with no stage.
-        connection.execute(
-            "UPDATE evidence_plans SET run_status = 'FAILED', run_stage = '' WHERE id = %s",
-            (plan_id,),
-        )
-        connection.commit()
         # Before the understanding is complete the Attributes step has nothing to say.
         assert attributes_run(connection, UUID(control)) == ("", "", "")
     _answer_required(migrated, team, control, client)
+    # Before completion: the specialist's review is queued over the failed run.
+    assert scheduler.plans == [plan_id] and _plan_run(migrated, control)[1:] == (
+        "PENDING",
+        "ATTRIBUTES",
+    )
+    with connect(migrated.url) as connection:
+        assert run_plan_through(connection, _Agents(migrated, team, control), plan_id) == "DONE"
+    assert client.get(f"{_path(team, control)}/context").json()["understanding_completed_at"]
+    # Completed; the planner's next run fails, and the understanding changes.
+    failed_plain()
+    scheduler.plans.clear()
+    _volume(team, control, client, "101 to 250")
     # Nothing is queued over a failed run: a person starts it again, and the step says so.
     assert scheduler.plans == [] and _plan_run(migrated, control)[1:] == ("FAILED", "")
     with connect(migrated.url) as connection:
