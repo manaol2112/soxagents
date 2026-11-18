@@ -112,5 +112,7 @@ A change is done when all of these hold:
 | Client-facing copy, design tokens, button hover | The guard tests under `tests/` |
 | A request that changes something comes from the workspace's own origin | `apps/web/src/origin-guard.ts`, applied in `apps/web/proxy.ts`; `tests/origin-guard.test.ts` |
 | The API paths the web spells out exist in the API | `services/api/tests/test_web_calls_api_routes.py` (paths built elsewhere are counted, not followed) |
+| Both background workers offer the same jobs, and every job looked up by name exists | `services/api/tests/test_scheduler_parity.py` |
+| Every request status change follows the transition table or a named service move | `services/api/tests/test_request_status_moves.py` |
 | No secret in any commit | `.github/workflows/security.yml` (gitleaks over the whole history; checked false positives in `.gitleaksignore`) |
 | No known advisory in a locked dependency | `.github/workflows/security.yml` (`pnpm audit`, `pip-audit`), on lockfile changes and weekly; updates proposed by `.github/dependabot.yml` |
