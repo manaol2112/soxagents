@@ -1100,9 +1100,12 @@ def test_a_chain_of_follow_on_runs_is_bounded_as_the_durable_workflow() -> None:
     migration = ROOT.parent.parent.parent / "migrations" / "0175_plan_run_follows.sql"
     sql = migration.read_text(encoding="utf-8")
     assert "ADD COLUMN run_follows integer NOT NULL DEFAULT 0" in sql
-    # Every queue that is not a requeue starts the chain again.
+    # Every queue that is not a requeue starts the chain again. Rewritten on 18 November 2026:
+    # old 3 (queue_assumption_update, request_attributes_run, replan_for_new_attributes); new
+    # 4, with refine_new_plan, the planner's run on a plan made for a control that had none
+    # (plan_to_follow), which is not a requeue either and starts the chain too.
     plans = (ROOT / "evidence_plans.py").read_text(encoding="utf-8")
-    assert plans.count("run_attempts = 0, run_follows = 0,") == 3
+    assert plans.count("run_attempts = 0, run_follows = 0,") == 4
     reviews = (ROOT / "understanding_review.py").read_text(encoding="utf-8")
     assert "run_attempts = 0, run_follows = 0," in reviews
 

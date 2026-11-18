@@ -12,11 +12,9 @@ import {
   ADD_SYSTEM_EVENT,
   controlsTiles,
   controlsTourSteps,
-  FINALIZE_EVENT,
   parseControlsPane,
   RCM_UPLOAD_EVENT,
   SELECT_CONTROLS_EVENT,
-  scopeReview,
   scopeSteps,
 } from "./controls-guide-model";
 import { ControlsPage, type ScopeAction } from "./controls-page";
@@ -80,7 +78,6 @@ import type { Policy, PriorYearReference } from "./references-model";
 import { PoliciesPane, ReferencesPane } from "./references-view";
 import { SaveWhenChanged } from "./save-when-changed";
 import {
-  FinalizeScope,
   OpenScopeAction,
   RcmSteps,
   RcmUpload,
@@ -2002,13 +1999,15 @@ function registerFiltered(engagement: EngagementState): boolean {
 
 /**
  * Systems & Processes (decided by the product owner, SP1 of the Systems & Processes
- * workflow): the engagement's scope on one page, its permanent home. The workflow's four
- * steps until the scope is finalized; a tile and a tab each for the systems, the business
- * processes, and the controls; the systems and processes as tables that open in place; the
- * controls register under the Controls tab once there are controls, and the library or
- * the client's RCM before. An empty tab opens on its first step. Until SP6, each control
+ * workflow): the engagement's scope on one page, its permanent home. The workflow's three
+ * steps until the first control is selected; a tile and a tab each for the systems, the
+ * business processes, and the controls; the systems and processes as tables that open in
+ * place; the controls register under the Controls tab once there are controls, and the
+ * library or the client's RCM before. An empty tab opens on its first step. Each control
  * set up here gets its walkthrough, evidence request, test, and review at once once the
- * engagement runs (scope_changes.reconcile_scope).
+ * engagement runs (scope_changes.reconcile_scope). There is no Review and finalize step
+ * (removed 17 November 2026, the product owner: "Scope keeps changing so it will never be
+ * finalized").
  */
 export function ScopePage({
   model,
@@ -2036,8 +2035,6 @@ export function ScopePage({
   const importing = setup.rcmImport !== null && editable;
   const systems = inScopeSystems(onboarding);
   const controls = onboarding.controls.filter((control) => control.included);
-  // The work starts when a person reviews and finalizes the scope (SP6).
-  const finalized = onboarding.scopeFinalizedAt !== null;
   const empty = systems.length === 0 && controls.length === 0;
   // What controls are selected for: each system, and each named process.
   const targets = [
@@ -2063,10 +2060,7 @@ export function ScopePage({
             {/* The setup agent's tour: by itself the first time, then on request. */}
             <ControlsTour steps={controlsTourSteps(onboarding)} />
             {editable && !importing ? (
-              <ControlsAddMenu
-                controlsSet={controls.length > 0}
-                finalized={finalized}
-              />
+              <ControlsAddMenu controlsSet={controls.length > 0} />
             ) : null}
           </>
         }
@@ -2086,32 +2080,12 @@ export function ScopePage({
           {NOTICES[setup.notice]}
         </Banner>
       ) : null}
-      {!importing && !finalized && onboarding.started && controls.length > 0 ? (
+      {!importing && onboarding.started && controls.length > 0 ? (
         <Banner tone="info">
           <span className="fz-banner">
             <span>
               {controls.length} control{controls.length === 1 ? " is" : "s are"}{" "}
-              selected. No work starts until the scope is reviewed and
-              finalized.
-            </span>
-            {editable ? (
-              <OpenScopeAction
-                event={FINALIZE_EVENT}
-                label="Review and finalize"
-                icon="check"
-                className="btn btn-sm"
-              />
-            ) : null}
-          </span>
-        </Banner>
-      ) : null}
-      {!importing && finalized && controls.length > 0 ? (
-        <Banner tone="info">
-          <span className="fz-banner">
-            <span>
-              The scope is final: {controls.length} control
-              {controls.length === 1 ? " is" : "s are"} in scope. Test plans are
-              prepared and approved in Planning.
+              in scope. Test plans are prepared and approved in Planning.
             </span>
             <a className="text-link" href={sectionHref(model, "planning")}>
               Go to Planning
@@ -2139,7 +2113,7 @@ export function ScopePage({
             priorYear: setup.priorYear ?? [],
           })}
           controlsHref={sectionHref(model, "register")}
-          steps={finalized ? null : scopeSteps(onboarding, finalized)}
+          steps={controls.length > 0 ? null : scopeSteps(onboarding)}
           panes={{
             systems:
               systems.length > 0 ? (
@@ -2265,7 +2239,6 @@ export function ScopePage({
             projectId={onboarding.projectId}
             targets={targets}
             advice={adviceBySystem(onboarding)}
-            finalized={finalized}
             rcm={controls.length === 0}
           />
           {controls.length === 0 ? (
@@ -2274,21 +2247,6 @@ export function ScopePage({
               projectId={onboarding.projectId}
             />
           ) : null}
-          {finalized ? null : (
-            <FinalizeScope
-              organizationId={model.organization.id}
-              projectId={onboarding.projectId}
-              review={scopeReview(onboarding)}
-              policies={
-                (setup.policies ?? []).filter(
-                  (item) => item.kind === "POLICY" || item.kind === "PROCEDURE",
-                ).length
-              }
-              canFinalize={editable}
-              planningHref={sectionHref(model, "planning")}
-              controlsHref={sectionHref(model, "register")}
-            />
-          )}
         </>
       ) : null}
     </div>
@@ -2326,7 +2284,6 @@ export function RegisterPage({
   const importing = setup.rcmImport !== null && editable;
   const systems = inScopeSystems(onboarding);
   const controls = onboarding.controls.filter((control) => control.included);
-  const finalized = onboarding.scopeFinalizedAt !== null;
   const targets = [
     ...systems.map((system) => ({
       kind: "system" as const,
@@ -2408,7 +2365,7 @@ export function RegisterPage({
             detail={
               systems.length + onboarding.processes.length === 0
                 ? "Controls are selected for each system and process. Add them on Systems & Processes first, or upload the organization's RCM, which finds the systems it names."
-                : "Choose controls from the firm's standard library for each system and process, or upload the organization's RCM. No work starts until the scope is reviewed and finalized."
+                : "Choose controls from the firm's standard library for each system and process, or upload the organization's RCM. Each control's walkthrough, evidence request, test, and review are created when it is selected."
             }
           >
             {editable ? (
@@ -2448,7 +2405,6 @@ export function RegisterPage({
             projectId={onboarding.projectId}
             targets={targets}
             advice={adviceBySystem(onboarding)}
-            finalized={finalized}
             rcm={controls.length === 0}
           />
           {controls.length === 0 ? (

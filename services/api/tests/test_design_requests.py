@@ -400,6 +400,46 @@ def test_accepting_the_last_request_releases_the_d_and_i_evidence_as_that_person
     ) == len(drafted)
 
 
+def test_a_d_and_i_request_the_planner_made_wait_for_another_is_requested_with_it(
+    migrated: Database,
+) -> None:
+    """Regression, ITGC-AC-01 (17 November 2026): the planner wrote the walkthrough instance
+    as waiting for the policy. Stored as waiting, it was left out of the D&I request (only a
+    sample request releases an item that waits, and D&I has none): the policy was sent
+    alone and the instance read "Message not drafted yet" with nothing ever to draft. Now
+    no D&I item waits, so accepting the list requests every item in the one D&I request."""
+    team, control = _prepared(migrated, "dr-no-wait")
+    org, project = UUID(str(team["org"])), UUID(str(team["project"]))
+    with connect(migrated.url) as connection:
+        output = _replanned(connection, project, UUID(control))
+        design = next(phase for phase in output["phases"] if phase["phase"] == "DESIGN")
+        instance = next(r for r in design["requirements"] if "CONTROL_EXECUTION" in r["categories"])
+        other = next(r for r in design["requirements"] if r is not instance)
+        instance["depends_on"] = other["key"]
+        generate(connection, _Planner(output), org, project, UUID(control), team["owner_id"])
+        connection.commit()
+    requests = _requests(team, control)
+    assert len(requests) >= 2
+    assert all(item["status"] == "PLANNED" and item["depends_on"] is None for item in requests)
+    done = _accept(team["owner"], team, control, requests)
+    assert done.status_code == 200, done.text
+    linked = _rows(
+        migrated,
+        "SELECT q.status, q.pbc_request_id FROM evidence_requirements q "
+        "WHERE q.engagement_control_id = %s AND q.phase = 'DESIGN' AND q.status <> 'REMOVED'",
+        UUID(control),
+    )
+    assert [row[0] for row in linked] == ["REQUESTED"] * len(requests)
+    carriers = {row[1] for row in linked}
+    assert len(carriers) == 1 and None not in carriers
+    assert _rows(
+        migrated,
+        "SELECT count(*) FROM pbc_requests WHERE engagement_control_id = %s "
+        "AND testing_phase = 'DESIGN'",
+        UUID(control),
+    ) == [(1,)]
+
+
 def test_an_acceptance_is_all_or_none_at_the_versions_the_person_saw(
     migrated: Database,
 ) -> None:

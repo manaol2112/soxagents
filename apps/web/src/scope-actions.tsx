@@ -14,11 +14,8 @@ import { createPortal } from "react-dom";
 import { AgentAvatar } from "./agent-avatar";
 import {
   CONTROLS_SAVED_EVENT,
-  FINALIZE_EVENT,
   RCM_UPLOAD_EVENT,
-  type ScopeReview,
   SELECT_CONTROLS_EVENT,
-  SHOW_PANE_EVENT,
   selectionCategory,
 } from "./controls-guide-model";
 import {
@@ -271,21 +268,19 @@ function parseOptions(value: unknown): {
  * Select controls (decided by the product owner, SP4 of the Systems & Processes workflow):
  * the firm's library controls for one system or process at a time, filtered by category,
  * searched, and chosen together. The categories start on the areas a person approved for
- * it. Controls already in scope show as such. Before the scope is finalized, selecting
- * creates no work; after, each control added gets its work.
+ * it. Controls already in scope show as such. On a running engagement each control added
+ * gets its work at once (no finalize step since 17 November 2026).
  */
 export function SelectControls({
   organizationId,
   projectId,
   targets,
-  finalized,
   rcm,
   advice = {},
 }: {
   organizationId: string;
   projectId: string;
   targets: Target[];
-  finalized: boolean;
   /** Whether the client's RCM can still be uploaded: only while no control is set up. */
   rcm: boolean;
   /** The agent's review of each system, by its id (adviceBySystem). */
@@ -306,7 +301,6 @@ export function SelectControls({
       projectId={projectId}
       targets={targets}
       initial={start.target}
-      finalized={finalized}
       rcm={rcm}
       advice={advice}
       onClose={drawer.close}
@@ -319,7 +313,6 @@ function SelectControlsDrawer({
   projectId,
   targets,
   initial,
-  finalized,
   rcm,
   advice,
   onClose,
@@ -328,7 +321,6 @@ function SelectControlsDrawer({
   projectId: string;
   targets: Target[];
   initial: Target | null;
-  finalized: boolean;
   rcm: boolean;
   advice: Record<string, SystemAdvice>;
   onClose: () => void;
@@ -931,9 +923,8 @@ function SelectControlsDrawer({
             <p className="mc-note">
               <UiIcon name="info" size={14} />
               <span>
-                {finalized
-                  ? `Mapping links controls to ${name}. Each control added gets its work at once.`
-                  : `Mapping links controls to ${name}. Testing will not start until the scope is finalized.`}
+                Mapping links controls to {name}. Each control added gets its
+                work at once.
               </span>
             </p>
           </aside>
@@ -1093,250 +1084,6 @@ export function RcmUpload({
         The organization&apos;s matrix is read in its own format and terms. Its
         columns are matched to the firm&apos;s next, then its controls are
         reviewed before any is imported.
-      </p>
-    </Drawer>
-  );
-}
-
-/**
- * Review and finalize (decided by the product owner, SP6): the scope as it stands, what
- * deserves a look, and the one action that starts the engagement's work for everything
- * in scope. Shown as success only once the server has confirmed it.
- */
-export function FinalizeScope({
-  organizationId,
-  projectId,
-  review,
-  policies,
-  canFinalize,
-  planningHref,
-  controlsHref = null,
-}: {
-  organizationId: string;
-  projectId: string;
-  review: ScopeReview;
-  /** The policies and procedures in use. */
-  policies: number;
-  canFinalize: boolean;
-  /** Where the scope goes next once it is finalized: Planning. */
-  planningHref: string;
-  /** The Controls page, where the controls row's Edit leads. */
-  controlsHref?: string | null;
-}) {
-  const drawer = useDrawer(FINALIZE_EVENT);
-  const router = useRouter();
-  const [, startTransition] = useTransition();
-  const [busy, setBusy] = useState(false);
-  const [problem, setProblem] = useState<string | null>(null);
-  const [done, setDone] = useState(false);
-  if (!drawer.open) {
-    return null;
-  }
-  // Edit leaves the review for the tab that holds what is edited.
-  const edit = (pane: string) => {
-    if (pane === "controls" && controlsHref !== null) {
-      window.location.assign(controlsHref);
-      return;
-    }
-    drawer.close();
-    document.dispatchEvent(new CustomEvent(SHOW_PANE_EVENT, { detail: pane }));
-  };
-  const close = () => {
-    if (done) {
-      startTransition(() => router.refresh());
-      setDone(false);
-    }
-    drawer.close();
-  };
-  const plural = (count: number, one: string, many = `${one}s`) =>
-    `${count} ${count === 1 ? one : many}`;
-  const rows: Array<{
-    pane: string;
-    icon: IconName;
-    label: string;
-    detail: string;
-  }> = [
-    {
-      pane: "systems",
-      icon: "server",
-      label: "Systems",
-      detail: `${plural(review.totals.systems, "system")} in scope`,
-    },
-    {
-      pane: "processes",
-      icon: "layers",
-      label: "Processes",
-      detail: `${plural(review.totals.processes, "process", "processes")} in scope`,
-    },
-    {
-      pane: "policies",
-      icon: "file",
-      label: "Policies & procedures",
-      detail: `${plural(policies, "document")} in use`,
-    },
-    {
-      pane: "controls",
-      icon: "shield",
-      label: "Controls",
-      detail: `${plural(review.totals.controls, "control")} in scope`,
-    },
-  ];
-  if (done) {
-    // The server confirmed it: the scope is final and planning can start.
-    return (
-      <Drawer
-        title="Review and finalize"
-        icon="check"
-        busy={false}
-        onClose={close}
-        compact
-        footer={
-          <>
-            <span className="sc-count">
-              Work created for every control in scope
-            </span>
-            <span className="as-foot-actions">
-              <button type="button" className="btn-secondary" onClick={close}>
-                Stay here
-              </button>
-              <a className="btn" href={planningHref}>
-                Go to Planning
-                <UiIcon name="arrow" size={14} />
-              </a>
-            </span>
-          </>
-        }
-      >
-        <section className="fz-ready" role="status">
-          <span className="fz-ready-mark" aria-hidden="true">
-            <UiIcon name="check" size={20} />
-          </span>
-          <div>
-            <h3>Scope ready for planning</h3>
-            <p>
-              {plural(review.totals.controls, "control is", "controls are")}{" "}
-              approved for this engagement. The planning agent prepares their
-              test plans for review.
-            </p>
-          </div>
-        </section>
-      </Drawer>
-    );
-  }
-  async function finalize() {
-    setBusy(true);
-    setProblem(null);
-    const { status } = await call({
-      organization_id: organizationId,
-      project_id: projectId,
-      intent: "scope-finalize",
-      ...review.totals,
-    });
-    setBusy(false);
-    if (status !== 200) {
-      setProblem(
-        status === 409
-          ? "The scope changed since this review, or it is already final. Refresh to see it as it stands."
-          : status === 403
-            ? "Only the engagement's managers can finalize the scope."
-            : "The scope could not be finalized. Try again.",
-      );
-      return;
-    }
-    setDone(true);
-  }
-  const blocked =
-    review.blocked ??
-    (canFinalize
-      ? null
-      : "Only the engagement's managers can finalize the scope.");
-  return (
-    <Drawer
-      title="Review and finalize"
-      icon="check"
-      busy={busy}
-      onClose={drawer.close}
-      footer={
-        <>
-          {problem !== null ? (
-            <p className="as-problem" role="alert">
-              {problem}
-            </p>
-          ) : (
-            <span className="sc-count">
-              {blocked ?? "The work starts for every control in scope."}
-            </span>
-          )}
-          <span className="as-foot-actions">
-            <button
-              type="button"
-              className="btn-secondary"
-              disabled={busy}
-              onClick={drawer.close}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="btn"
-              disabled={busy || blocked !== null}
-              onClick={() => void finalize()}
-            >
-              {busy ? "Finalizing…" : "Confirm scope and start planning"}
-            </button>
-          </span>
-        </>
-      }
-    >
-      <p className="as-hint">Confirm the scope and start planning.</p>
-      <ul className="fz-rows" aria-label="Scope">
-        {rows.map((row) => (
-          <li key={row.pane}>
-            <span className={`fz-row-icon is-${row.pane}`} aria-hidden="true">
-              <UiIcon name={row.icon} size={16} />
-            </span>
-            <span className="fz-row-text">
-              <strong>{row.label}</strong>
-              <small>{row.detail}</small>
-            </span>
-            <button
-              type="button"
-              className="btn-secondary btn-sm"
-              disabled={busy}
-              onClick={() => edit(row.pane)}
-            >
-              Edit
-            </button>
-          </li>
-        ))}
-      </ul>
-      <dl className="as-review">
-        {review.byArea.map((area) => (
-          <div key={area.area}>
-            <dt>{area.label}</dt>
-            <dd>{area.controls}</dd>
-          </div>
-        ))}
-      </dl>
-      {review.notes.length > 0 ? (
-        <section className="fz-notes" aria-label="To look at">
-          <h4>Worth a look before finalizing</h4>
-          <ul>
-            {review.notes.map((note) => (
-              <li key={note}>
-                <UiIcon name="info" size={13} />
-                {note}
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-      <p className="as-note">
-        <UiIcon name="info" size={14} />
-        Finalizing creates each control&apos;s walkthrough, evidence request,
-        test, and review. Evidence requests are drafted for approval: nothing is
-        sent to the organization until an approver confirms it. Later scope
-        changes update the work at once.
       </p>
     </Drawer>
   );

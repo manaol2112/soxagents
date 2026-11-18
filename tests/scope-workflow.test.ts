@@ -3,7 +3,6 @@ import { describe, it } from "node:test";
 
 import {
   areaOf,
-  scopeReview,
   scopeSteps,
   selectionCategory,
 } from "../apps/web/src/controls-guide-model.ts";
@@ -15,8 +14,10 @@ import {
   wizardWrite,
 } from "../apps/web/src/onboarding-model.ts";
 
-// The Systems & Processes workflow's processes (SP3), control selection (SP4), and Review
-// and finalize (SP6), decided by the product owner on 24 October 2026.
+// The Systems & Processes workflow's processes (SP3) and control selection (SP4), decided by
+// the product owner on 24 October 2026. Review and finalize (SP6) is removed: on 17 November
+// 2026 the product owner decided "Remove the requirement to finalize the scope. Scope keeps
+// changing so it will never be finalized." Each control's work starts when it is selected.
 
 const org = "11111111-1111-7111-8111-111111111111";
 const project = "22222222-2222-7222-8222-222222222222";
@@ -40,7 +41,7 @@ function engagement(extra: Record<string, unknown> = {}): Onboarding {
       pbc_max_follow_ups: 2,
       templates_confirmed_at: null,
       kicked_off_at: "2026-10-25T10:00:00Z",
-      scope_finalized_at: null,
+
       version: 3,
     },
     applications: [
@@ -153,7 +154,7 @@ describe("the Add business process wizard's calls", () => {
   });
 });
 
-describe("selecting controls and finalizing the scope", () => {
+describe("selecting controls", () => {
   it("reads what a system or a process can select, then selects", () => {
     const options = wizardWrite({
       organization_id: org,
@@ -194,28 +195,21 @@ describe("selecting controls and finalizing the scope", () => {
     }
   });
 
-  it("finalizes only with the counts reviewed and at least one control", () => {
-    const write = wizardWrite({
-      organization_id: org,
-      project_id: project,
-      intent: "scope-finalize",
-      systems: 1,
-      processes: 1,
-      controls: 3,
-    });
-    assert.ok(!("error" in write));
-    assert.equal(write.path, `${base}/scope/finalize`);
-    assert.deepEqual(write.body, { systems: 1, processes: 1, controls: 3 });
-    assert.ok(
-      "error" in
-        wizardWrite({
-          organization_id: org,
-          project_id: project,
-          intent: "scope-finalize",
-          systems: 1,
-          processes: 0,
-          controls: 0,
-        }),
+  // Rewritten 17 November 2026 (the product owner: the scope is never finalized). Old:
+  // "finalizes only with the counts reviewed and at least one control" (scope-finalize wrote
+  // POST .../scope/finalize). New: the finalize step and its route are removed, so the
+  // intent is refused like any unknown one and nothing can call the route.
+  it("has no finalize write: the work starts when a control is selected", () => {
+    assert.deepEqual(
+      wizardWrite({
+        organization_id: org,
+        project_id: project,
+        intent: "scope-finalize",
+        systems: 1,
+        processes: 1,
+        controls: 3,
+      }),
+      { error: "invalid" },
     );
   });
 
@@ -231,44 +225,30 @@ describe("selecting controls and finalizing the scope", () => {
   });
 });
 
-describe("Review and finalize", () => {
-  it("cannot finalize before a control is selected, or before launch", () => {
-    assert.equal(
-      scopeReview(engagement()).blocked,
-      "Select at least one control first.",
-    );
-    assert.equal(
-      scopeReview(engagement({ started: false })).blocked,
-      "Launch the engagement from onboarding first.",
-    );
-  });
-
-  it("counts the scope and says what deserves a look", () => {
-    const review = scopeReview(
-      engagement({
-        controls: [
-          control("ITGC-AC-01", "ACCESS", { application_id: sap }),
-          control("HR-01", "HIRE_TO_RETIRE", { process_id: payroll }),
-          control("OUT-01", "ACCESS", {
-            application_id: sap,
-            included: false,
-          }),
-        ],
-      }),
-    );
-    assert.equal(review.blocked, null);
-    assert.deepEqual(review.totals, { systems: 1, processes: 1, controls: 2 });
+// Rewritten 17 November 2026 (the product owner: the scope is never finalized). Old:
+// "Review and finalize" checked scopeReview (blocked before a control or the launch; the
+// counts and notes the person confirmed) and that finalizing marked the workflow's fourth
+// step done. scopeReview fed only the Review and finalize drawer, which is removed with the
+// step, so its two tests are retired with it. New: selecting the controls is the last of
+// three steps, and the steps read nothing about a finalization.
+describe("the workflow's steps", () => {
+  it("ends with selecting the controls, with no finalize step", () => {
+    const empty = engagement();
     assert.deepEqual(
-      review.byArea.map((area) => `${area.area}:${area.controls}`),
-      ["ITGC:1", "ITAC:0", "IPE:0", "BUSINESS:1"],
+      scopeSteps(empty).map((step) => `${step.key}:${step.state}`),
+      ["systems:done", "processes:done", "controls:now"],
     );
-    assert.deepEqual(review.notes, [
-      "SAP ERP: no control selected yet in application controls.",
-      "Payroll is linked to no system.",
-    ]);
-  });
-
-  it("is the workflow's last step until the scope is final", () => {
+    const selected = engagement({
+      controls: [control("ITGC-AC-01", "ACCESS", { application_id: sap })],
+    });
+    assert.ok(
+      scopeSteps(selected).every((step) => step.state === "done"),
+      "every step is done once a control is selected",
+    );
+    assert.ok(
+      !scopeSteps(selected).some((step) => step.title.includes("final")),
+    );
+    // An engagement finalized under SP6 reads the same: the field is not read any more.
     const final = engagement({
       settings: {
         period_end: "2027-12-31",
@@ -277,10 +257,7 @@ describe("Review and finalize", () => {
         version: 3,
       },
     });
-    assert.equal(final.scopeFinalizedAt, "2026-10-26T10:00:00Z");
-    assert.equal(engagement().scopeFinalizedAt, null);
-    const steps = scopeSteps(final, true);
-    assert.equal(steps[3]?.state, "done");
+    assert.ok(!("scopeFinalizedAt" in final));
     assert.equal(engagement().processes[0]?.owner, "HR Director");
     assert.equal(engagement().processes[0]?.controlAreas, null);
   });

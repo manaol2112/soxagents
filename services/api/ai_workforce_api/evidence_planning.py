@@ -1807,7 +1807,11 @@ def _personal(key: str) -> bool:
 
 def _merge(group: list[RequirementPlan], depends_on: str | None = None) -> RequirementPlan:
     first = group[0]
-    if len(group) == 1 and (depends_on is None or first.depends_on == depends_on):
+    # The item waits for what the grouping says (depends_on), and for nothing else, as a
+    # merged item does: an item alone in its group keeps no wait of its own. A D&I item
+    # left waiting is never requested, since only a sample request releases one (ITGC-AC-01,
+    # 17 November 2026: the walkthrough waited for the policy and never went out).
+    if len(group) == 1 and first.depends_on == depends_on:
         return first
     # Personal data is decided by the library item's key (evidence_catalog): a merged item
     # holding one takes its key, so the request still travels as personal data.

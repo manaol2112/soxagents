@@ -517,9 +517,12 @@ def test_an_engagement_launches_before_its_controls_and_sets_them_up_in_controls
     controls = [c for c in loaded.json()["controls"] if c["included"]]
     assert controls
 
-    # Superseded by Review and finalize (decided by the product owner, SP6, 24 October
-    # 2026): the controls loaded wait, with no work, until a person finalizes the scope;
-    # finalizing gives each the work the kickoff gives every control, and the report task.
+    # Rewritten 17 November 2026 (the product owner: "Remove the requirement to finalize the
+    # scope. Scope keeps changing so it will never be finalized."). Old (SP6, 24 October
+    # 2026): the controls loaded waited, with no work, until a person finalized the scope,
+    # which then gave each the kickoff's work and the report task. New: there is no finalize
+    # step; loading the controls on the running engagement gives each its work at once, and
+    # the report task with the first control's work.
     def planned() -> tuple[int, int]:
         with connect(migrated.url) as connection:
             row = connection.execute(
@@ -531,15 +534,8 @@ def test_an_engagement_launches_before_its_controls_and_sets_them_up_in_controls
         assert row is not None
         return int(row[0]), int(row[1])
 
-    assert planned() == (0, 0)
-    systems = len(loaded.json()["applications"])
-    finalized = owner.post(
-        f"{base}/scope/finalize",
-        json={"systems": systems, "processes": 0, "controls": len(controls)},
-    )
-    assert finalized.status_code == 200, finalized.text
-    assert finalized.json()["settings"]["scope_finalized_at"] is not None
     assert planned() == (len(controls), 1)
+    assert "scope_finalized_at" not in loaded.json()["settings"]
     # Once the engagement has controls, the set is not replaced wholesale: neither the
     # library nor an RCM upload, since work is attached; controls change one at a time.
     again = owner.post(f"{base}/controls/load-library", json={"domains": ["CHANGE"]})

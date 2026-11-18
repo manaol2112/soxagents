@@ -64,24 +64,34 @@ const withSystem = () =>
   running({ applications: [{ id: appId, name: "SAP ERP", description: "" }] });
 
 describe("the Controls tour", () => {
-  it("walks the systems, the processes, the selection of controls, and the finalization", () => {
+  // Rewritten 17 November 2026 (the product owner: "Remove the requirement to finalize the
+  // scope. Scope keeps changing so it will never be finalized."). Old: the tour walked the
+  // systems, the processes, the selection of controls, then Review and finalize (SP6, a stop
+  // at ".sp-step.is-finalize"). New: no finalize stop; the last stop says the work starts
+  // when a control is selected and follows the scope as it changes.
+  it("walks the systems, the processes, and the selection of controls", () => {
     const steps = controlsTourSteps(running());
     assert.deepEqual(
       steps.map((step) => step.id),
-      ["welcome", "systems", "processes", "library", "finalize", "done"],
+      ["welcome", "systems", "processes", "library", "done"],
     );
     assert.deepEqual(steps[0]?.targets, [".cs-tiles"]);
     assert.deepEqual(steps[1]?.targets, ["#cs-pane-systems > :first-child"]);
     // The controls are selected on their own page: the tour points at the workflow's
-    // Select controls step, then at Review and finalize (SP6).
+    // Select controls step.
     assert.deepEqual(steps[3]?.targets, [".sp-step.is-controls"]);
-    assert.deepEqual(steps[4]?.targets, [".sp-step.is-finalize"]);
+    const words = steps.flatMap((step) => [step.title, ...step.body]).join(" ");
+    assert.doesNotMatch(words, /finali[sz]/i);
+    assert.match(
+      steps[4]?.body[0] ?? "",
+      /^Each control's work starts when it is selected/,
+    );
   });
 
   it("opens each stop's tab before pointing at it", () => {
     assert.deepEqual(
       controlsTourSteps(running()).map((step) => step.pane ?? null),
-      [null, "systems", "processes", "systems", null, null],
+      [null, "systems", "processes", "systems", null],
     );
   });
 
@@ -176,29 +186,28 @@ describe("the tiles and tabs of the first setup", () => {
   });
 });
 
+// Rewritten 17 November 2026 (the product owner: the scope is never finalized). Old: four
+// steps, the last "Review and finalize", current once controls were selected and done once
+// the scope was finalized. New: three steps; selecting the controls completes the workflow.
 describe("the Systems & Processes workflow", () => {
-  const states = (onboarding: Onboarding, finalized = false) =>
-    scopeSteps(onboarding, finalized).map(
-      (step) => `${step.key}:${step.state}`,
-    );
+  const states = (onboarding: Onboarding) =>
+    scopeSteps(onboarding).map((step) => `${step.key}:${step.state}`);
 
-  it("starts with the systems, then the processes, the controls, and the finalization", () => {
+  it("starts with the systems, then the processes and the controls", () => {
     assert.deepEqual(states(running()), [
       "systems:now",
       "processes:todo",
       "controls:todo",
-      "finalize:todo",
     ]);
     assert.deepEqual(states(withSystem()), [
       "systems:done",
       "processes:now",
       "controls:todo",
-      "finalize:todo",
     ]);
     assert.deepEqual(
-      scopeSteps(running(), false).map((step) => step.pane),
-      // Select controls opens the Controls page; finalizing has no tab of its own.
-      ["systems", "processes", null, null],
+      scopeSteps(running()).map((step) => step.pane),
+      // Select controls opens the Controls page.
+      ["systems", "processes", null],
     );
   });
 
@@ -219,13 +228,12 @@ describe("the Systems & Processes workflow", () => {
       // The fixture's control did not parse: nothing below would be meaningful.
       assert.fail("the fixture's control should be in scope");
     }
+    // Nothing is left to do once a control is selected: no finalize step waits.
     assert.deepEqual(states(selected), [
       "systems:done",
       "processes:todo",
       "controls:done",
-      "finalize:now",
     ]);
-    assert.equal(states(selected, true)[3], "finalize:done");
   });
 
   it("reads the related processes a person typed as a list", () => {

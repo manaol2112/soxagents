@@ -305,17 +305,32 @@ def register_control_context(
         plans = getattr(scheduler, "schedule_plan_runs", None)
         if plans is not None and model() is not None:
             from ai_workforce_api.evidence_plans import (
+                plan_to_follow,
                 queue_for_understanding,
+                refine_new_plan,
                 replan_for_new_attributes,
             )
 
+            # A control with no plan yet (selected under SP6 on an engagement whose scope was
+            # never finalized, until the worker's start catches it up) is planned by the rules
+            # once the agents have something to do on it, so the run below has a plan to ride
+            # on (18 November 2026).
+            made, made_drafts = (
+                (False, [])
+                if owner is None
+                else plan_to_follow(connection, owner[0], project_id, control_id, actor)
+            )
+            if made_drafts:
+                _after_commit(lambda: schedule(drafts, made_drafts))
             # Control Understanding just became complete, or changed once complete: the
             # attribute agent and the planner follow it in the same run, so the attributes
             # and their criteria are prepared before a person opens the Attributes step
             # (product owner, 12 November 2026). One run at a time for the control.
-            planned = queue_for_understanding(
-                connection, project_id, control_id
-            ) or replan_for_new_attributes(connection, control_id)
+            planned = (
+                queue_for_understanding(connection, project_id, control_id)
+                or replan_for_new_attributes(connection, control_id)
+                or (refine_new_plan(connection, control_id) if made else None)
+            )
             if planned is not None:
                 _after_commit(lambda: plans([planned]))
         # The save may have been the last thing the D&I requests list waited for (the
@@ -618,6 +633,15 @@ def register_control_context(
             if plans is None or model() is None:
                 understanding_once.complete(c, project_id, control_id, reviewing=False)
                 return _body(c, project_id, control_id)
+            # The review rides on the control's plan run: a control with no plan yet is
+            # planned by the rules first, as a save does (changed; 18 November 2026).
+            from ai_workforce_api.evidence_plans import plan_to_follow
+            from ai_workforce_api.pbc_drafting import DraftScheduler, schedule
+
+            _made, made_drafts = plan_to_follow(c, organization_id, project_id, control_id, p.id)
+            if made_drafts:
+                drafter = scheduler if isinstance(scheduler, DraftScheduler) else None
+                _after_commit(lambda: schedule(drafter, made_drafts))
             planned = understanding_review.follow(c, project_id, control_id)
             if planned is not None:
                 _after_commit(lambda: plans([planned]))

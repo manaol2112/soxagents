@@ -1,5 +1,5 @@
-"""The Systems & Processes workflow's processes, control selection, and finalization (SP3,
-SP4, SP6, decided by the product owner on 24 October 2026).
+"""The Systems & Processes workflow's processes and control selection (SP3 and SP4, decided
+by the product owner on 24 October 2026).
 
 - SP3: a business process is added in one step with its description, owner, the systems it
   runs on (one of them primary), and its control areas: the agent's suggestion kept apart
@@ -7,11 +7,12 @@ SP4, SP6, decided by the product owner on 24 October 2026).
 - SP4: controls are selected from the firm's library for one system or one process at a
   time. A system's are its instances of the library standards; a process's are the library
   controls of the cycle it is based on.
-- SP6: the engagement's work starts when a person reviews and finalizes the scope. Until
-  then, selecting or removing controls creates no work (scope_changes.reconcile_scope reads
-  scope_finalized); finalizing creates it for everything in scope, and later changes are
-  reconciled at once, as before. An engagement launched with controls is final from its
-  launch.
+- SP6, Review and finalize, is retired (the product owner, 17 November 2026: "Remove the
+  requirement to finalize the scope. Scope keeps changing so it will never be finalized.").
+  Old: the engagement's work started when a person finalized the scope (`POST
+  .../scope/finalize`), and selecting controls before then created no work. New: there is
+  no finalize step; a control selected on a running engagement gets its work at once and a
+  control removed has its open work cancelled (scope_changes.reconcile_scope).
 """
 
 from collections.abc import Callable
@@ -41,15 +42,12 @@ from ai_workforce_api.onboarding import (
     OnboardingBody,
     OnboardingState,
     _audit,
-    _audit_target,
     _authorize_setup,
-    _instances,
     _reset_templates,
     _snapshot,
 )
 from ai_workforce_api.pbc_drafting import DraftScheduler
-from ai_workforce_api.schedule import KIND_PHASES
-from ai_workforce_api.scope_changes import reconcile_scope, scope_finalized, started
+from ai_workforce_api.scope_changes import reconcile_scope
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.system_scoping import include_control
 from ai_workforce_api.system_setup import AREAS, Area, AreaSuggestion, AreaSuggestions, _count
@@ -398,9 +396,9 @@ def select_controls(
     project_id: UUID,
     body: ControlSelection,
 ) -> OnboardingBody:
-    """Bring the chosen library controls into scope for one system or process. Before the
-    scope is finalized this creates no work; after, the work is reconciled as for any other
-    scope change."""
+    """Bring the chosen library controls into scope for one system or process. On a running
+    engagement each one gets its work at once, as for any other scope change (no finalize
+    step since 17 November 2026); a control already in scope gets none again."""
     _authorize_setup(connection, principal, organization_id, project_id, after_start=True)
     kind, target_id, _name, cycle, _areas = _target(
         connection, project_id, body.system_id, body.process_id
@@ -429,95 +427,6 @@ def select_controls(
         _audit(
             cursor, organization_id, project_id, principal.id, "onboarding.controls_selected",
             {"target": kind.lower(), "target_id": str(target_id), "library_keys": keys},
-        )  # fmt: skip
-    reconcile_scope(connection, organization_id, project_id, principal.id)
-    return _snapshot(connection, organization_id, project_id)
-
-
-# SP6: review and finalize
-
-
-class ScopeFinalization(BaseModel):
-    # The person confirms the scope as reviewed: the counts shown on the page.
-    systems: int = Field(ge=0)
-    processes: int = Field(ge=0)
-    controls: int = Field(ge=1)
-
-
-def finalize_scope(
-    connection: psycopg.Connection[Any],
-    principal: Principal,
-    organization_id: UUID,
-    project_id: UUID,
-    body: ScopeFinalization,
-) -> OnboardingBody:
-    """Confirm the scope and start planning: the work of every control in scope is created
-    now, all at once. The counts the person reviewed must still match."""
-    _authorize_setup(connection, principal, organization_id, project_id, after_start=True)
-    if not started(connection, project_id):
-        raise OnboardingState("launch the engagement first")
-    if scope_finalized(connection, project_id):
-        raise OnboardingState("the scope is already final")
-    counts = connection.execute(
-        """
-        SELECT (SELECT count(*) FROM engagement_applications
-                WHERE project_id = %s AND out_of_scope_at IS NULL),
-               (SELECT count(*) FROM engagement_processes WHERE project_id = %s),
-               (SELECT count(*) FROM engagement_controls WHERE project_id = %s AND included)
-        """,
-        (project_id, project_id, project_id),
-    ).fetchone()
-    assert counts is not None
-    if int(counts[2]) == 0:
-        raise OnboardingState("select at least one control")
-    if (int(counts[0]), int(counts[1]), int(counts[2])) != (
-        body.systems, body.processes, body.controls,
-    ):  # fmt: skip
-        raise OnboardingState("the scope changed since it was reviewed")
-    instances = _instances(connection, organization_id, project_id)
-    with transaction(connection) as cursor:
-        claimed = cursor.execute(
-            """
-            UPDATE engagement_settings
-            SET scope_finalized_at = clock_timestamp(), scope_finalized_by = %s,
-                version = version + 1, updated_at = clock_timestamp()
-            WHERE project_id = %s AND scope_finalized_at IS NULL
-            RETURNING project_id
-            """,
-            (principal.id, project_id),
-        ).fetchone()
-        if claimed is None:
-            raise OnboardingState("the scope is already final")
-        # Launched with no controls, the engagement has no report task yet: the reviews
-        # created below wait for it.
-        report = cursor.execute(
-            "SELECT 1 FROM tasks WHERE project_id = %s AND plan_kind = 'report' "
-            "AND status <> 'CANCELLED'",
-            (project_id,),
-        ).fetchone()
-        if report is None:
-            row = cursor.execute(
-                """
-                INSERT INTO tasks (
-                    organization_id, project_id, title, description, status, priority,
-                    agent_instance_id, phase_key, plan_kind
-                )
-                VALUES (%s, %s, %s, %s, 'READY', 'NORMAL', %s, %s, 'report')
-                RETURNING id
-                """,
-                (organization_id, project_id, "Draft findings and the engagement report",
-                 "Summarize exceptions and deficiencies from reviewed work only.",
-                 instances.get("reporting-analyst"), KIND_PHASES["report"]),
-            ).fetchone()  # fmt: skip
-            if row is None:
-                raise NotVisible()
-            _audit_target(
-                cursor, organization_id, project_id, principal.id, "task.created", "task",
-                row[0], {"status": "READY", "source": "scope_finalized"},
-            )  # fmt: skip
-        _audit(
-            cursor, organization_id, project_id, principal.id, "onboarding.scope_finalized",
-            {"systems": body.systems, "processes": body.processes, "controls": body.controls},
         )  # fmt: skip
     reconcile_scope(connection, organization_id, project_id, principal.id)
     return _snapshot(connection, organization_id, project_id)
@@ -576,13 +485,5 @@ def register_scope_setup(
         organization_id: UUID, project_id: UUID, body: ControlSelection, request: Request
     ) -> OnboardingBody:
         result = run(request, lambda c, p: select_controls(c, p, organization_id, project_id, body))
-        drafts(project_id)
-        return result
-
-    @app.post(f"{base}/scope/finalize")
-    def scope_finalize(
-        organization_id: UUID, project_id: UUID, body: ScopeFinalization, request: Request
-    ) -> OnboardingBody:
-        result = run(request, lambda c, p: finalize_scope(c, p, organization_id, project_id, body))
         drafts(project_id)
         return result
