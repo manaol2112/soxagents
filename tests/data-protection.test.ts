@@ -35,6 +35,7 @@ function run(script: string, args: string[], env: Record<string, string>) {
     cwd: dir, // no .env here: only the variables below are read
     encoding: "utf8",
     env: {
+      NODE_ENV: "test",
       PATH: process.env.PATH ?? "",
       COMPOSE: `bash ${fake}`,
       BACKUP_DIR: join(dir, "backups").replaceAll("\\", "/"),

@@ -1,9 +1,16 @@
 name: CI
 
+# Runs on the branches work is actually done on, and on every pull request. Until 17 Nov
+# 2026 it ran on main only, which no one had pushed to since 11 Oct.
 on:
   push:
-    branches: [main]
+    branches: [main, windows-dev, macbook-pro-dev, governance]
   pull_request:
+
+# A newer push to the same branch replaces the run in progress.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -59,6 +66,11 @@ jobs:
           EMAIL_LIVE_SEND_ENABLED=false
           EOF
           unset password
+
+      # The tests create their own databases on this server (services/api/tests/conftest.py).
+      # Only PostgreSQL is started: Temporal and the object store are not needed by the gate.
+      - name: Start PostgreSQL
+        run: docker compose up -d --wait --wait-timeout 180 postgres
 
       - name: Test
         run: make test
