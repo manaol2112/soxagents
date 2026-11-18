@@ -467,8 +467,19 @@ def test_a_waiting_item_with_its_own_evidence_is_judged_and_counted_as_a_request
     ]
     assert _design_draft(case) == "PENDING"
 
-    # Its file unlinked: the judgment that rested on it alone is gone, and it waits again.
+    # 18 November 2026 (E1, evidence reliance; product owner): the file an item was
+    # accepted with stays on it until that decision is changed. Old: the unlink went
+    # through and took the acceptance with it; new: the unlink is refused naming the
+    # acceptance, the person reopens the decision, and then unlinks.
     link = next(f for f in done["files"] if f["link_id"] is not None)
+    kept = case.client.post(
+        f"{judge}/{waiting['id']}/files/{link['link_id']}/remove",
+        json={"reason": "Linked to the wrong item.", "version": link["link_version"]},
+    )
+    assert kept.status_code == 409
+    assert "was accepted with it; change that decision first" in kept.json()["detail"]
+    assert decide(waiting["id"], "NOT_REVIEWED").status_code == 200
+    # Its file unlinked: no judgment is left on it, and it waits again.
     removed = case.client.post(
         f"{judge}/{waiting['id']}/files/{link['link_id']}/remove",
         json={"reason": "Linked to the wrong item.", "version": link["link_version"]},
@@ -690,7 +701,25 @@ def test_an_item_that_loses_its_last_file_never_reads_accepted_on_a_different_on
     hand.link(first)
     assert hand.decide("ACCEPTED").status_code == 200
     hand.link(later)
-    hand.unlink(first)
+    # 18 November 2026 (E1, evidence reliance; product owner): the first file was accepted
+    # with, so it stays on the item until that decision changes. Old: the unlink went
+    # through, the acceptance standing on the later file; new: the unlink is refused. The
+    # rest of this test starts from the record the earlier rule left, set directly: the
+    # first file's link removed, the acceptance standing on the later file alone.
+    link = next(f for f in hand.item()["files"] if f["file_id"] == first)
+    refused = case.client.post(
+        f"{hand.judge}/{hand.item_id}/files/{link['link_id']}/remove",
+        json={"reason": "Linked to the wrong item.", "version": link["link_version"]},
+    )
+    assert refused.status_code == 409
+    assert "was accepted with it; change that decision first" in refused.json()["detail"]
+    with connect(case.database.url) as connection:
+        connection.execute(
+            "UPDATE evidence_requirement_files SET status = 'REMOVED', removed_by = %s, "
+            "removed_at = clock_timestamp(), removed_reason = 'Linked to the wrong item.', "
+            "version = version + 1 WHERE requirement_id = %s AND evidence_file_id = %s",
+            (owner, UUID(hand.item_id), UUID(first)),
+        )
     assert (hand.item()["state"], hand.on_record()) == ("ACCEPTED", ("ACCEPTED", owner))
 
     # The file left came after the acceptance, so it can be withdrawn. The item then has
@@ -712,20 +741,31 @@ def test_an_item_that_loses_its_last_file_never_reads_accepted_on_a_different_on
     hand.link(third)
     assert (hand.item()["state"], hand.on_record()) == ("RECEIVED", ("NOT_REVIEWED", None))
 
-    # The same when the last file is replaced: a person's link is the old file's own.
+    # The same when the last file is replaced: the judgment on the old file is not carried.
+    # 18 November 2026 (E1, evidence reliance; product owner): a person's link carries to
+    # the replacement. Old: the item was left with no file (the link was the old file's
+    # own); new: the replacement is linked to the item, never judged. The judgment reset
+    # and its audit event are unchanged.
     assert hand.decide("INSUFFICIENT", "The approval date is missing.").status_code == 200
     fourth = hand.file()
     hand.link(fourth)
     hand.unlink(third)
-    assert hand.replace(fourth).status_code == 200
-    assert (hand.item()["files"], hand.on_record()) == ([], ("NOT_REVIEWED", None))
+    replaced = hand.replace(fourth)
+    assert replaced.status_code == 200
+    assert (
+        [(f["file_id"], f["via"]) for f in hand.item()["files"]],
+        hand.on_record(),
+    ) == ([(replaced.json()["file_id"], "LINK")], ("NOT_REVIEWED", None))
     assert resets()[1:] == [
         (owner, {"sufficiency": "NOT_REVIEWED", "was": "INSUFFICIENT", "by": "FILE_REPLACED",
                  "evidence_file_id": fourth}),
     ]  # fmt: skip
 
     # A record left by the earlier behaviour: an acceptance with no file under it. It is
-    # hidden while the item has none, and it is taken off as a file is linked.
+    # hidden while the item has none, and it is taken off as a file is linked. (18
+    # November 2026: the carried link is taken off first, so the item has none.)
+    case.read_files()
+    hand.unlink(replaced.json()["file_id"])
     with connect(case.database.url) as connection:
         connection.execute(
             "UPDATE evidence_requirements SET sufficiency = 'ACCEPTED', sufficiency_by = %s, "

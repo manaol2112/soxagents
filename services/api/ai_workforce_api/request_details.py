@@ -40,6 +40,7 @@ from ai_workforce_api.authorization import (
 from ai_workforce_api.db import transaction
 from ai_workforce_api.evidence import MAX_BYTES, StoreFactory, _filename, preview_type
 from ai_workforce_api.evidence_intake import clean_name, clean_type
+from ai_workforce_api.evidence_withdrawn import in_force
 from ai_workforce_api.pbc import _COLUMNS as _PBC_COLUMNS
 from ai_workforce_api.pbc import PbcBody, PbcState
 from ai_workforce_api.pbc import _body as _pbc_body
@@ -2013,15 +2014,16 @@ def _sources(
     project_id: UUID,
     request_id: UUID,
 ) -> SourcesBody:
-    """What can be attached: this engagement's files, and the prior-year workpapers of the
-    same control from the same client's earlier engagements the person can read."""
+    """What can be attached: this engagement's files in force (a withdrawn file is not
+    offered; E1, 18 November 2026), and the prior-year workpapers of the same control from
+    the same client's earlier engagements the person can read."""
     _authorize(connection, principal, Action.TASK_READ, organization_id, project_id)
     pbc = _read(connection, organization_id, project_id, request_id)
     files = connection.execute(
-        """
+        f"""
         SELECT f.id, f.file_name, f.size_bytes, f.created_at
         FROM evidence_files f
-        WHERE f.project_id = %s AND f.organization_id = %s
+        WHERE f.project_id = %s AND f.organization_id = %s AND NOT {in_force("f")}
           AND NOT EXISTS (
               SELECT 1 FROM request_attachments a
               WHERE a.pbc_request_id = %s AND a.evidence_file_id = f.id
@@ -2029,7 +2031,7 @@ def _sources(
           )
         ORDER BY f.created_at DESC
         LIMIT 200
-        """,
+        """,  # noqa: S608
         (project_id, organization_id, request_id),
     ).fetchall()
     papers = [

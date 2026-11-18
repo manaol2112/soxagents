@@ -1417,6 +1417,13 @@ def _reanalyze(
             raise AnalysisState("review is signed off")
         if is_withdrawn(cursor, UUID(str(current[3]))):
             raise AnalysisState("the file is withdrawn")
+        # A new reading redoes the coverage, the review and the passages that decisions on
+        # the file rest on: refused while any of them stands (E1, 18 November 2026).
+        from ai_workforce_api.evidence_reliance import refusal
+
+        relied = refusal(cursor, project_id, UUID(str(current[3])), "REREAD")
+        if relied is not None:
+            raise AnalysisState(relied)
         restart_analysis(cursor, analysis_id, principal.id)
         # An upload that waits for a person is matched again with the new reading.
         cursor.execute(

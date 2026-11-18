@@ -2165,7 +2165,7 @@ def in_hand_without_request(status: str, phase: str | None) -> bool:
 # set_sufficiency, for the redraft of the design workpaper, a request's move to received
 # once every such item is accepted (_design_redraft, _received_when_accepted,
 # evidence_receipts), and for the file an item was accepted with, which is not withdrawn
-# or replaced (evidence_versions._accepted_with).
+# or replaced (evidence_reliance._accepted).
 JUDGEABLE_SQL = """
     (q.status = 'REQUESTED'
      OR ((q.status = 'PLANNED' OR (q.status = 'AWAITING_DEPENDENCY' AND q.phase = 'DESIGN'))
@@ -5810,29 +5810,35 @@ def _received_when_accepted(
     )  # fmt: skip
 
 
-def _has_own_evidence(cursor: psycopg.Cursor[Any], requirement_id: UUID) -> bool:
+def _has_own_evidence(
+    cursor: psycopg.Cursor[Any], requirement_id: UUID, excluding: UUID | None = None
+) -> bool:
     """Whether a file serves the item itself: one on its request that serves it (filed for
     it, or for the request and not read as missing it), one a sibling control shares for
-    it, or one a person linked to it. The test the plan uses for an item's files."""
+    it, or one a person linked to it. The test the plan uses for an item's files. With
+    `excluding`, as if that file were out of force already (what a withdrawal would leave,
+    read before it: evidence_reliance.impact)."""
     row = cursor.execute(
         """
         SELECT 1 FROM evidence_requirements q
-        WHERE q.id = %s AND (
+        WHERE q.id = %(item)s AND (
             EXISTS (
                 SELECT 1 FROM evidence_file_links l
                 LEFT JOIN evidence_analyses a ON a.evidence_file_id = l.evidence_file_id
-                WHERE l.pbc_request_id = q.pbc_request_id AND {SERVES})
-            OR EXISTS ({SHARED})
+                WHERE l.pbc_request_id = q.pbc_request_id AND {SERVES}
+                  AND l.evidence_file_id IS DISTINCT FROM %(skip)s::uuid)
+            OR EXISTS ({SHARED} AND f.id IS DISTINCT FROM %(skip)s::uuid)
             OR EXISTS (
                 SELECT 1 FROM evidence_requirement_files ef
                 JOIN evidence_file_links l
                   ON l.evidence_file_id = ef.evidence_file_id
                  AND l.engagement_control_id = ef.engagement_control_id
-                WHERE ef.requirement_id = q.id AND ef.status = 'LINKED'))
+                WHERE ef.requirement_id = q.id AND ef.status = 'LINKED'
+                  AND ef.evidence_file_id IS DISTINCT FROM %(skip)s::uuid))
         """.replace("{SERVES}", request_file_serves("l.evidence_file_id")).replace(
             "{SHARED}", shared_from_sibling("1")
         ),
-        (requirement_id,),
+        {"item": requirement_id, "skip": excluding},
     ).fetchone()
     return row is not None
 
@@ -5854,14 +5860,17 @@ def _linked(cursor: psycopg.Cursor[Any], requirement_id: UUID) -> bool:
     )
 
 
-def unsupported_judgment(cursor: psycopg.Cursor[Any], requirement_id: UUID) -> str | None:
+def unsupported_judgment(
+    cursor: psycopg.Cursor[Any], requirement_id: UUID, excluding: UUID | None = None
+) -> str | None:
     """The judgment on record for an item that no file of its own supports (the file it
     was judged on went: withdrawn, replaced, or filed elsewhere), or None. Such a judgment
     is hidden while the item has no file, and would read again, on a file nobody judged,
     once another is linked (independent review of 10.15, 15 November 2026): an acceptance
     of any item, and any judgment of an item in hand without a request (a requested item
     found short with nothing of its own is a judgment of that, and stays). To be read
-    before a file is linked to the item; `reset_judgment` then takes it off the record."""
+    before a file is linked to the item; `reset_judgment` then takes it off the record.
+    With `excluding`, as if that file were out of force already (_has_own_evidence)."""
     row = cursor.execute(
         "SELECT status, phase, sufficiency FROM evidence_requirements WHERE id = %s",
         (requirement_id,),
@@ -5870,7 +5879,7 @@ def unsupported_judgment(cursor: psycopg.Cursor[Any], requirement_id: UUID) -> s
         return None
     if row[2] != "ACCEPTED" and not in_hand_without_request(str(row[0]), str(row[1])):
         return None
-    return None if _has_own_evidence(cursor, requirement_id) else str(row[2])
+    return None if _has_own_evidence(cursor, requirement_id, excluding) else str(row[2])
 
 
 def reset_judgment(cursor: psycopg.Cursor[Any], requirement_id: UUID) -> None:
@@ -5903,7 +5912,7 @@ def reset_judgments_left_without_file(
     (`unsupported_judgment`), in the same transaction, with one audit event per item and
     the person who moved the file as its actor. Before, the judgment stayed on record,
     hidden, and read again as soon as a different file was linked. The file an item was
-    accepted with cannot leave at all (evidence_versions._accepted_with); this is for a
+    accepted with cannot leave at all (evidence_reliance._accepted); this is for a
     file that came after the acceptance. Returns the items reset."""
     found: list[UUID] = []
     for requirement_id, plan_id in cursor.execute(
@@ -6076,6 +6085,16 @@ def unlink_file(
             raise NotVisible()
         if int(link[0]) != body.version:
             raise PlanState("the link changed")
+        if linked_file is not None:
+            # Evidence a person relied on for this item stays until that is changed (E1,
+            # product owner, 18 November 2026): before, nothing guarded an unlink.
+            from ai_workforce_api.evidence_reliance import refusal
+
+            refused = refusal(
+                cursor, project_id, UUID(str(linked_file[0])), "UNLINK", requirement_id
+            )
+            if refused is not None:
+                raise PlanState(refused)
         cursor.execute(
             """
             UPDATE evidence_requirement_files

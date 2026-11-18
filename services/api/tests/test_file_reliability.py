@@ -519,56 +519,64 @@ def test_a_later_check_never_ends_a_decision_and_the_files_going_does(
     log_decision = _on(on_log.json(), log)["decision"]["id"]
     assert bench.audit(reliability.ENDED_WITH_FILE, bench.item_id) == []
 
-    # The log is withdrawn: its decision ends in that same act, naming nobody; the
-    # ticket's stands.
+    # 18 November 2026 (E1, evidence reliance; product owner): a file a person's
+    # reliability decision stands on stays until that decision is changed. Old: the log was
+    # withdrawn (and later the ticket replaced) and its decision ended as FILE_GONE in that
+    # same act, naming nobody; new: the withdrawal and the replacement are refused, naming
+    # the decision, and nothing ends. The person reopens the decision first; only then does
+    # the file leave. (A withdrawal or replacement can no longer end a standing decision,
+    # so the FILE_GONE-by-withdrawal assertions are retired with that path.)
+    kept = bench.owner.post(
+        f"{bench.base}/evidence-files/{log}/withdraw", json={"reason": "Sent in error"}
+    )
+    assert kept.status_code == 409
+    assert kept.json()["detail"].startswith(
+        "the file cannot be withdrawn: a person's decision on whether it is reliable stands"
+    )
+    assert [r["ended_at"] for r in _rows(bench)] == [None, None]
+    assert _reopen(bench, log, log_decision).status_code == 200
     withdrawn = bench.owner.post(
         f"{bench.base}/evidence-files/{log}/withdraw", json={"reason": "Sent in error"}
     )
     assert withdrawn.status_code == 200, withdrawn.text
     rows = {r["id"]: r for r in _rows(bench)}
-    gone = rows[log_decision]
-    assert (gone["ended_as"], gone["ended_by"], gone["ended_reason"], gone["version"]) == (
-        "FILE_GONE", None, "The file is no longer in force on this request.", 2,
-    )  # fmt: skip
+    assert rows[log_decision]["ended_as"] == "REOPENED"
     assert rows[ticket_decision]["ended_at"] is None
-    [(actor, agent, event)] = bench.audit(reliability.ENDED_WITH_FILE, bench.item_id)
-    assert (actor, agent) == (None, None)
-    assert event == {
-        "control_id": bench.control, "file_id": log, "decision_id": log_decision,
-        "kind": "NOT_RELIED_ON", "ended_as": "FILE_GONE",
-        "changed_by": str(bench.team["owner_id"]),
-    }  # fmt: skip
+    assert bench.audit(reliability.ENDED_WITH_FILE, bench.item_id) == []
     # Back on the ticket alone: the first check of that basis is copied, and the log has
     # no entry there.
     alone = bench.entry()
     assert alone["status"] == "REVIEWED"
     assert [item["file_id"] for item in alone["file_reliability"]] == [ticket]
-    # Restoring the file does not bring the decision back: the check of both files is
-    # current again, and the log's decision is in its history only.
+    # Restoring the file does not bring the decision back: the log's decision is in its
+    # history only.
     restored = bench.owner.post(
         f"{bench.base}/evidence-files/{log}/restore", json={"reason": "It was the right file."}
     )
     assert restored.status_code == 200, restored.text
-    assert [r["ended_at"] is None for r in _rows(bench)] == [True, False]
     shown = bench.entry()
     assert shown["status"] == "REVIEWED"
     item = _on(shown, log)
     assert item["decision"] is None
-    assert [h["ended_as"] for h in item["history"]] == ["FILE_GONE"]
-    assert item["history"][0]["ended_by_name"] is None
+    assert [h["ended_as"] for h in item["history"]] == ["REOPENED"]
     assert _on(shown, ticket)["decision"]["id"] == ticket_decision
 
-    # The ticket is replaced: its decision ends in that same act.
-    replaced = bench.owner.post(
-        f"{bench.base}/evidence-files/{ticket}/replace",
-        params={"name": "ticket REQ-1041 v2.txt", "reason": "Corrected export"},
-        content=(TICKET + "Closed on 2026-03-05\n").encode(),
-        headers={"content-type": "text/plain"},
-    )
+    # The ticket's replacement is refused while its decision stands, and goes through once
+    # the decision is reopened.
+    def replace() -> Any:
+        return bench.owner.post(
+            f"{bench.base}/evidence-files/{ticket}/replace",
+            params={"name": "ticket REQ-1041 v2.txt", "reason": "Corrected export"},
+            content=(TICKET + "Closed on 2026-03-05\n").encode(),
+            headers={"content-type": "text/plain"},
+        )
+
+    assert replace().status_code == 409
+    assert _reopen(bench, ticket, ticket_decision).status_code == 200
+    replaced = replace()
     assert replaced.status_code == 200, replaced.text
-    ended = {r["id"]: r for r in _rows(bench)}[ticket_decision]
-    assert (ended["ended_as"], ended["ended_by"]) == ("FILE_GONE", None)
-    assert len(bench.audit(reliability.ENDED_WITH_FILE, bench.item_id)) == 2
+    assert {r["id"]: r for r in _rows(bench)}[ticket_decision]["ended_as"] == "REOPENED"
+    assert bench.audit(reliability.ENDED_WITH_FILE, bench.item_id) == []
     assert all(r["ended_at"] is not None for r in _rows(bench))
 
 
