@@ -17,7 +17,7 @@ else
 BASH := bash
 endif
 
-.PHONY: help toolchain check install start free-ports go awake stop status format lint typecheck api web migrate test test-fast test-critical test-demo test-changed test-full ci reset
+.PHONY: help toolchain check install backup restore backup-verify start free-ports go awake stop status format lint typecheck api web migrate test test-fast test-critical test-demo test-changed test-full ci reset
 
 help:
 	@echo "make toolchain  Show pinned Node.js, pnpm, Python, and uv versions"
@@ -41,7 +41,10 @@ help:
 	@echo "make test-changed   Tests for the files changed since main (BASE=<ref> to compare)"
 	@echo "make test-full  The entire legacy Python suite (only when the owner asks)"
 	@echo "make ci         Run lint, typecheck, and test"
-	@echo "make reset      Stop PostgreSQL and delete the local data volume"
+	@echo "make backup     Back up a database to backups/ (DB=name; default: DATABASE_URL's)"
+	@echo "make restore    Restore a backup into a NEW database (FILE=... TARGET=...)"
+	@echo "make backup-verify  Prove a backup restores, on a scratch database"
+	@echo "make reset      Delete ALL local data; needs CONFIRM=delete-local-data and backs up first"
 
 toolchain:
 	@echo "Node.js $(NODE_VERSION)"
@@ -194,9 +197,25 @@ test-full: require-env
 
 ci: lint typecheck test
 
+# Data protection (docs/operations.md, "Backup and restore"). A backup is one database,
+# written to backups/ (git-ignored, not encrypted). A restore only goes into a database
+# that does not exist yet. backup-verify proves a backup restores, on a scratch database.
+#   make backup [DB=name]     make restore FILE=backups/x.dump TARGET=new_name
+#   make backup-verify [DB=name]
+backup: require-env
+	@"$(BASH)" scripts/backup.sh backup
+
+restore: require-env
+	@"$(BASH)" scripts/backup.sh restore
+
+backup-verify: require-env
+	@"$(BASH)" scripts/backup.sh verify
+
+# Deletes every local database and the local object store. It refuses without
+# CONFIRM=delete-local-data, refuses outside a development APP_ENV without a second
+# variable, and backs every database up first (scripts/reset.sh).
 reset: require-env
-	@echo "Deleting the local PostgreSQL volume ai_workforce_postgres_data."
-	$(COMPOSE) down -v --remove-orphans
+	@"$(BASH)" scripts/reset.sh
 
 require-env:
 	@test -f .env || (echo "Missing .env. Copy .env.example and set the PostgreSQL values in docs/development.md."; exit 1)
