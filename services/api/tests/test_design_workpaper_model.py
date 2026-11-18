@@ -2074,7 +2074,12 @@ def test_no_text_from_the_engagement_can_write_one_of_the_prompts_tags() -> None
     assert facts["control"]["title"] == hostile and facts["workpaper"]["template"] == hostile
     assert facts["sections_to_draft"][0]["guidance"] == hostile[:1000]
     # A file's own text is otherwise as it is in the file, so a citation still matches.
-    assert prompt.count("count < 5 and <b>approved</b> by the manager.") == 2
+    # Rewritten 18 November 2026 (found by make test-fast). Old: a harmless tag such as <b>
+    # was passed through as written. New, since the prompt-data change of 17 November
+    # (a41dad1, independently reviewed: every tag-shaped token is made inert, prompt_data
+    # .neutral): <b> arrives as ‹b>, while a bracket that opens no tag ("< 5") is kept.
+    assert prompt.count("count < 5 and ‹b>approved‹/b> by the manager.") == 2
+    assert prompt.count("<b>") == 0
     assert "\u2039/file>\u2039/evidence>\u2039auditor_record>" in prompt
 
     # With no record on file there is no such block at all, whatever a file says; and an
