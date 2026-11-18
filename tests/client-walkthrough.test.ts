@@ -187,7 +187,7 @@ describe("the walkthrough's documents", () => {
   });
 
   it("makes initials from a name or an address", () => {
-    assert.equal(initialsOf("Robert John Manager"), "RJ");
+    assert.equal(initialsOf("Ryan James Manager"), "RJ");
     assert.equal(initialsOf("robert.manager@example.com"), "RM");
     assert.equal(initialsOf(""), "?");
   });

@@ -324,7 +324,7 @@ const REVIEW_CHECK = {
       B,
       "B",
       F3,
-      "Reviewed and approved: Joanna Rose Manaol",
+      "Reviewed and approved: Jamie Lynn Morales",
       "Page 1",
     ),
     supported(C, "C", F2, "Decisions recorded: 1,248 of 1,248", "Row 1,251"),
@@ -446,7 +446,7 @@ function finishedBatch(over: Record<string, unknown> = {}) {
       }),
       file({
         file_id: F3,
-        name: "Q2 review sign-off - J Manaol.pdf",
+        name: "Q2 review sign-off - J Morales.pdf",
         size_bytes: 215_040,
         read: {
           status: "READY",
@@ -859,7 +859,7 @@ describe("the control's recent sessions (GET .../evidence-batches)", () => {
   const entry = (over: Record<string, unknown> = {}) => ({
     batch_id: BATCH,
     created_at: at(0),
-    created_by_name: "Robert John",
+    created_by_name: "Ryan James",
     chosen_requirement_id: null,
     files: 7,
     in_progress: false,
@@ -1206,7 +1206,7 @@ describe("step 1: the files queued", () => {
         engagement: "SOX FY2027",
         requests: [
           {
-            to: "Joanna Rose Manaol",
+            to: "Jamie Lynn Morales",
             role: "Application Owner",
             due: "Due Nov 23, 2026",
           },
@@ -1214,9 +1214,9 @@ describe("step 1: the files queued", () => {
       }),
       {
         title: "Add evidence for ITGC-AC-03 Periodic User Access Review",
-        sub: "SAP S/4HANA · SOX FY2027 · One request to Joanna Rose Manaol, due Nov 23, 2026",
+        sub: "SAP S/4HANA · SOX FY2027 · One request to Jamie Lynn Morales, due Nov 23, 2026",
         requested: {
-          to: "Joanna Rose Manaol",
+          to: "Jamie Lynn Morales",
           rest: "Application Owner, due Nov 23, 2026",
         },
       },
@@ -1928,7 +1928,7 @@ describe("step 2: each item's two readings, drawn from the check's real stage", 
     );
     assert.deepEqual(review?.fileNames, [
       "Q2-2026 SAP user listing.xlsx",
-      "Q2 review sign-off - J Manaol.pdf",
+      "Q2 review sign-off - J Morales.pdf",
       "SNOW change tickets Q2.pdf",
       "SAP SUIM change log Jul-2026.csv",
     ]);
@@ -2677,7 +2677,7 @@ describe("the list's line and the session remembered here", () => {
         summary: {
           batchId: BATCH,
           createdAt: CREATED,
-          createdBy: "Robert John",
+          createdBy: "Ryan James",
           chosenRequirementId: null,
           files: 7,
           inProgress: false,
@@ -2689,7 +2689,7 @@ describe("the list's line and the session remembered here", () => {
         seconds: 33,
       }),
       {
-        text: "7 files analyzed: 1 needs you. Added by Robert John.",
+        text: "7 files analyzed: 1 needs you. Added by Ryan James.",
         done: true,
         action: "See results",
       },
@@ -2701,7 +2701,7 @@ describe("the list's line and the session remembered here", () => {
       summary: {
         batchId: BATCH,
         createdAt: CREATED,
-        createdBy: "Robert John",
+        createdBy: "Ryan James",
         chosenRequirementId: null,
         files: 7,
         inProgress: false,

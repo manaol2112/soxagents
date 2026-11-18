@@ -120,7 +120,7 @@ FACTS = Facts(
     control_title="Periodic User Access Review",
     control_line=control_line("Periodic User Access Review", "QUARTERLY", "Active Directory"),
     system="Active Directory",
-    recipient_name="Joanna Rose Manaol",
+    recipient_name="Jamie Lynn Morales",
 )
 
 
@@ -275,7 +275,7 @@ def test_the_wording_cannot_take_over_the_frame_or_the_upload_link() -> None:
 
 def test_a_greeting_by_name_only_for_one_persons_name() -> None:
     cases = {
-        "Joanna Rose Manaol": "Joanna",
+        "Jamie Lynn Morales": "Jamie",
         "Dr. Dana Lee": "Dana",
         "Mr John Smith": "John",
         "Prof Ann Wu": "Ann",
@@ -376,7 +376,7 @@ def test_the_new_request_email_for_the_real_itgc_ac_03_text() -> None:
         "Periodic User Access Review (ITGC-AC-03): 2 items due 23 Nov 2026 [PBC-0A3A48A8]"
     )
     body = message.body
-    assert body.startswith("Hello Joanna,\n\nWe are documenting the design")
+    assert body.startswith("Hello Jamie,\n\nWe are documenting the design")
     assert (
         "Control:   ITGC-AC-03, Quarterly Active Directory User Access Review\n"
         "System:    Active Directory\n"
@@ -424,7 +424,7 @@ def test_the_new_layout_keeps_each_item_whole_and_every_word_escaped() -> None:
         f'<a href="{URL}" style="display:inline-block;',
         ">Upload evidence</a>",
         "A one-time code is sent to this address when you open it.",
-        "Hello Joanna,",
+        "Hello Jamie,",
         "Enter the one-time code we email to this address.",
         "The SOX FY2027 audit team</b>",
         "Questions? Reply to this email and keep PBC-0A3A48A8 in the subject.",

@@ -158,7 +158,7 @@ function registerFile(fields: Partial<RegisterFile>): RegisterFile {
     source: "UPLOAD",
     sizeBytes: 2048,
     createdAt: "2026-10-29T10:24:00Z",
-    addedBy: "Joanna Rose",
+    addedBy: "Jamie Lynn",
     batchId: null,
     state: "FILED",
     filedBy: null,
@@ -387,7 +387,7 @@ describe("navigatorOf", () => {
     assert.equal(policy?.read, "ready");
     assert.equal(policy?.kindLabel, "Policy");
     assert.equal(policy?.sizeBytes, 2048);
-    assert.equal(policy?.addedBy, "Joanna Rose");
+    assert.equal(policy?.addedBy, "Jamie Lynn");
     const screen = phases[1]?.items[0]?.files[1];
     assert.equal(screen?.read, "reading");
     assert.equal(screen?.via, "LINK");
@@ -763,7 +763,7 @@ describe("the follow-up note and the file line", () => {
     assert.equal(
       fileMeta(
         {
-          addedBy: "Joanna",
+          addedBy: "Jamie",
           createdAt: "2026-10-29T10:00:00Z",
           sizeBytes: 512,
           via: "REQUEST",
@@ -771,7 +771,7 @@ describe("the follow-up note and the file line", () => {
         bytes,
         date,
       ),
-      "Joanna · 2026-10-29 · 512 B",
+      "Jamie · 2026-10-29 · 512 B",
     );
     assert.equal(
       fileMeta(

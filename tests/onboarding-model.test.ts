@@ -1624,7 +1624,7 @@ describe("previewChoices", () => {
 describe("the launched engagement", () => {
   const raw = {
     launched_at: "2026-10-12T14:00:00Z",
-    launched_by: "Robert Manaol",
+    launched_by: "Robert Morales",
     controls: 19,
     plans_approved: 4,
     plans_proposed: 14,
@@ -1644,7 +1644,7 @@ describe("the launched engagement", () => {
   it("reads the summary and refuses what is not one", () => {
     const launch = launchParse(raw);
     assert.ok(launch !== null);
-    assert.equal(launch.launchedBy, "Robert Manaol");
+    assert.equal(launch.launchedBy, "Robert Morales");
     assert.equal(launch.plansProposed, 14);
     assert.equal(launch.requestsHeld, 5);
     assert.equal(launchParse({ ...raw, tasks_done: -3 })?.tasksDone, 0);

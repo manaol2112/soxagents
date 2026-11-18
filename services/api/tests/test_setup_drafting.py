@@ -44,7 +44,7 @@ def _facts(**overrides: Any) -> SetupFacts:
 def test_the_rules_draft_scope_period_and_cadence_from_the_records() -> None:
     assert fiscal_year_of("SOX FY27 Acme", TODAY) == 2027
     assert fiscal_year_of("Fiscal Year 2026 ITGC", TODAY) == 2026
-    assert fiscal_year_of("Joanna Corp", TODAY) is None
+    assert fiscal_year_of("Jamie Corp", TODAY) is None
     # A year far from today is not a fiscal year.
     assert fiscal_year_of("Project 1999", TODAY) is None
     period, why = suggest_period_end(_facts())
