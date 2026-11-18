@@ -484,9 +484,7 @@ def _review_once(
             (LEASE_MINUTES, application_id, MAX_ATTEMPTS),
         ).fetchone()
         if claimed is not None:
-            hold_claim(
-                cursor, "system_reviews", "application_id", application_id, "review_status"
-            )
+            hold_claim(cursor, "system_reviews", "application_id", application_id, "review_status")
     if claimed is None:
         return "SKIPPED"
     requester = UUID(str(claimed[0]))

@@ -440,7 +440,11 @@ describe("the handoff never contradicts the D&I step", () => {
         mix.requests.mode === "list"
           ? mix.requests.coverage.filter((chip) => chip.state === "UNCOVERED")
           : [];
-      if (open.length > 0 && !mix.requests.working) {
+      if (
+        mix.requests.mode === "list" &&
+        open.length > 0 &&
+        !mix.requests.working
+      ) {
         assert.equal(design?.coverage?.complete, false);
         assert.match(shown.gap, /not addressed by a D&I request/);
         assert.doesNotMatch(shown.gap, /^Attributes? {2}/);

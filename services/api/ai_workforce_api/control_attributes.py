@@ -50,7 +50,6 @@ from ai_workforce_api.control_context import (
     ContextState,
     Issue,
     Source,
-    attributes_accepted,
     check_quote,
     checked_issues,
     line,
@@ -60,6 +59,9 @@ from ai_workforce_api.control_context import (
 )
 from ai_workforce_api.control_context import (
     QUESTIONS_CLOSED_NOTE as QUESTIONS_CLOSED_NOTE,
+)
+from ai_workforce_api.control_context import (
+    attributes_accepted as attributes_accepted,
 )
 from ai_workforce_api.criteria_history import ATTRIBUTE_AGENT as ATTRIBUTE_AGENT_NAME
 from ai_workforce_api.criteria_history import counts as criteria_counts
