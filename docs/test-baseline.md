@@ -35,6 +35,7 @@ CI until a run on GitHub shows it; record the run below when it does.
 | --- | --- | --- | --- | --- |
 | B4 | 24 node tests in 9 files; `biome check` reports about 290 formatting errors | No `.gitattributes`, so a Windows checkout is CRLF; one test builds a path from a URL | Windows only | `.gitattributes` is merged and the checkout refreshed; `tests/evidence-wizard-contract.test.ts:29` uses `fileURLToPath` |
 | B6 | Intermittent "Address already in use (10048)" under parallel pytest | Hypothesis: ephemeral-port exhaustion | Windows only | Measured; until then lower `WORKERS` on Windows and rerun the failed file alone |
+| B7 | 3 tests outside the critical tier fail on Windows, the same way with and without the governance changes (checked on a clean checkout, 18 Nov 2026): `test_understanding_is_authority.py::test_an_open_conflict_from_before_is_closed_only_for_a_reason_that_is_true_of_it`, `test_question_review.py::test_many_questions_are_written_in_small_batches`, `test_attributes_follow_understanding.py::test_a_failed_planner_run_reads_as_stopped_once_the_understanding_is_complete` | Undiagnosed | Seen on Windows; Linux not run | Diagnosed and fixed with the assertions kept |
 
 ## Tiers
 
