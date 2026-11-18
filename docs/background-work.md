@@ -2,6 +2,13 @@
 
 **Status: Proposal. Not approved. Nothing in the application has been changed.**
 
+**Superseded in detail by `docs/production-worker-design.md` (18 November 2026),** which was
+checked against the `governance` branch and corrects this study: console turns, evidence
+assessments and narrative runs also renew their leases; evidence assessments already carry an
+owner token and `db.release_claim` fences many writes on the attempt count; console turns and
+evidence assessments are also failed when their attempts run out; and a section redraft has no
+claim at all. Line numbers here are from the `windows-dev` working tree.
+
 Read-only study of branch `windows-dev` (working tree, 17 November 2026). Paths are under `services/api/ai_workforce_api/` unless they start with `docs/`.
 
 ## The answer
