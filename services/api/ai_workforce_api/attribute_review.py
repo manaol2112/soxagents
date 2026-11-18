@@ -49,6 +49,7 @@ from ai_workforce_api.agent_answers import generate_read, note_unusable, note_us
 from ai_workforce_api.control_context import line
 from ai_workforce_api.db import transaction
 from ai_workforce_api.models import ModelProvider, ModelRequest
+from ai_workforce_api.prompt_data import neutral
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 
 # /2 (12 November 2026): duplicates are merged, never left for the person. /3 (the same day,
@@ -56,8 +57,10 @@ from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 # and what an attribute's agent says it follows, with the fact as recorded. Every verdict and
 # every power it had stays: what an agent says it follows exempts nothing from review. /4 (16
 # November 2026, after the review of B1k): its correction carries the previous answer as
-# escaped data (agent_answers.correction_prompt); every verdict and power of /3 stays.
-PROMPT_VERSION = "attribute-set-review/4"
+# escaped data (agent_answers.correction_prompt); every verdict and power of /3 stays. /5
+# (18 November 2026, owner-approved S1): every tag-shaped token in its inputs is made inert
+# (prompt_data.neutral); its wording is as /4.
+PROMPT_VERSION = "attribute-set-review/5"
 REVIEWER = "Reviewer agent"
 NOT_REVIEWED = (
     "The reviewer agent did not finish, so the attributes and criteria are as drafted and "
@@ -759,6 +762,16 @@ def _store(cursor: psycopg.Cursor[Any], control_id: UUID, stored: _Stored) -> No
     )
 
 
+def review_prompt(data: str) -> str:
+    """The set reviewer's prompt: its inputs (JSON) as data, every tag in them made inert, so
+    an attribute, a criterion or an understanding that writes one stays inside the block
+    (prompt_data; 18 November 2026, owner-approved S1). Pure."""
+    return (
+        "Review this control's test attributes and their criteria.\n\n<review_inputs>\n"
+        f"{neutral(data)}\n</review_inputs>"
+    )
+
+
 def review_set(
     connection: psycopg.Connection[Any],
     provider: ModelProvider,
@@ -794,10 +807,7 @@ def review_set(
         ),
         ModelRequest(
             operation="generate",
-            prompt=(
-                "Review this control's test attributes and their criteria.\n\n<review_inputs>\n"
-                f"{_json(data)}\n</review_inputs>"
-            ),
+            prompt=review_prompt(_json(data)),
             output_schema=SCHEMA,
             allowed_tool_ids=(),
             max_tokens=REVIEW_TOKENS,

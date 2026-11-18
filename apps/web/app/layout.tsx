@@ -66,11 +66,7 @@ export default async function RootLayout({
   // The theme is set on the first paint, so a page never flashes the other one.
   const theme = parseTheme((await cookies()).get(THEME_COOKIE)?.value);
   return (
-    <html
-      lang="en"
-      className={sans.variable}
-      data-theme={theme}
-    >
+    <html lang="en" className={sans.variable} data-theme={theme}>
       <body>{children}</body>
     </html>
   );

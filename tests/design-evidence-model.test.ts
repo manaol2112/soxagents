@@ -400,7 +400,10 @@ describe("requests drafted: approve and send", () => {
     // word "drafted" names the message to the owner only (product owner, same day).
     assert.equal(line(none)?.status, "Message not drafted yet");
     assert.equal(line(none)?.canChange, false);
-    assert.match(none.rows[0]?.uploadBlocked ?? "", /message is not drafted yet/);
+    assert.match(
+      none.rows[0]?.uploadBlocked ?? "",
+      /message is not drafted yet/,
+    );
   });
 });
 
@@ -1853,15 +1856,19 @@ describe("one meaning per word on the D&I Evidence step", () => {
   for (const [name, view] of Object.entries(views)) {
     it(`says "drafted" only of a message to the owner: ${name}`, () => {
       for (const text of said(view)) {
-        if (/drafted/i.test(text)) {
-          assert.match(text, /messages?/i, `"${text}" uses "drafted" for something other than the message`);
+        if (/\bdrafted\b/i.test(text)) {
+          assert.match(
+            text,
+            /\bmessages?\b/i,
+            `"${text}" uses "drafted" for something other than the message`,
+          );
         }
       }
     });
     it(`never says a request is drafted and not drafted at once: ${name}`, () => {
       const all = said(view).join(" | ");
       assert.ok(
-        !(/Drafted \d+ requests?/.test(all) && /not drafted/i.test(all)),
+        !(/\bDrafted \d+ requests?\b/.test(all) && /not drafted/i.test(all)),
         all,
       );
       assert.match(view.header.agent.did, /^Planned /);

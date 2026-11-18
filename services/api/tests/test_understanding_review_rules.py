@@ -340,7 +340,9 @@ def test_hostile_answers_stay_data_inside_the_one_block_of_escaped_json() -> Non
     # Old: "understanding-review/1". New: "understanding-review/2" since the review of B1k
     # (16 November 2026): a follow-up names its attribute, the inputs carry each question's
     # kind of fact and what the agents assumed; every safety line is kept word for word.
-    assert review.PROMPT_VERSION == "understanding-review/2" and review.AGENT == (
+    # Old: "understanding-review/2". New: "understanding-review/3" (18 November 2026, owner-approved
+    # S1: the data's tags are made inert, nothing else changed).
+    assert review.PROMPT_VERSION == "understanding-review/3" and review.AGENT == (
         "independent-reviewer"
     )
 
@@ -972,7 +974,8 @@ def test_a_conflict_keeps_the_codes_its_finding_names() -> None:
     items = control_attributes.ATTRIBUTES_SCHEMA["properties"]["issues"]["items"]
     assert "attribute_codes" in items["properties"]
     assert "attribute_codes" not in items["required"]
-    assert control_attributes.PROMPT_VERSION == "attributes/8"
+    # Old "attributes/8"; new "attributes/9" (18 November 2026, owner-approved S1).
+    assert control_attributes.PROMPT_VERSION == "attributes/9"
 
 
 def test_a_conflict_point_is_settled_by_deciding_it_never_by_a_consideration() -> None:
@@ -1301,4 +1304,5 @@ def test_the_process_map_agents_assumptions_carry_the_codes_its_findings_name() 
     )
     source = inspect.getsource(process_understanding.build)
     assert "from_issue(item, codes) for item, codes in coded" in source
-    assert '"process-map/3"' in source
+    # Old "process-map/3"; new "process-map/4" (18 November 2026, owner-approved S1).
+    assert '"process-map/4"' in source

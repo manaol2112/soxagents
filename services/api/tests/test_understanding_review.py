@@ -129,7 +129,35 @@ def test_the_review_asks_before_any_attribute_is_drafted_and_answering_completes
     # Read on the questions asked, per attribute, with what each needs.
     [given] = agents.specialist_given
     assert given["round"] == 1 and given["units"] and given["attributes"]
-    assert all("needs" in item and "RECORD" in item["needs"] for item in given["attributes"])
+    # Rewritten 18 November 2026. Old: every attribute needs RECORD, the rule of needs_of for an
+    # attribute the bank records nothing for ("always the record that shows it"). New: an
+    # attribute the bank records needs for has those (walkthrough_questions.criteria_needs),
+    # less each one the bank records as met elsewhere, with that reason given beside them
+    # (49503f5, "asked once with the bank"): AC-01's request record is met by the statement's
+    # request tool, so it is not asked again. Why: the review never asks what a value of the
+    # statement or the evidence already settles (B1k "Nothing missed" 2). An attribute the
+    # bank knows nothing of still needs RECORD.
+    with connect(migrated.url) as connection:
+        keys = dict(
+            connection.execute(
+                "SELECT code, definition_key FROM control_attributes "
+                "WHERE engagement_control_id = %s AND status = 'APPROVED'",
+                (UUID(control),),
+            ).fetchall()
+        )
+    for item in given["attributes"]:
+        assert "needs" in item and "met_elsewhere" in item, item["unit"]
+        key = keys.get(item["unit"]) or ""
+        listed = walkthrough_questions.criteria_needs(key) if key else ()
+        if not listed:
+            assert "RECORD" in item["needs"], item["unit"]
+            continue
+        dropped = [fact for fact in listed if walkthrough_questions.met_elsewhere(key, fact)]
+        assert item["needs"] == [
+            fact for fact in review.FACTS if fact in listed and fact not in dropped
+        ]
+        assert len(item["met_elsewhere"]) == len(dropped), item["unit"]
+    assert any("RECORD" in item["needs"] for item in given["attributes"])
     # Asked in Control Understanding; nothing of the attributes was drafted.
     assert [who for who in agents.calls if who != "other"] == []
     assert all(row[2] is None for row in _approved(migrated, control))
@@ -1202,8 +1230,11 @@ def test_the_backfill_completes_a_control_accepted_before_the_release(migrated: 
     team, control, _scheduler, _client_ = _ready(migrated, "ur-backfill")
     _accepted_by_owner(migrated, team, control)
     assert _completed_at(migrated, control) is None
-    sql = (review.__file__.rsplit("/services/", 1)[0] + "/migrations/"
-           "0174_understanding_review.sql")  # fmt: skip
+    # The migrations folder from the module's own location, on any operating system (the
+    # split on "/services/" found no folder on Windows; 18 November 2026).
+    from ai_workforce_api.migrate import migrations_dir
+
+    sql = migrations_dir() / "0174_understanding_review.sql"
     with open(sql, encoding="utf-8") as handle:
         text = handle.read()
     # Only this control: the database is shared with the other tests of the module.
@@ -1527,7 +1558,10 @@ def test_a_follow_on_run_has_its_own_attempts_and_the_chain_is_bounded(
     assert body["review"]["failure"] == review.NOT_STARTED_SENTENCE
     # A person's Run again starts a new chain.
     again = other_client.post(f"{_path(other_team, other)}/understanding/review/run")
-    assert again.status_code == 200, again.text
+    # Corrected 18 November 2026. Old: 200. New: 202, the status the route has answered since
+    # it was written (context_routes.py, eef886b): the read is queued, not done, and the other
+    # tests of this route and the web (control-context route.ts takes 200 or 202) agree.
+    assert again.status_code == 202, again.text
     [row] = _rows(migrated, "SELECT run_attempts, run_follows, run_status FROM evidence_plans "
                   "WHERE engagement_control_id = %s", UUID(other))  # fmt: skip
     assert row == (0, 0, "PENDING")

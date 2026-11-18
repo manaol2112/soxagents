@@ -28,6 +28,7 @@ from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.model_providers import call_note, live_model, provider_for
 from ai_workforce_api.models import ModelProvider, ModelRequest
 from ai_workforce_api.onboarding import OnboardingState, _authorize_setup
+from ai_workforce_api.prompt_data import neutral
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.rcm_systems import Layer, _known
 from ai_workforce_api.settings import Settings
@@ -257,7 +258,9 @@ def suggest_prompt(facts: Facts) -> str:
             lines.append("- " + " | ".join(parts))
     else:
         lines.append("The engagement's records hold no controls on this system yet.")
-    return "<records>\n" + "\n".join(lines) + "\n</records>"
+    # The records hold the client's and the team's words: every tag in them is made inert
+    # (prompt_data; 18 November 2026, owner-approved S1).
+    return "<records>\n" + neutral("\n".join(lines)) + "\n</records>"
 
 
 _EMAIL = re.compile(r"[^\s@]+@[^\s@]+")
@@ -345,7 +348,7 @@ def suggest(
             cancelled=False,
             system=SYSTEM_PROMPT,
         ),
-        "system-suggestions/1",
+        "system-suggestions/2",  # /2: the records' tags made inert (18 November 2026, S1)
         {"project": str(project_id)},
     )
     status, raw = call.status, call.raw

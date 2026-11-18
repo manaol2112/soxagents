@@ -39,12 +39,15 @@ from ai_workforce_api.agent_answers import SHAPE, note_unusable, problem_of
 from ai_workforce_api.control_context import Source, line, source_blocks
 from ai_workforce_api.db import transaction
 from ai_workforce_api.models import ModelProvider, ModelRequest
+from ai_workforce_api.prompt_data import neutral
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 
 logger = logging.getLogger(__name__)
 
-WRITER_LABEL = "question-interview/1"
-REVIEWER_LABEL = "question-review/3"
+# /2 and /4 (18 November 2026, owner-approved S1): every tag-shaped token in the items and
+# the control's context is made inert (prompt_data.neutral); the wording is as before.
+WRITER_LABEL = "question-interview/2"
+REVIEWER_LABEL = "question-review/4"
 # The first pass, then one more for what the checks sent back.
 ROUNDS = 2
 MAX_ITEMS = 12
@@ -499,6 +502,24 @@ def _judge(fields: dict[str, Any], held: _Held, known: str) -> list[str]:
     return problems
 
 
+def interview_prompt(
+    reviewing: bool, items: list[dict[str, Any]], package: dict[str, Any], sources: list[Source]
+) -> str:
+    """The interview writer's prompt (`reviewing`: its reviewer's): the items, the control's
+    context and its sources as data, every tag in them made inert (prompt_data; 18 November
+    2026, owner-approved S1). Pure."""
+    return (
+        "Read these interviews and correct them.\n\n<items>\n"
+        if reviewing
+        else "Write the interviews.\n\n<items>\n"
+    ) + (
+        f"{neutral(json.dumps(items, ensure_ascii=False, indent=1))}\n</items>\n\n"
+        "<control_context>\n"
+        f"{neutral(json.dumps(package, ensure_ascii=False, indent=1, default=str))}\n"
+        f"</control_context>\n\n<sources>\n{source_blocks(sources)}\n</sources>"
+    )
+
+
 def _ask_agent(
     connection: psycopg.Connection[Any],
     provider: ModelProvider,
@@ -553,17 +574,7 @@ def _ask_agent(
     ).generate(
         ModelRequest(
             operation="generate",
-            prompt=(
-                "Read these interviews and correct them.\n\n<items>\n"
-                if system == INTERVIEW_REVIEW_PROMPT
-                else "Write the interviews.\n\n<items>\n"
-            )
-            + (
-                f"{json.dumps(items, ensure_ascii=False, indent=1)}\n</items>\n\n"
-                "<control_context>\n"
-                f"{json.dumps(package, ensure_ascii=False, indent=1, default=str)}\n"
-                f"</control_context>\n\n<sources>\n{source_blocks(sources)}\n</sources>"
-            ),
+            prompt=interview_prompt(system == INTERVIEW_REVIEW_PROMPT, items, package, sources),
             output_schema=REVIEW_SCHEMA,
             allowed_tool_ids=(),
             timeout_seconds=REVIEW_SECONDS,

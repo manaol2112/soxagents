@@ -638,12 +638,12 @@ export function WorkflowPanel({
                 {system !== "" ? (
                   <>
                     {systemHref !== null ? (
-                        <Link className="wf-crumb-system" href={systemHref}>
-                          {system}
-                        </Link>
-                      ) : (
-                        <span className="wf-crumb-system">{system}</span>
-                      )}
+                      <Link className="wf-crumb-system" href={systemHref}>
+                        {system}
+                      </Link>
+                    ) : (
+                      <span className="wf-crumb-system">{system}</span>
+                    )}
                     <span className="wf-crumb-sep" aria-hidden="true">
                       /
                     </span>
@@ -678,9 +678,7 @@ export function WorkflowPanel({
           </p>
           <h2 id="wf-panel-title" ref={heading} tabIndex={-1}>
             {title}
-            {tone !== null ? (
-              <PanelPill pill={statusPill(tone, "")} />
-            ) : null}
+            {tone !== null ? <PanelPill pill={statusPill(tone, "")} /> : null}
           </h2>
           {status !== "" ? <p className="wf-panel-status">{status}</p> : null}
         </div>

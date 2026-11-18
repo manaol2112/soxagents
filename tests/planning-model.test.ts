@@ -1704,7 +1704,7 @@ describe("client values filled into an approved plan", () => {
           key: "review-deadline",
           label: "the deadline in the access review procedure",
           value: "30 days after quarter end",
-          filled_by: "Robert John Manaol",
+          filled_by: "Ryan James Morales",
           filled_at: "2026-10-19T20:13:39+00:00",
         },
         "not a record",
@@ -1714,7 +1714,7 @@ describe("client values filled into an approved plan", () => {
     assert.equal(plan.filledSinceApproval.length, 1);
     assert.equal(
       filledLine(plan.filledSinceApproval),
-      "Organization-specific value filled since approval: the deadline in the access review procedure: 30 days after quarter end (Robert John Manaol)",
+      "Organization-specific value filled since approval: the deadline in the access review procedure: 30 days after quarter end (Ryan James Morales)",
     );
     assert.equal(filledLine([]), "");
     assert.deepEqual(

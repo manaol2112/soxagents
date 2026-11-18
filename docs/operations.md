@@ -198,3 +198,52 @@ again is the recovery, and it tests only what was left.
 services/api/tests/test_live_model.py`). It makes one short call per tier and runs the
 tester once on a synthetic control: a few cents. It is never part of `make test`,
 `make test-fast` or `make test-critical`.
+
+## Backup and restore
+
+Added 17 November 2026 (governance assessment, findings D1 and D2). Until then no backup
+existed and `make reset` deleted every local database without asking.
+
+| Command | What it does |
+| --- | --- |
+| `make backup` | Writes one database to `backups/<name>-<UTC time>.dump`. `DB=<name>` picks the database; the default is the one in `DATABASE_URL`. |
+| `make restore FILE=<dump> TARGET=<new name>` | Restores a backup into a database that does not exist yet. It never overwrites and never drops. |
+| `make backup-verify` | Takes a backup, restores it into a scratch database, compares every table's row count and the newest migration, and drops the scratch database. |
+| `make reset CONFIRM=delete-local-data` | Deletes all local data. See below. |
+
+**What a backup holds.** Every table of the one database, in PostgreSQL's custom format.
+With no S3 bucket configured, evidence files are rows of that database and are included.
+With a bucket configured they are not: copy the bucket separately.
+
+**What it leaves out.** The rows of `auth_sessions`, `evidence_portal_sessions` and
+`evidence_portal_codes`, so a backup carries no sign-in session and people sign in again
+after a restore. It does not hold `.env`. Keep `PROVENANCE_KEY` and any previous keys
+somewhere safe as well: without them, restored model-call content cannot be read (see
+Provenance keys above).
+
+**What it is not.** The file is not encrypted and holds engagement data. `backups/` is
+git-ignored, which keeps it out of the repository and nothing more: it is on one disk until
+it is copied to protected storage. Nothing here schedules backups; run `make backup` before
+risky work, and set a schedule before real client data is held.
+
+**Using a restored copy.** Restore into a new name, set `DATABASE_URL` to that database,
+restart the API (`make go`), and check the engagement. The earlier database is untouched,
+so going back is setting `DATABASE_URL` back.
+
+**Reset.** `make reset` deletes the PostgreSQL volume (every database in it) and the local
+object-store volume. It refuses unless all of these hold (`scripts/reset.sh`):
+
+1. `CONFIRM=delete-local-data` is given.
+2. `APP_ENV` is `development`, `dev`, `local` or `test`. Anywhere else, including an unset
+   `APP_ENV`, `ALLOW_NON_DEV_RESET=<the POSTGRES_DB name>` must also be given.
+3. With an S3 bucket configured, `ACCEPT_OBJECT_STORE_LOSS=yes` is given.
+4. A backup of every database (test databases aside) was written first. `SKIP_BACKUP=yes`
+   leaves this out, deliberately.
+
+`RESET_DRY_RUN=1` runs every check and prints the deletion instead of doing it. The guard
+is held by `tests/data-protection.test.ts`, which uses a fake Docker command.
+
+**Checked on 17 November 2026.** `backup-verify` on a synthetic database: 174 tables and
+the newest migration matched after the restore. A restore over an existing database was
+refused. The reset was exercised with the fake command and the dry run only; it has not
+been run against real data.

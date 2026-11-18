@@ -927,7 +927,7 @@ export type WizardContext = {
 };
 
 /** "Add evidence for ITGC-AC-03 Periodic User Access Review", its line ("SAP S/4HANA ·
- * SOX FY2027 · One request to Joanna Rose Manaol, due Nov 23, 2026"), and who the side
+ * SOX FY2027 · One request to Jamie Lynn Morales, due Nov 23, 2026"), and who the side
  * panel says the evidence was requested from. */
 export function windowHeading(context: WizardContext): {
   title: string;

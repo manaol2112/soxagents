@@ -12,6 +12,7 @@ confirmed) replaces it, and the new run is an engine 2 run. Synthetic evidence o
 from typing import Any
 from uuid import UUID
 
+from psycopg.types.json import Json
 from support import Database
 from test_evidence_assurance import LOG, TICKET, _Bench, _reading
 from test_outbound import migrated
@@ -59,7 +60,7 @@ def _as_engine_1(bench: _Bench, status: str) -> UUID:
                     "finished_at = clock_timestamp(), ran_with = %s::jsonb, "
                     "assessor_opinion = '{}'::jsonb, reviewer_opinion = '{}'::jsonb "
                     "WHERE id = %s",
-                    (chain.Json(basis.models), made[0]),
+                    (Json(basis.models), made[0]),
                 )
         bench.worker.assessments.clear()
         return made[0]

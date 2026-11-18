@@ -369,8 +369,8 @@ describe("the words", () => {
     assert.equal(countWords(0), "none");
     assert.equal(countWords(2), "2 logged");
     assert.equal(
-      preparedDetail("Robert John Manaol", "Nov 16", 7),
-      "by Robert John Manaol · Nov 16 · version 7",
+      preparedDetail("Ryan James Morales", "Nov 16", 7),
+      "by Ryan James Morales · Nov 16 · version 7",
     );
   });
 

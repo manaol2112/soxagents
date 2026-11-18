@@ -1775,7 +1775,10 @@ function headerOf(facts: {
           status: `${plural(toSend, "message")} not drafted yet`,
           need: {
             kind: "wait",
-            title: toSend === 1 ? "Message not drafted yet" : "Messages not drafted yet",
+            title:
+              toSend === 1
+                ? "Message not drafted yet"
+                : "Messages not drafted yet",
             detail: `${toSend === 1 ? "The message for 1 request is" : `The messages for ${toSend} requests are`} not drafted yet. Nothing is sent until you approve it.`,
           },
           agent: { did: drafted, found },

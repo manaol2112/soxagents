@@ -1,0 +1,30 @@
+# Dependency updates as pull requests (governance assessment, finding S2, 18 November 2026).
+# Weekly, grouped, a few open at a time: each still goes through CI and a person's review.
+# Versions in this repository are pinned exactly; an update changes the pin and the lockfile.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      web-patch-and-minor:
+        update-types: [minor, patch]
+
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      python-patch-and-minor:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2

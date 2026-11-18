@@ -11,6 +11,18 @@ Routine, explicitly authorized actions may run automatically. Sensitive or conse
 3. Implement only the current milestone named in `docs/phase-plan.md`.
 4. If a requirement conflicts or a consequential architecture decision is missing, stop and ask. Do not guess.
 
+## How every change is made
+
+The detail of each rule is in `docs/engineering-standards.md`; read the section a rule names when it applies.
+
+- **Reuse first.** Find the owning area in `docs/architecture.md`, then the existing function, component or query, then its tests, before writing anything new. A new module, dependency, table, job type or abstraction needs a stated reason. A second implementation of something that exists is a defect.
+- **Classify the risk by impact, not by size** (§2). Low: local and reversible; implement with targeted tests. Medium: shared behaviour or an interface between modules; write a short impact note first and test the affected callers. High: authorization, tenant scope, migrations or stored data, approvals and sign-offs, outbound email, model prompts or tools, the background workers, a public API body, a destructive command; agree a design and risk note before coding, run the critical tier, and get an independent review. When unsure, take the higher class.
+- **Fix causes, not symptoms** (§4). Reproduce, trace to the first wrong value, fix it in the module that owns it, add a test that fails without the fix. No fallback, retry or broad `except` that hides a failure.
+- **Stay in scope** (§3). No unrelated refactoring, renaming, reformatting or speculative features. Report any departure from the agreed approach before finishing.
+- **Several agents** (§7). One writer per file: parallel writers use separate worktrees or non-overlapping file lists. Migrations, API bodies, the scheduler interface, the Makefile and this file change one at a time. The coordinator integrates, assigns migration numbers, and alone starts or restarts servers. Commit each accepted change; do not let work pile up uncommitted.
+- **Known failures are listed, not ignored.** A failing check is either fixed or already in `docs/test-baseline.md`; anything else is new and belongs to the change.
+- **Ask first** (§8) before a migration, a change to an authorization or approval boundary, a new dependency, a destructive command (`make reset` deletes all local data), a push, a merge or a deploy, or anything that sends a real message outside the team.
+
 ## Engineering rules
 
 - Use strict TypeScript and Python type hints.

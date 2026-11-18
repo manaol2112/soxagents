@@ -1385,7 +1385,7 @@ def register_evidence_portal(
                 content_type,
                 content,
                 item,
-            )
+            ),
         )
         await asyncio.to_thread(schedule_analyses, analyses, [] if queued is None else [queued])
         return stored

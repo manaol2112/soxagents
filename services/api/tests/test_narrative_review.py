@@ -934,8 +934,10 @@ def test_an_independent_agent_reviews_each_drafted_attribute_before_a_person_see
     # Old {"attributes/6", "attribute-review/3"}; new {"attributes/7", "attribute-review/4"}
     # after the review of B1k (16 November 2026): the corrections carry the previous answer
     # as escaped data; nothing else changed. Old "attributes/7"; new "attributes/8" in the
-    # second fix round of B1k: each issue names the attribute codes it bears on.
-    assert {"attributes/8", "attribute-review/4"} <= agents
+    # second fix round of B1k: each issue names the attribute codes it bears on. Old
+    # {"attributes/8", "attribute-review/4"}; new /9 and /5 (18 November 2026, owner-approved S1:
+    # the data's tags are made inert, nothing else changed).
+    assert {"attributes/9", "attribute-review/5"} <= agents
     # When the reviewer keeps none, the team is told why, not that nothing was found.
     dropped = {"attributes": [], "fixes": ["Left out the draft: it repeats A1."]}
     with connect(migrated.url) as connection:

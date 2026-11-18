@@ -24,6 +24,7 @@ from ai_workforce_api.controls import DOMAIN_LABELS
 from ai_workforce_api.db import hold_claim, independent_steps, transaction
 from ai_workforce_api.model_providers import fallback_note
 from ai_workforce_api.models import ModelProvider, ModelRequest
+from ai_workforce_api.prompt_data import neutral
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.rcm_import import (
     FIELD_KEYS,
@@ -153,7 +154,9 @@ def terms_prompt(choices: dict[str, list[Any]], examples: dict[str, dict[str, li
                 for item in items
             ],
         }
-    data = json.dumps(fields, ensure_ascii=False, indent=1)[:60000]
+    # The terms are the client's: every tag in them is made inert (prompt_data; 18 November
+    # 2026, owner-approved S1).
+    data = neutral(json.dumps(fields, ensure_ascii=False, indent=1)[:60000])
     return f"Map these client terms.\n\n<rcm_terms>\n{data}\n</rcm_terms>"
 
 
@@ -241,6 +244,7 @@ def run_terms(
             cancelled=False,
             system=SYSTEM_PROMPT,
         )
+        # The prompt is /2 (18 November 2026, owner-approved S1): the terms' tags are made inert.
         call = AgentCaller(
             connection,
             provider,
@@ -253,7 +257,7 @@ def run_terms(
                 requester,
                 agent_instance_id=agent_actor(connection, project_id, "evidence-coordinator"),
             ),  # fmt: skip
-        ).generate(request, "rcm-terms/1", {"import": str(import_id)})
+        ).generate(request, "rcm-terms/2", {"import": str(import_id)})
         status, raw, call_id = call.status, call.raw, call.call_id
         if status == "SUCCEEDED" and raw.output is not None:
             try:

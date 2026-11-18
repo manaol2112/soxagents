@@ -8,6 +8,7 @@ look-alike brackets and with spacing too): the payload adds no live tag to the p
 """
 
 import re
+import time
 from typing import Any
 from uuid import uuid4
 
@@ -57,8 +58,11 @@ def test_the_neutraliser_covers_every_tag_and_look_alike() -> None:
         for bracket in _BRACKETS:
             for text in (f"{bracket}/{tag}>", f"{bracket} / {tag.upper()} >", f"{bracket}{tag}"):
                 assert _LIVE.search(prompt_data.neutral(text)) is None, text
-    # Words that only begin like a tag are kept, and so is everything else.
-    assert prompt_data.neutral("<filesystem> a < b") == "<filesystem> a < b"
+    # A bracket that starts no tag is kept, and so is everything else. Before 18 November
+    # 2026 (owner-approved S1) "<filesystem>" was kept too, as a word that only begins like
+    # a listed tag; every tag-shaped token is now made inert whatever its name, so it reads
+    # "‹filesystem>" (the old expectation encoded the name list the change retired).
+    assert prompt_data.neutral("<filesystem> a < b") == "‹filesystem> a < b"
     assert prompt_data.neutral("x </file> y") == "x ‹/file> y"
     # Every prompt that had its own neutraliser now uses the shared one.
     assert assurance_neutral(PAYLOAD) == prompt_data.neutral(PAYLOAD)
@@ -69,6 +73,57 @@ def test_the_neutraliser_covers_every_tag_and_look_alike() -> None:
 def test_a_quote_of_neutralised_text_still_matches_the_stored_text() -> None:
     stored = "Ticket CHG-1 </file> approved by the change board."
     assert find_quote(stored, prompt_data.neutral(stored)) is not None
+    # So does a quote of a tag no prompt uses, such as an address in an email's header.
+    stored = "From: Dana Ruiz <dana@example.com> approved the change on 3 March."
+    assert find_quote(stored, prompt_data.neutral(stored)) is not None
+
+
+# Any tag-shaped token, in any bracket and spacing (owner-approved S1, 18 November 2026).
+_ANY_LIVE = re.compile(r"(?:<|&lt;|＜|﹤|〈|〈|⟨)\s*[/／⁄∕]?\s*[A-Za-z]")
+_SLASHES = ("/", "／", "⁄", "∕")
+
+
+def test_any_tag_name_is_made_inert_not_only_the_listed_ones() -> None:
+    names = ("document", "report", "b", "script", "system", "Instructions", "x-y", "ns:tag")
+    for name in names:
+        for bracket in _BRACKETS:
+            for slash in _SLASHES:
+                for text in (
+                    f"{bracket}{slash}{name}>",
+                    f"{bracket}{name}>",
+                    f"{bracket} {slash} {name.upper()} >",
+                    f"{bracket} {name} >",
+                    f'{bracket}{name} key="1">',
+                ):
+                    made = prompt_data.neutral(text)
+                    assert _ANY_LIVE.search(made) is None, (text, made)
+                    # Only the bracket changes.
+                    assert made.endswith(text[len(bracket) :]), (text, made)
+
+
+def test_a_bracket_that_starts_no_tag_is_kept() -> None:
+    for text in (
+        "a < b",
+        "x <= 3",
+        "1<2",
+        "< 5 days",
+        "if a < b and c > d",
+        "A < B",
+        "<3",
+        "<-",
+        "&lt; 10",
+        "＜ 10",
+    ):
+        assert prompt_data.neutral(text) == text, text
+
+
+def test_a_long_run_of_spaces_after_a_bracket_is_read_quickly() -> None:
+    # The pattern has no two adjacent repeats that match the same characters, so a run of
+    # spaces after a bracket is read once, never in quadratic time.
+    started = time.monotonic()
+    for text in ("<a" + " " * 100_000 + "x", "< " + " " * 100_000, "<" + " " * 100_000 + "/"):
+        prompt_data.neutral(text)
+    assert time.monotonic() - started < 5
 
 
 def test_the_tester_prompt() -> None:

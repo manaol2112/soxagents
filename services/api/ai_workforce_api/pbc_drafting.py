@@ -40,6 +40,7 @@ from ai_workforce_api.db import connect, independent_steps, transaction
 from ai_workforce_api.methodology import PLATFORM_DEFAULT, Rules, for_project
 from ai_workforce_api.model_providers import fallback_note, live_model, provider_for
 from ai_workforce_api.models import ModelProvider, ModelRequest
+from ai_workforce_api.prompt_data import neutral
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.understanding_authority import Fact, for_agents
@@ -644,12 +645,14 @@ def prompt_for(context: DraftContext) -> str:
             }
             for item in context.planned
         ]
-        data = json.dumps(facts, ensure_ascii=False, indent=1)[:12000]
+        data = neutral(json.dumps(facts, ensure_ascii=False, indent=1)[:12000])
         return (
             f"Word the {context.phase.lower()} evidence request for this control, one item "
             f"per planned evidence item.\n\n<control>\n{data}\n</control>"
         )
-    data = json.dumps(facts, ensure_ascii=False, indent=1)[:12000]
+    # The control's facts hold the client's RCM words: every tag in them is made inert
+    # (prompt_data; 18 November 2026, owner-approved S1).
+    data = neutral(json.dumps(facts, ensure_ascii=False, indent=1)[:12000])
     return f"Draft the evidence request for this control.\n\n<control>\n{data}\n</control>"
 
 
@@ -781,7 +784,9 @@ def draft_runner(settings: Settings, provider: ModelProvider | None = None) -> D
 
 
 # The evidence coordinator's prompt version, recorded on every call (Milestone 3a).
-PROMPT_VERSION = "evidence-coordinator/2"
+# /3 (18 November 2026, owner-approved S1): every tag-shaped token in the control's facts is
+# made inert (prompt_data.neutral); the wording is as /2.
+PROMPT_VERSION = "evidence-coordinator/3"
 
 
 def run_draft(

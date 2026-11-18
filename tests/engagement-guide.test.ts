@@ -187,7 +187,7 @@ describe("the onboarding cycle the agent shows", () => {
 describe("the agent panel beside the form", () => {
   it("greets by a first name only when the address reads as one", () => {
     assert.equal(firstNameFrom("avery.brooks@example.com"), "Avery");
-    assert.equal(firstNameFrom("manaol2112@example.com"), "");
+    assert.equal(firstNameFrom("rmorales2112@example.com"), "");
     assert.equal(firstNameFrom("ui-plan-ed3bc421@example.com"), "");
     assert.equal(firstNameFrom("j.doe@example.com"), "");
     assert.equal(agentBrief(blank, "").greeting, "Welcome.");

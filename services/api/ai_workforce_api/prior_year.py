@@ -55,6 +55,7 @@ from ai_workforce_api.db import hold_claim, independent_steps, releasing_claims,
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.model_providers import live_model, provider_for
 from ai_workforce_api.models import ModelProvider, ModelRequest
+from ai_workforce_api.prompt_data import neutral
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.settings import Settings
 
@@ -450,7 +451,7 @@ def _match_prompt(text: str, controls: list[_Control], matched: set[UUID]) -> st
     ]
     return (
         "This year's controls:\n" + "\n".join(rows)
-        + f"\n\n<document>\n{text[:MATCH_TEXT]}\n</document>"
+        + f"\n\n<document>\n{neutral(text[:MATCH_TEXT])}\n</document>"
     )  # fmt: skip
 
 
@@ -475,7 +476,7 @@ def described_matches(
             cancelled=False,
             system=MATCH_SYSTEM,
         ),
-        "prior-year-match/1",
+        "prior-year-match/2",  # /2: the text's tags made inert (18 November 2026, S1)
         {"document": str(job.target_id)},
     )
     if call.status not in ("SUCCEEDED", "MALFORMED") or call.raw.output is None:
@@ -658,7 +659,7 @@ def analysis_prompt(
     return (
         "This year's control:\n" + "\n".join(lines)
         + "\n\nIts client-specific questions:\n" + ("\n".join(asked) or "(none)")
-        + f"\n\n<prior_year>\n{text[:ANALYSIS_TEXT]}\n</prior_year>"
+        + f"\n\n<prior_year>\n{neutral(text[:ANALYSIS_TEXT])}\n</prior_year>"
     )  # fmt: skip
 
 
@@ -687,7 +688,7 @@ def analyse(
             cancelled=False,
             system=ANALYSIS_SYSTEM,
         ),
-        "prior-year-analysis/1",
+        "prior-year-analysis/2",  # /2: the text's tags made inert (18 November 2026, S1)
         {"match": str(match_id), "control": str(control_id)},
     )
     if call.status not in ("SUCCEEDED", "MALFORMED") or call.raw.output is None:

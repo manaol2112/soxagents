@@ -685,7 +685,7 @@ To understand how this control is designed, please provide:`,
 
 describe("the recipients and timing", () => {
   it("shows a person by their initials", () => {
-    assert.equal(initialsOf("Joanna Rose Manaol", "j@client.example"), "JM");
+    assert.equal(initialsOf("Jamie Lynn Morales", "j@client.example"), "JM");
     assert.equal(initialsOf("Priya", "p@client.example"), "P");
     assert.equal(initialsOf("", "iam@client.example"), "I");
   });

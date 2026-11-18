@@ -36,6 +36,7 @@ from ai_workforce_api.controls import BY_KEY, DOMAIN_LABELS
 from ai_workforce_api.db import transaction
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.models import ModelProvider, ModelRequest
+from ai_workforce_api.prompt_data import neutral
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 
 Status = Literal["RECOMMENDED", "POTENTIAL", "NOT_RECOMMENDED", "JUDGMENT"]
@@ -766,7 +767,7 @@ def _read_reports(
                 system=REPORT_PROMPT,
                 max_tokens=16000,
             ),
-            "soc-report/1",
+            "soc-report/2",  # /2: the report's tags made inert (18 November 2026, S1)
             {"application": str(facts.application_id), "report": str(report_id)},
         )
         status, raw, call_id = call.status, call.raw, call.call_id
@@ -807,7 +808,9 @@ def _report_prompt(text: str, candidates: list[Any]) -> str:
         f"- {item.control_ref} | {item.title} | {DOMAIN_LABELS.get(item.domain, item.domain)}"
         for item in candidates
     )
-    return f"Controls a CUEC can map to:\n{listed}\n\n<report>\n{text}\n</report>"
+    # The report is a service organization's: every tag in it is made inert (prompt_data;
+    # 18 November 2026, owner-approved S1).
+    return f"Controls a CUEC can map to:\n{listed}\n\n<report>\n{neutral(text)}\n</report>"
 
 
 def _fail_report(connection: psycopg.Connection[Any], report_id: Any, note: str) -> None:
