@@ -110,5 +110,7 @@ A change is done when all of these hold:
 | Line endings | `.gitattributes` |
 | Format, lint, types, critical tests, all node tests | `.github/workflows/ci.yml` |
 | Client-facing copy, design tokens, button hover | The guard tests under `tests/` |
+| No secret in any commit | `.github/workflows/security.yml` (gitleaks over the whole history; checked false positives in `.gitleaksignore`) |
+| No known advisory in a locked dependency | `.github/workflows/security.yml` (`pnpm audit`, `pip-audit`), on lockfile changes and weekly; updates proposed by `.github/dependabot.yml` |
 
-Planned, not yet built: a test that web proxies call routes that exist; a secret scan in CI.
+Planned, not yet built: a test that web proxies call routes that exist.
