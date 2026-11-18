@@ -44,15 +44,21 @@ def _unrelated(database: Database, seeded: dict[str, Any], project_id: UUID) -> 
     return UUID(str(row[0]))
 
 
-def _finalized(database: Database, project_id: UUID) -> None:
+def _running(database: Database, project_id: UUID, user_id: UUID) -> None:
+    """The engagement is launched. Rewritten 17 November 2026 from `_finalized` (the product
+    owner: the scope is never finalized): old, the scope was marked finalized (SP6), which is
+    what replanned an adopted control; new, a launched engagement replans it."""
     with connect(database.url) as connection:
         connection.execute(
             """
-            INSERT INTO engagement_settings (organization_id, project_id, scope_finalized_at)
-            SELECT organization_id, id, clock_timestamp() FROM projects WHERE id = %s
-            ON CONFLICT (project_id) DO UPDATE SET scope_finalized_at = clock_timestamp()
+            INSERT INTO engagement_settings (
+                organization_id, project_id, kicked_off_at, kicked_off_by
+            )
+            SELECT organization_id, id, clock_timestamp(), %s FROM projects WHERE id = %s
+            ON CONFLICT (project_id) DO UPDATE
+            SET kicked_off_at = clock_timestamp(), kicked_off_by = EXCLUDED.kicked_off_by
             """,
-            (project_id,),
+            (user_id, project_id),
         )
         connection.commit()
 
@@ -63,7 +69,7 @@ def test_strong_matches_are_followed_together_and_planned_from_the_standard(
     seeded, project_id, owner, _admin = _team(migrated, "adopt")
     leavers = _seed_control(migrated, seeded, project_id)
     unrelated = _unrelated(migrated, seeded, project_id)
-    _finalized(migrated, project_id)
+    _running(migrated, project_id, seeded["user_id"])
     base = f"/organizations/{seeded['organization_id']}/projects/{project_id}/standards"
     before = owner.get(f"{base}/matches").json()
     assert before["unmatched"] == 2 and before["strong"] == []
@@ -112,7 +118,10 @@ def test_strong_matches_are_followed_together_and_planned_from_the_standard(
     assert after["strong"] == [] and after["none"] + after["partial"] == 1
 
 
-def test_before_the_scope_is_final_nothing_is_planned(migrated: Database) -> None:
+def test_before_the_launch_nothing_is_planned(migrated: Database) -> None:
+    """Rewritten 17 November 2026 from test_before_the_scope_is_final_nothing_is_planned (the
+    product owner: the scope is never finalized). Old: nothing was planned before a person
+    finalized the scope. New: nothing is planned before the launch, which plans it."""
     seeded, project_id, owner, _admin = _team(migrated, "adopt-draft")
     leavers = _seed_control(migrated, seeded, project_id)
     base = f"/organizations/{seeded['organization_id']}/projects/{project_id}/standards"

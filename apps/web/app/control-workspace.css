@@ -5110,3 +5110,8 @@
   font-family: var(--font-ui);
   letter-spacing: -0.02em;
 }
+
+/* Highlights like the options above it in the same list (17 November 2026). */
+.rr-combo-new:hover:not(:disabled) {
+  background: var(--accent-soft);
+}

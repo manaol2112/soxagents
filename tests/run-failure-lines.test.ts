@@ -681,6 +681,15 @@ describe("the D&I evidence check and the wizard's reading", () => {
       "The check did not finish, so nothing of it is shown. The reader stopped.",
     );
     assert.equal(checkLine({ status: "REVIEWED", note: "" }), null);
+    // Design review rounds 4-5, 18 November 2026: the server's internal "No model is
+    // configured" is said once, as what it means for the person (no lead sentence).
+    assert.equal(
+      checkLine({
+        status: "FAILED",
+        note: "No model is configured, so the evidence was not checked against the attributes.",
+      }),
+      "The automated check is unavailable. No verdict was recorded; check the item again later or review its files against the attributes.",
+    );
   });
   it("says a failed reading, and how to go on where the reader gave no reason", () => {
     assert.equal(

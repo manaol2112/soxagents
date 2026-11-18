@@ -470,8 +470,18 @@ function parseFileReliabilities(value: unknown): FileReliability[] {
   ).slice(0, RELIABILITY_BOUNDS.files);
 }
 
+/** What clears a file's hold, as the server says it (evidence_assurance.held_action):
+ * READ_AGAIN where reading the file again can read it, REPLACE where only another copy
+ * can; null where the hold has a step of its own, or the server said none. */
+export type HeldAction = "READ_AGAIN" | "REPLACE";
+
 /** A file the gate left out of the readings; the run went ahead on the rest. */
-export type HeldFile = { fileId: string; code: HeldCode; reason: string };
+export type HeldFile = {
+  fileId: string;
+  code: HeldCode;
+  reason: string;
+  action?: HeldAction | null;
+};
 
 // The review of a request's evidence (section 10.7)
 
@@ -966,9 +976,24 @@ function parseHeldFile(value: unknown): HeldFile | null {
     return null;
   }
   const fileId = uuidOrNull(value.file_id);
-  return fileId === null
-    ? null
-    : { fileId, code: heldCode(value.code), reason: str(value.reason) };
+  const action =
+    value.action === "READ_AGAIN" || value.action === "REPLACE"
+      ? value.action
+      : // The server's explicit "nothing clears it now" (18 November 2026: images no
+        // text recognition read while it is not available) is kept, apart from no word.
+        value.action === null
+        ? null
+        : undefined;
+  if (fileId === null) {
+    return null;
+  }
+  const held = {
+    fileId,
+    code: heldCode(value.code),
+    reason: str(value.reason),
+  };
+  // Said only where the server says it: a file it gives no action keeps today's form.
+  return action === undefined ? held : { ...held, action };
 }
 
 const distinct = <T>(items: readonly T[], key: (item: T) => string): T[] => {
@@ -1298,6 +1323,11 @@ export type AssuranceCounts = {
   checking: number;
   /** Requests whose check is on hold. */
   held: number;
+  /** Of those, requests held only because none of their files' text was read: the
+   * check's line says so, with "Read all N again" where the server offers it. */
+  unread: number;
+  /** Of those, requests every file of which the server says can be read again now. */
+  rereadable: number;
   /** Requests whose check failed or is out of date: to run again. */
   again: number;
   /** Open results both readings agree are an issue. */
@@ -1335,11 +1365,16 @@ export function assuranceCounts(
   const judged = (item: AssuredAttribute) => item.verdict === "UNSETTLED";
   const tally = (pick: (item: AssuredAttribute) => boolean) =>
     attributes.filter(pick).length;
+  const unread = requests.filter(heldUnread);
   return {
     requests: requests.length,
     notChecked: has("NOT_CHECKED"),
     checking: Math.max(said(summary?.checking), has("QUEUED", "CHECKING")),
     held: Math.max(said(summary?.held), has("HELD")),
+    unread: unread.length,
+    rereadable: unread.filter((item) =>
+      item.heldFiles.every((held) => heldAction(held)?.kind === "REREAD"),
+    ).length,
     again: Math.max(
       said(summary?.failed) + said(summary?.outOfDate),
       has("FAILED", "OUT_OF_DATE"),
@@ -1368,8 +1403,10 @@ export function assurancePill(counts: AssuranceCounts): string {
           counts.issues > 0 ? plural(counts.issues, "issue") : "",
           counts.unsettled > 0 ? `${counts.unsettled} for your judgment` : "",
         ]
-      : counts.held > 0
-        ? [`${counts.held} on hold`]
+      : // Held because no file's text was read: the step's own count of the files not
+        // read says it (design review, 18 November 2026), never "on hold" beside it.
+        counts.held - counts.unread > 0
+        ? [`${counts.held - counts.unread} on hold`]
         : counts.again > 0
           ? [`${counts.again} to check again`]
           : counts.notChecked > 0
@@ -1392,9 +1429,19 @@ export function assuranceSentence(counts: AssuranceCounts): string {
       ? `${plural(counts.unsettled, "result")} for your judgment`
       : "",
   ].filter((part) => part !== "");
+  // Held because no file's text was read: said as what clears it where something does,
+  // and never as a check "to run again" (design review, 18 November 2026).
+  const held = counts.held - counts.unread;
+  const unreadOnly = counts.unread - counts.rereadable;
   const waiting = [
-    counts.held > 0
-      ? `${plural(counts.held, "request")} on hold until you act on ${counts.held === 1 ? "its" : "their"} row`
+    held > 0
+      ? `${plural(held, "request")} on hold until you act on ${held === 1 ? "its" : "their"} row`
+      : "",
+    counts.rereadable > 0
+      ? `${plural(counts.rereadable, "request")} whose files must be read again`
+      : "",
+    unreadOnly > 0
+      ? `${plural(unreadOnly, "request")} whose files could not be read`
       : "",
     counts.again > 0 ? `${plural(counts.again, "check")} to run again` : "",
     counts.notChecked > 0
@@ -1811,6 +1858,8 @@ export type CheckActionKind =
   | "CONFIRM_TYPE"
   | "REPLACE"
   | "REREAD"
+  // Every file of a group left out for the same reason, read again one after another.
+  | "REREAD_ALL"
   | "PICK_INSTANCE"
   | "RERUN"
   // A finished check an earlier engine made, checked again by the current one
@@ -1848,6 +1897,8 @@ export type CheckAction = {
   kind: CheckActionKind;
   label: string;
   fileId: string | null;
+  /** REREAD_ALL's files, in the group's order; absent for every other action. */
+  fileIds?: readonly string[];
 };
 
 const FILE_ACTIONS: Partial<
@@ -1897,19 +1948,308 @@ const FILE_REASONS: Record<HeldCode, string> = {
 /** Said of a file of the row the server lists neither as read nor as left out. */
 export const NOT_LISTED = "It is not part of this check.";
 
+/** Before a group's reason, which the gate words for one file. */
+export const FOR_EACH = "For each file: ";
+/** The codes a file is held for by its own gate (the rest hold the whole run). */
+const PER_FILE_CODES: ReadonlySet<HeldCode> = new Set<HeldCode>([
+  "CUSTODY",
+  "READ_FAILED",
+  "UNREADABLE",
+  "KIND_UNSURE",
+  "POPULATION",
+]);
+/** The codes of a file nothing of which was read. */
+const NOT_READ_CODES: ReadonlySet<HeldCode> = new Set<HeldCode>([
+  "CUSTODY",
+  "READ_FAILED",
+  "UNREADABLE",
+]);
+
+/** Whether a held file is one none of whose text was read (it failed its custody check,
+ * its reading did not finish, or nothing readable was taken from it). */
+export const textNotRead = (held: Pick<HeldFile, "code">): boolean =>
+  NOT_READ_CODES.has(held.code);
+
+/** What clears a file's hold: the server's own word first (READ_AGAIN, REPLACE, or an
+ * explicit none, which for a file not read means nothing clears it now); the code's
+ * otherwise, where the server said nothing, or the hold has a step of its own. */
+export function heldAction(held: HeldFile): CheckAction | null {
+  if (held.action === "READ_AGAIN") {
+    return { kind: "REREAD", label: READ_AGAIN_LABEL, fileId: held.fileId };
+  }
+  if (held.action === "REPLACE") {
+    return { kind: "REPLACE", label: REPLACE_LABEL, fileId: held.fileId };
+  }
+  if (held.action === null && textNotRead(held)) {
+    return null;
+  }
+  const action = FILE_ACTIONS[held.code];
+  return action === undefined ? null : { ...action, fileId: held.fileId };
+}
+
+/** A request held only because none of its files' text was read: no file passed, and
+ * every file it holds is one not read. */
+export const heldUnread = (
+  request: Pick<AssuredRequest, "status" | "fileIds" | "heldFiles">,
+): boolean =>
+  request.status === "HELD" &&
+  request.fileIds.length === 0 &&
+  request.heldFiles.length > 0 &&
+  request.heldFiles.every(textNotRead);
+
+/** The line of a request held because none of its files' text was read, said for the
+ * files of one upload (`fileIds`, the evidence dialog's): their count, why, and how many
+ * other files of the request were not read either, so every number of the dialog is the
+ * same count (design review, 18 November 2026). Null where the request is not so held
+ * or holds none of those files. */
+export function uploadHeldLine(
+  request: AssuredRequest,
+  fileIds: readonly string[],
+  nameOf: (fileId: string) => string,
+): string | null {
+  if (!heldUnread(request)) {
+    return null;
+  }
+  const mine = request.heldFiles.filter((held) =>
+    fileIds.includes(held.fileId),
+  );
+  const [first] = mine;
+  if (first === undefined) {
+    return null;
+  }
+  const reasonOf = (held: HeldFile) =>
+    sentence(held.reason) || FILE_REASONS[held.code];
+  const together = heldGroups(mine, reasonOf).length === 1;
+  const all = together ? groupUnreadReason(mine) : null;
+  const lead =
+    mine.length === 1
+      ? `${nameOf(first.fileId)} was not read, so the request was not checked: ${afterColon(reasonOf(first))}`
+      : `${mine.length} files were not read, so the request was not checked${
+          all === UNREAD_MANY_AVAILABLE_NOW
+            ? `. ${all}`
+            : all !== null
+              ? `: ${all}`
+              : together
+                ? `. ${FOR_EACH}${afterColon(reasonOf(first))}`
+                : "."
+        }`;
+  const others = request.heldFiles.length - mine.length;
+  return [
+    sentence(lead),
+    others === 0
+      ? ""
+      : others === 1
+        ? "1 other file on this request was not read either."
+        : `${others} other files on this request were not read either.`,
+  ]
+    .filter((part) => part !== "")
+    .join(" ");
+}
+
+/** The files of a check that has ended (reviewed, or held) none of whose text was read,
+ * by id, in the server's order; none for a check at work, failed or out of date. */
+export function notReadIds(
+  request: Pick<AssuredRequest, "status" | "heldFiles">,
+): string[] {
+  return request.status === "HELD" || request.status === "REVIEWED"
+    ? request.heldFiles.filter(textNotRead).map((held) => held.fileId)
+    : [];
+}
+
+/** The sentence after a colon, its first letter lower-cased where it is a word's (not an
+ * acronym's: "SAP" stays): "…: its type is not confirmed." */
+export function afterColon(text: string): string {
+  return /^[A-Z](?![A-Z])/.test(text)
+    ? `${text.charAt(0).toLowerCase()}${text.slice(1)}`
+    : text;
+}
+
+/** The held files in groups of the same code and reason, each group where its first
+ * file is, the files in their own order. */
+export function heldGroups(
+  held: readonly HeldFile[],
+  reasonOf: (file: HeldFile) => string,
+): [HeldFile, ...HeldFile[]][] {
+  const groups = new Map<string, [HeldFile, ...HeldFile[]]>();
+  for (const file of held) {
+    const key = `${file.code}\u0000${reasonOf(file)}`;
+    const group = groups.get(key);
+    if (group === undefined) {
+      groups.set(key, [file]);
+    } else {
+      group.push(file);
+    }
+  }
+  return [...groups.values()];
+}
+
 const STAGE_WORDS: Partial<Record<Stage, string>> = {
   ASSESS: "first reading",
   VERIFY: "second, independent reading",
   COMPARE: "comparing the two readings",
 };
 
-/** A file left out of the readings, with why and the action that clears it. */
-export type LeftOutLine = {
+/** One file of a grouped line, named, with the action that clears it. */
+export type LeftOutFile = {
   fileId: string;
-  /** "Checked without SAP_ticket.pdf: Its type is not confirmed." */
-  line: string;
+  name: string;
   action: CheckAction | null;
 };
+
+/** A file left out of the readings, with why and the action that clears it; or, where
+ * two or more were left out for the same reason, one line for all of them. */
+export type LeftOutLine = {
+  /** The file's id; for a group, its first file's. */
+  fileId: string;
+  /** "Checked without SAP_ticket.pdf: Its type is not confirmed." For a group, "Left
+   * out of the check, 9 files. For each file: …"; "" where the group's sentence is the
+   * check's own line (requestCheck's HELD line), which then names it. */
+  line: string;
+  /** The file's action; for a group, "Read all 9 again" where every file of it can be
+   * read again, else null (each file's own action is in `files`). */
+  action: CheckAction | null;
+  /** A group's files, in the request's order; absent for a line about one file, which
+   * keeps its one-line form. */
+  files?: LeftOutFile[];
+  /** For a file, or a group, the gate held: what held it (its code, never shown) and
+   * why, as the line says it after its lead (what "Needs attention" and a reading again
+   * word themselves from): a file's sentence; for a group, "For each file: …" or the
+   * group's own plural sentence (groupUnreadReason). Absent for a file the check does
+   * not list. */
+  kind?: HeldCode;
+  reason?: string;
+};
+
+/** Said of a group of files whose images no text recognition read, for all of them at
+ * once (design review, 18 November 2026: no singular sentence inside a group). */
+export const UNREAD_MANY_UNAVAILABLE =
+  "text recognition is not available. Review the files yourself, or read them again once an owner or admin turns on text recognition in Settings › AI workforce.";
+// Round 4, 18 November 2026: no claim about why the images were not read (recognition may
+// have been off, or tried and failed). Old: "text recognition was not available when they
+// were read. Text recognition is available now: read them again." after a colon.
+export const UNREAD_MANY_AVAILABLE_NOW =
+  "Text recognition is available now: read them again.";
+
+/** A group's plural reason, from what holds its files (never from the server's words):
+ * images no text recognition read (UNREADABLE) that the server says can be read again
+ * now (READ_AGAIN), or that nothing clears now (an explicit none); null otherwise, where
+ * each file's own sentence is said "For each file". */
+export function groupUnreadReason(group: readonly HeldFile[]): string | null {
+  if (group.length < 2 || !group.every((held) => held.code === "UNREADABLE")) {
+    return null;
+  }
+  if (group.every((held) => held.action === "READ_AGAIN")) {
+    return UNREAD_MANY_AVAILABLE_NOW;
+  }
+  return group.every((held) => held.action === null)
+    ? UNREAD_MANY_UNAVAILABLE
+    : null;
+}
+
+const capitalFirst = (text: string) =>
+  `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+
+/** Whether a left-out line is about files none of whose text was read. */
+export const lineNotRead = (line: LeftOutLine): boolean =>
+  line.kind !== undefined && textNotRead({ code: line.kind });
+
+/** A grouped line's files; empty for a line about one file. */
+export const groupFiles = (line: LeftOutLine): LeftOutFile[] =>
+  line.files ?? [];
+
+/** Every file a left-out line is about: its own, or each of its group's. */
+export function leftOutFileIds(line: LeftOutLine): string[] {
+  const files = groupFiles(line);
+  return files.length > 0 ? files.map((file) => file.fileId) : [line.fileId];
+}
+
+/** How many files of a check that has ended (reviewed, or held) none of whose text was
+ * read: each file of its not-read lines once. */
+export function notReadCount(check: RequestCheck): number {
+  if (check.standing !== "REVIEWED" && check.standing !== "HELD") {
+    return 0;
+  }
+  return check.leftOut
+    .filter(lineNotRead)
+    .reduce((count, line) => count + leftOutFileIds(line).length, 0);
+}
+
+/** After "Read all N again" (or "Read the file again"), once the readings have ended and
+ * the check holds the files again: what is still so, then the gate's reason. */
+const STILL_NOT_READ: Partial<Record<HeldCode, string>> = {
+  UNREADABLE: "the text in the images still could not be read.",
+  READ_FAILED: "the reading still did not finish.",
+  CUSTODY: "the file still did not pass its custody check.",
+};
+export const READ_AGAIN_LEAD = "Read again: ";
+/** What a read again that ended with the files held again says, after "Read again: ",
+ * where they can still be read again: one sentence of what happened, then every action
+ * still open, the one offered first (round 4, 18 November 2026: no repeat of the reason). */
+export const stillUnreadReason = (count: number): string =>
+  count === 1
+    ? "text recognition still could not read this file's images. Read it again, review the file yourself, or replace it with a clearer copy."
+    : `text recognition still could not read these ${count} files' images. Read them again, review the files yourself, or replace them with clearer copies.`;
+/** The row's confirmed line once the files a person asked to read again were read. */
+export const readAgainDone = (count: number): string =>
+  count === 1
+    ? "Read again: the file was read."
+    : `Read again: all ${count} files were read.`;
+/** The row's line while the files a person asked to read again are read. */
+export const readingAgainLine = (count: number): string =>
+  count === 1 ? "Reading the file again" : `Reading ${count} files again`;
+
+/** The check as its row says it once the files a person had read again (`fileIds`) were
+ * read and are held again: the line about them (the check's own, where it is the
+ * group's) says so plainly, then why. Every other line is as it was. */
+export function afterReadAgain(
+  check: RequestCheck,
+  fileIds: readonly string[],
+): RequestCheck {
+  const asked = new Set(fileIds);
+  const [group] = check.leftOut;
+  // Read again where text recognition was there to read them (the line could be read
+  // again): its reason ("available now: read them again") would only offer the same
+  // again, so the line says what is left (design review, 18 November 2026).
+  const rereadable = (line: LeftOutLine): boolean =>
+    line.kind === "UNREADABLE" &&
+    (line.action?.kind === "REREAD" ||
+      line.action?.kind === "REREAD_ALL" ||
+      (line === group && check.action?.kind === "REREAD_ALL"));
+  const again = (line: LeftOutLine): string | null => {
+    const still =
+      line.kind === undefined ? undefined : STILL_NOT_READ[line.kind];
+    if (
+      still === undefined ||
+      !leftOutFileIds(line).some((id) => asked.has(id))
+    ) {
+      return null;
+    }
+    if (rereadable(line)) {
+      return `${READ_AGAIN_LEAD}${stillUnreadReason(leftOutFileIds(line).length)}`;
+    }
+    // The line's reason as it says it for its files (a group's, for all or each).
+    return [`${READ_AGAIN_LEAD}${still}`, line.reason ?? ""]
+      .filter((part) => part !== "")
+      .join(" ");
+  };
+  const own =
+    check.standing === "HELD" && group !== undefined && group.line === ""
+      ? again(group)
+      : null;
+  return {
+    ...check,
+    line: own ?? check.line,
+    leftOut: check.leftOut.map((line) => {
+      const said = line.line === "" ? null : again(line);
+      return said === null ? line : { ...line, line: said };
+    }),
+  };
+}
+
+/** The group action where every file can be read again. */
+export const readAllAgain = (count: number) => `Read all ${count} again`;
+export const READ_AGAIN_LABEL = "Read the file again";
+export const REPLACE_LABEL = "Replace the file";
 
 export type RequestCheck = {
   standing: CheckStanding;
@@ -1976,6 +2316,10 @@ function sentence(text: string): string {
   return text === "" || /[.!?…]$/.test(text) ? text : `${text}.`;
 }
 
+/** Said in place of the server's "No model is configured" for a check that did not run. */
+export const NO_CHECKER =
+  "The automated check is unavailable. No verdict was recorded; check the item again later or review its files against the attributes.";
+
 /** The check's one sentence for a run that ended without a usable answer (it failed), or
  * null: nothing of the run is shown, and the server's reason (its failure sentence, else
  * the run's note). The next action is the check's own "Check again", beside it
@@ -1987,10 +2331,12 @@ export function runFailureLine(
   if (request.status !== "FAILED") {
     return null;
   }
-  return [
-    "The check did not finish, so nothing of it is shown.",
-    plainNote(failureNote) || plainNote(request.note),
-  ]
+  const reason = plainNote(failureNote) || plainNote(request.note);
+  if (reason.startsWith("No model is configured")) {
+    // Said once, in what it means for the person (design review round 5).
+    return NO_CHECKER;
+  }
+  return ["The check did not finish, so nothing of it is shown.", reason]
     .filter((part) => part !== "")
     .join(" ");
 }
@@ -2035,12 +2381,71 @@ export function requestCheck(
       : working
         ? `Being checked without ${name}: `
         : `Left out of the check, ${name}: `;
+  const leadMany = (count: number) =>
+    `${reviewed ? `Checked without ${count} files` : working ? `Being checked without ${count} files` : `Left out of the check, ${count} files`}. ${FOR_EACH}`;
+  const reasonOf = (held: HeldFile) =>
+    sentence(held.reason) || FILE_REASONS[held.code];
+  // A file none of whose text was read is said so, in those words, whatever the check
+  // did without it (design review, 18 November 2026: one fact, one word). The reason
+  // after a colon starts in lower case.
+  const lineOne = (held: HeldFile) =>
+    textNotRead(held)
+      ? `${nameOf(held.fileId)} was not read: ${afterColon(reasonOf(held))}`
+      : `${lead(nameOf(held.fileId))}${afterColon(reasonOf(held))}`;
+  // A group's reason after its lead: its own plural sentence where it has one, else
+  // each file's (design review, 18 November 2026).
+  const groupWhy = (group: readonly HeldFile[]) => {
+    const [first] = group;
+    const all = groupUnreadReason(group);
+    // The plural "available now" is a sentence of its own; the plural "not available"
+    // follows a colon (round 4, 18 November 2026).
+    return all === UNREAD_MANY_AVAILABLE_NOW
+      ? { colon: `. ${all}`, reason: all }
+      : all !== null
+        ? { colon: `: ${all}`, reason: capitalFirst(all) }
+        : {
+            colon: `. ${FOR_EACH}${afterColon(first === undefined ? "" : reasonOf(first))}`,
+            reason: `${FOR_EACH}${afterColon(first === undefined ? "" : reasonOf(first))}`,
+          };
+  };
+  const lineMany = (group: readonly HeldFile[], held: HeldFile) =>
+    textNotRead(held)
+      ? `${group.length} files were not read${groupWhy(group).colon}`
+      : `${leadMany(group.length)}${afterColon(reasonOf(held))}`;
   const leftOut: LeftOutLine[] = [
-    ...request.heldFiles.map((held) => ({
-      fileId: held.fileId,
-      line: `${lead(nameOf(held.fileId))}${sentence(held.reason) || FILE_REASONS[held.code]}`,
-      action: fileAction(held.code, held.fileId),
-    })),
+    // Files left out for the same reason are one line, their names on request.
+    ...heldGroups(request.heldFiles, reasonOf).map((group): LeftOutLine => {
+      const [first] = group;
+      if (group.length === 1) {
+        return {
+          fileId: first.fileId,
+          line: lineOne(first),
+          action: heldAction(first),
+          kind: first.code,
+          reason: reasonOf(first),
+        };
+      }
+      const each = group.map((held) => ({
+        fileId: held.fileId,
+        name: nameOf(held.fileId),
+        action: heldAction(held),
+      }));
+      return {
+        fileId: first.fileId,
+        line: lineMany(group, first),
+        action: each.every((file) => file.action?.kind === "REREAD")
+          ? {
+              kind: "REREAD_ALL",
+              label: readAllAgain(group.length),
+              fileId: null,
+              fileIds: each.map((file) => file.fileId),
+            }
+          : null,
+        files: each,
+        kind: first.code,
+        reason: groupWhy(group).reason,
+      };
+    }),
     // A file of the row the finished check lists neither as read nor as left out: said,
     // never passed over (the third error of section 1).
     ...(reviewed
@@ -2052,7 +2457,7 @@ export function requestCheck(
           )
           .map((file) => ({
             fileId: file.id,
-            line: `${lead(file.name)}${NOT_LISTED}`,
+            line: `${lead(file.name)}${afterColon(NOT_LISTED)}`,
             action: null,
           }))
       : []),
@@ -2107,6 +2512,30 @@ export function requestCheck(
           ? files.map((file) => file.id)
           : [];
     const [only] = candidates;
+    // Held only because no file passed, every file for the one reason: the group's line
+    // is the check's line, said once, with the group's action and its files below.
+    const [group] = leftOut;
+    const [held] = request.heldFiles;
+    if (
+      group !== undefined &&
+      held !== undefined &&
+      leftOut.length === 1 &&
+      groupFiles(group).length > 1 &&
+      request.fileIds.length === 0 &&
+      PER_FILE_CODES.has(code) &&
+      request.heldFiles.every((each) => each.code === code)
+    ) {
+      return {
+        ...base,
+        standing: "HELD",
+        // Design review, 18 November 2026: the files' fact in one word ("not read"),
+        // what it means for the request after it, the reason in lower case.
+        // The group's plural reason where it has one (groupUnreadReason).
+        line: `${groupFiles(group).length} files were ${textNotRead(held) ? "not read" : "left out"}, so the request was not checked${groupWhy(request.heldFiles).colon}`,
+        action: group.action,
+        leftOut: [{ ...group, line: "", action: null }],
+      };
+    }
     return {
       ...base,
       standing: "HELD",
@@ -2735,7 +3164,39 @@ export function offeredAction(
       action.kind === "REPLACE" ? facts.replaceable : facts.rereadable;
     return action.fileId !== null && able(action.fileId) ? action : null;
   }
+  if (action.kind === "REREAD_ALL") {
+    // Offered only where every file of the group can be read again by this person.
+    const ids = action.fileIds ?? [];
+    return ids.length > 1 && ids.every(facts.rereadable) ? action : null;
+  }
   return action;
+}
+
+/** What the row says once "Read all N again" has been answered, one request per file
+ * in the group's order: success only for the files the server confirmed, and the files
+ * that did not start, by name, with the first refusal's own sentence. */
+export function rereadAllOutcome(
+  results: readonly { name: string; status: number }[],
+): { done: string | null; problem: string | null } {
+  const started = results.filter((each) => each.status === 200);
+  const refused = results.filter((each) => each.status !== 200);
+  const total = results.length;
+  const done =
+    started.length === 0
+      ? null
+      : started.length === total
+        ? `All ${total} files are being read again.`
+        : `${started.length} of ${total} files are being read again.`;
+  if (refused.length === 0) {
+    return { done, problem: null };
+  }
+  const named = refused.map((each) => each.name).join(", ");
+  const why = rereadProblem(refused[0]?.status ?? 0) ?? "";
+  return {
+    done,
+    problem:
+      `Reading again did not start for ${refused.length === 1 ? "" : `${refused.length} files: `}${named}. ${why}`.trim(),
+  };
 }
 
 // One request row

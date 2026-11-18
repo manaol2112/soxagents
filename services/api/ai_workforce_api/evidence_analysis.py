@@ -415,7 +415,7 @@ def run_analysis(
         # read on from here as a file added on its item's request is.
         placing = plan_placement(
             connection, analysis_id, wizard, classification, source, extraction.text, listed,
-            len(items) > len(listed),
+            len(items) > len(listed), waiting_for_ocr=extraction.status == "NEEDS_OCR",
         )  # fmt: skip
     # Until the filing is tried, in the reading's transaction, the file is read on for the
     # request its placement means it for (the screenshot review's context and sampling's).
@@ -532,7 +532,7 @@ def run_analysis(
                     filed,
                 )
         if review is not None:
-            result, status_text, review_context, review_call, review_note, tester = review
+            result, status_text, _review_context, review_call, review_note, tester = review
             save_review(
                 cursor,
                 organization_id=organization_id,
@@ -543,7 +543,6 @@ def run_analysis(
                 requester=requester,
                 review=result,
                 status="READY" if status_text == "READY" else "NEEDS_PERSON",
-                context=review_context,
                 model_call_id=review_call,
                 note=review_note,
                 tester=tester,

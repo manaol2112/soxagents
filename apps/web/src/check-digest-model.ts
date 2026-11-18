@@ -25,6 +25,10 @@ import {
   type DispositionKind,
   type Ending,
   type FollowUpLine,
+  groupFiles,
+  type LeftOutLine,
+  leftOutFileIds,
+  lineNotRead,
   type ReliabilityLine,
   type RequestCheck,
   requestSettled,
@@ -266,6 +270,45 @@ export const FINDING_WAITS: readonly string[] = ["PROPOSED", "ANSWERED"];
 /** A file's item, in bold: what to do. */
 export const NEED_CONFIRM_TITLE = "Confirm this file's type.";
 export const NEED_FILE_TITLE = "A file was left out.";
+/** A file none of whose text was read, in bold, in the words its line uses; one only
+ * another copy can clear. */
+export const NEED_UNREAD_TITLE = "A file was not read.";
+export const NEED_REPLACE_TITLE = "A file must be replaced.";
+/** A group of files left out for the same reason, in bold, once. */
+export const needFilesTitle = (count: number) =>
+  `${count} files were left out.`;
+/** A group none of whose text was read, and one whose every file must be replaced. */
+export const needUnreadTitle = (count: number) =>
+  `${count} files were not read.`;
+export const needReplaceTitle = (count: number) =>
+  `${count} files must be replaced.`;
+
+/** A left-out line's headline, from what holds it (design review, 18 November 2026): a
+ * file not read is said so, as its line says it, and two groups with different reasons
+ * have different headlines. */
+export function leftOutTitle(item: LeftOutLine, headline: string): string {
+  const group = groupFiles(item);
+  if (headline !== NEED_FILE_TITLE) {
+    return headline;
+  }
+  // What clears it first (only another copy), then what it is (not read).
+  const replace =
+    group.length > 1
+      ? group.every((file) => file.action?.kind === "REPLACE")
+      : item.action?.kind === "REPLACE";
+  if (group.length <= 1) {
+    return replace
+      ? NEED_REPLACE_TITLE
+      : lineNotRead(item)
+        ? NEED_UNREAD_TITLE
+        : headline;
+  }
+  return replace
+    ? needReplaceTitle(group.length)
+    : lineNotRead(item)
+      ? needUnreadTitle(group.length)
+      : needFilesTitle(group.length);
+}
 /** A follow-up the review sent without a word of what to ask for. */
 export const ASK_UNSAID = "A follow-up without its wording.";
 
@@ -1089,33 +1132,47 @@ function attentionOf(
     lines: RequestCheck["leftOut"],
   ): AttentionItem[] =>
     lines.flatMap((item, at) => {
-      if (item.action === null) {
+      if (!listedLine(item)) {
         return [];
       }
-      const also = rowFile.get(item.fileId);
-      if (also !== undefined) {
-        merged.add(also.key);
+      const group = groupFiles(item).length > 1;
+      // A group whose sentence is the check's own line (a request held because no file
+      // passed) has none of its own: the check's line and action are the item's.
+      const own = item.line === "";
+      const line = own ? check.line : item.line;
+      const action =
+        own && check.action?.kind === "REREAD_ALL" ? check.action : item.action;
+      // The row's own words about any file of the line join it (a group's, each).
+      const also = leftOutFileIds(item).flatMap((fileId) => {
+        const extra = rowFile.get(fileId);
+        return extra === undefined ? [] : [extra];
+      });
+      for (const extra of also) {
+        merged.add(extra.key);
       }
       return [
         {
           key: `${kind}:${item.fileId || at}`,
           kind: "FILE",
-          mark: fileRef(rowFiles, item.fileId),
-          headline,
+          // A group is about several files: its names are on the row, under its line.
+          mark: group ? "" : fileRef(rowFiles, item.fileId),
+          headline: leftOutTitle(item, headline),
           more: 0,
-          context: [
-            also === undefined ? "" : extraWords(also),
-            needDetail(item.line),
-          ]
+          context: [...also.map(extraWords), needDetail(line)]
             .filter((part) => part !== "")
             .join(" "),
           flag: "",
           status: null,
-          control: {
-            type: "ACT",
-            action: item.action,
-            label: item.action.label,
-          },
+          // A group's own action where it has one ("Read all 9 again"); otherwise each
+          // file's action is in its own card's menu, on the row.
+          control:
+            action === null
+              ? { type: "NONE" }
+              : {
+                  type: "ACT",
+                  action,
+                  label: action.label,
+                },
           attributeKey: null,
         },
       ];
@@ -1223,10 +1280,17 @@ function attentionOf(
 
 // What is fine, and what must not be lost
 
+/** Whether a left-out line is an item under "Needs attention": a file with its own
+ * action, or a group any file of which has one (listed once, as one item). */
+const listedLine = (item: RequestCheck["leftOut"][number]) =>
+  item.action !== null || groupFiles(item).some((file) => file.action !== null);
+
 /** The files left out that have no action of their own, and the notes on a file's type
- * that have none. */
+ * that have none: each file once, a group's every file. */
 const actionless = (lines: RequestCheck["leftOut"]) =>
-  lines.filter((item) => item.action === null).length;
+  lines
+    .filter((item) => !listedLine(item))
+    .reduce((count, item) => count + leftOutFileIds(item).length, 0);
 
 /** Where a file's reliability is the caveat, and the server names each file it is about
  * (section 10.14): each file is said on its own, so the label is not said beside them. */
@@ -1312,7 +1376,7 @@ function quietOf(
   // What the check already says of a file stands for it: the row's own caveat about the
   // same file is not said a second time.
   const named = new Set(
-    [...check.leftOut, ...check.confirm].map((item) => item.fileId),
+    [...check.leftOut, ...check.confirm].flatMap(leftOutFileIds),
   );
   const partSaid =
     caveat?.label.toLowerCase().includes(QUIET_READ_IN_PART.toLowerCase()) ??

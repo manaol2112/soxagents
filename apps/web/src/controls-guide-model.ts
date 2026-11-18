@@ -34,8 +34,6 @@ export const SELECT_CONTROLS_EVENT = "aw:select-controls";
 export const CONTROLS_SAVED_EVENT = "aw:controls-saved";
 /** Opens the client's RCM upload (SP5). */
 export const RCM_UPLOAD_EVENT = "aw:rcm-upload";
-/** Opens Review and finalize (SP6). */
-export const FINALIZE_EVENT = "aw:finalize-scope";
 
 /** The control area a library domain falls in. */
 export function areaOf(domain: string): ControlArea {
@@ -64,96 +62,10 @@ export function selectionCategory(domain: string): {
   };
 }
 
-export type ScopeReview = {
-  totals: { systems: number; processes: number; controls: number };
-  byArea: Array<{ area: ControlArea; label: string; controls: number }>;
-  systems: Array<{
-    id: string;
-    name: string;
-    controls: number;
-    /** Areas a person approved with no control selected in them yet. */
-    open: string[];
-  }>;
-  processes: Array<{
-    id: string;
-    name: string;
-    controls: number;
-    systems: number;
-  }>;
-  /** What deserves a look before finalizing; none of it blocks. */
-  notes: string[];
-  /** Why the scope cannot be finalized yet; null when it can. */
-  blocked: string | null;
-};
-
-/**
- * Review and finalize (decided by the product owner, SP6): the scope as it stands, what
- * deserves a look, and whether it can be finalized. The counts are the ones the person
- * confirms; the API refuses them if the scope changed meanwhile.
- */
-export function scopeReview(onboarding: Onboarding): ScopeReview {
-  const included = onboarding.controls.filter((control) => control.included);
-  const systems = inScopeSystems(onboarding).map((system) => {
-    const mine = included.filter(
-      (control) => control.applicationId === system.id,
-    );
-    const open = (system.controlAreas ?? []).filter(
-      (area) =>
-        area !== "BUSINESS" &&
-        !mine.some((control) => areaOf(control.domain) === area),
-    );
-    return {
-      id: system.id,
-      name: system.name,
-      controls: mine.length,
-      open: open.map(
-        (area) => CONTROL_AREAS.find((item) => item.id === area)?.label ?? area,
-      ),
-    };
-  });
-  const processes = onboarding.processes.map((process) => ({
-    id: process.id,
-    name: process.name,
-    controls: included.filter((control) => control.processId === process.id)
-      .length,
-    systems: process.systemIds.length,
-  }));
-  const notes = [
-    ...systems
-      .filter((system) => system.controls === 0)
-      .map((system) => `${system.name} has no control selected.`),
-    ...systems
-      .filter((system) => system.controls > 0 && system.open.length > 0)
-      .map(
-        (system) =>
-          `${system.name}: no control selected yet in ${system.open.map((label) => label.charAt(0).toLowerCase() + label.slice(1)).join(", ")}.`,
-      ),
-    ...processes
-      .filter((process) => process.systems === 0)
-      .map((process) => `${process.name} is linked to no system.`),
-  ];
-  return {
-    totals: {
-      systems: inScopeSystems(onboarding).length,
-      processes: onboarding.processes.length,
-      controls: included.length,
-    },
-    byArea: CONTROL_AREAS.map((area) => ({
-      area: area.id,
-      label: area.label,
-      controls: included.filter((control) => areaOf(control.domain) === area.id)
-        .length,
-    })),
-    systems,
-    processes,
-    notes,
-    blocked: !onboarding.started
-      ? "Launch the engagement from onboarding first."
-      : included.length === 0
-        ? "Select at least one control first."
-        : null,
-  };
-}
+// No Review and finalize (SP6) and its scope review: removed 17 November 2026 (the product
+// owner: "Remove the requirement to finalize the scope. Scope keeps changing so it will never
+// be finalized."). Each control's work starts when it is selected on a launched engagement,
+// and at the launch for a control selected before it (workStartLine).
 
 /** The Controls tour opens by itself the first time; afterwards it waits to be asked. */
 export const CONTROLS_GUIDE_SEEN_KEY = "aw.guide.controls-setup";
@@ -197,37 +109,33 @@ export function parseControlsPane(
 }
 
 export type ScopeStep = {
-  key: "systems" | "processes" | "controls" | "finalize";
+  key: "systems" | "processes" | "controls";
   title: string;
   detail: string;
   state: "done" | "now" | "todo";
-  /** The tab the step is worked in; the controls are on their own page, and the last
-   * step has none of its own. */
+  /** The tab the step is worked in; the controls are on their own page. */
   pane: ControlsPane | null;
 };
 
 /**
- * The Systems & Processes workflow's four steps (decided by the product owner): add the
- * systems, add the processes, select the controls, then review and finalize. The current
- * step is the first not done; the processes are optional, so they are current only while
- * nothing past them is done.
+ * The Systems & Processes workflow's steps (decided by the product owner): add the systems,
+ * add the processes, then select the controls. The current step is the first not done; the
+ * processes are optional, so they are current only while nothing past them is done.
+ * Rewritten 17 November 2026 (the product owner: the scope is never finalized): old, a
+ * fourth step, Review and finalize, started the work; new, the work of each control starts
+ * when it is selected, so selecting the controls is the last step.
  */
-export function scopeSteps(
-  onboarding: Onboarding,
-  finalized: boolean,
-): ScopeStep[] {
+export function scopeSteps(onboarding: Onboarding): ScopeStep[] {
   const state = controlsSetupState(onboarding);
   const done: Record<ScopeStep["key"], boolean> = {
     systems: state.systems.length > 0,
     processes: state.processes > 0,
     controls: state.controls > 0,
-    finalize: finalized,
   };
   const order: ScopeStep["key"][] = [
     "systems",
     ...(done.controls ? [] : (["processes"] as const)),
     "controls",
-    "finalize",
   ];
   const now = order.find((key) => !done[key]) ?? null;
   const step = (
@@ -261,12 +169,6 @@ export function scopeSteps(
       "For each system and process, on Controls",
       null,
     ),
-    step(
-      "finalize",
-      "Review and finalize",
-      "Confirm the scope and start planning",
-      null,
-    ),
   ];
 }
 
@@ -275,8 +177,18 @@ const TARGETS = {
   systems: ["#cs-pane-systems > :first-child"],
   processes: ["#cs-pane-processes > :first-child"],
   library: [".sp-step.is-controls"],
-  finalize: [".sp-step.is-finalize"],
+  // The steps are hidden once a control is selected: the page's Add, which still selects
+  // controls from the library, takes their place (18 November 2026).
+  libraryAdd: [".is-controls-setup .page-actions .row-menu-trigger"],
 } as const;
+
+/** When a control's work is created (scope_changes.reconcile_scope): on selection once the
+ * engagement is launched, and at the launch for what was selected before it. */
+export function workStartLine(started: boolean): string {
+  return started
+    ? "Each control's walkthrough, evidence request, test, and review are created when it is selected."
+    : "Each control's walkthrough, evidence request, test, and review are created when the engagement is launched.";
+}
 
 /** The names in a list a person typed: split at commas, semicolons, and new lines. */
 export function listOf(text: string): string[] {
@@ -344,7 +256,7 @@ export function controlsTourSteps(onboarding: Onboarding): TourStep[] {
       targets: TARGETS.tiles,
       title: "Set up the engagement's controls",
       body: [
-        "The systems in scope, the business processes, the policies and procedures that govern them, and the references that describe them. The controls selected for each are listed on the Controls page; each gets its walkthrough, evidence request, test, and review once the scope is finalized.",
+        "The systems in scope, the business processes, the policies and procedures that govern them, and the references that describe them. The controls selected for each are listed on the Controls page.",
         "Nothing is requested from the organization until a plan is approved, and nothing is sent until an approver confirms it.",
       ],
       done: true,
@@ -381,7 +293,7 @@ export function controlsTourSteps(onboarding: Onboarding): TourStep[] {
     {
       id: "library",
       pane: "systems",
-      targets: TARGETS.library,
+      targets: state.controls > 0 ? TARGETS.libraryAdd : TARGETS.library,
       title: "Select the controls",
       body: [
         state.libraryControls > 0
@@ -394,21 +306,13 @@ export function controlsTourSteps(onboarding: Onboarding): TourStep[] {
       done: state.controls > 0,
     },
     {
-      id: "finalize",
-      targets: TARGETS.finalize,
-      title: "Review and finalize",
-      body: [
-        "Nothing starts while the scope is being set up. Review it, then confirm it: each control's walkthrough, evidence request, test, and review are created then.",
-        "Evidence requests are drafted for approval; nothing is sent until an approver confirms it.",
-      ],
-      done: false,
-    },
-    {
       id: "done",
       targets: [],
-      title: "Then the work starts",
+      title: "How the work follows the scope",
       body: [
-        "Once the scope is final, the Controls page lists the controls and where each stands.",
+        `${workStartLine(onboarding.started)} The scope can change at any time: ${
+          onboarding.started ? "a" : "once the engagement is launched, a"
+        } control added later is prepared the same way, and a control removed has its open work cancelled. The Controls page lists the controls and where each stands.`,
         "This tour can be replayed from this page at any time.",
       ],
       done: true,
@@ -511,7 +415,9 @@ export function controlsBrief(onboarding: Onboarding): ControlsBrief {
       ? "Next: add the first system, or upload the organization's RCM, which finds the systems it names."
       : state.controls === 0
         ? "Next: load the standard library for these systems, or upload the organization's RCM."
-        : "Controls are in place; their work has started.",
+        : onboarding.started
+          ? "Controls are in place; their work has started."
+          : "Controls are in place; their work starts when the engagement is launched.",
     tip: "A control added later, or taken out of scope, updates the engagement's work at once: added controls get their work, and a control taken out has its open work cancelled.",
   };
 }

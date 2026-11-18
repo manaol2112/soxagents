@@ -15,7 +15,6 @@ import {
   CONTROLS_PANES,
   type ControlsPane,
   type ControlsTile,
-  FINALIZE_EVENT,
   OPEN_CONTROLS_GUIDE_EVENT,
   PANE_COUNT_EVENT,
   PROCESS_SAVED_EVENT,
@@ -100,7 +99,7 @@ export function ControlsSetupFrame({
   panes: Record<ControlsPane, ReactNode>;
   /** The Controls page, where the controls selected for each system and process are. */
   controlsHref?: string | null;
-  /** The workflow's four steps, shown until the scope is finalized. */
+  /** The workflow's three steps, shown until the first control is selected. */
   steps?: readonly ScopeStep[] | null;
 }) {
   const [pane, setPane] = useState<ControlsPane>(initial);
@@ -216,7 +215,7 @@ export function ControlsSetupFrame({
                     type="button"
                     className="sp-step-body"
                     onClick={() =>
-                      document.dispatchEvent(new Event(FINALIZE_EVENT))
+                      document.dispatchEvent(new Event(SELECT_CONTROLS_EVENT))
                     }
                   >
                     {body}
@@ -305,15 +304,10 @@ export function ControlsSetupFrame({
 }
 
 /** The page's Add: a system or a business process (each wizard opens over the tab in
- * view, and what it saved shows on its tab), controls from the library, the client's RCM
- * while no control is set up, and, until the scope is final, Review and finalize. */
-export function ControlsAddMenu({
-  controlsSet,
-  finalized,
-}: {
-  controlsSet: boolean;
-  finalized: boolean;
-}) {
+ * view, and what it saved shows on its tab), controls from the library, and the client's
+ * RCM while no control is set up. No Review and finalize (removed 17 November 2026, the
+ * product owner: the scope is never finalized). */
+export function ControlsAddMenu({ controlsSet }: { controlsSet: boolean }) {
   const raise = (event: string) => () =>
     document.dispatchEvent(new Event(event));
   return (
@@ -344,15 +338,6 @@ export function ControlsAddMenu({
             : null,
           onSelect: raise(RCM_UPLOAD_EVENT),
         },
-        ...(finalized
-          ? []
-          : [
-              {
-                label: "Review and finalize",
-                icon: "check" as const,
-                onSelect: raise(FINALIZE_EVENT),
-              },
-            ]),
       ]}
     />
   );

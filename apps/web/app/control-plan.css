@@ -1654,3 +1654,10 @@ button.pp-count:disabled {
 .cw .pr-figures .pr-text strong {
   font-weight: 600;
 }
+
+/* Its own hover, as the row menus' (17 November 2026: it had shown the global black). */
+.pp-menu-button:hover:not(:disabled) {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}

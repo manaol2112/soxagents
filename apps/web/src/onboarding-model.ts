@@ -503,8 +503,6 @@ export type Onboarding = {
   maxFollowUps: number;
   templatesConfirmed: boolean;
   started: boolean;
-  /** When a person reviewed and finalized the scope (SP6): the work starts then. */
-  scopeFinalizedAt: string | null;
   applications: SetupSystem[];
   /** Business processes the team named, beside the standard cycles. */
   processes: SetupProcess[];
@@ -1227,10 +1225,6 @@ export function parseOnboarding(value: unknown): Onboarding | null {
     maxFollowUps: Number(settings.pbc_max_follow_ups ?? 2),
     templatesConfirmed: typeof settings.templates_confirmed_at === "string",
     started: value.started === true,
-    scopeFinalizedAt:
-      typeof settings.scope_finalized_at === "string"
-        ? settings.scope_finalized_at
-        : null,
     drafting: {
       total: Number((isRecord(value.drafting) ? value.drafting.total : 0) ?? 0),
       pending: Number(
@@ -2556,7 +2550,9 @@ export function wizardWrite(fields: Record<string, unknown>): WizardWrite {
     };
   }
   // Selecting controls (SP4): what can be selected for a system or a process, then the
-  // selection; and Review and finalize (SP6) with the counts the person reviewed.
+  // selection, which starts each control's work on a running engagement. Review and
+  // finalize (SP6) is removed (17 November 2026, the product owner: the scope is never
+  // finalized), so "scope-finalize" is no longer an intent.
   if (intent === "scope-options" || intent === "scope-select") {
     const target = scopeTarget(fields);
     if (target === null) {
@@ -2582,26 +2578,6 @@ export function wizardWrite(fields: Record<string, unknown>): WizardWrite {
       method: "POST",
       path: `${base}/scope/select`,
       body: { ...target, library_keys: [...new Set(keys)] },
-    };
-  }
-  if (intent === "scope-finalize") {
-    const counts = ["systems", "processes", "controls"].map((key) =>
-      Number(fields[key]),
-    );
-    if (
-      !counts.every((count) => Number.isInteger(count) && count >= 0) ||
-      (counts[2] ?? 0) < 1
-    ) {
-      return { error: "invalid" };
-    }
-    return {
-      method: "POST",
-      path: `${base}/scope/finalize`,
-      body: {
-        systems: counts[0],
-        processes: counts[1],
-        controls: counts[2],
-      },
     };
   }
   // The Add system wizard (SP2): the agent's suggested areas, then the system added in

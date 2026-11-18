@@ -1054,7 +1054,7 @@ def decide_basis(
              "adopted": adopted},
         )  # fmt: skip
     note = f"The control now follows {_basis_words(write.basis)}."
-    # Planned again now, unless the scope is not final yet: its finalization plans it
+    # Planned again now, unless the engagement is not launched yet: its launch plans it
     # (standard_adoption.py, the strong matches confirmed together).
     if replan and (adopted or write.basis != facts.test_basis):
         from ai_workforce_api.evidence_plans import generate

@@ -76,7 +76,7 @@ class AdoptBody(BaseModel):
 
 class AdoptResult(BaseModel):
     adopted: int
-    # Planned again from the standard now (the scope is final), or at finalization.
+    # Planned again from the standard now (the engagement runs), or at launch.
     replanned: bool
 
 
@@ -159,15 +159,17 @@ def adopt_standards(
 ) -> AdoptResult:
     """A person confirms strong matches together: each control follows its matched
     standard. Every control named is checked first: the client's, undecided, and strongly
-    matched; otherwise none is decided. Planned again from the standard once the scope is final;
-    before that, the finalization plans it."""
-    from ai_workforce_api.scope_changes import scope_finalized
+    matched; otherwise none is decided. Planned again from the standard once the engagement
+    runs; before its launch, the launch plans it. Rewritten 17 November 2026 (the product
+    owner: the scope is never finalized): old, planned again only once a person finalized the
+    scope (SP6); new, once the engagement is launched, when its controls have their work."""
+    from ai_workforce_api.scope_changes import started
 
     wanted = list(dict.fromkeys(control_ids))
     keys = {item.control_id: item.library_key for item in matches(connection, project_id).strong}
     if any(control_id not in keys for control_id in wanted):
         raise MatchState("a control changed or no longer matches a standard strongly")
-    replan = scope_finalized(connection, project_id)
+    replan = started(connection, project_id)
     for control_id in wanted:
         facts = load_control(connection, control_id)
         if facts is None or facts.project_id != project_id:

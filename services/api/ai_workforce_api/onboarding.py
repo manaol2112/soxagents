@@ -153,8 +153,8 @@ class SettingsBody(BaseModel):
     templates_confirmed_at: datetime | None
     kicked_off_at: datetime | None
     version: int
-    # Review and finalize (SP6, migration 0111): the engagement's work starts here.
-    scope_finalized_at: datetime | None = None
+    # No scope_finalized_at (removed 17 November 2026, the product owner: the scope is never
+    # finalized). The column (migration 0111) keeps when SP6 engagements were finalized.
 
 
 class CuecBody(BaseModel):
@@ -1151,7 +1151,7 @@ def _settings(connection: psycopg.Connection[Any], project_id: UUID) -> Settings
         SELECT period_end, client_coordinator_name, client_coordinator_email, client_domains,
                pbc_due_days, pbc_follow_up_days, pbc_max_follow_ups, templates_confirmed_at,
                kicked_off_at, version, client_name, engagement_type, period_start,
-               fiscal_year, methodology, reporting_objectives, frameworks, scope_finalized_at
+               fiscal_year, methodology, reporting_objectives, frameworks
         FROM engagement_settings WHERE project_id = %s
         """,
         (project_id,),
@@ -1176,7 +1176,6 @@ def _settings(connection: psycopg.Connection[Any], project_id: UUID) -> Settings
         methodology=None if row[14] is None else str(row[14]),
         reporting_objectives=str(row[15]),
         frameworks=None if row[16] is None else [str(item) for item in row[16]],
-        scope_finalized_at=row[17],
     )
 
 
@@ -3642,18 +3641,10 @@ def approve_plan(
         ).fetchone()
         if claimed is None:
             raise OnboardingState("engagement has started")
-        # Launched with controls in scope, the scope is final now: their work is created
-        # below. Launched without, the work waits for Review and finalize (SP6).
-        cursor.execute(
-            """
-            UPDATE engagement_settings
-            SET scope_finalized_at = kicked_off_at, scope_finalized_by = kicked_off_by
-            WHERE project_id = %s AND EXISTS (
-                SELECT 1 FROM engagement_controls WHERE project_id = %s AND included
-            )
-            """,
-            (project_id, project_id),
-        )
+        # The controls in scope get their work below. Each control added later gets its work
+        # when it is selected (scope_changes.reconcile_scope). Rewritten 17 November 2026
+        # (the product owner: the scope is never finalized): the launch no longer marks the
+        # scope final, since no work waits for it.
         cursor.execute(
             """
             UPDATE projects SET status = 'ACTIVE', version = version + 1,

@@ -262,6 +262,8 @@ async def serve(
         ),
     )
     async with worker:
+        # First, so the drafts and plan runs it queues resume with the rest.
+        await asyncio.to_thread(start_scope_work, database_url, reviewing)
         await resume_follow_ups(client, database_url)
         await resume_drafts(client, database_url)
         await resume_scans(client, database_url)
@@ -279,6 +281,20 @@ async def serve(
         await resume_policy_evidence_runs(client, database_url)
         await resume_assessments(client, database_url)
         yield
+
+
+def start_scope_work(database_url: str, refine: bool) -> int:
+    """Controls in scope with no work (selected under SP6 on an engagement whose scope was
+    never finalized) get it now (the product owner, 17 November 2026: the scope is never
+    finalized; scope_changes.start_waiting_scope). Returns the engagements started."""
+    from ai_workforce_api.scope_changes import start_waiting_scope
+
+    try:
+        with connect(database_url) as connection:
+            return len(start_waiting_scope(connection, refine=refine))
+    except Exception as error:
+        logger.warning("scope work could not be started (%s)", type(error).__name__)
+        return 0
 
 
 async def resume_assessments(client: Client, database_url: str) -> int:

@@ -668,6 +668,27 @@ def test_sample_evidence_must_depend_on_its_population() -> None:
         check_plan(data, facts)
 
 
+def test_a_d_and_i_item_never_waits_for_another_d_and_i_item() -> None:
+    """Regression, ITGC-AC-01 (17 November 2026): the planner wrote the walkthrough
+    instance as waiting for the policy. The lean grouping put each in an item of its own
+    and kept that wait, so the walkthrough was stored as waiting and was never requested:
+    nothing releases a D&I item that waits (only a sample request releases one, and D&I
+    has none). The policy went out alone and the walkthrough read "Message not drafted
+    yet". D&I evidence is requested together (27 October 2026): no D&I item waits."""
+    facts = _access_review()
+    data = rules_plan(facts).model_dump()
+    design = next(p for p in data["phases"] if p["phase"] == "DESIGN")
+    walkthrough = next(r for r in design["requirements"] if r["key"] == "design-walkthrough")
+    walkthrough["depends_on"] = "design-procedure"
+    plan = check_plan(data, facts)
+    assert _keys(plan, "DESIGN") == ["design-procedure", "design-walkthrough"]
+    assert [r.depends_on for r in plan.phase("DESIGN").requirements] == [None, None]
+    # The samples still wait for the population they are selected from.
+    assert _requirement(plan, "INTERIM", "interim-sample-evidence").depends_on == (
+        "interim-population"
+    )
+
+
 def test_the_prompt_carries_the_facts_and_the_decisions_the_records_settle() -> None:
     prompt = prompt_for(_access_review())
     assert "<control>" in prompt

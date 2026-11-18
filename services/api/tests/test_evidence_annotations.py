@@ -21,7 +21,7 @@ readings and synthetic files only: no model, no client evidence.
 
 import io
 import json
-import shutil
+import os
 import sys
 from dataclasses import replace
 from pathlib import Path
@@ -106,8 +106,11 @@ from ai_workforce_api.storage import MockObjectStore
 
 __all__ = ["migrated"]
 
+# 17 November 2026: found the way the app finds it (TesseractOcr.locate), not only on the
+# PATH, which the Windows installer leaves alone: a skip there hid a test that could run.
 needs_local_ocr = pytest.mark.skipif(
-    shutil.which("tesseract") is None, reason="the local OCR engine (tesseract) is not installed"
+    TesseractOcr.locate(os.environ.get("OCR_TESSERACT_PATH", "")) is None,
+    reason="the local OCR engine (tesseract) is not installed",
 )
 
 REQUESTED_FOR = "Requested for: Dana Lee (DLEE)"

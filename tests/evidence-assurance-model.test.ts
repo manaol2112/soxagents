@@ -13,6 +13,8 @@ import {
   type AssuredRequest,
   acceptNote,
   acceptNoteParts,
+  afterColon,
+  afterReadAgain,
   assuranceCounts,
   assurancePill,
   assuranceProblem,
@@ -25,22 +27,34 @@ import {
   ELEMENT_DEVIATION,
   type EvidenceAssurance,
   elementWords,
+  FOR_EACH,
+  groupUnreadReason,
+  type HeldFile,
   issueDecided,
   keyedOf,
   NOT_CHECKED_LINE,
   NOT_LISTED,
+  notReadCount,
+  notReadIds,
   offeredAction,
   parseAssurance,
   READ_IN_PART,
   READINGS_DISAGREE,
   RESULT_UNREAD,
   type RowFile,
+  readAgainDone,
+  readingAgainLine,
   requestCheck,
+  rereadAllOutcome,
   rereadProblem,
   resultWords,
   SAME_INSTANCE,
   STATE_WORDS,
   STILL_CHECKING,
+  stillUnreadReason,
+  UNREAD_MANY_AVAILABLE_NOW,
+  UNREAD_MANY_UNAVAILABLE,
+  uploadHeldLine,
 } from "../apps/web/src/evidence-assurance-model.ts";
 import { dialogWrite } from "../apps/web/src/evidence-dialog-model.ts";
 import { parseFindings } from "../apps/web/src/evidence-findings-model.ts";
@@ -930,11 +944,17 @@ describe("a request's check, in every status", () => {
       },
       [POLICY_FILE, LOG],
     );
+    // Rewritten 18 November 2026 (design review: a file none of whose text was read is
+    // said "was not read", the reason after a colon in lower case, and the line carries
+    // what held it). Old: "Checked without Change_log.xlsx: Reading it did not finish."
+    // and no kind or reason; new: the line below, with kind READ_FAILED and the reason.
     assert.deepEqual(view.leftOut, [
       {
         fileId: THIRD,
-        line: "Checked without Change_log.xlsx: Reading it did not finish.",
+        line: "Change_log.xlsx was not read: reading it did not finish.",
         action: { kind: "REREAD", label: "Read the file again", fileId: THIRD },
+        kind: "READ_FAILED",
+        reason: "Reading it did not finish.",
       },
     ]);
   });
@@ -959,14 +979,17 @@ describe("a request's check, in every status", () => {
         item.action?.kind,
         item.action?.fileId,
       ]),
+      // Rewritten 18 November 2026 (design review): the reason after a colon starts in
+      // lower case, and a file none of whose text was read is said "was not read". Old:
+      // "…v3.pdf: Its type…" and "Left out of the check, Ticket_4711.pdf: Nothing…".
       [
         [
-          "Left out of the check, Access_Procedure_v3.pdf: Its type is not confirmed.",
+          "Left out of the check, Access_Procedure_v3.pdf: its type is not confirmed.",
           "CONFIRM_TYPE",
           FILE,
         ],
         [
-          "Left out of the check, Ticket_4711.pdf: Nothing readable could be taken from it.",
+          "Ticket_4711.pdf was not read: nothing readable could be taken from it.",
           "REPLACE",
           SECOND,
         ],
@@ -1237,15 +1260,23 @@ describe("a request's check, in every status", () => {
       },
       [POLICY_FILE, TICKET, LOG],
     );
+    // Rewritten 18 November 2026 (design review): the reason after a colon starts in
+    // lower case; a file none of whose text was read (UNREADABLE, CUSTODY) is said "was
+    // not read", whatever the check did without it; the line carries what held it. Old:
+    // "…: The reader…", "Checked without Change_log.xlsx: Nothing readable…", "…: It did
+    // not pass…", "Being checked without Change_log.xlsx: It did not pass…", each with
+    // a capital after the colon and no kind or reason.
     assert.deepEqual(view.leftOut, [
       {
         fileId: THIRD,
-        line: "Checked without Change_log.xlsx: The reader was not sure this is a change log.",
+        line: "Checked without Change_log.xlsx: the reader was not sure this is a change log.",
         action: {
           kind: "CONFIRM_TYPE",
           label: "Confirm the file's type",
           fileId: THIRD,
         },
+        kind: "KIND_UNSURE",
+        reason: "The reader was not sure this is a change log.",
       },
     ]);
     const reason = (code: string) =>
@@ -1253,23 +1284,23 @@ describe("a request's check, in every status", () => {
         .leftOut[0]?.line;
     assert.equal(
       reason("UNREADABLE"),
-      "Checked without Change_log.xlsx: Nothing readable could be taken from it.",
+      "Change_log.xlsx was not read: nothing readable could be taken from it.",
     );
     assert.equal(
       reason("CUSTODY"),
-      "Checked without Change_log.xlsx: It did not pass its custody check.",
+      "Change_log.xlsx was not read: it did not pass its custody check.",
     );
     assert.equal(
       reason("POPULATION"),
-      "Checked without Change_log.xlsx: It is a population: the walkthrough instance is picked first.",
+      "Checked without Change_log.xlsx: it is a population: the walkthrough instance is picked first.",
     );
     assert.equal(
       reason("TOO_LARGE"),
-      "Checked without Change_log.xlsx: It is too large to be read with the other files.",
+      "Checked without Change_log.xlsx: it is too large to be read with the other files.",
     );
     assert.equal(
       reason("NEW_CODE"),
-      "Checked without Change_log.xlsx: It was not checked.",
+      "Checked without Change_log.xlsx: it was not checked.",
     );
     assert.equal(
       check(
@@ -1279,19 +1310,22 @@ describe("a request's check, in every status", () => {
         },
         [POLICY_FILE, LOG],
       ).leftOut[0]?.line,
-      "Being checked without Change_log.xlsx: It did not pass its custody check.",
+      "Change_log.xlsx was not read: it did not pass its custody check.",
     );
   });
 
   it("a file of the row the finished check does not list is said, never passed over", () => {
     const view = check({ file_ids: [FILE] }, [POLICY_FILE, TICKET]);
+    // Rewritten 18 November 2026 (design review: lower case after a colon). Old:
+    // `Checked without Ticket_4711.pdf: ${NOT_LISTED}` ("It is…"); new: "it is…".
     assert.deepEqual(view.leftOut, [
       {
         fileId: SECOND,
-        line: `Checked without Ticket_4711.pdf: ${NOT_LISTED}`,
+        line: "Checked without Ticket_4711.pdf: it is not part of this check.",
         action: null,
       },
     ]);
+    assert.equal(NOT_LISTED, "It is not part of this check.");
     assert.deepEqual(
       check({ status: "CHECKING", file_ids: [FILE] }, [POLICY_FILE, TICKET])
         .leftOut,
@@ -1340,6 +1374,484 @@ describe("a request's check, in every status", () => {
     }).attributes;
     assert.equal(line?.letter, "F");
     assert.equal(line?.text, "");
+  });
+});
+
+// Owner's report, 17 November 2026: nine screenshots no OCR engine read, each said on
+// its own line with "Replace the file", and the run's line once more. Files left out for
+// the same reason are one line, named on request; a group every file of which can be
+// read again is read again at once; a single file keeps its one line and its action.
+// 18 November 2026: the server says the two reasons in plain, file-singular words, and
+// "READ_AGAIN" only where text recognition is available now (else no action). The
+// fixtures use its sentences; old: one "No OCR engine could read…" sentence.
+// Round 4, 18 November 2026: the server's available-now sentence no longer says why
+// (old: "Text recognition was not available when the file was read, so the text in its
+// images was not read. It is available now: read the file again.").
+describe("files left out for the same reason", () => {
+  const OCR =
+    "The text in the file's images was not read. Text recognition is available now: read the file again.";
+  const OCR_OFF =
+    "Text recognition is not available, so the text in the file's images could not be read. Review the file yourself, or read it again once an owner or admin turns on text recognition in Settings › AI workforce.";
+  const lower = (text: string) =>
+    `${text.charAt(0).toLowerCase()}${text.slice(1)}`;
+  // Round 3, 18 November 2026 (design review: no singular sentence inside a group): a
+  // group whose images no text recognition read is said for all of them, from its code
+  // and the server's action. Old: `For each file: ` and the file's own sentence.
+  const MANY = UNREAD_MANY_AVAILABLE_NOW;
+  const MANY_OFF = UNREAD_MANY_UNAVAILABLE;
+  const shots: RowFile[] = Array.from({ length: 9 }, (_, at) => ({
+    id: uuid(200 + at),
+    name: `${at + 1}_screenshot.png`,
+  }));
+  const held = (
+    files: readonly RowFile[],
+    code = "UNREADABLE",
+    reason = OCR,
+    action: string | null = "READ_AGAIN",
+  ) => files.map((file) => ({ file_id: file.id, code, reason, action }));
+  const check = (over: Record<string, unknown>, files: RowFile[]) =>
+    requestCheck(only(parsed([entry(over)])), lettered, files, span);
+  const heldRun = (heldFiles: unknown[], files: RowFile[]) =>
+    check(
+      {
+        status: "HELD",
+        held: { code: "UNREADABLE", reason: OCR },
+        file_ids: [],
+        held_files: heldFiles,
+      },
+      files,
+    );
+
+  it("nine files held for one reason: one line, the run's, with Read all 9 again", () => {
+    const view = heldRun(held(shots), shots);
+    assert.equal(view.standing, "HELD");
+    // Rewritten 18 November 2026 (design review: one fact, one word; lower case after a
+    // colon). Old: `Not checked: none of the 9 files was read. ${FOR_EACH}${OCR}`.
+    assert.equal(
+      view.line,
+      // Round 4, 18 November 2026: "available now" is its own sentence, with no claim
+      // about why. Old: "…not checked: text recognition was not available when they were
+      // read. Text recognition is available now: read them again."
+      `9 files were not read, so the request was not checked. ${MANY}`,
+    );
+    assert.deepEqual(view.action, {
+      kind: "REREAD_ALL",
+      label: "Read all 9 again",
+      fileId: null,
+      fileIds: shots.map((file) => file.id),
+    });
+    // The run's sentence is said once: the group's own line is the run's.
+    assert.equal(view.leftOut.length, 1);
+    const [group] = view.leftOut;
+    assert.equal(group?.line, "");
+    assert.equal(group?.action, null);
+    assert.deepEqual(
+      group?.files?.map((file) => [
+        file.name,
+        file.action?.kind,
+        file.action?.label,
+      ]),
+      shots.map((file) => [file.name, "REREAD", "Read the file again"]),
+    );
+  });
+
+  it("two reasons: two groups, each named once, in the files' order", () => {
+    const [one, two, three, four] = shots;
+    assert.ok(one && two && three && four);
+    const view = check(
+      {
+        file_ids: [FILE],
+        held_files: [
+          ...held([one, two]),
+          ...held([three, four], "UNREADABLE", "", "REPLACE"),
+        ],
+      },
+      [POLICY_FILE, one, two, three, four],
+    );
+    assert.equal(view.standing, "REVIEWED");
+    assert.deepEqual(
+      view.leftOut.map((line) => [
+        line.line,
+        line.action?.label ?? null,
+        line.files?.length,
+      ]),
+      [
+        // Rewritten 18 November 2026 (design review): files none of whose text was
+        // read are said so. Old: `Checked without 2 files. ${FOR_EACH}${OCR}` and
+        // "Checked without 2 files. For each file: Nothing readable…".
+        // Round 4, 18 November 2026: old "2 files were not read: text recognition was
+        // not available when they were read. …"; new: its own sentence, no why.
+        [`2 files were not read. ${MANY}`, "Read all 2 again", 2],
+        [
+          `2 files were not read. ${FOR_EACH}nothing readable could be taken from it.`,
+          null,
+          2,
+        ],
+      ],
+    );
+    // No group action where its files are replaced: each file keeps its own.
+    assert.deepEqual(
+      view.leftOut[1]?.files?.map((file) => file.action?.kind),
+      ["REPLACE", "REPLACE"],
+    );
+  });
+
+  it("held for two reasons: the run's own line stands, and each group its own", () => {
+    const [one, two, three] = shots;
+    assert.ok(one && two && three);
+    const view = heldRun(
+      [...held([one, two]), ...held([three], "KIND_UNSURE", "", null)],
+      [one, two, three],
+    );
+    assert.equal(view.line, OCR);
+    assert.equal(view.leftOut.length, 2);
+    // Rewritten 18 November 2026 (design review). Old: `Left out of the check, 2
+    // files. ${FOR_EACH}${OCR}` and "…3_screenshot.png: Its type is not confirmed.".
+    // Round 4, 18 November 2026: as above (old: "…not read: text recognition was not
+    // available when they were read. …").
+    assert.equal(view.leftOut[0]?.line, `2 files were not read. ${MANY}`);
+    assert.equal(
+      view.leftOut[1]?.line,
+      "Left out of the check, 3_screenshot.png: its type is not confirmed.",
+    );
+  });
+
+  it("one file keeps its one line and its action, as the server says it", () => {
+    const [one] = shots;
+    assert.ok(one);
+    const read = check({ file_ids: [FILE], held_files: held([one]) }, [
+      POLICY_FILE,
+      one,
+    ]);
+    // Rewritten 18 November 2026 (design review). Old: `Checked without
+    // 1_screenshot.png: ${OCR}`, no kind or reason; new: "was not read", lower case.
+    assert.deepEqual(read.leftOut, [
+      {
+        fileId: one.id,
+        line: `1_screenshot.png was not read: ${lower(OCR)}`,
+        action: {
+          kind: "REREAD",
+          label: "Read the file again",
+          fileId: one.id,
+        },
+        kind: "UNREADABLE",
+        reason: OCR,
+      },
+    ]);
+    const replaced = check(
+      {
+        file_ids: [FILE],
+        held_files: held([one], "UNREADABLE", "", "REPLACE"),
+      },
+      [POLICY_FILE, one],
+    );
+    assert.deepEqual(replaced.leftOut[0]?.action, {
+      kind: "REPLACE",
+      label: "Replace the file",
+      fileId: one.id,
+    });
+    // A server that sends no action: the code's, as before.
+    const older = check(
+      {
+        file_ids: [FILE],
+        held_files: [{ file_id: one.id, code: "UNREADABLE", reason: "" }],
+      },
+      [POLICY_FILE, one],
+    );
+    assert.equal(older.leftOut[0]?.action?.kind, "REPLACE");
+    // Held on that one file alone: the run's line, and the file's own line under it.
+    const alone = heldRun(held([one]), [one]);
+    assert.equal(alone.line, OCR);
+    assert.equal(alone.leftOut.length, 1);
+    assert.equal(alone.leftOut[0]?.files, undefined);
+  });
+
+  it("Read all N again only where every file of the group can be read again", () => {
+    const [one, two, three] = shots;
+    assert.ok(one && two && three);
+    const mixed = heldRun(
+      [...held([one, two]), ...held([three], "UNREADABLE", OCR, "REPLACE")],
+      [one, two, three],
+    );
+    // The same sentence, one file to be replaced: one line, and no action for all.
+    assert.equal(mixed.leftOut.length, 1);
+    assert.equal(mixed.action, null);
+    assert.deepEqual(
+      mixed.leftOut[0]?.files?.map((file) => file.action?.kind),
+      ["REREAD", "REREAD", "REPLACE"],
+    );
+    const all = heldRun(held([one, two, three]), [one, two, three]).action;
+    assert.ok(all !== null);
+    const facts = (rereadable: (id: string) => boolean) => ({
+      canAct: true,
+      replaceable: () => true,
+      rereadable,
+    });
+    assert.deepEqual(
+      offeredAction(
+        all,
+        facts(() => true),
+      ),
+      all,
+    );
+    assert.equal(
+      offeredAction(
+        all,
+        facts((id) => id !== two.id),
+      ),
+      null,
+    );
+    assert.equal(
+      offeredAction(all, { ...facts(() => true), canAct: false }),
+      null,
+    );
+  });
+
+  it("says what the server confirmed, and which files did not start", () => {
+    assert.deepEqual(
+      rereadAllOutcome([
+        { name: "a.png", status: 200 },
+        { name: "b.png", status: 200 },
+      ]),
+      { done: "All 2 files are being read again.", problem: null },
+    );
+    assert.deepEqual(
+      rereadAllOutcome([
+        { name: "a.png", status: 200 },
+        { name: "b.png", status: 409 },
+        { name: "c.png", status: 0 },
+      ]),
+      {
+        done: "1 of 3 files are being read again.",
+        problem: `Reading again did not start for 2 files: b.png, c.png. ${rereadProblem(409)}`,
+      },
+    );
+    assert.deepEqual(rereadAllOutcome([{ name: "a.png", status: 403 }]), {
+      done: null,
+      problem: `Reading again did not start for a.png. ${rereadProblem(403)}`,
+    });
+  });
+
+  // Design review, 18 November 2026: with text recognition not available the server
+  // sends no action, so nothing is offered (no "Replace the file" either), and the
+  // step says the files could not be read, never that a check is to run again.
+  it("text recognition not available: no action, said as files not read", () => {
+    const [one, two, three] = shots;
+    assert.ok(one && two && three);
+    const files = [one, two, three];
+    const heldFiles = held(files, "UNREADABLE", OCR_OFF, null);
+    const view = heldRun(heldFiles, files);
+    assert.equal(
+      view.line,
+      `3 files were not read, so the request was not checked: ${MANY_OFF}`,
+    );
+    assert.equal(view.action, null);
+    assert.deepEqual(
+      view.leftOut[0]?.files?.map((file) => file.action),
+      [null, null, null],
+    );
+    assert.equal(notReadCount(view), 3);
+    // An older server that sends no action key keeps the code's own.
+    const older = heldRun(
+      files.map((file) => ({
+        file_id: file.id,
+        code: "UNREADABLE",
+        reason: "",
+      })),
+      files,
+    );
+    assert.deepEqual(
+      older.leftOut[0]?.files?.map((file) => file.action?.kind),
+      ["REPLACE", "REPLACE", "REPLACE"],
+    );
+    const counts = (heldList: unknown[]) =>
+      assuranceCounts(
+        parsed([
+          entry({
+            status: "HELD",
+            held: { code: "UNREADABLE", reason: OCR },
+            file_ids: [],
+            held_files: heldList,
+          }),
+        ]),
+      );
+    const off = counts(heldFiles);
+    assert.deepEqual([off.held, off.unread, off.rereadable], [1, 1, 0]);
+    assert.equal(
+      assuranceSentence(off),
+      "1 request whose files could not be read.",
+    );
+    assert.doesNotMatch(assuranceSentence(off), /run again/);
+    const on = counts(held(files));
+    assert.deepEqual([on.held, on.unread, on.rereadable], [1, 1, 1]);
+    assert.equal(
+      assuranceSentence(on),
+      "1 request whose files must be read again.",
+    );
+  });
+
+  it("after Read all 3 again ends with the files held again, the line says so", () => {
+    const [one, two, three] = shots;
+    assert.ok(one && two && three);
+    const files = [one, two, three];
+    const view = heldRun(held(files), files);
+    const ids = files.map((file) => file.id);
+    const after = afterReadAgain(view, ids);
+    // Round 4, 18 November 2026 (found on the real screen): read again with text
+    // recognition there to read them, the line no longer repeats "available now: read them
+    // again". Old: the group's reason (MANY). New: what is left (stillUnreadReason).
+    // Round 4, same day: one sentence and the actions still open, nothing repeated. Old:
+    // "Read again: the text in the images still could not be read. Text recognition
+    // could not read these files' images. Review the files yourself, or replace them…".
+    assert.equal(
+      after.line,
+      "Read again: text recognition still could not read these 3 files' images. Read them again, review the files yourself, or replace them with clearer copies.",
+    );
+    // Nothing else of the check moves; files not asked for leave it as it was.
+    assert.deepEqual(after.leftOut, view.leftOut);
+    assert.deepEqual(after.action, view.action);
+    assert.equal(afterReadAgain(view, [uuid(999)]).line, view.line);
+    // On a finished check, the group's own line says it; the other lines are as they were.
+    const [four] = shots.slice(3);
+    assert.ok(four);
+    const reviewed = check(
+      {
+        file_ids: [FILE],
+        held_files: [
+          ...held([one, two]),
+          ...held([four], "KIND_UNSURE", "", null),
+        ],
+      },
+      [POLICY_FILE, one, two, four],
+    );
+    const again = afterReadAgain(reviewed, [one.id, two.id]);
+    assert.equal(again.leftOut[0]?.line, `Read again: ${stillUnreadReason(2)}`);
+    assert.equal(again.leftOut[1]?.line, reviewed.leftOut[1]?.line);
+    assert.equal(again.line, reviewed.line);
+    // One file: its reason, as the gate says it.
+    const single = check({ file_ids: [FILE], held_files: held([one]) }, [
+      POLICY_FILE,
+      one,
+    ]);
+    assert.equal(
+      afterReadAgain(single, [one.id]).leftOut[0]?.line,
+      "Read again: text recognition still could not read this file's images. Read it again, review the file yourself, or replace it with a clearer copy.",
+    );
+    // Where no text recognition is there to read them (no action), the reason stands:
+    // it says what would let them be read.
+    const off = heldRun(held(files, "UNREADABLE", OCR_OFF, null), files);
+    assert.equal(
+      afterReadAgain(off, ids).line,
+      `Read again: the text in the images still could not be read. ${MANY_OFF.charAt(0).toUpperCase()}${MANY_OFF.slice(1)}`,
+    );
+    assert.equal(readingAgainLine(3), "Reading 3 files again");
+    assert.equal(readingAgainLine(1), "Reading the file again");
+    assert.equal(readAgainDone(10), "Read again: all 10 files were read.");
+    assert.equal(readAgainDone(1), "Read again: the file was read.");
+  });
+
+  // Round 3, 18 November 2026: which plural sentence a group takes comes from what holds
+  // its files (code and the server's action), never from the server's words.
+  it("words a group for all its files only from its code and the server's action", () => {
+    const of = (
+      action: "READ_AGAIN" | "REPLACE" | null | "absent",
+      code = "UNREADABLE",
+    ) =>
+      shots.slice(0, 2).map(
+        (file): HeldFile => ({
+          fileId: file.id,
+          code: code as HeldFile["code"],
+          reason: "Any words at all.",
+          ...(action === "absent" ? {} : { action }),
+        }),
+      );
+    assert.equal(groupUnreadReason(of("READ_AGAIN")), MANY);
+    assert.equal(groupUnreadReason(of(null)), MANY_OFF);
+    // An older server says no action: each file's own sentence, "For each file".
+    assert.equal(groupUnreadReason(of("absent")), null);
+    assert.equal(groupUnreadReason(of("REPLACE")), null);
+    assert.equal(groupUnreadReason(of("READ_AGAIN", "READ_FAILED")), null);
+    assert.equal(groupUnreadReason(of("READ_AGAIN").slice(0, 1)), null);
+  });
+
+  it("says a held request's line for one upload's files, and its other files apart", () => {
+    const [one, two, three] = shots;
+    assert.ok(one && two && three);
+    const request = only(
+      parsed([
+        entry({
+          status: "HELD",
+          held: { code: "UNREADABLE", reason: OCR_OFF },
+          file_ids: [],
+          attributes: [],
+          held_files: held([one, two, three], "UNREADABLE", OCR_OFF, null),
+        }),
+      ]),
+    );
+    const name = (fileId: string) =>
+      shots.find((file) => file.id === fileId)?.name ?? "a file";
+    assert.equal(
+      uploadHeldLine(request, [one.id, two.id], name),
+      `2 files were not read, so the request was not checked: ${MANY_OFF} 1 other file on this request was not read either.`,
+    );
+    assert.equal(
+      uploadHeldLine(request, [one.id], name),
+      `1_screenshot.png was not read, so the request was not checked: ${lower(OCR_OFF)} 2 other files on this request were not read either.`,
+    );
+    assert.equal(
+      uploadHeldLine(request, [one.id, two.id, three.id], name),
+      `3 files were not read, so the request was not checked: ${MANY_OFF}`,
+    );
+    assert.equal(uploadHeldLine(request, [uuid(999)], name), null);
+    // Round 4, 18 November 2026: text recognition available now is its own sentence,
+    // with no claim about why the images were not read.
+    const now = only(
+      parsed([
+        entry({
+          status: "HELD",
+          held: { code: "UNREADABLE", reason: OCR },
+          file_ids: [],
+          attributes: [],
+          held_files: held([one, two]),
+        }),
+      ]),
+    );
+    assert.equal(
+      uploadHeldLine(now, [one.id, two.id], name),
+      "2 files were not read, so the request was not checked. Text recognition is available now: read them again.",
+    );
+    // Not held for files not read: the request's own line is said.
+    const reviewed = only(parsed([entry({ held_files: held([one]) })]));
+    assert.equal(uploadHeldLine(reviewed, [one.id], name), null);
+  });
+
+  it("counts and names the files not read, and only on a check that has ended", () => {
+    const [one, two, three] = shots;
+    assert.ok(one && two && three);
+    const request = only(
+      parsed([
+        entry({
+          file_ids: [FILE],
+          held_files: [
+            ...held([one, two]),
+            ...held([three], "KIND_UNSURE", "", null),
+          ],
+        }),
+      ]),
+    );
+    assert.deepEqual(notReadIds(request), [one.id, two.id]);
+    assert.equal(notReadIds({ ...request, status: "OUT_OF_DATE" }).length, 0);
+    const view = requestCheck(
+      request,
+      lettered,
+      [POLICY_FILE, one, two, three],
+      span,
+    );
+    assert.equal(notReadCount(view), 2);
+    assert.equal(notReadCount({ ...view, standing: "FAILED" }), 0);
+    assert.equal(afterColon("SAP access log."), "SAP access log.");
+    assert.equal(afterColon("Its type."), "its type.");
+    assert.equal(afterColon("A file."), "a file.");
   });
 });
 
@@ -1743,11 +2255,16 @@ describe("the step's counts, pill and line", () => {
         unsettled: 5,
       }),
     );
+    // 18 November 2026 (design review): the counts say, of the held requests, those held
+    // only because no file's text was read and those the server lets be read again (none
+    // here). Old: no unread or rereadable; new: both 0.
     assert.deepEqual(counts, {
       requests: 6,
       notChecked: 1,
       checking: 3,
       held: 2,
+      unread: 0,
+      rereadable: 0,
       again: 3,
       issues: 4,
       unsettled: 5,
@@ -1793,6 +2310,8 @@ describe("the step's counts, pill and line", () => {
       notChecked: 0,
       checking: 0,
       held: 0,
+      unread: 0,
+      rereadable: 0,
       again: 0,
       issues: 0,
       unsettled: 0,
@@ -1805,6 +2324,8 @@ describe("the step's counts, pill and line", () => {
       notChecked: 0,
       checking: 0,
       held: 0,
+      unread: 0,
+      rereadable: 0,
       issues: 0,
       unsettled: 0,
       again: 0,
@@ -1820,6 +2341,16 @@ describe("the step's counts, pill and line", () => {
       "1 for your judgment",
     );
     assert.equal(assurancePill({ ...base, held: 1, checking: 1 }), "1 on hold");
+    // Design review, 18 November 2026: a request held only because no file's text was
+    // read is not "on hold" on the pill (the step counts its files not read).
+    assert.equal(
+      assurancePill({ ...base, held: 1, unread: 1, rereadable: 1, again: 1 }),
+      "1 to check again",
+    );
+    assert.equal(
+      assurancePill({ ...base, held: 2, unread: 1, rereadable: 1 }),
+      "1 on hold",
+    );
     assert.equal(
       assurancePill({ ...base, again: 1, checking: 1 }),
       "1 to check again",
@@ -1837,6 +2368,8 @@ describe("the step's counts, pill and line", () => {
       notChecked: 0,
       checking: 0,
       held: 0,
+      unread: 0,
+      rereadable: 0,
       issues: 0,
       unsettled: 0,
       again: 0,
@@ -1865,6 +2398,24 @@ describe("the step's counts, pill and line", () => {
     assert.equal(
       assuranceSentence({ ...base, requests: 3, held: 2, again: 1 }),
       "2 requests on hold until you act on their row, 1 check to run again.",
+    );
+    // Design review, 18 November 2026: a request whose files were not read is said as
+    // what clears it, "read again" where the server offers it, never "to run again";
+    // where nothing does (text recognition not available), only that they were not.
+    assert.equal(
+      assuranceSentence({
+        ...base,
+        requests: 2,
+        held: 1,
+        unread: 1,
+        rereadable: 1,
+        again: 1,
+      }),
+      "1 request whose files must be read again, 1 check to run again.",
+    );
+    assert.equal(
+      assuranceSentence({ ...base, requests: 1, held: 1, unread: 1 }),
+      "1 request whose files could not be read.",
     );
     assert.equal(
       assuranceSentence({ ...base, requests: 1, notChecked: 1 }),
@@ -2842,6 +3393,108 @@ describe("the D&I list with the chain", () => {
     assert.equal(decided.header.status, "1 file to review");
   });
 
+  // Design review, 18 November 2026: the step said "Read 4 files.", "Review 4 files." and
+  // "4 files to review · 1 on hold" while three of them were not read, and "to run
+  // again" for files whose only action was "Read all 3 again".
+  it("files whose text was not read are counted apart, and said as what clears them", () => {
+    const shots = [SECOND, THIRD, uuid(34)];
+    const three = list({
+      requirements: [
+        requirement({
+          files: shots.map((fileId, at) =>
+            file({ fileId, name: `${at + 1}_screenshot.png` }),
+          ),
+        }),
+      ],
+      assurance: parsed(
+        [
+          entry({
+            status: "HELD",
+            held: { code: "UNREADABLE", reason: "" },
+            file_ids: [],
+            attributes: [],
+            held_files: shots.map((fileId) => ({
+              file_id: fileId,
+              code: "UNREADABLE",
+              reason:
+                "The text in the file's images was not read. Text recognition is available now: read the file again.",
+              action: "READ_AGAIN",
+            })),
+          }),
+        ],
+        { held: 1 },
+      ),
+    });
+    assert.equal(three.header.standing, "REVIEW");
+    assert.equal(three.header.status, "3 files to review · 3 not read");
+    assert.equal(
+      three.header.need.title,
+      "Review 3 files. None could be read.",
+    );
+    assert.equal(
+      three.header.need.detail,
+      "1 request whose files must be read again. Nothing is accepted until you accept it.",
+    );
+    assert.equal(three.header.agent.did, "3 files could not be read.");
+    assert.doesNotMatch(
+      `${three.header.status} ${three.header.need.detail}`,
+      /on hold|run again/,
+    );
+    // With a second request whose one file was read and whose check did not finish: the
+    // numbers reconcile (1 read and 3 not read of 4), and "to run again" is that check.
+    const other = uuid(35);
+    const four = list({
+      requirements: [
+        requirement({
+          files: shots.map((fileId, at) =>
+            file({ fileId, name: `${at + 1}_screenshot.png` }),
+          ),
+        }),
+        requirement({
+          id: uuid(36),
+          title: "One access request, request to grant",
+          files: [file({ fileId: other, name: "ticket.png" })],
+        }),
+      ],
+      assurance: parsed(
+        [
+          entry({
+            status: "HELD",
+            held: { code: "UNREADABLE", reason: "" },
+            file_ids: [],
+            attributes: [],
+            held_files: shots.map((fileId) => ({
+              file_id: fileId,
+              code: "UNREADABLE",
+              reason: "",
+              action: "READ_AGAIN",
+            })),
+          }),
+          entry({
+            requirement_id: uuid(36),
+            status: "FAILED",
+            file_ids: [other],
+            attributes: [],
+          }),
+        ],
+        { held: 1, failed: 1 },
+      ),
+    });
+    assert.equal(
+      four.header.status,
+      "4 files to review · 3 not read · 1 to check again",
+    );
+    assert.equal(four.header.need.title, "Review 4 files: 1 read, 3 not read.");
+    assert.equal(
+      four.header.need.detail,
+      "1 request whose files must be read again, 1 check to run again. Nothing is accepted until you accept it.",
+    );
+    assert.equal(
+      four.header.agent.did,
+      "Read 1 file. 3 files could not be read.",
+    );
+  });
+
   it("an attribute is evidenced only when the records of an instance show it and a person accepted", () => {
     const state = (view: ReturnType<typeof list>) =>
       Object.fromEntries(
@@ -2964,9 +3617,11 @@ describe("the D&I list with the chain", () => {
       view.rows[0]?.sub,
       "Policy or procedure · 2 files · Checked by two readings, 1 file left out",
     );
+    // Rewritten 18 November 2026 (design review: lower case after a colon). Old: "…:
+    // Its type is not confirmed."; new: "…: its type is not confirmed.".
     assert.equal(
       view.rows[0]?.assurance?.check.leftOut[0]?.line,
-      "Checked without Change_log.xlsx: Its type is not confirmed.",
+      "Checked without Change_log.xlsx: its type is not confirmed.",
     );
     assert.equal(
       view.rows[0]?.assurance?.check.attributes[0]?.passages[0]?.fileLabel,

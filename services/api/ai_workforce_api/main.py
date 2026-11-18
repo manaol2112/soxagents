@@ -316,11 +316,33 @@ def create_app(
     return app
 
 
+def warn_without_local_ocr(settings: Settings) -> bool:
+    """Say at startup when Tesseract cannot be found, rather than only when an upload is
+    held: without it a screenshot or scan waits for a person to read it (product owner,
+    17 November 2026, after "Reading ended at .01 seconds"). Returns whether it warned."""
+    from ai_workforce_api.evidence_ocr import local_ocr_available
+
+    if local_ocr_available(settings):
+        return False
+    if settings.ocr_tesseract_path.strip():
+        logger.warning(
+            "Tesseract OCR is not at OCR_TESSERACT_PATH: screenshots and scans wait for a "
+            "person to read them. Fix the path, or run make install."
+        )
+    else:
+        logger.warning(
+            "Tesseract OCR is not installed: screenshots and scans wait for a person to "
+            "read them unless the firm uses model OCR. Run make install."
+        )
+    return True
+
+
 def _lifespan(
     settings: Settings, local: LocalDraftScheduler | None
 ) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        warn_without_local_ocr(settings)
         if local is not None:
             # Drafts left open by a restart continue on the local worker.
             try:

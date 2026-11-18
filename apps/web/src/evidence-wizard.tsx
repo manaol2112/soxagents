@@ -1,9 +1,11 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   type CSSProperties,
   type DragEvent,
+  type ReactNode,
   useCallback,
   useEffect,
   useId,
@@ -17,6 +19,7 @@ import {
   assuranceProblem,
   FOLLOW_UP_TITLE,
   type Lettered,
+  READ_AGAIN_LABEL,
   REVIEW_TITLE,
 } from "./evidence-assurance-model";
 import { FileChanges } from "./evidence-change";
@@ -26,6 +29,7 @@ import { PreviewButton } from "./evidence-opener";
 import { usePlanAction } from "./evidence-plan-view";
 import {
   addressesLine,
+  analyzedLine,
   analyzeLabel,
   announcement,
   apartTitle,
@@ -44,17 +48,23 @@ import {
   fileMark,
   fileMeta,
   filesApart,
+  filesCount,
+  filesNotAdded,
   finishedAt,
-  finishedNote,
+  finishOf,
   formatElapsed,
   hintKey,
   type ItemCard,
   type ItemResult,
+  isEarlierSession,
   itemCards,
   itemResults,
+  itemsPane,
   type Lane,
   leftWithout,
   type NeedsFix,
+  NOT_ADDED_CHIP,
+  notAddedTitle,
   OUT,
   OUT_LABEL,
   type Progress,
@@ -68,8 +78,10 @@ import {
   progressOf,
   type Queued,
   queueHead,
+  type RefusalBlock,
   readHint,
   readingProblem,
+  refusalBlocks,
   resultsNote,
   resultsSummary,
   retryDelay,
@@ -80,9 +92,11 @@ import {
   UNREACHABLE_AFTER,
   type Upload,
   uploadAnswer,
+  WITHDRAWN_LINK,
   type WizardContext,
   type WizardItem,
   windowHeading,
+  withdrawnFilesHref,
   withoutRepeats,
   writeHint,
 } from "./evidence-wizard-model";
@@ -191,6 +205,9 @@ export function useEvidenceWizard(setup: WizardSetup) {
   // When the shown batch's read set out (see goneFromBatch).
   const [readFrom, setReadFrom] = useState<number | null>(null);
   const [summary, setSummary] = useState<BatchSummary | null>(null);
+  // The session taken up from the list when a newer one exists: its line says only its
+  // files that still wait for a person (round 4, 18 November 2026).
+  const [earlierId, setEarlierId] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState<string[]>([]);
   const [placing, setPlacing] = useState<Record<string, boolean>>({});
   const [problems, setProblems] = useState<Record<string, string>>({});
@@ -367,6 +384,11 @@ export function useEvidenceWizard(setup: WizardSetup) {
         setReopenOnRead(true);
       }
       setSummary(list?.find((item) => item.batchId === pick.batchId) ?? shown);
+      setEarlierId(
+        list !== null && isEarlierSession(list, pick.batchId)
+          ? pick.batchId
+          : null,
+      );
       setSession(
         (current) =>
           current ?? {
@@ -724,8 +746,9 @@ export function useEvidenceWizard(setup: WizardSetup) {
     }
     // Where it got to: its results once it is done (as the server last said, or as the
     // list of sessions says when its state is not read yet).
+    // A session that added no file opens on its files, where each says why.
     const finished = known
-      ? progress.done
+      ? progress.done && !progress.nothingAdded
       : listed !== null && !listed.inProgress;
     setDraft(null);
     setStep(finished ? 3 : 2);
@@ -899,7 +922,7 @@ export function useEvidenceWizard(setup: WizardSetup) {
     void read(session.batchId);
   }
 
-  /** "Confirm its kind" or "Read it again", where a reason names it: the reading's own
+  /** "Confirm its kind", or "Read the file again" where the server says it can: the reading's own
    * actions (the evidence dialog's route), said only once the server confirms them. */
   async function fixReading(
     line: FileLine,
@@ -1113,6 +1136,7 @@ export function useEvidenceWizard(setup: WizardSetup) {
           progress: known ? progress : null,
           summary: listed,
           seconds,
+          earlier: earlierId !== null && earlierId === session.batchId,
         });
   const line =
     shown === null ? null : { ...shown, text: `${shown.text}${offline}` };
@@ -1338,6 +1362,8 @@ export type WindowView = {
   results: ItemResult[];
   summary: ReturnType<typeof resultsSummary>;
   apart: FileLine[];
+  /** The files this browser could not add: Results' own section. */
+  notAdded: FileLine[];
   items: WizardItem[];
   attributes: Lettered[];
   batch: BatchState | null;
@@ -1395,6 +1421,7 @@ export function windowView(wizard: Wizard): WindowView {
     results,
     summary: resultsSummary(batch, results, progress),
     apart: filesApart(lines),
+    notAdded: filesNotAdded(lines),
     items,
     attributes: setup.attributes,
     batch,
@@ -1571,8 +1598,12 @@ export function WizardWindow({
 }
 
 function Footer({ view, wizard }: { view: WindowView; wizard: WindowActions }) {
-  const note = (icon: IconName, text: string, done = false) => (
-    <p className={`wz-note${done ? " is-done" : ""}`}>
+  const note = (
+    icon: IconName,
+    text: string,
+    tone: "" | "done" | "warning" | "problem" = "",
+  ) => (
+    <p className={`wz-note${tone !== "" ? ` is-${tone}` : ""}`}>
       <UiIcon name={icon} size={15} />
       <span>{text}</span>
     </p>
@@ -1659,16 +1690,18 @@ function Footer({ view, wizard }: { view: WindowView; wizard: WindowActions }) {
   }
   if (view.step === 2) {
     const done = view.progress.done;
+    // The footer says what the stages and the finished line say (finishOf).
+    const finish = done ? finishOf(view.seconds, view.progress) : null;
     return (
       <footer className="wz-foot">
         {view.unreachable
           ? offline
-          : done
-            ? note(
-                "checkCircle",
-                finishedNote(view.seconds, view.progress),
-                true,
-              )
+          : finish !== null
+            ? finish.tone === "success"
+              ? note("checkCircle", finish.note, "done")
+              : finish.tone === "warning"
+                ? note("risk", finish.note, "warning")
+                : note("x", finish.note, "problem")
             : note(
                 "info",
                 "You can close this window. The results appear on the list when they are ready.",
@@ -1681,15 +1714,25 @@ function Footer({ view, wizard }: { view: WindowView; wizard: WindowActions }) {
           >
             Keep working
           </button>
-          <button
-            type="button"
-            className="btn"
-            disabled={!done}
-            onClick={wizard.seeResults}
-          >
-            See results
-            <UiIcon name="arrow" size={14} />
-          </button>
+          {finish?.action === "add" && view.canAct ? (
+            <button type="button" className="btn" onClick={wizard.addMore}>
+              <UiIcon name="upload" size={14} />
+              Add files
+            </button>
+          ) : (
+            <button
+              type="button"
+              // While a file waits for a person, the row's own choice is the primary.
+              className={
+                finish?.primary === false ? "btn btn-secondary" : "btn"
+              }
+              disabled={!done || finish?.action === "add"}
+              onClick={wizard.seeResults}
+            >
+              See results
+              <UiIcon name="arrow" size={14} />
+            </button>
+          )}
         </div>
       </footer>
     );
@@ -2243,8 +2286,22 @@ const STAGE_ICONS: Record<StageLine["key"], IconName> = {
   sort: "tag",
   check: "listCheck",
 };
-const STAGE_WORDS = { wait: "waiting", active: "under way", done: "done" };
-const TRACK = ["Secured", "Read", "Classified", "Sorted"] as const;
+const STAGE_WORDS: Record<StageLine["state"], string> = {
+  wait: "waiting",
+  active: "under way",
+  done: "done",
+  partial: "needs attention",
+  problem: "ended with nothing done",
+};
+// The track's steps, as keys; their names are the line's (trackLabels).
+const TRACK_STEPS = ["secured", "read", "classified", "sorted"] as const;
+const STAGE_MARKS: Record<StageLine["state"], IconName> = {
+  wait: "check",
+  active: "check",
+  done: "check",
+  partial: "risk",
+  problem: "x",
+};
 
 function Analyze({
   view,
@@ -2256,6 +2313,8 @@ function Analyze({
   const filesId = useId();
   const itemsId = useId();
   const { progress } = view;
+  const finish = progress.done ? finishOf(view.seconds, progress) : null;
+  const pane = itemsPane(progress);
   return (
     <div className="wz-view wz-v2">
       <div className="wz-pipe">
@@ -2267,18 +2326,18 @@ function Analyze({
                   <UiIcon name={STAGE_ICONS[stage.key]} size={14} />
                 </span>
                 <span className="wz-tick">
-                  <UiIcon name="check" size={14} />
+                  <UiIcon name={STAGE_MARKS[stage.state]} size={14} />
                 </span>
               </span>
               <span className="wz-stage-name">{stage.name}</span>
               <span className="wz-stage-count">
-                {stage.count}
+                <span className="wz-count-text">{stage.count}</span>
                 {stage.flag !== "" ? (
                   <span
                     className={`wz-flag${stage.key === "secure" ? " is-danger" : ""}`}
                   >
-                    {" "}
-                    · {stage.flag}
+                    <span className="wz-flag-sep"> · </span>
+                    {stage.flag}
                   </span>
                 ) : null}
                 <span className="sr-only">, {STAGE_WORDS[stage.state]}</span>
@@ -2287,17 +2346,28 @@ function Analyze({
             </li>
           ))}
         </ol>
-        <div className="wz-pipe-time">
-          <p className="wz-elapsed">
-            <small>Elapsed</small>
-            <span className="num">{formatElapsed(view.seconds)}</span>
-          </p>
-          <p className={`wz-est${progress.done ? " is-done" : ""}`}>
-            {progress.done
-              ? `Finished in ${formatElapsed(view.seconds)}`
-              : estimateText(Math.max(1, progress.files))}
-          </p>
-        </div>
+        {/* Nothing added: no clock and no line (the red stage and the footer say it), so
+            the stage cards take the full width (design review round 3). */}
+        {finish !== null && finish.short === "" ? null : (
+          <div className="wz-pipe-time">
+            {/* The clock runs while work does; once done, the finished line says it. */}
+            {finish === null ? (
+              <p className="wz-elapsed">
+                <small>Elapsed</small>
+                <span className="num">{formatElapsed(view.seconds)}</span>
+              </p>
+            ) : null}
+            {finish === null || finish.short !== "" ? (
+              <p
+                className={`wz-est${finish === null ? "" : finish.tone === "success" ? " is-done" : ` is-${finish.tone}`}`}
+              >
+                {finish !== null
+                  ? finish.short
+                  : estimateText(Math.max(1, progress.files))}
+              </p>
+            ) : null}
+          </div>
+        )}
       </div>
       <div className="wz-v2-main">
         <section className="wz-pane" aria-labelledby={filesId}>
@@ -2305,16 +2375,30 @@ function Analyze({
             <h3 className="wz-side-kicker" id={filesId}>
               Files
             </h3>
-            <span className="wz-pane-note">
-              {progress.files > 0 && progress.sorted === progress.files
-                ? `${plural(progress.files, "file")} sorted`
-                : `Sorted ${progress.sorted} of ${progress.files}`}
-            </span>
+            <span className="wz-pane-note">{filesCount(progress)}</span>
           </div>
           <ul className="wz-fl">
-            {view.lines.map((line) => (
-              <FileRow key={line.key} line={line} view={view} wizard={wizard} />
-            ))}
+            {refusalBlocks(view.lines).map((block) =>
+              block.kind === "line" ? (
+                <FileRow
+                  key={block.key}
+                  line={block.line}
+                  view={view}
+                  wizard={wizard}
+                />
+              ) : (
+                <RefusalGroup key={block.key} block={block} view={view}>
+                  {block.lines.map((line) => (
+                    <FileRow
+                      key={line.key}
+                      line={line}
+                      view={view}
+                      wizard={wizard}
+                    />
+                  ))}
+                </RefusalGroup>
+              ),
+            )}
           </ul>
         </section>
         <section className="wz-pane is-items" aria-labelledby={itemsId}>
@@ -2322,15 +2406,13 @@ function Analyze({
             <h3 className="wz-side-kicker" id={itemsId}>
               D&amp;I items
             </h3>
-            <span className="wz-pane-note">Two readings each</span>
+            {pane.note !== "" ? (
+              <span className="wz-pane-note">{pane.note}</span>
+            ) : null}
           </div>
           <div className="wz-ics">
             {view.cards.length === 0 ? (
-              <p className="wz-q-empty">
-                {progress.done
-                  ? "No file went to a D&I item, so nothing is checked against the attributes."
-                  : "Each D&I item appears here as files are sorted into it."}
-              </p>
+              <p className="wz-q-empty">{pane.empty}</p>
             ) : (
               view.cards.map((card) => (
                 <ItemCardView key={card.requirementId} card={card} />
@@ -2340,6 +2422,38 @@ function Analyze({
         </section>
       </div>
     </div>
+  );
+}
+
+/** Rows refused for one reason (withdrawn from the same control): the reason once, with
+ * one link to that control's withdrawn files, then the rows. */
+function RefusalGroup({
+  block,
+  view,
+  children,
+}: {
+  block: Extract<RefusalBlock, { kind: "group" }>;
+  view: WindowView;
+  children: ReactNode;
+}) {
+  return (
+    <li className="wz-fr-group">
+      <p className="wz-fr-group-note">
+        <span>{block.note}</span>
+        <Link
+          className="wz-fr-link"
+          href={withdrawnFilesHref(
+            view.ids.organizationId,
+            view.ids.projectId,
+            block.query,
+          )}
+        >
+          {WITHDRAWN_LINK}
+          <UiIcon name="arrow" size={13} />
+        </Link>
+      </p>
+      <ul className="wz-fl">{children}</ul>
+    </li>
   );
 }
 
@@ -2361,32 +2475,46 @@ function FileRow({
         <span className="wz-fr-name">{line.name}</span>
         <span className="wz-fr-meta">{line.meta}</span>
       </span>
-      <span className="wz-fr-track" aria-hidden="true">
-        {TRACK.map((name, at) => {
-          const state = line.track[at] ?? "wait";
-          return (
-            <span key={name} className={`wz-tk is-${state}`}>
-              <span className="wz-tk-bar">
-                {at === 0 && line.sent !== null ? (
-                  <span
-                    className="wz-tk-fill"
-                    style={{ transform: `scaleX(${line.sent})` }}
-                  />
-                ) : null}
-              </span>
-              <span className="wz-tk-label">
-                <span className="wz-tk-ic">
-                  <i />
-                  <UiIcon name={state === "failed" ? "x" : "check"} size={11} />
+      {line.notAdded ? (
+        // Never secured: one status in place of a track with nothing on it.
+        <span className="wz-fr-track is-out">
+          <span className="pill tone-danger wz-fr-chip">
+            <UiIcon name="x" size={11} />
+            {NOT_ADDED_CHIP}
+          </span>
+        </span>
+      ) : (
+        <span className="wz-fr-track" aria-hidden="true">
+          {TRACK_STEPS.map((step, at) => {
+            const state = line.track[at] ?? "wait";
+            const name = line.trackLabels[at] ?? "";
+            return (
+              <span key={step} className={`wz-tk is-${state}`}>
+                <span className="wz-tk-bar">
+                  {at === 0 && line.sent !== null ? (
+                    <span
+                      className="wz-tk-fill"
+                      style={{ transform: `scaleX(${line.sent})` }}
+                    />
+                  ) : null}
                 </span>
-                {name}
+                <span className="wz-tk-label">
+                  <span className="wz-tk-ic">
+                    <i />
+                    <UiIcon
+                      name={state === "failed" ? "x" : "check"}
+                      size={11}
+                    />
+                  </span>
+                  {name}
+                </span>
               </span>
-            </span>
-          );
-        })}
-      </span>
+            );
+          })}
+        </span>
+      )}
       <span className="wz-fr-res">
-        {line.activity !== null ? (
+        {line.activity !== null && line.group === null ? (
           <span
             className={`wz-fr-act is-${line.activity.tone}${line.activity.on ? " is-on" : ""}`}
           >
@@ -2418,6 +2546,20 @@ function FileRow({
           <span className="wz-problem" role="alert">
             {problem}
           </span>
+        ) : null}
+        {line.withdrawn && line.group === null ? (
+          // In-app navigation: the page is not reloaded.
+          <Link
+            className="wz-fr-link"
+            href={withdrawnFilesHref(
+              view.ids.organizationId,
+              view.ids.projectId,
+              line.name,
+            )}
+          >
+            {WITHDRAWN_LINK}
+            <UiIcon name="arrow" size={13} />
+          </Link>
         ) : null}
         {line.retry && view.canAct && line.upload !== null ? (
           <button
@@ -2549,7 +2691,8 @@ function FixReading({
           }}
         >
           {busy ? spinner : <UiIcon name="retry" size={13} />}
-          {busy ? "Starting…" : "Read it again"}
+          {/* The step's own name for it (design review, 18 November 2026). */}
+          {busy ? "Starting…" : READ_AGAIN_LABEL}
         </button>
       </span>
     );
@@ -2845,6 +2988,7 @@ function Results({
 }) {
   const sumId = useId();
   const lookId = useId();
+  const outId = useId();
   const { summary } = view;
   return (
     <div className="wz-view wz-v3">
@@ -2853,11 +2997,13 @@ function Results({
           <h3 className="wz-sum-lead" id={sumId}>
             {summary.lead}
           </h3>
-          <p className="wz-sum-meta">
-            Analyzed in {formatElapsed(view.seconds)}
-            <br />
-            Two readings per item
-          </p>
+          {analyzedLine(view.seconds, view.progress) !== "" ? (
+            <p className="wz-sum-meta">
+              {analyzedLine(view.seconds, view.progress)}
+              <br />
+              Two readings per item
+            </p>
+          ) : null}
           {summary.lines.length > 0 ? (
             <dl className="wz-sum-lines">
               {summary.lines.map((line) => (
@@ -2897,6 +3043,50 @@ function Results({
                 wizard={wizard}
               />
             ))}
+          </section>
+        ) : null}
+        {view.notAdded.length > 0 ? (
+          <section className="wz-look" aria-labelledby={outId}>
+            <div className="wz-look-head">
+              <h3 className="wz-look-title" id={outId}>
+                {notAddedTitle(view.notAdded.length)}
+              </h3>
+            </div>
+            {refusalBlocks(view.notAdded).map((block) =>
+              block.kind === "line" ? (
+                <ApartRow
+                  key={block.key}
+                  line={block.line}
+                  view={view}
+                  wizard={wizard}
+                />
+              ) : (
+                <div key={block.key} className="wz-look-group">
+                  <p className="wz-fr-group-note">
+                    <span>{block.note}</span>
+                    <Link
+                      className="wz-fr-link"
+                      href={withdrawnFilesHref(
+                        view.ids.organizationId,
+                        view.ids.projectId,
+                        block.query,
+                      )}
+                    >
+                      {WITHDRAWN_LINK}
+                      <UiIcon name="arrow" size={13} />
+                    </Link>
+                  </p>
+                  {block.lines.map((line) => (
+                    <ApartRow
+                      key={line.key}
+                      line={line}
+                      view={view}
+                      wizard={wizard}
+                    />
+                  ))}
+                </div>
+              ),
+            )}
           </section>
         ) : null}
         {view.results.map((item) => (
@@ -2970,10 +3160,30 @@ function ApartRow({
             </span>
           </>
         ) : (
-          <span className="wz-state-line is-danger">
-            <UiIcon name="xCircle" size={14} />
-            {line.activity?.text ?? "Not added."}
-          </span>
+          <>
+            <span className="pill tone-danger wz-fr-chip">
+              <UiIcon name="x" size={11} />
+              {NOT_ADDED_CHIP}
+            </span>
+            {line.group === null &&
+            line.activity !== null &&
+            line.activity.text !== "" ? (
+              <span className="wz-why">{line.activity.text}</span>
+            ) : null}
+            {line.withdrawn && line.group === null ? (
+              <Link
+                className="wz-fr-link"
+                href={withdrawnFilesHref(
+                  view.ids.organizationId,
+                  view.ids.projectId,
+                  line.name,
+                )}
+              >
+                {WITHDRAWN_LINK}
+                <UiIcon name="arrow" size={13} />
+              </Link>
+            ) : null}
+          </>
         )}
         {line.duplicate ? (
           <span className="wz-why">
@@ -3565,14 +3775,27 @@ function ResultFile({
 
 /** On the D&I list while a session is open and its window closed: where it stands, and
  * the way back into it. */
+/** The list line's mark, by its tone (the window's finish: green, amber, red). */
+const LINE_ICONS: Record<
+  "working" | "success" | "warning" | "problem",
+  IconName
+> = {
+  working: "sparkles",
+  success: "checkCircle",
+  warning: "risk",
+  problem: "x",
+};
+
 export function WizardProgress({ wizard }: { wizard: Wizard }) {
   const line = wizard.line;
   if (line === null) {
     return null;
   }
   return (
-    <div className={`de-progress${line.done ? " is-done" : ""}`}>
-      <UiIcon name={line.done ? "checkCircle" : "sparkles"} size={15} />
+    <div
+      className={`de-progress${line.tone === "working" ? "" : ` is-${line.tone}`}`}
+    >
+      <UiIcon name={LINE_ICONS[line.tone]} size={15} />
       <span className="de-progress-text">{line.text}</span>
       <button
         type="button"

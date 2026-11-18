@@ -230,6 +230,41 @@ def test_local_ocr_reads_each_image_from_stdin_with_a_fixed_command(tmp_path: Pa
     assert TesseractOcr.locate(str(tmp_path / "missing.exe")) is None
 
 
+def test_local_ocr_is_found_where_the_windows_installer_puts_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Product owner, 17 November 2026: Tesseract is a requirement that make install installs.
+    # The Windows installer does not put it on the PATH, so with no OCR_TESSERACT_PATH the
+    # app looks in %ProgramFiles%\Tesseract-OCR, as scripts/tesseract.sh does.
+    monkeypatch.setattr("ai_workforce_api.evidence_ocr.shutil.which", lambda _name: None)
+    monkeypatch.setattr("ai_workforce_api.evidence_ocr.sys.platform", "win32")
+    monkeypatch.setenv("ProgramFiles", str(tmp_path))
+    assert TesseractOcr.locate("") is None
+    standard = tmp_path / "Tesseract-OCR" / "tesseract.exe"
+    standard.parent.mkdir()
+    standard.write_bytes(b"")
+    assert TesseractOcr.locate("") == (str(standard),)
+    # A configured path stays the only one tried, and elsewhere only the PATH counts.
+    assert TesseractOcr.locate(str(tmp_path / "missing.exe")) is None
+    monkeypatch.setattr("ai_workforce_api.evidence_ocr.sys.platform", "linux")
+    assert TesseractOcr.locate("") is None
+
+
+def test_the_api_warns_at_startup_when_local_ocr_is_missing(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    from ai_workforce_api.main import warn_without_local_ocr
+
+    command = tmp_path / "tesseract.exe"
+    command.write_bytes(b"")
+    with caplog.at_level("WARNING", logger="ai_workforce_api.main"):
+        assert warn_without_local_ocr(Settings(ocr_tesseract_path=str(command))) is False
+        assert caplog.records == []
+        assert warn_without_local_ocr(Settings(ocr_tesseract_path=str(tmp_path / "no.exe")))
+    assert "not at OCR_TESSERACT_PATH" in caplog.text
+    assert str(tmp_path) not in caplog.text
+
+
 def test_local_ocr_is_the_only_engine_unless_the_firm_opted_into_the_model(
     tmp_path: Path,
 ) -> None:

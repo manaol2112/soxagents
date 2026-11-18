@@ -49,7 +49,7 @@ import pytest
 from fastapi.testclient import TestClient
 from support import Database
 from test_design_evidence import _Case
-from test_evidence_analysis import _no_ocr, _Provider, _settings
+from test_evidence_analysis import _no_ocr, _png, _Provider, _settings
 from test_evidence_intake import _client, _Scheduler
 from test_outbound import migrated
 
@@ -61,6 +61,8 @@ from ai_workforce_api.evidence_assurance import (
     FILE_NOT_CHECKED,
     HELD_REASONS,
     MAX_READING_TEXT,
+    OCR_AVAILABLE_NOW,
+    OCR_UNAVAILABLE,
     POPULATION_PURPOSE,
     READ_IN_PART,
     READING_SECONDS,
@@ -1117,7 +1119,9 @@ def test_a_held_file_is_left_out_and_named_and_an_unsure_kind_is_read(
     assert entry["status"] == "HELD" and entry["stage"] == "GATE"
     assert entry["held"] == {"code": "POPULATION", "reason": POPULATION_PURPOSE}
     assert entry["held_files"] == [
-        {"file_id": log, "code": "POPULATION", "reason": POPULATION_PURPOSE}
+        # Rewritten 17 November 2026: each held file now carries its action (held_action);
+        # a population has a step of its own (pick the instance), so none.
+        {"file_id": log, "code": "POPULATION", "reason": POPULATION_PURPOSE, "action": None}
     ]
     assert entry["file_ids"] == [] and entry["attributes"] == []
     assert entry["engine_version"] == 2 and entry["review"] is None
@@ -1161,7 +1165,7 @@ def test_a_held_file_is_left_out_and_named_and_an_unsure_kind_is_read(
     entry = bench.entry()
     assert set(entry["file_ids"]) == {log, ticket}
     assert entry["held_files"] == [
-        {"file_id": listing, "code": "POPULATION", "reason": POPULATION_PURPOSE}
+        {"file_id": listing, "code": "POPULATION", "reason": POPULATION_PURPOSE, "action": None}
     ]
     # Together the two lists cover every file in force on the requirement.
     listed = {f["file_id"] for f in bench.item(bench.item_id)["files"]}
@@ -1221,8 +1225,13 @@ def test_a_held_file_is_left_out_and_named_and_an_unsure_kind_is_read(
     assert entry["file_ids"] == [log]
     assert sorted(entry["held_files"], key=lambda f: str(f["file_id"])) == sorted(
         [
-            {"file_id": ticket, "code": "POPULATION", "reason": POPULATION_PURPOSE},
-            {"file_id": listing, "code": "POPULATION", "reason": POPULATION_PURPOSE},
+            {"file_id": ticket, "code": "POPULATION", "reason": POPULATION_PURPOSE, "action": None},
+            {
+                "file_id": listing,
+                "code": "POPULATION",
+                "reason": POPULATION_PURPOSE,
+                "action": None,
+            },
         ],
         key=lambda f: str(f["file_id"]),
     )
@@ -1792,6 +1801,27 @@ def test_a_reading_that_failed_this_time_is_not_an_unreadable_file() -> None:
     assert custody is not None and custody.code == "CUSTODY"
 
 
+def test_an_image_no_ocr_engine_read_is_not_called_empty() -> None:
+    """Owner's report, 17 November 2026: nine screenshots on a D&I item were never read
+    (no local OCR installed, model OCR off), and each was left out as "Nothing readable
+    was extracted from the file". The hold and its code stand (so no basis hash moves);
+    the sentence says the images were not read."""
+    for engine in (1, 2):
+        waiting = gate(_facts(readable=False, waiting_for_ocr=True), engine)
+        # Rewritten 18 November 2026 (design review). Old: OCR_NOT_READ, "No OCR engine
+        # could read this file's images …". New: the gate records OCR_UNAVAILABLE; what is
+        # shown follows whether text recognition can read the file now (_held_files).
+        assert waiting == Held("UNREADABLE", OCR_UNAVAILABLE)
+        assert gate(_facts(readable=False), engine) == Held(
+            "UNREADABLE", HELD_REASONS["UNREADABLE"]
+        )
+    # Custody and a reading that did not finish still come first.
+    custody = gate(_facts(readable=False, waiting_for_ocr=True, custody_failed=True))
+    assert custody is not None and custody.code == "CUSTODY"
+    failed = gate(_facts(readable=False, waiting_for_ocr=True, read_failed=True))
+    assert failed is not None and failed.code == "READ_FAILED"
+
+
 def test_forged_delimiters_in_a_file_cannot_change_what_either_reading_is_asked() -> None:
     """Review item 11."""
     forged = (
@@ -1965,7 +1995,185 @@ def test_a_reading_that_gave_up_holds_the_file_as_read_failed(migrated: Database
     reason = "The file could not be read this time. Read it again."
     assert entry["status"] == "HELD"
     assert entry["held"] == {"code": "READ_FAILED", "reason": reason}
-    assert entry["held_files"] == [{"file_id": ticket, "code": "READ_FAILED", "reason": reason}]
+    # Rewritten 17 November 2026: the held file carries its action, read it again.
+    assert entry["held_files"] == [
+        {"file_id": ticket, "code": "READ_FAILED", "reason": reason, "action": "READ_AGAIN"}
+    ]
+
+
+def _add_png(bench: _Bench, name: str) -> str:
+    """A screenshot added on the bench's item."""
+    target = bench.item(bench.item_id)
+    added = bench.client.post(
+        f"{bench.base}/evidence-uploads",
+        params={
+            "batch_id": str(uuid4()),
+            "name": name,
+            "request_id": target["request_id"],
+            "requirement_id": target["id"],
+        },
+        content=_png(f"{name} REQ-1041 approved by Priya Shah"),
+        headers={"content-type": "image/png"},
+    )
+    assert added.status_code == 200, added.text
+    return str(added.json()["file_id"])
+
+
+def test_a_screenshot_no_ocr_engine_read_is_held_as_not_read(
+    migrated: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Owner's report, 17 November 2026, in the database: a PNG on a D&I item, read where
+    no OCR engine is installed and the firm has not turned on model OCR. Nothing of it
+    goes to a model; the check is held, both its sentence and the file's say the images
+    were not read, and the file says it can be read again. Neither the sentence nor the
+    action moves the basis hash: the run stays current. Once the firm turns on model OCR,
+    reading the file again reads its image through the model and queues a new check.
+
+    Rewritten 18 November 2026 after the design review. Old: the file always said "it can
+    be read again" (READ_AGAIN, OCR_NOT_READ), so with no text recognition anywhere
+    "Read all again" only held the files again. New: with none available (no local OCR,
+    model OCR off or no model) the file says so and has no action; once text recognition
+    is available it says so and can be read again (ocr_can_read). Neither moves the basis.
+    The local engine is pinned here, not left to whether this machine has Tesseract."""
+    from ai_workforce_api import evidence_ocr
+    from ai_workforce_api.evidence_ocr import engines_for
+
+    monkeypatch.setattr(evidence_ocr, "local_ocr_available", lambda _settings: False)
+    bench = _Bench(migrated, "noocr")
+    shot = _add_png(bench, "3_access-request-ticket.png")
+    bench.read_next(None)
+    [(status, note, analysis_id, version)] = bench.rows(
+        "SELECT extraction_status, note, id, version FROM evidence_analyses "
+        "WHERE evidence_file_id = %s",
+        UUID(shot),
+    )
+    assert status == "NEEDS_OCR" and "No OCR engine is installed" in note
+    entry = bench.entry()
+    assert entry["status"] == "HELD"
+    assert entry["held"] == {"code": "UNREADABLE", "reason": OCR_UNAVAILABLE}
+    assert entry["held_files"] == [
+        {"file_id": shot, "code": "UNREADABLE", "reason": OCR_UNAVAILABLE, "action": None}
+    ]
+    # Text recognition available now (local OCR on the server): the same hold, said so,
+    # and the file can be read again.
+    monkeypatch.setattr(evidence_ocr, "local_ocr_available", lambda _settings: True)
+    entry = bench.entry()
+    assert entry["held"] == {"code": "UNREADABLE", "reason": OCR_AVAILABLE_NOW}
+    # Round 4, 18 November 2026: true whether recognition was off or tried and failed.
+    # Old: "Text recognition was not available when the file was read, so the text in its
+    # images was not read. It is available now: read the file again."
+    assert OCR_AVAILABLE_NOW == (
+        "The text in the file's images was not read. Text recognition is available now: "
+        "read the file again."
+    )
+    assert entry["held_files"] == [
+        {"file_id": shot, "code": "UNREADABLE", "reason": OCR_AVAILABLE_NOW, "action": "READ_AGAIN"}
+    ]
+    monkeypatch.setattr(evidence_ocr, "local_ocr_available", lambda _settings: False)
+    assert [run[3] for run in bench.runs()] == ["UNREADABLE"]
+    assert bench.calls() == []
+
+    # The hash: the same with the file read as waiting for OCR or as an empty file, and
+    # the stored run's, so the run is current (HELD, never out of date).
+    project, control_id = UUID(str(bench.team["project"])), UUID(bench.control)
+    with connect(migrated.url) as connection:
+        control = chain_module._control(connection, project, control_id)
+        assert control is not None
+        request = next(
+            item
+            for item in chain_module._requests(connection, project, control_id)
+            if item.requirement_id == UUID(bench.item_id)
+        )
+        attributes = chain_module._approved(connection, control_id)
+        links = chain_module._linked(connection, control_id)
+        context = chain_module._Contexts(connection, project, control_id).sha256(request)
+    waiting = chain_module._basis(request, control, attributes, links, context_sha256=context)
+    empty = replace(request, files=tuple(replace(f, extraction_status="") for f in request.files))
+    blank = chain_module._basis(empty, control, attributes, links, context_sha256=context)
+    assert waiting.files[0]["held"] == {"code": "UNREADABLE", "reason": OCR_UNAVAILABLE}
+    assert blank.files[0]["held"] == {"code": "UNREADABLE", "reason": HELD_REASONS["UNREADABLE"]}
+    assert waiting.sha256 == blank.sha256
+    [(stored,)] = bench.rows(
+        "SELECT basis_sha256 FROM evidence_assessments WHERE requirement_id = %s",
+        UUID(bench.item_id),
+    )
+    assert stored == waiting.sha256
+
+    # A run recorded before the sentence existed, as the owner's were (its basis as the
+    # gate made it then: the empty file's sentence; a finished run is never rewritten, so
+    # it is recorded anew): the same hold, current, said as the gate says it now, with
+    # the same action, and its record keeps the sentence it was recorded with.
+    with connect(migrated.url) as connection, transaction(connection) as cursor:
+        for (run_id,) in cursor.execute(
+            "SELECT id FROM evidence_assessments WHERE requirement_id = %s AND stale_at IS NULL",
+            (UUID(bench.item_id),),
+        ).fetchall():
+            chain_module._mark_stale(cursor, run_id, ["Replaced by the test's earlier run."])
+        earlier = chain_module._gate_of(empty, len(attributes))
+        assert earlier == Held("UNREADABLE", HELD_REASONS["UNREADABLE"])
+        made = chain_module._insert(
+            cursor, control, project, control_id, empty, blank, earlier, bench.team["owner_id"]
+        )
+        assert made is not None
+    entry = bench.entry()
+    assert entry["status"] == "HELD" and entry["run_id"] == str(made[0])
+    assert entry["held"] == {"code": "UNREADABLE", "reason": OCR_UNAVAILABLE}
+    assert entry["held_files"][0]["reason"] == OCR_UNAVAILABLE
+    assert entry["held_files"][0]["action"] is None
+    assert bench.rows(
+        "SELECT held_reason, files -> 0 -> 'held' ->> 'reason' FROM evidence_assessments "
+        "WHERE id = %s",
+        made[0],
+    ) == [(HELD_REASONS["UNREADABLE"], HELD_REASONS["UNREADABLE"])]
+
+    # The firm turns on model OCR; the file is read again, with the firm's choice as it
+    # stands, through the model (no local engine on this server), and a check is queued.
+    settings_path = f"/organizations/{bench.team['org']}/evidence-settings"
+    turned = bench.owner.put(settings_path, json={"ocr_engine": "MODEL", "version": 0})
+    assert turned.status_code == 200, turned.text
+    again = bench.owner.post(
+        f"{bench.base}/evidence-analyses/{analysis_id}/reanalyze", json={"version": version}
+    )
+    assert again.status_code == 200, again.text
+    # No local engine: a configured path that is not a file is never run (TesseractOcr).
+    settings = _settings(migrated).model_copy(
+        update={"ocr_tesseract_path": "Z:/no-such-folder/tesseract.exe"}
+    )
+    provider = _Provider([{"pages": [{"text": TICKET}]}, _reading("walkthrough")])
+    with connect(migrated.url) as connection:
+        assert run_analysis(connection, settings, provider, analysis_id, engines_for(settings)) == (
+            "READY"
+        )
+    assert len(provider.requests[0].images) == 1
+    [(engine, extracted, ocr_call)] = bench.rows(
+        "SELECT ocr_engine, extraction_status, ocr_model_call_id IS NOT NULL "
+        "FROM evidence_analyses WHERE id = %s",
+        analysis_id,
+    )
+    assert (engine, extracted, ocr_call) == ("MODEL", "EXTRACTED", True)
+    runs = bench.runs()
+    assert runs[-1][1:3] == ("PENDING", False)
+    assert [run[1:3] for run in runs[:-1]] == [("HELD", True), ("HELD", True)]
+    entry = bench.entry()
+    assert (entry["status"], entry["file_ids"], entry["held_files"]) == ("QUEUED", [shot], [])
+
+
+def test_an_empty_file_is_held_with_replace_as_its_action(migrated: Database) -> None:
+    """A file with nothing readable in it (not one waiting for OCR) keeps the gate's own
+    sentence, and only another copy clears it."""
+    bench = _Bench(migrated, "emptyfile")
+    blank = bench.add("scan.txt", "   " + chr(10))
+    bench.read_next(None)
+    entry = bench.entry()
+    assert entry["status"] == "HELD"
+    assert entry["held_files"] == [
+        {
+            "file_id": blank,
+            "code": "UNREADABLE",
+            "reason": HELD_REASONS["UNREADABLE"],
+            "action": "REPLACE",
+        }
+    ]
 
 
 def test_a_new_check_is_attached_to_an_issue_a_person_has_in_hand(migrated: Database) -> None:

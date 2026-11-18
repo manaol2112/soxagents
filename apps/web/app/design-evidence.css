@@ -71,8 +71,19 @@
   color: var(--accent-text);
 }
 
-.de-progress.is-done > svg {
+.de-progress.is-done > svg,
+.de-progress.is-success > svg {
   color: var(--success);
+}
+
+/* Done with files not added or waiting for a person (amber), or with none added (red),
+   as the wizard's finish says it (evidence-wizard-model progressLine). */
+.de-progress.is-warning > svg {
+  color: var(--warning);
+}
+
+.de-progress.is-problem > svg {
+  color: var(--danger);
 }
 
 .de-progress-text {
@@ -498,6 +509,13 @@ button.de-caret > svg {
   color: var(--text-secondary);
 }
 
+/* A file the check did not read: its tag in one slot on every card, before its menu,
+   whatever the length of its name (design review, 18 November 2026). */
+.de-file-main > .de-file-tag {
+  flex: none;
+  align-self: center;
+}
+
 .de-file-text {
   display: flex;
   flex: 1 1 auto;
@@ -660,6 +678,44 @@ button.ep-file-open:focus-visible {
   flex: none;
 }
 
+/* A held line's sentence is long: it takes the width, its action wraps under it, and its
+   mark sits at its first line (design review, 18 November 2026). */
+.de-check.is-held > .de-check-line,
+.de-left-out .de-check-line {
+  align-items: flex-start;
+}
+
+.de-check.is-held > .de-check-line > svg,
+.de-left-out .de-check-line > svg {
+  margin-top: 0.2em;
+}
+
+.de-check.is-held .de-check-line > span,
+.de-left-group .de-check-line > span {
+  flex-basis: 22rem;
+}
+
+/* A button that works keeps its width: its label and its busy word share one cell, and
+   the one not said is hidden (it is not part of the button's name). */
+.de-steady {
+  display: inline-grid;
+}
+
+.de-steady > span {
+  grid-area: 1 / 1;
+  text-align: center;
+}
+
+.de-steady > .is-off {
+  visibility: hidden;
+}
+
+/* The server's confirmation, under the row's line while its files are read again. */
+.de-check-done {
+  margin: 0;
+  padding-left: calc(13px + 0.5rem);
+}
+
 /* A file left out of the readings: named, with why and the action that clears it. */
 .de-left-out {
   display: grid;
@@ -669,8 +725,17 @@ button.ep-file-open:focus-visible {
   list-style: none;
 }
 
-.de-left-out > li > svg {
+.de-left-out > li > svg,
+.de-left-group > .de-check-line > svg {
   color: var(--warning);
+}
+
+/* Files left out for the same reason: one line, its one action; each file is its own
+   card above, marked "Not read" where it was not. */
+.de-left-group {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
 }
 
 .de-check-part {
@@ -1181,6 +1246,17 @@ button.de-copy {
 @media (max-width: 640px) {
   .de-head-split {
     padding-left: 0.75rem;
+  }
+
+  /* A held line's action goes under its sentence, lined up with it. */
+  .de-check.is-held .de-check-line > span,
+  .de-left-group .de-check-line > span {
+    flex-basis: calc(100% - 13px - 0.5rem);
+  }
+
+  .de-check.is-held .de-check-line > span + button,
+  .de-left-group .de-check-line > span + button {
+    margin-left: calc(13px + 0.5rem);
   }
 }
 

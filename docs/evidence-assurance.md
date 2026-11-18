@@ -75,7 +75,7 @@ plain sentence, when any of these hold:
 | --- | --- |
 | `CUSTODY` | The reading failed its custody check. |
 | `READ_FAILED` | The reading did not finish this time (a timeout, a provider error, a reader that gave up, a cancellation): "The file could not be read this time. Read it again." |
-| `UNREADABLE` | Nothing readable was extracted (no text, password-protected, a failed OCR). |
+| `UNREADABLE` | Nothing readable was extracted (no text, password-protected, a failed OCR). A file whose images no OCR engine read (extraction `NEEDS_OCR`: no local OCR installed and model OCR off, or every engine failed) is held with the same code, so no basis hash moves, and its own sentence (`OCR_NOT_READ`): it was not read, rather than empty. |
 | `KIND_UNSURE` | The reader's confidence in the file's kind is low, or the rules classified it (no model, or the model's answer was rejected), or the demo seeded it, and no person has confirmed the kind. |
 | `POPULATION` | The file is a population on a design item: the walkthrough instance is picked first (walkthrough_instances.py). |
 

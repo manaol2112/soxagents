@@ -1683,6 +1683,7 @@ class LocalDraftScheduler:
         from ai_workforce_api.prior_year import open_runs as open_prior_year
         from ai_workforce_api.process_narrative import open_runs as open_narratives
         from ai_workforce_api.rcm_systems import open_scans
+        from ai_workforce_api.scope_changes import start_waiting_scope
         from ai_workforce_api.setup_drafting import open_drafts as open_setups
         from ai_workforce_api.system_review_queue import open_reviews as open_scopings
         from ai_workforce_api.testing_engine import open_runs
@@ -1690,6 +1691,10 @@ class LocalDraftScheduler:
         from ai_workforce_api.workpaper_service import open_drafts as open_workpapers
 
         with connect(self._settings.database_url) as connection:
+            # Controls in scope with no work (selected under SP6 on an engagement whose scope
+            # was never finalized) get it first (the product owner, 17 November 2026: the
+            # scope is never finalized), so the drafts and plan runs they queue resume below.
+            start_waiting_scope(connection, refine=live_model(self._settings))
             ids = open_drafts(connection)
             scans = open_scans(connection)
             analyses = open_analyses(connection)

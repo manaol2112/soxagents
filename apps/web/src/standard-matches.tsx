@@ -105,7 +105,7 @@ export function StandardMatchesCard({
       `${count} control${count === 1 ? " now follows its" : "s now follow their"} standard. ${
         result?.replanned === true
           ? "Their test plans were drawn up again from the standard's procedures, for approval in Planning."
-          : "They are planned from the standard's procedures when the scope is finalized."
+          : "They are planned from the standard's procedures when the engagement is launched."
       }`,
     );
     const fresh = await write(ids, { intent: "standard-matches" });

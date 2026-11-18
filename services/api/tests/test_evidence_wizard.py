@@ -39,7 +39,7 @@ import pytest
 from fastapi.testclient import TestClient
 from support import Database
 from test_design_evidence import _Case
-from test_evidence_analysis import _no_ocr, _settings
+from test_evidence_analysis import _no_ocr, _png, _settings
 from test_evidence_assurance import (
     APPROVAL,
     GRANT,
@@ -61,11 +61,14 @@ from ai_workforce_api.db import connect
 from ai_workforce_api.evidence_analysis import fail_analysis, run_analysis
 from ai_workforce_api.evidence_assurance import (
     HELD_REASONS,
+    OCR_AVAILABLE_NOW,
+    OCR_UNAVAILABLE,
     HeldCode,
     read_assurance,
     run_assessment,
 )
 from ai_workforce_api.evidence_classify import Classification, prompt_for
+from ai_workforce_api.evidence_intake import RESTORED_IN_ADD_EVIDENCE
 from ai_workforce_api.evidence_receipts import _every_item_served, covered
 from ai_workforce_api.evidence_wizard import (
     ACCEPTED_REASON,
@@ -97,12 +100,20 @@ STATE_KEYS = {
     "files", "items",
 }  # fmt: skip
 STAGE_KEYS = {"stored", "read", "sorted", "checked_items", "items", "files"}
+# `restored` added 17 November 2026 (owner decision "Restore and read"): a file withdrawn
+# from the control, restored by being dropped in the session. Old: the ten keys without it;
+# new: the same ten and `restored`; every other key's meaning is unchanged.
 FILE_KEYS = {
-    "file_id", "name", "size_bytes", "extension", "duplicate", "stage", "read", "classification",
-    "placement", "addresses",
+    "file_id", "name", "size_bytes", "extension", "duplicate", "restored", "stage", "read",
+    "classification", "placement", "addresses",
 }  # fmt: skip
 # `failure_note` added 13 November 2026 (B1i): the reading's plain sentence when it fails.
-READ_KEYS = {"status", "method", "pages", "started_at", "finished_at", "note", "failure_note"}
+# 18 November 2026 (design review, round 3): a reading says whether it took text from the
+# file and what clears one whose text was not read. Old: without text_read and action.
+READ_KEYS = {
+    "status", "method", "pages", "started_at", "finished_at", "note", "failure_note",
+    "text_read", "action",
+}  # fmt: skip
 CLASSIFICATION_KEYS = {"kind", "label", "confidence", "summary"}
 PLACEMENT_KEYS = {"status", "method", "requirement_ids", "reason", "suggestions", "version"}
 ITEM_KEYS = {
@@ -356,9 +367,11 @@ def test_a_batch_is_sorted_into_the_items_and_its_state_follows_the_contract(
     # before any placed item has a check.
     reads: list[UUID] = []
 
-    def counted(connection: Any, project_id: UUID, control_id: UUID, *rest: Any) -> Any:
+    def counted(
+        connection: Any, project_id: UUID, control_id: UUID, *rest: Any, **options: Any
+    ) -> Any:
         reads.append(control_id)
-        return read_assurance(connection, project_id, control_id, *rest)
+        return read_assurance(connection, project_id, control_id, *rest, **options)
 
     monkeypatch.setattr(wizard_module, "read_assurance", counted)
     policy_item, walk_item = case.policy, case.walkthrough
@@ -430,6 +443,7 @@ def test_a_batch_is_sorted_into_the_items_and_its_state_follows_the_contract(
         assert set(entry["classification"]) == CLASSIFICATION_KEYS
         assert set(entry["placement"]) == PLACEMENT_KEYS
         assert (entry["read"]["status"], entry["read"]["method"]) == ("READY", "TEXT")
+        assert (entry["read"]["text_read"], entry["read"]["action"]) == (True, None)
         assert _when(entry["read"]["started_at"]) <= _when(entry["read"]["finished_at"])
         assert entry["extension"] == "txt" and entry["size_bytes"] > 0
         assert entry["addresses"] == []
@@ -698,6 +712,104 @@ def test_a_file_the_gate_would_hold_is_not_placed_and_waits_for_a_person(
     assert case.state()["stages"]["sorted"] == 5
 
 
+def test_a_screenshot_no_ocr_engine_read_waits_for_a_person_saying_it_was_not_read(
+    migrated: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Owner's report, 17 November 2026: a PNG added in the wizard where no OCR engine is
+    installed and model OCR is off is not placed, and its reason says the images were not
+    read, not that the file has nothing readable in it. No model is asked."""
+    case = _Wizard(migrated, "noocr")
+    added = case.owner.post(
+        f"{case.base}/evidence-uploads",
+        params={
+            "batch_id": case.batch,
+            "name": "1_population-user-listing.png",
+            "design_control_id": case.control,
+        },
+        content=_png("User listing"),
+        headers={"content-type": "image/png"},
+    )
+    assert added.status_code == 200, added.text
+    shot = str(added.json()["file_id"])
+    never = _Reader("walkthrough", covers={case.walkthrough["title"]: "COVERED"})
+    assert case.read_file(shot, never) == "READY"
+    assert never.requests == []
+    # 18 November 2026: the entry says the reason as things stand (ocr_can_read), so the
+    # test states its premise, no text recognition now, rather than taking the machine's.
+    monkeypatch.setattr(wizard_module, "ocr_can_read", lambda *_args: False)
+    entry = case.file(shot)
+    assert entry["placement"]["status"] == "NEEDS_PERSON"
+    # Old (17 November 2026): OCR_NOT_READ. New (18 November 2026, design review): the
+    # gate's OCR_UNAVAILABLE, the same hold in plainer words.
+    assert entry["placement"]["reason"] == OCR_UNAVAILABLE
+    assert entry["placement"]["requirement_ids"] == []
+
+
+def test_a_file_whose_text_was_not_read_says_so_with_what_clears_it_as_things_stand(
+    migrated: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Design review, 18 November 2026: the wizard counted a screenshot no text recognition
+    read as read, and offered "Read it again" from the words of its reason while text
+    recognition was not available. Each file says whether its text was read, and what
+    clears it as things stand (held_action with ocr_can_read), on every route that returns
+    it; the stored reason is said as things stand too."""
+    case = _Wizard(migrated, "ocrstand")
+    added = case.owner.post(
+        f"{case.base}/evidence-uploads",
+        params={
+            "batch_id": case.batch,
+            "name": "1_population-user-listing.png",
+            "design_control_id": case.control,
+        },
+        content=_png("User listing"),
+        headers={"content-type": "image/png"},
+    )
+    assert added.status_code == 200, added.text
+    shot = str(added.json()["file_id"])
+    policy = case.add("access policy.txt", POLICY)
+    assert case.read_file(shot, _Reader("walkthrough")) == "READY"
+    case.read_file(policy, _Reader("policy", covers={case.policy["title"]: "COVERED"}))
+
+    available = {"now": False}
+    monkeypatch.setattr(wizard_module, "ocr_can_read", lambda *_args: available["now"])
+    off = case.file(shot)
+    assert (off["read"]["status"], off["read"]["text_read"]) == ("READY", False)
+    assert off["read"]["action"] is None
+    assert off["placement"]["reason"] == OCR_UNAVAILABLE
+    read = case.file(policy)
+    assert (read["read"]["text_read"], read["read"]["action"]) == (True, None)
+
+    available["now"] = True
+    on = case.file(shot)
+    assert (on["read"]["text_read"], on["read"]["action"]) == (False, "READ_AGAIN")
+    assert on["placement"]["reason"] == OCR_AVAILABLE_NOW
+
+    # A person's move answers with the same facts as things stand.
+    moved = case.place(shot, [case.walkthrough["id"]], on["placement"]["version"])
+    assert moved.status_code == 200, moved.text
+    assert (moved.json()["read"]["text_read"], moved.json()["read"]["action"]) == (
+        False,
+        "READ_AGAIN",
+    )
+    available["now"] = False
+    after = case.place(shot, [], moved.json()["placement"]["version"])
+    assert after.status_code == 200, after.text
+    assert after.json()["read"]["action"] is None
+    # The sessions list composes the same state, as things stand.
+    asked: list[bool] = []
+    compose = wizard_module._compose
+
+    def spied(*args: Any) -> Any:
+        asked.append(bool(args[4]))
+        return compose(*args)
+
+    monkeypatch.setattr(wizard_module, "_compose", spied)
+    available["now"] = True
+    listed = case.owner.get(f"{case.base}/controls/{case.control}/evidence-batches")
+    assert listed.status_code == 200, listed.text
+    assert asked == [True]
+
+
 def test_the_readers_own_findings_are_held_for_a_wizard_file_and_the_checks_stay(
     migrated: Database,
 ) -> None:
@@ -901,10 +1013,13 @@ def test_who_may_read_and_move_and_what_an_upload_may_name(migrated: Database) -
     assert plain.status_code == 409 and "wizard" in plain.json()["detail"]
     # A control that is not this engagement's is not found.
     assert case.drop("more.txt", NOTES, control=str(uuid4()), batch=str(uuid4())).status_code == 404
-    # The same file dropped again is the one held: nothing new is stored.
+    # The same file dropped again is the one held: nothing new is stored. (17 November
+    # 2026, owner decision "Restore and read": the answer gained `restored`, false here as
+    # the file was never withdrawn; old: the four keys without it.)
     again = case.drop("access policy.txt", POLICY)
     assert again.status_code == 200 and again.json() == {
         "file_id": policy, "file_name": "access policy.txt", "folder_path": "", "duplicate": True,
+        "restored": False,
     }  # fmt: skip
     assert len(case.state()["files"]) == 1
     # Placements and batches are kept as written.
@@ -1910,6 +2025,204 @@ def test_a_file_dropped_again_from_a_row_says_so(migrated: Database) -> None:
         "PLACED", "PERSON", ADDED_AGAIN,
     )  # fmt: skip
     assert placement["requirement_ids"] == [case.policy["id"], case.walkthrough["id"]]
+
+
+# --- Restore and read (product owner, 17 November 2026) ---------------------------------
+# The owner withdrew screenshots from ITGC-AC-01, dropped the same files into its Add
+# evidence dialog to have them read again, and every row was refused with "restore it from
+# the withdrawn files", which the dialog cannot reach. Decided: a file withdrawn from the
+# same control, dropped again, is restored (the withdrawals' own restoration) and read
+# again; one withdrawn from another control stays withdrawn, and says where it was.
+
+
+def _withdraw(case: _Wizard, file_id: str) -> None:
+    withdrawn = case.owner.post(
+        f"{case.base}/evidence-files/{file_id}/withdraw", json={"reason": "Wrong screenshot."}
+    )
+    assert withdrawn.status_code == 200, withdrawn.text
+
+
+def _events(case: _Wizard, file_id: str, action: str) -> list[dict[str, Any]]:
+    return [
+        row[0]
+        for row in case.rows(
+            "SELECT payload FROM audit_events WHERE target_type = 'evidence_file' "
+            "AND target_id = %s AND action = %s ORDER BY occurred_at",
+            UUID(file_id),
+            action,
+        )  # fmt: skip
+    ]
+
+
+@pytest.mark.parametrize("row", [False, True])
+def test_a_file_withdrawn_from_the_control_and_dropped_again_is_restored_and_read_again(
+    migrated: Database, row: bool
+) -> None:
+    """Traceability: the drop restores the file through the withdrawals' own restoration
+    (who, when, the reason, an evidence.restored event naming the session), puts it back
+    where it was filed (from a row, on the row's item), and reads it again from the start;
+    the session lists it as restored, through the stages of a file added now. Dropped
+    again, it is restored once."""
+    case = _Wizard(migrated, f"restore-{'row' if row else 'all'}")
+    policy = case.add("access policy.txt", POLICY)
+    covered = _Reader("policy", covers={case.policy["title"]: "COVERED"})
+    assert case.read_file(policy, covered) == "READY"
+    assert case.file(policy)["stage"] == "SORTED"
+    filed = case.filing(policy)
+    analysis = _analysis(case, policy)
+    [(before,)] = case.rows("SELECT version FROM evidence_analyses WHERE id = %s", UUID(analysis))
+    _withdraw(case, policy)
+    case.batch = str(uuid4())
+    item = case.walkthrough["id"] if row else None
+    again = case.drop("access policy.txt", POLICY, requirement_id=item)
+    assert again.status_code == 200, again.text
+    assert again.json() == {
+        "file_id": policy, "file_name": "access policy.txt", "folder_path": "", "duplicate": True,
+        "restored": True,
+    }  # fmt: skip
+    # Restored, by the owner, with the reason, in one record; the event names the session.
+    assert case.rows(
+        "SELECT restored_by, restore_reason FROM evidence_withdrawals WHERE evidence_file_id = %s",
+        UUID(policy),
+    ) == [(UUID(str(case.team["owner_id"])), RESTORED_IN_ADD_EVIDENCE)]
+    assert _events(case, policy, "evidence.restored") == [
+        {"batch_id": case.batch, "via": "ADD_EVIDENCE", "reason": RESTORED_IN_ADD_EVIDENCE}
+    ]
+    # Back where it was filed, on its request and item; from a row it serves the row's
+    # item too (asked for on a request of its own by now, so it is linked to it).
+    assert case.filing(policy) == filed
+    linked = case.rows(
+        "SELECT requirement_id FROM evidence_requirement_files "
+        "WHERE evidence_file_id = %s AND status = 'LINKED'",
+        UUID(policy),
+    )
+    assert linked == ([(UUID(case.walkthrough["id"]),)] if row else [])
+    # Read again from the start, the reading handed to the worker.
+    assert case.rows(
+        "SELECT status, version > %s FROM evidence_analyses WHERE id = %s",
+        before, UUID(analysis),
+    ) == [("PENDING", True)]  # fmt: skip
+    assert UUID(analysis) in case.worker.analyses
+    assert _events(case, policy, "evidence.reanalysis_requested") == [
+        {"batch_id": case.batch, "after": "restored"}
+    ]
+    entry = case.file(policy)
+    assert (entry["duplicate"], entry["restored"], entry["stage"]) == (True, True, "STORED")
+    assert entry["read"]["status"] == "PENDING"
+    reader = _Reader(
+        "walkthrough" if row else "policy",
+        covers={(case.walkthrough if row else case.policy)["title"]: "COVERED"},
+    )
+    assert case.read_file(policy, reader) == "READY"
+    entry = case.file(policy)
+    assert (entry["restored"], entry["stage"], entry["placement"]["status"]) == (
+        True, "SORTED", "PLACED",
+    )  # fmt: skip
+    # Dropped again, in the same session and in another: restored once, read once.
+    assert case.drop("access policy.txt", POLICY, requirement_id=item).json()["restored"] is False
+    case.batch = str(uuid4())
+    later = case.drop("access policy.txt", POLICY, requirement_id=item)
+    assert later.status_code == 200 and later.json()["restored"] is False
+    assert len(_events(case, policy, "evidence.restored")) == 1
+    assert case.rows("SELECT status FROM evidence_analyses WHERE id = %s", UUID(analysis)) == [
+        ("READY",)
+    ]
+    assert case.file(policy)["restored"] is False
+    assert case.rows(
+        "SELECT count(*) FROM evidence_withdrawals WHERE evidence_file_id = %s", UUID(policy)
+    ) == [(1,)]
+
+
+def test_a_file_withdrawn_from_another_control_stays_withdrawn_and_says_where(
+    migrated: Database,
+) -> None:
+    """A file withdrawn from another control is not moved here: refused, with the control
+    it was withdrawn from and the way to the withdrawn files; nothing is restored and no
+    batch is recorded. Outside the wizard, the same file on its request names the place."""
+    case = _Wizard(migrated, "restore-other")
+    minutes = case.add("parking minutes.txt", MINUTES)
+    case.read_file(minutes, _Reader("other"))
+    other = _other_control(case)
+    refiled = _refile(case, minutes, other)
+    assert refiled.status_code == 200, refiled.text
+    assert case.read_file(minutes, _Reader("other")) == "READY"
+    _withdraw(case, minutes)
+    [(ref, application)] = case.rows(
+        "SELECT c.control_ref, a.name FROM engagement_controls c "
+        "LEFT JOIN engagement_applications a ON a.id = c.engagement_application_id "
+        "WHERE c.id = %s",
+        UUID(other),
+    )
+    # Named in a sentence as the control, then its application in parentheses
+    # ("ITGC-AC-02 (SAP ERP)"; design review, 17 November 2026).
+    where = ref if application is None else f"{ref} ({application})"
+    case.batch = str(uuid4())
+    refused = case.drop("parking minutes.txt", MINUTES)
+    assert refused.status_code == 409
+    # Design review, 17 November 2026: plain sentences. Old: "this file was withdrawn from
+    # ITGC-AC-02 · SAP ERP; restoring it from the Withdrawn list of the Evidence library
+    # returns it there"; new: the sentence below (the row links to the withdrawn files).
+    # The refusal and its `withdrawn` flag are unchanged.
+    assert refused.json() == {
+        "detail": f"Withdrawn from {where}. Restoring it returns it to that control, not this one.",
+        "withdrawn": True,
+        "withdrawn_from": where,
+    }
+    assert case.rows(
+        "SELECT restored_at FROM evidence_withdrawals WHERE evidence_file_id = %s", UUID(minutes)
+    ) == [(None,)]
+    assert _events(case, minutes, "evidence.restored") == []
+    assert case.rows("SELECT count(*) FROM evidence_batches WHERE id = %s", UUID(case.batch)) == [
+        (0,)
+    ]
+    # Outside the wizard (a file added on its request as a whole): the place is named.
+    plain = case.owner.post(
+        f"{case.base}/evidence-uploads",
+        params={"batch_id": str(uuid4()), "name": "parking minutes.txt"},
+        content=MINUTES.encode(), headers={"content-type": "text/plain"},
+    )  # fmt: skip
+    assert plain.status_code == 409
+    assert plain.json()["detail"] == (
+        f"Withdrawn from {where}. Restore it from the Withdrawn list in the Evidence library "
+        "to use it again."
+    )
+    assert plain.json()["withdrawn_from"] == where
+
+
+def test_only_a_person_who_may_restore_restores_by_dropping_a_file_again(
+    migrated: Database,
+) -> None:
+    """Authorization: dropping a withdrawn file restores it only for a person allowed to
+    restore it (the withdrawn files' Restore asks the same permission as adding
+    evidence). A Reviewer is refused, and the file stays withdrawn; another firm sees
+    nothing."""
+    case = _Wizard(migrated, "restore-roles")
+    policy = case.add("access policy.txt", POLICY)
+    case.read_file(policy, _Reader("policy", covers={case.policy["title"]: "COVERED"}))
+    _withdraw(case, policy)
+    _reviewer_id, reviewer = case.member("REVIEWER")
+    # The Reviewer may not restore it from the withdrawn files, nor by dropping it again.
+    assert (
+        reviewer.post(
+            f"{case.base}/evidence-files/{policy}/restore", json={"reason": "Wanted back."}
+        ).status_code
+        == 403
+    )
+    refused = case.drop("access policy.txt", POLICY, batch=str(uuid4()), client=reviewer)
+    assert refused.status_code == 403
+    assert case.rows(
+        "SELECT restored_at FROM evidence_withdrawals WHERE evidence_file_id = %s", UUID(policy)
+    ) == [(None,)]
+    with connect(migrated.url) as connection:
+        stranger = _seed_org(
+            connection, f"restore-{uuid4().hex[:6]}", f"{uuid4().hex[:8]}@example.com"
+        )
+    outsider = _client(migrated, stranger["user_id"], None)
+    assert (
+        case.drop("access policy.txt", POLICY, batch=str(uuid4()), client=outsider).status_code
+        == 404
+    )
+    assert _events(case, policy, "evidence.restored") == []
 
 
 def test_the_readers_excerpt_cannot_close_itself() -> None:

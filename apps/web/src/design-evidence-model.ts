@@ -28,6 +28,7 @@ import {
   type DispositionKind,
   type EvidenceAssurance,
   keyedOf,
+  notReadCount,
   SAME_INSTANCE,
   withNotChecked,
 } from "./evidence-assurance-model.ts";
@@ -1829,22 +1830,59 @@ function headerOf(facts: {
         : proposed.length > 0
           ? `${says} ${checks}`
           : checks;
+    // Files none of whose text was read still wait on the person, but the agent did
+    // not read them: the title, the pill and the agent's line count them apart, so the
+    // numbers agree with the rows (design review, 18 November 2026).
+    const unreadIn = (rows: readonly EvidenceRow[]) =>
+      facts.unread
+        ? 0
+        : rows.reduce(
+            (sum, row) =>
+              sum +
+              (row.assurance === null ? 0 : notReadCount(row.assurance.check)),
+            0,
+          );
+    const notRead = unreadIn(review);
+    // The agent's line is about the rows it read (its own proposals), else those that wait.
+    const agentUnread = unreadIn(readFiles > 0 ? read : review);
+    const readCount = (readFiles || reviewFiles) - agentUnread;
+    const unreadSaid =
+      agentUnread === 0
+        ? ""
+        : `${plural(agentUnread, "file")} could not be read.`;
     return {
       standing: "REVIEW",
       tone: "attention",
-      status: `${plural(reviewFiles, "file")} to review${pill !== "" ? ` · ${pill}` : ""}`,
+      status: [
+        `${plural(reviewFiles, "file")} to review`,
+        notRead > 0 ? `${notRead} not read` : "",
+        pill,
+      ]
+        .filter((part) => part !== "")
+        .join(" · "),
       need: {
         kind: "act",
-        title: `Review ${plural(reviewFiles, "file")}.`,
+        title:
+          notRead === 0
+            ? `Review ${plural(reviewFiles, "file")}.`
+            : notRead >= reviewFiles
+              ? `Review ${plural(reviewFiles, "file")}. ${reviewFiles === 1 ? "It could not be read." : "None could be read."}`
+              : `Review ${plural(reviewFiles, "file")}: ${reviewFiles - notRead} read, ${notRead} not read.`,
         detail: `${readings} Nothing is accepted until you accept it.`,
       },
       agent: {
-        did:
-          proposals.length === 0
-            ? `Read ${plural(readFiles || reviewFiles, "file")}.`
-            : `Read ${plural(readFiles, "file")}: ${proposals
-                .map((item) => `${item.n} ${item.word}`)
-                .join(", ")}.`,
+        did: [
+          readCount <= 0 && agentUnread > 0
+            ? ""
+            : proposals.length === 0
+              ? `Read ${plural(readCount, "file")}.`
+              : `Read ${plural(readCount, "file")}: ${proposals
+                  .map((item) => `${item.n} ${item.word}`)
+                  .join(", ")}.`,
+          unreadSaid,
+        ]
+          .filter((part) => part !== "")
+          .join(" "),
         found,
       },
     };

@@ -458,12 +458,14 @@ def test_a_firm_with_a_reviewer_launches_the_demo_through_the_real_setup(
     assert _rows(url, "SELECT status::text, demo FROM projects WHERE id = %s", project_id) == [
         ("ACTIVE", True)
     ]
+    # Rewritten 17 November 2026 (the product owner: the scope is never finalized). Old: the
+    # launch also marked the scope finalized (SP6). New: no work waits for a finalization, so
+    # the launch records only that the engagement started.
     assert _rows(
         url,
-        "SELECT kicked_off_at IS NOT NULL, scope_finalized_at IS NOT NULL "
-        "FROM engagement_settings WHERE project_id = %s",
+        "SELECT kicked_off_at IS NOT NULL FROM engagement_settings WHERE project_id = %s",
         project_id,
-    ) == [(True, True)]
+    ) == [(True,)]
     assert _rows(url, "SELECT count(*) FROM evidence_plans WHERE project_id = %s", project_id) == [
         (14,)
     ]

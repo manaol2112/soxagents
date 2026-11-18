@@ -3176,6 +3176,11 @@ class GateFacts:
     # The reading did not finish (a timeout, a provider error, a reader that gave up, a
     # cancellation): a passing reason, distinct from a file with no readable text.
     read_failed: bool = False
+    # The reading ended with the file's images still waiting for OCR (extraction status
+    # NEEDS_OCR): no OCR engine read them, so none of their text was read. Still held as
+    # UNREADABLE (the code, and so every basis hash, is unchanged), with a sentence that
+    # says so instead of calling the file empty.
+    waiting_for_ocr: bool = False
 
 
 @dataclass(frozen=True)
@@ -3207,6 +3212,25 @@ HELD_REASONS: dict[HeldCode, str] = {
         "person reads them. Nothing was cut to make them fit."
     ),
 }
+# Why a file whose images no OCR engine read is left out (GateFacts.waiting_for_ocr): it
+# was never read, which is not the same as a file with nothing readable in it. Said as
+# things stand when it is shown (_held_files, ocr_can_read): whether text recognition can
+# read it now. Reworded 18 November 2026 after the design review: "No OCR engine could read
+# this file's images … (local OCR on the server, or model OCR …)" named internals, and
+# offered to read the file again while nothing could.
+OCR_UNAVAILABLE = (
+    "Text recognition is not available, so the text in the file's images could not be "
+    "read. Review the file yourself, or read it again once an owner or admin turns on text "
+    "recognition in Settings › AI workforce."
+)
+# Round 4, 18 November 2026: no claim about why the images were not read. A reading whose
+# text recognition was available and failed waits the same way, and is read again the same
+# way. Old: "Text recognition was not available when the file was read, so the text in its
+# images was not read. It is available now: read the file again."
+OCR_AVAILABLE_NOW = (
+    "The text in the file's images was not read. Text recognition is available now: read "
+    "the file again."
+)
 # Why engine 2 leaves a population out of a single-instance item, said by purpose
 # (section 10.3).
 POPULATION_PURPOSE = (
@@ -3253,6 +3277,8 @@ def gate(facts: GateFacts, engine: int = 1, *, population_asked: bool = False) -
         return None
     if code == "POPULATION" and engine >= 2:
         return Held(code, POPULATION_PURPOSE)
+    if code == "UNREADABLE" and facts.waiting_for_ocr:
+        return Held(code, OCR_UNAVAILABLE)
     return Held(code, HELD_REASONS[code])
 
 
@@ -3399,6 +3425,8 @@ class _File:
     kind: str
     confidence: str
     kind_confirmed: bool
+    # The reading's extraction status (evidence_extraction.Status); "" before it ends.
+    extraction_status: str = ""
 
     @property
     def landed(self) -> bool:
@@ -3420,6 +3448,7 @@ class _File:
             confidence=self.confidence,
             source=self.source,
             read_failed=self.analysis_status == "FAILED" and not self.custody_failed,
+            waiting_for_ocr=self.extraction_status == "NEEDS_OCR",
         )
 
     def held_for(self, engine: int, population_asked: bool = False) -> Held | None:
@@ -3433,6 +3462,11 @@ class _File:
     def kind_unsure(self) -> bool:
         """Read all the same from engine 2, and listed for a person to confirm."""
         return kind_unsure(self.gate_facts)
+
+    @property
+    def waiting_for_ocr(self) -> bool:
+        """Its reading ended with its images unread by any OCR engine."""
+        return self.gate_facts.waiting_for_ocr
 
 
 @dataclass(frozen=True)
@@ -3597,7 +3631,8 @@ def _requests(
                    coalesce(a.text_truncated, false),
                    coalesce(a.confirmed_kind, a.classification ->> 'kind', 'other'),
                    coalesce(a.classification ->> 'confidence', ''),
-                   a.confirmed_kind IS NOT NULL
+                   a.confirmed_kind IS NOT NULL,
+                   coalesce(a.extraction_status, '')
             FROM evidence_files f
             LEFT JOIN evidence_analyses a ON a.evidence_file_id = f.id
             WHERE f.id = ANY(%s) AND f.project_id = %s
@@ -3630,6 +3665,7 @@ def _requests(
                     kind=str(reading[12]),
                     confidence=str(reading[13]),
                     kind_confirmed=bool(reading[14]),
+                    extraction_status=str(reading[15]),
                 )
             )
         if files:
@@ -5437,10 +5473,50 @@ class HeldBody(BaseModel):
     reason: str
 
 
+# What clears a file's hold, said beside it (held_action).
+HeldAction = Literal["READ_AGAIN", "REPLACE"]
+
+
 class HeldFileBody(BaseModel):
     file_id: UUID
     code: HeldCode
     reason: str
+    # Decided in code from the file's reading as it stands, never stored, so no run's
+    # record or basis moves (held_action). None where the hold has a step of its own.
+    action: HeldAction | None = None
+
+
+def ocr_can_read(
+    connection: psycopg.Connection[Any], settings: Settings, organization_id: UUID
+) -> bool:
+    """Whether text recognition can read a file's images now: local OCR on the server, or
+    the model, where the firm chose it and a model is configured (evidence_ocr.engines_for
+    tries the same engines)."""
+    from ai_workforce_api.evidence_analysis import ocr_choice
+    from ai_workforce_api.evidence_ocr import local_ocr_available
+    from ai_workforce_api.model_providers import live_model
+
+    if local_ocr_available(settings):
+        return True
+    return live_model(settings) and ocr_choice(connection, organization_id) == "MODEL"
+
+
+def held_action(code: str, waiting_for_ocr: bool, ocr_available: bool = True) -> HeldAction | None:
+    """What clears a file's hold: READ_AGAIN where reading the file again can read it (a
+    reading that did not finish; images no OCR engine read, once text recognition is
+    available: `ocr_available`, ocr_can_read), REPLACE where only another copy can (it
+    failed its custody check, or nothing readable was taken from it), None where the hold
+    has a step of its own (its kind to confirm, a population's instance to pick), is the
+    run's (no attribute, too long together), or waits for text recognition (18 November
+    2026, after the design review: reading again while none is available only held the
+    file again)."""
+    if code == "READ_FAILED":
+        return "READ_AGAIN"
+    if code == "UNREADABLE" and waiting_for_ocr:
+        return "READ_AGAIN" if ocr_available else None
+    if code in ("UNREADABLE", "CUSTODY"):
+        return "REPLACE"
+    return None
 
 
 class PassageBody(BaseModel):
@@ -5681,13 +5757,22 @@ class AssuranceBody(BaseModel):
     summary: SummaryBody = Field(default_factory=SummaryBody)
 
 
-def _held_files(run: _Run) -> list[HeldFileBody]:
+def _held_files(
+    run: _Run, request: _Request | None = None, ocr_available: bool = True
+) -> list[HeldFileBody]:
     """The files of the run's requirement that its readings did not include, each with
     the code and the sentence that kept it out: its own gate's, or, for a file that
     passed its own gate in a run held whole (no approved attribute, or too long
     together), the run's. With `file_ids` these cover every file the run was recorded
-    on, so the screen can say of any other file that it is not part of this check."""
+    on, so the screen can say of any other file that it is not part of this check.
+
+    With the requirement's files as they stand (`request`), each carries what clears its
+    hold (held_action), and a file held UNREADABLE whose images no OCR engine read is
+    said as things stand (OCR_UNAVAILABLE, or OCR_AVAILABLE_NOW with `ocr_available`), not
+    as an empty file: a run recorded before those sentences existed is the same hold, with
+    the same code and basis, and the record itself is unchanged."""
     included = {str(item) for item in run.file_ids}
+    waiting = set() if request is None else {f.file_id for f in request.files if f.waiting_for_ocr}
     found: list[HeldFileBody] = []
     for file in run.files:
         if not file.get("file_id"):
@@ -5695,7 +5780,20 @@ def _held_files(run: _Run) -> list[HeldFileBody]:
         file_id = UUID(str(file["file_id"]))
         own = file.get("held")
         if isinstance(own, dict):
-            found.append(HeldFileBody(file_id=file_id, code=own["code"], reason=own["reason"]))
+            code = str(own["code"])
+            ocr = code == "UNREADABLE" and file_id in waiting
+            found.append(
+                HeldFileBody(
+                    file_id=file_id,
+                    code=cast(HeldCode, code),
+                    reason=(
+                        (OCR_AVAILABLE_NOW if ocr_available else OCR_UNAVAILABLE)
+                        if ocr
+                        else str(own["reason"])
+                    ),
+                    action=held_action(code, ocr, ocr_available),
+                )
+            )
         elif str(file_id) not in included and run.held_code is not None:
             found.append(
                 HeldFileBody(
@@ -5705,16 +5803,34 @@ def _held_files(run: _Run) -> list[HeldFileBody]:
     return found
 
 
+def _run_held_reason(run: _Run, held_files: Sequence[HeldFileBody]) -> str:
+    """The sentence a run held whole is said with. Where no file passed its own gate, the
+    run was held with its first held file's sentence (run_gate): it is said as that file
+    is said now (_held_files), so the two always agree. Otherwise the run's own."""
+    first = next((f for f in run.files if isinstance(f.get("held"), dict)), None)
+    if (
+        run.file_ids
+        or first is None
+        or first["held"].get("code") != run.held_code
+        or first["held"].get("reason") != run.held_reason
+    ):
+        return run.held_reason
+    shown = next((f for f in held_files if str(f.file_id) == str(first.get("file_id"))), None)
+    return run.held_reason if shown is None else shown.reason
+
+
 def read_assurance(
     connection: psycopg.Connection[Any],
     project_id: UUID,
     control_id: UUID,
     only_requirement: UUID | None = None,
+    ocr_available: bool = True,
 ) -> AssuranceBody:
     """One entry per DESIGN requirement with a file in force: its latest run, or
     NOT_CHECKED where it has none (never silently skipped). A run whose basis no longer
     matches what would be read now is shown as out of date even where nothing marked it
-    yet; one whose worker stopped before it finished is shown as FAILED."""
+    yet; one whose worker stopped before it finished is shown as FAILED. `ocr_available`
+    (ocr_can_read): whether a file whose images were not read can be read again now."""
     control = _control(connection, project_id, control_id)
     if control is None:
         raise NotVisible()
@@ -5914,6 +6030,7 @@ def read_assurance(
             summary.out_of_date += 1
         review = _review_body(run, request) if status == "REVIEWED" else None
         names = {file.file_id: file.file_name for file in request.files}
+        held_files = _held_files(run, request, ocr_available)
         entries.append(
             RequestBody(
                 requirement_id=request.requirement_id,
@@ -5921,11 +6038,14 @@ def read_assurance(
                 status=status,
                 stage=cast(Stage, run.stage),
                 held=(
-                    HeldBody(code=cast(HeldCode, run.held_code), reason=run.held_reason)
+                    HeldBody(
+                        code=cast(HeldCode, run.held_code),
+                        reason=_run_held_reason(run, held_files),
+                    )
                     if status == "HELD" and run.held_code is not None
                     else None
                 ),
-                held_files=_held_files(run),
+                held_files=held_files,
                 file_ids=list(run.file_ids),
                 lens=cast(Lens, run.lens),
                 read_in_part=run.read_in_part,
@@ -6191,7 +6311,10 @@ def register_evidence_assurance(
         def work(connection: psycopg.Connection[Any], principal: Principal) -> AssuranceBody:
             authorize(connection, principal=principal, action=Action.PROJECT_READ,
                       organization_id=organization_id, project_id=project_id)  # fmt: skip
-            return read_assurance(connection, project_id, control_id)
+            return read_assurance(
+                connection, project_id, control_id,
+                ocr_available=ocr_can_read(connection, settings, organization_id),
+            )  # fmt: skip
 
         return run(request, work)
 
@@ -6211,7 +6334,10 @@ def register_evidence_assurance(
                 raise NotVisible()
             queued = rerun(connection, project_id, control_id, requirement_id, principal.id)
             after_commit(lambda: schedule_assessments(scheduler, queued))
-            body = read_assurance(connection, project_id, control_id, requirement_id)
+            body = read_assurance(
+                connection, project_id, control_id, requirement_id,
+                ocr_available=ocr_can_read(connection, settings, organization_id),
+            )  # fmt: skip
             if not body.requests:
                 raise AssuranceState(NOTHING_TO_CHECK)
             return body.requests[0]
@@ -6236,7 +6362,10 @@ def register_evidence_assurance(
                 connection, project_id, control_id, requirement_id, principal.id
             )
             after_commit(lambda: schedule_assessments(scheduler, queued))
-            body = read_assurance(connection, project_id, control_id, requirement_id)
+            body = read_assurance(
+                connection, project_id, control_id, requirement_id,
+                ocr_available=ocr_can_read(connection, settings, organization_id),
+            )  # fmt: skip
             if not body.requests:
                 raise AssuranceState(NOTHING_TO_CHECK)
             return body.requests[0]

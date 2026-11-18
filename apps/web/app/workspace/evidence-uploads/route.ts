@@ -42,6 +42,8 @@ export async function POST(request: Request) {
       // knows what to do; nothing else of the answer is passed on.
       const refused = (await response.json().catch(() => ({}))) as {
         detail?: unknown;
+        withdrawn?: unknown;
+        withdrawn_from?: unknown;
       };
       return NextResponse.json(
         {
@@ -49,6 +51,16 @@ export async function POST(request: Request) {
           detail:
             response.status === 409 && typeof refused.detail === "string"
               ? refused.detail.slice(0, 200)
+              : null,
+          // The file stays withdrawn: the screen links to the withdrawn files.
+          withdrawn: response.status === 409 && refused.withdrawn === true,
+          // The control it was withdrawn from, so files withdrawn from one control are
+          // said once, together (evidence-wizard-model refusalBlocks).
+          withdrawn_from:
+            response.status === 409 &&
+            refused.withdrawn === true &&
+            typeof refused.withdrawn_from === "string"
+              ? refused.withdrawn_from.slice(0, 200)
               : null,
         },
         { status: response.status },
@@ -58,6 +70,8 @@ export async function POST(request: Request) {
     return NextResponse.json({
       file_id: typeof body.file_id === "string" ? body.file_id : null,
       duplicate: body.duplicate === true,
+      // Withdrawn from this control and restored by the drop: read again.
+      restored: body.restored === true,
     });
   } catch {
     return NextResponse.json({ error: "unavailable" }, { status: 503 });

@@ -1220,7 +1220,12 @@ button,
     box-shadow 120ms ease;
 }
 
-button:hover,
+/* The primary hover, at the lowest weight a hover can have (product owner, 17 November
+   2026: the "System name" field turned black on hover): `:where(button)` adds nothing, so a
+   button restyled by its own class — a field, a link, a chip — keeps its own look, its own
+   rule loading after this one. A plain or .btn button still gets the primary hover.
+   tests/button-hover.test.ts holds this. */
+:where(button):hover,
 .btn:hover {
   color: var(--text-on-accent);
   background: var(--accent-hover);
@@ -14976,6 +14981,8 @@ button.answer-done:hover {
   z-index: 30;
   display: grid;
   min-width: 12rem;
+  /* Never wider than the window, less its gutters (a phone); row-menu.tsx keeps it in. */
+  max-width: calc(100vw - 2rem);
   padding: 0.3rem;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -15052,6 +15059,17 @@ button.answer-done:hover {
   margin-top: 0.15rem;
   color: var(--text-tertiary);
   font-size: var(--fs-xs);
+}
+
+/* On a narrow window a long item wraps inside the menu rather than widening it. */
+@media (max-width: 760px) {
+  .row-menu-list a,
+  .row-menu-list button,
+  .row-menu-list small {
+    line-height: 1.35;
+    white-space: normal;
+    overflow-wrap: break-word;
+  }
 }
 
 /* Which systems a policy applies to, asked before it is uploaded (evidence-intake.tsx). */
@@ -16773,4 +16791,31 @@ button.answer-done:hover {
 button:disabled,
 .btn[aria-disabled="true"] {
   opacity: 0.5;
+}
+
+/* Buttons drawn as text links show they are links on hover: an underline, and nothing
+   else, so each keeps its own colours and states (17 November 2026). Weightless, so a
+   component's own hover still wins. */
+:where(
+    .as-link,
+    .cpg-link,
+    .cr-link-button,
+    .cs-link,
+    .cu-skip,
+    .cw-versions-all,
+    .ei-history-toggle,
+    .ep-points-toggle,
+    .ew-link,
+    .link-button,
+    .ng-skip,
+    .pe-link,
+    .pe-open,
+    .pl-strip-link,
+    .pn-view,
+    .pp-count,
+    .tas-link,
+    .uc-change
+  ):hover:not(:disabled) {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }

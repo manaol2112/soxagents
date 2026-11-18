@@ -1991,3 +1991,144 @@ def test_no_one_accepts_the_attributes_while_a_redraft_of_the_understanding_runs
         assert not attributes_updating(connection, UUID(control))
     accepted = owner.post(f"{_path(team, control)}/attributes/accept", json={"items": items})
     assert accepted.status_code == 200, accepted.text
+
+
+# A control with no evidence plan yet (the development data, 18 November 2026)
+
+
+def _unplanned(migrated: Database, slug: str) -> tuple[dict[str, Any], str, _Scheduler, TestClient]:
+    """A control in scope with no work and no evidence plan, as ITGC-AC-01 for BlackLine on the
+    development data: selected under SP6 on an engagement whose scope was never finalized. Its
+    statement's values are recorded; its walkthrough is not answered. The owner is on an app
+    with a background worker and a model.
+
+    Rewritten 17 November 2026 (the product owner: the scope is never finalized). Old: the
+    control was selected through the API before the scope was finalized, which created no
+    work. New: selecting now starts the work at once, so the control is put in scope as SP6
+    left it (in scope, no task, no plan), before the worker's start catches it up
+    (scope_changes.start_waiting_scope); plan_to_follow still covers it until then."""
+    from test_scope_setup import _launched_empty
+
+    from ai_workforce_api.system_scoping import include_control
+
+    owner, base, team = _launched_empty(migrated, slug)
+    system = owner.post(
+        f"{base}/systems",
+        json={"name": "BlackLine", "layer": "APPLICATION", "approved_areas": ["ITGC"]},
+    ).json()["applications"][0]
+    options = owner.get(f"{base}/scope/options", params={"system_id": system["id"]}).json()
+    key = next(c["library_key"] for c in options["controls"] if c["control_ref"] == AC01)
+    with connect(migrated.url) as connection:
+        with connection.cursor() as cursor:
+            include_control(cursor, team["org"], team["project"], UUID(system["id"]), None, key)
+        connection.commit()
+    control = next(
+        c["id"] for c in owner.get(base).json()["controls"]
+        if c["included"] and c["application_id"] == system["id"]
+    )  # fmt: skip
+    assert _plans(migrated, control) == []
+    _values_and_questions_answered(migrated, team, control)
+    scheduler = _Scheduler()
+    return team, control, scheduler, _client(migrated, team["owner_id"], scheduler, True)
+
+
+def _plans(migrated: Database, control: str) -> list[tuple[Any, ...]]:
+    return _rows(
+        migrated,
+        "SELECT id, source, status, run_status, run_stage FROM evidence_plans "
+        "WHERE engagement_control_id = %s",
+        UUID(control),
+    )
+
+
+def _nothing_requested(migrated: Database, team: dict[str, Any]) -> None:
+    """The control still has no work: no task and no evidence request exist (as SP6 left it;
+    rewritten 17 November 2026, when the finalize step was removed)."""
+    assert _rows(
+        migrated,
+        "SELECT (SELECT count(*) FROM tasks WHERE project_id = %s AND engagement_control_id "
+        "IS NOT NULL), (SELECT count(*) FROM pbc_requests WHERE project_id = %s)",
+        team["project"], team["project"],
+    ) == [(0, 0)]  # fmt: skip
+
+
+def test_completing_the_understanding_of_a_control_with_no_plan_queues_its_review(
+    migrated: Database,
+) -> None:
+    """Regression (18 November 2026, the product owner: "when I complete control understanding,
+    it does not automatically run the attribute drafting"). The specialist's review and the
+    attributes ride on the control's evidence plan run, and a control selected under SP6
+    whose scope was never finalized has no plan: every queue was an update of no row, nothing
+    was handed to the worker, and a person had to propose the attributes by hand. Now the save
+    that makes the review due plans the control with the rules first, so the run is queued and
+    handed over."""
+    team, control, scheduler, client = _unplanned(migrated, "afu-unplanned")
+    _answer_required(migrated, team, control, client)
+    [(plan_id, source, status, run_status, stage)] = _plans(migrated, control)
+    assert (source, status, run_status, stage) == ("RULES", "PROPOSED", "PENDING", "ATTRIBUTES")
+    assert scheduler.plans == [UUID(str(plan_id))]
+    assert _rows(
+        migrated,
+        "SELECT round, cause, status FROM understanding_reviews WHERE engagement_control_id = %s",
+        UUID(control),
+    ) == [(1, "UNDERSTANDING", "PENDING")]
+    assert client.get(f"{_path(team, control)}/context").json()["question_pass"] == "CHECKING"
+    _nothing_requested(migrated, team)
+    # The worker's run: the review asks nothing, so the understanding completes and the
+    # attributes follow in the same run, before a person opens the Attributes step.
+    agents = _Agents(migrated, team, control)
+    with connect(migrated.url) as connection:
+        assert run_plan_through(connection, agents, UUID(str(plan_id))) == "DONE"
+    assert len(agents.specialist_given) == 1
+    assert [who for who in agents.calls if who != "other"] == [
+        "attributes", "planner", "set-review",
+    ]  # fmt: skip
+    body = client.get(f"{_path(team, control)}/context").json()
+    assert body["understanding_completed_at"] is not None
+    assert all(row[2] == "AGENT" for row in _approved(migrated, control))
+    _nothing_requested(migrated, team)
+
+
+def test_accepting_the_attributes_of_a_control_with_no_plan_queues_its_evidence_plan(
+    migrated: Database,
+) -> None:
+    """Regression (18 November 2026, the product owner: "when attribute is accepted, it does
+    not automatically run the evidence drafting"). Accepting the attributes completes the
+    understanding, but a control with no plan had no run to queue: its D&I requests waited for
+    a person to press Plan the evidence. Now the acceptance plans it with the rules and hands
+    the planner agent's run to the worker, which drafts the D&I requests to accept."""
+    team, control, scheduler, client = _unplanned(migrated, "afu-unplanned-accept")
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE control_attributes SET criteria_origin = 'AGENT', "
+            "condition = 'The request names the role.', "
+            "pass_criteria = 'The request names the role granted.', "
+            "fail_criteria = 'The request names no role.' "
+            "WHERE engagement_control_id = %s AND status = 'APPROVED'",
+            (UUID(control),),
+        )
+        connection.commit()
+    approved = client.get(f"{_path(team, control)}/context").json()["attributes"]["approved"]
+    items = [{"attribute_id": item["id"], "version": item["version"]} for item in approved]
+    accepted = client.post(f"{_path(team, control)}/attributes/accept", json={"items": items})
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["understanding_completed_at"] is not None
+    [(plan_id, source, status, run_status, stage)] = _plans(migrated, control)
+    assert (source, status, run_status, stage) == ("RULES", "PROPOSED", "PENDING", "")
+    assert scheduler.plans == [UUID(str(plan_id))]
+    _nothing_requested(migrated, team)
+    # The worker's run: the planner agent plans the evidence for the accepted attributes; the
+    # attributes are not drafted again.
+    agents = _Agents(migrated, team, control)
+    with connect(migrated.url) as connection:
+        assert run_plan_through(connection, agents, UUID(str(plan_id))) == "DONE"
+    assert [who for who in agents.calls if who != "other"] == ["planner"]
+    assert _plans(migrated, control)[0][1:4] == ("MODEL", "PROPOSED", "IDLE")
+    design = _rows(
+        migrated,
+        "SELECT status, pbc_request_id FROM evidence_requirements "
+        "WHERE engagement_control_id = %s AND phase = 'DESIGN' AND status <> 'REMOVED'",
+        UUID(control),
+    )
+    assert design and all(row == ("PLANNED", None) for row in design)
+    _nothing_requested(migrated, team)

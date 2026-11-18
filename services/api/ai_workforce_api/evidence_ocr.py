@@ -7,8 +7,10 @@ A firm's owner or admin opts into MODEL. Without that choice, images never leave
 
 import io
 import logging
+import os
 import shutil
 import subprocess
+import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -97,10 +99,21 @@ class TesseractOcr:
 
     @staticmethod
     def locate(configured: str) -> tuple[str, ...] | None:
+        """A configured path is the only one tried. Otherwise `tesseract` on the PATH, and
+        on Windows the standard install location, which the Windows installer does not put
+        on the PATH (scripts/tesseract.sh, run by make install and make check, looks in the
+        same order)."""
         path = configured.strip()
         if path:
             return (path,) if Path(path).is_file() else None
         found = shutil.which("tesseract")
+        if found is None and sys.platform == "win32":
+            standard = (
+                Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+                / "Tesseract-OCR"
+                / "tesseract.exe"
+            )
+            found = str(standard) if standard.is_file() else None
         return None if found is None else (found,)
 
     def _run(self, image: bytes, *output: str) -> bytes:

@@ -132,6 +132,21 @@ nothing new (`duplicate: true`) and is listed in that session with the placement
 it is refused (409), and nothing is recorded. Custody, de-duplication and the
 archived-engagement guard are unchanged.
 
+A file withdrawn from the same control, dropped again, is restored (product owner, 17
+November 2026, "Restore and read"): in the upload's transaction, after the batch, the
+withdrawals' own restoration runs (evidence_versions.restore_file: who, when, the reason
+"Added again in Add evidence.", an `evidence.restored` event whose payload names the batch,
+the request's receipt and the assurance chain), so the file is back where it was filed (from
+a row, on the row's item too); then its reading starts again from the start (extraction and
+OCR, `evidence.reanalysis_requested`), and the upload answers `duplicate: true, restored:
+true`. The session lists it with `restored: true`, and the screen shows it through Secured,
+Read, Classified and Sorted as a file added now. Dropped twice, it is restored once (the
+withdrawal is locked; the second drop finds a file held on the control). A file withdrawn
+from another control, or before it was filed, stays withdrawn: 409 with `withdrawn: true`,
+`withdrawn_from` (the control's name, or null) and a sentence naming where it was withdrawn
+from; the row links to the Withdrawn list of the Evidence library. The same 409 answers a
+withdrawn file added on a request outside the wizard.
+
 ### 2.2 Reading for placement
 
 A wizard file is read by the existing reader, with every D&I item of the control as its
@@ -158,7 +173,12 @@ onto one.
    already on it stays.
 1. A file the assurance gate would hold (custody, a reading that did not finish,
    unreadable, kind unsure, population on a design item) is not placed: it needs a person,
-   with the gate's reason, and the items ranked.
+   with the gate's reason, and the items ranked. Each file's reading also says whether any
+   text was taken from it (`read.text_read`) and what clears its hold (`read.action`:
+   READ_AGAIN, REPLACE or null, as `evidence_assurance.held_action` decides it). A file
+   whose images no text recognition read is READ_AGAIN only while text recognition can read
+   it now (`ocr_can_read`: local OCR on the server, or model OCR the firm chose with a model
+   configured), and its reason says which (18 November 2026, after the design review).
 2. Candidates are the items the reader says the file covers (COVERED first, then PARTIAL).
 3. The file is placed when the reader is the model with high or medium confidence and one
    candidate stands out: the only COVERED item, or the only candidate whose category fits the
@@ -240,6 +260,7 @@ the file's reading, then the batch, then the plan, then a request, so none waits
   "files": [
     {
       "file_id": "…", "name": "…", "size_bytes": 0, "extension": "pdf", "duplicate": false,
+      "restored": false,
       "stage": "STORED | READING | READ | SORTED | NEEDS_PERSON | NOT_DESIGN | FAILED",
       "read": { "status": "PENDING | WORKING | READY | FAILED", "method": "TEXT | OCR | NONE",
                 "pages": 0, "started_at": "…", "finished_at": "…", "note": "", "failure_note": "" },

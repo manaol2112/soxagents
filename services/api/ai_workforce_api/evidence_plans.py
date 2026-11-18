@@ -2693,6 +2693,84 @@ def queue_for_understanding(
     return None if row is None else UUID(str(row[0]))
 
 
+def plan_to_follow(
+    connection: psycopg.Connection[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    requester: UUID,
+) -> tuple[bool, list[UUID]]:
+    """Plan, with the reviewed rules, a control that has no evidence plan once the agents
+    have something to do on it: the specialist's review is due, or the understanding is
+    completed, or the attributes are accepted. The review, the attributes and the planner all
+    ride on the plan's run (queue_for_understanding, refine_new_plan), so without a plan each
+    queue updated no row and nothing was handed to the worker (the product owner, 18 November
+    2026, on ITGC-AC-01 for BlackLine: "when I complete control understanding, it does not
+    automatically run the attribute drafting, when attribute is accepted, it does not
+    automatically run the evidence drafting"). A control selected under SP6 on an engagement
+    whose scope was never finalized has no plan until the worker's start gives it its work
+    (scope_changes.start_waiting_scope; the finalize step was removed on 17 November 2026).
+
+    This is what "Plan the evidence" does without a model (generate): the plan is proposed,
+    and nothing is requested from it before the gates allow (the D&I list accepted, the plan
+    approved). Not for an engagement that is not running, or a control out of scope. Returns
+    whether the plan was made now, and the drafts to schedule."""
+    if (
+        connection.execute(
+            "SELECT 1 FROM evidence_plans WHERE engagement_control_id = %s", (control_id,)
+        ).fetchone()
+        is not None
+    ):
+        return False, []
+    running = connection.execute(
+        """
+        SELECT j.status = 'ACTIVE' AND s.kicked_off_at IS NOT NULL AND c.included
+        FROM engagement_controls c
+        JOIN projects j ON j.id = c.project_id
+        JOIN engagement_settings s ON s.project_id = c.project_id
+        WHERE c.id = %s AND c.project_id = %s
+        """,
+        (control_id, project_id),
+    ).fetchone()
+    if running is None or not running[0]:
+        return False, []
+    from ai_workforce_api import understanding_review as review
+
+    state = review.standing(connection, project_id, control_id)
+    if not (state.completed or state.accepted or review.due_round(state) is not None):
+        return False, []
+    try:
+        _, drafts, _ = generate(
+            connection, None, organization_id, project_id, control_id, requester
+        )
+    except PlanState:
+        # Another request planned it meanwhile ("the plan is being generated").
+        return False, []
+    return True, drafts
+
+
+def refine_new_plan(connection: psycopg.Connection[Any], control_id: UUID) -> UUID | None:
+    """The planner agent's plain run on a rules' plan plan_to_follow just made, when nothing
+    else was queued on it (the understanding completed and the attributes followed it, or
+    they were accepted): the planner plans the evidence for the attributes, as the launch's
+    refinement does for a control planned at launch (queue_unrefined_plans), for one control.
+    Returns the plan to run."""
+    with transaction(connection) as cursor:
+        row = cursor.execute(
+            f"""
+            UPDATE evidence_plans p
+            SET run_status = 'PENDING', run_attempts = 0, run_follows = 0,
+                run_lease_until = NULL,
+                run_note = '', run_stage = '', run_codes = '{{}}', run_cause = ''
+            WHERE p.engagement_control_id = %s AND p.status = 'PROPOSED' AND p.source = 'RULES'
+              AND p.run_status = 'IDLE' AND p.run_attempts = 0 AND NOT {_AGENTS_AT_WORK_SQL}
+            RETURNING p.id
+            """,
+            (control_id,),
+        ).fetchone()
+    return None if row is None else UUID(str(row[0]))
+
+
 def queue_due_reads(connection: psycopg.Connection[Any], limit: int = 200) -> list[UUID]:
     """At the worker's start (resume), with a model: queue the specialist's read on every
     control where one is due by the rules and none is queued (B1l point 1; after the review of
