@@ -1386,7 +1386,14 @@ def test_an_open_conflict_from_before_is_closed_only_for_a_reason_that_is_true_o
     ) == [(0,)]
     needs = [need["key"] for need in _needs(team, control) if need["kind"] == "QUESTION"]
     assert str(stale) not in needs and str(point) in needs
-    assert [item["id"] for item in _open(team, control) if item["origin"] == "ATTRIBUTES"] == []
+    # Rewritten 18 November 2026 (docs/test-baseline.md, B7 item 1). Old: no question of the
+    # attribute agent stayed open, which predates B1j rule 4 (commit 1e3bee6: a run no
+    # longer closes the earlier round's unanswered questions). New: exactly the two the run
+    # left open, as asserted above, stay open; the two it settled do not.
+    assert {item["id"] for item in _open(team, control) if item["origin"] == "ATTRIBUTES"} == {
+        str(neutral),
+        str(real),
+    }
 
 
 # A missing fact is always asked

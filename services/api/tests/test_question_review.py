@@ -118,10 +118,18 @@ def _ask_first(migrated: Database, team: dict[str, Any], cid: str, raw: dict[str
             )  # fmt: skip
 
 
-def _raised(provider: _Provider, migrated: Database, ref: str) -> tuple[Any, dict[str, Any], str]:
+def _raised(
+    provider: _Provider,
+    migrated: Database,
+    ref: str,
+    asked: tuple[dict[str, Any], ...] = (GAP,),
+) -> tuple[Any, dict[str, Any], str]:
+    """The control, its agent questions raised first (`asked`: the one GAP unless a test
+    names more), then the review."""
     team, client, _scheduler = _engagement(migrated, f"question-review-{ref}")
     cid = _new_control(client, team, control_ref=f"REV-{ref}", domain="ORDER_TO_CASH")["id"]
-    _ask_first(migrated, team, cid, GAP)
+    for raw in asked:
+        _ask_first(migrated, team, cid, raw)
     with connect(migrated.url) as connection:
         review_control(connection, provider, team["org"], team["project"], UUID(cid),
                        team["owner_id"])  # fmt: skip
@@ -323,7 +331,12 @@ def test_many_questions_are_written_in_small_batches(migrated: Database) -> None
     issues = [{**GAP, "topic": f"Gap {at}"} for at in range(6)]
     items = [_reviewed(ref=f"q{at}") for at in range(1, 5)]
     provider = _Provider([{"attributes": [], "issues": issues[:5]}, _answer(*items)])
-    client, team, cid = _raised(provider, migrated, "87")
+    # Rewritten 18 November 2026 (docs/test-baseline.md, B7 item 2). Old: the review raised
+    # the model's five gaps as questions itself. Since B1k (49503f5) its gaps are
+    # assumptions, so only the one question raised first was written, in one batch. New: the
+    # five are raised first, as the attribute agent's were, and the review writes their
+    # wording in small batches (question_review.BATCH); every assertion is as it was.
+    client, team, cid = _raised(provider, migrated, "87", tuple(issues[:5]))
     calls = [r for r in provider.requests if r.system == INTERVIEW_PROMPT]
     assert len(calls) >= 2
     assert all(r.prompt.count('"ref"') <= 4 for r in calls)
