@@ -35,36 +35,19 @@ CI until a run on GitHub shows it; record the run below when it does.
 | --- | --- | --- | --- | --- |
 | B4 | 24 node tests in 9 files; `biome check` reports about 290 formatting errors | No `.gitattributes`, so a Windows checkout is CRLF; one test builds a path from a URL | Windows only | `.gitattributes` is merged and the checkout refreshed; `tests/evidence-wizard-contract.test.ts:29` uses `fileURLToPath` |
 | B6 | Intermittent "Address already in use (10048)" under parallel pytest | Hypothesis: ephemeral-port exhaustion | Windows only | Measured; until then lower `WORKERS` on Windows and rerun the failed file alone |
-| B7 | 3 tests in the fast tier (`make test-fast` has been red since 16 Nov 2026 because of them): `test_understanding_is_authority.py::test_an_open_conflict_from_before_is_closed_only_for_a_reason_that_is_true_of_it`, `test_question_review.py::test_many_questions_are_written_in_small_batches`, `test_attributes_follow_understanding.py::test_a_failed_planner_run_reads_as_stopped_once_the_understanding_is_complete` | Diagnosed 18 Nov 2026: each expects behaviour from before B1j/B1k (16 Nov) that its rewrite missed; no product defect, not a platform issue. See "B7: causes and plan" below | All (deterministic) | Each fixed as below, assertions kept; the third after the owner confirms the behaviour it tests |
+| B8 | Intermittent: `test_attributes_follow_understanding.py::test_a_run_whose_process_died_reads_as_stopped_and_resumes_when_the_worker_starts` failed once in a parallel run of its file on 18 Nov 2026, then passed alone and in a parallel rerun (36 of 36) | Not diagnosed. Hypothesis: the local worker's `resume` hands runs to pool threads and the test reads what was handed (the traceback was not kept) | Windows; Linux unknown (the file is in the fast tier, not in CI) | Diagnosed and fixed at its cause, with the run's traceback |
 
-### B7: causes and plan
+### Lifted
 
-Diagnosed on 18 November 2026; the fixes were each tried in a scratch copy and passed. Not yet
-applied.
-
-1. **Open conflict closed only for a true reason.** The last assertion (line ~1389) expects
-   the attribute run to leave no question open, while a few lines earlier the same test
-   asserts that two of them stay open under B1j rule 4 (commit 1e3bee6: a run no longer
-   closes the earlier round's unanswered questions). The line predates that rule.
-   *Fix:* assert the exact set left open (those two), with an Old/New note. Low risk.
-2. **Many questions written in small batches.** Since B1k (49503f5) the review turns the
-   model's gaps into assumptions rather than questions, so the helper `_raised` now raises
-   one question, and one batch is written. The batching itself (`question_review.BATCH`)
-   is intact. *Fix:* let `_raised` take the questions to raise, and give this test five;
-   every assertion as written. Low risk.
-3. **A failed planner run reads as stopped once the understanding is complete.** Since
-   B1k, completion waits for the specialist's review, so after the test's answers the
-   understanding is not complete and the specialist's read is queued over the failed run
-   (`evidence_plans.py` ~2639-2660). *Fix:* complete the understanding first (run the
-   plan through), then fail the run and change an answer, and keep every original
-   assertion. Low risk. **Owner decision first:** "a failed run is queued over before the
-   understanding is complete" is recorded only in commit 49503f5 and a code comment, not
-   in the approved B1k/B1l plan (`docs/control-workflow-plan.md`); confirm it, and record it
-   in the plan, before a test is built on it. That plan's line ~133 ("nothing is queued
-   over a failed run") is true only after completion.
-
-Verification: the three tests, their three files, then `make test-fast`. The critical tier
-is not affected.
+- B7 (18 November 2026, branch `b7-known-failures`): the three fast-tier tests that expected
+  behaviour from before B1j/B1k were rewritten for the approved behaviour, each with a dated
+  note giving the old and new expectation and no assertion removed. The third waited for the
+  product owner, who confirmed that day that a due specialist review is queued over a failed
+  planner run before Control Understanding is complete (recorded in
+  `docs/control-workflow-plan.md`, B1l). A fourth fast-tier test, stale since the prompt-data
+  change of 17 November (`test_design_workpaper_model.py`: `<b>` now arrives inert), was
+  rewritten the same way. `make test-fast` on Windows, 18 November: Python 988 passed and
+  that one failed (its file then 89 of 89); node 2,124 of 2,143, the 19 failures all B4.
 
 ## Tiers
 
