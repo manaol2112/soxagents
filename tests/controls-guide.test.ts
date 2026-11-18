@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import {
@@ -82,10 +83,79 @@ describe("the Controls tour", () => {
     assert.deepEqual(steps[3]?.targets, [".sp-step.is-controls"]);
     const words = steps.flatMap((step) => [step.title, ...step.body]).join(" ");
     assert.doesNotMatch(words, /finali[sz]/i);
+    // Reworded 18 November 2026 (design review). Old: "Each control's work starts when it
+    // is selected", on every engagement, under "Then the work starts". New: on a launched
+    // engagement the work of a control is created when it is selected, under "How the work
+    // follows the scope"; before the launch, at the launch (next test).
+    assert.equal(steps[4]?.title, "How the work follows the scope");
     assert.match(
       steps[4]?.body[0] ?? "",
-      /^Each control's work starts when it is selected/,
+      /^Each control's walkthrough, evidence request, test, and review are created when it is selected\. The scope can change at any time: a control added later is prepared the same way, and a control removed has its open work cancelled\./,
     );
+  });
+
+  // Added 18 November 2026 (design review): scope_changes.reconcile_scope creates no work
+  // before the engagement is launched, so the tour says the work starts at the launch.
+  it("says the work starts at the launch on an engagement not yet launched", () => {
+    const steps = controlsTourSteps(running({ started: false }));
+    assert.match(
+      steps[4]?.body[0] ?? "",
+      /^Each control's walkthrough, evidence request, test, and review are created when the engagement is launched\./,
+    );
+    assert.match(
+      steps[4]?.body[0] ?? "",
+      /once the engagement is launched, a control added later is prepared the same way/,
+    );
+    const words = steps.flatMap((step) => [step.title, ...step.body]).join(" ");
+    assert.doesNotMatch(words, /when it is selected/);
+  });
+
+  // Added 18 November 2026 (design review: the tour repeated itself). Old: the first and
+  // last stops each said when the work starts and that nothing is sent until an approver
+  // confirms it. New: when the work starts is said once, on the last stop; the approval
+  // reassurance once, on the first.
+  it("says each point once: the approval on the first stop, the work on the last", () => {
+    for (const started of [true, false]) {
+      const steps = controlsTourSteps(running({ started }));
+      const where = (pattern: RegExp) =>
+        steps
+          .filter((step) => step.body.some((line) => pattern.test(line)))
+          .map((step) => step.id);
+      assert.deepEqual(where(/nothing is sent until an approver/i), [
+        "welcome",
+      ]);
+      assert.deepEqual(where(/walkthrough, evidence request, test/), ["done"]);
+    }
+  });
+
+  // Added 18 November 2026 (design review): the workflow's steps are hidden once a control
+  // is selected, so the stop on selecting controls points at the page's Add instead.
+  it("points at the page's Add once the steps are gone", () => {
+    const selected = running({
+      applications: [{ id: appId, name: "SAP ERP", description: "" }],
+      controls: [
+        {
+          id: "66666666-6666-7666-8666-666666666666",
+          control_ref: "ITGC-AC-01",
+          title: "User access provisioning",
+          domain: "ACCESS",
+          included: true,
+        },
+      ],
+    });
+    assert.equal(controlsSetupState(selected).controls, 1);
+    assert.deepEqual(controlsTourSteps(selected)[3]?.targets, [
+      ".is-controls-setup .page-actions .row-menu-trigger",
+    ]);
+    // The page's Add is a RowMenu trigger in the page header's actions.
+    const guide = readFileSync("apps/web/src/controls-guide.tsx", "utf8");
+    assert.match(guide, /trigger=\{\{ label: "Add", icon: "plus" \}\}/);
+    const menu = readFileSync("apps/web/src/row-menu.tsx", "utf8");
+    assert.match(menu, /className=\{`btn row-menu-trigger/);
+    const page = readFileSync("apps/web/src/workspace-view.tsx", "utf8");
+    assert.match(page, /<div className="page-actions">\{actions\}<\/div>/);
+    const view = readFileSync("apps/web/src/setup-view.tsx", "utf8");
+    assert.match(view, /className="page setup-page is-controls-setup"/);
   });
 
   it("opens each stop's tab before pointing at it", () => {
@@ -130,6 +200,30 @@ describe("the agent beside the Controls setup", () => {
     const next = controlsBrief(withSystem());
     assert.equal(next.checklist[0]?.detail, "1 system in scope");
     assert.match(next.next, /^Next: load the standard library/);
+  });
+
+  // Added 18 November 2026 (design review): before the launch no work exists yet. Old: "Controls
+  // are in place; their work has started." on every engagement. New: before the launch, the
+  // work starts when the engagement is launched.
+  it("says the work starts at the launch on an engagement not yet launched", () => {
+    const controls = [
+      {
+        id: "66666666-6666-7666-8666-666666666666",
+        control_ref: "ITGC-AC-01",
+        title: "User access provisioning",
+        domain: "ACCESS",
+        included: true,
+      },
+    ];
+    const applications = [{ id: appId, name: "SAP ERP", description: "" }];
+    assert.equal(
+      controlsBrief(running({ applications, controls })).next,
+      "Controls are in place; their work has started.",
+    );
+    assert.equal(
+      controlsBrief(running({ applications, controls, started: false })).next,
+      "Controls are in place; their work starts when the engagement is launched.",
+    );
   });
 
   it("counts what the engagement holds", () => {
@@ -236,6 +330,22 @@ describe("the Systems & Processes workflow", () => {
     ]);
   });
 
+  // Added 18 November 2026 (design review): steps 1 and 2 are buttons, which the global
+  // button rule centres, and step 3 a link, which sat at the left without the hover.
+  it("lines every step up at the left, with the same hover, button or link", () => {
+    const css = readFileSync("apps/web/app/controls-setup.css", "utf8").replace(
+      /\r\n/g,
+      "\n",
+    );
+    const body = css.match(/\n\.sp-step-body \{([^}]*)\}/)?.[1] ?? "";
+    assert.match(body, /justify-content: flex-start;/);
+    assert.match(
+      css,
+      /\n\.sp-step-body:hover \{[^}]*background: var\(--surface-muted\);/,
+    );
+    assert.doesNotMatch(css, /button\.sp-step-body:hover/);
+  });
+
   it("reads the related processes a person typed as a list", () => {
     assert.deepEqual(listOf("Procure-to-Pay, Financial Close;\nPayroll"), [
       "Procure-to-Pay",
@@ -269,5 +379,66 @@ describe("a system taken out of scope (migration 0114)", () => {
       reason: "Retired before the period.",
     });
     assert.equal(controlsTiles(onboarding)[0]?.count, 1);
+  });
+});
+
+// Added 18 November 2026 (design review): at 390 px wide the page's Add menu ran past the
+// window's right edge. Once its side is chosen it moves back inside the window, and never
+// past the left edge; the CSS caps its width at the window's, less the gutters.
+describe("the page's Add menu on a narrow window", () => {
+  const source = readFileSync("apps/web/src/row-menu.tsx", "utf8").replace(
+    /\r\n/g,
+    "\n",
+  );
+  // The pure placement rule, taken from the component (a .tsx the tests cannot import).
+  const declared = source.match(
+    /export function inWindowShift\(([\s\S]*?)\n\}\n/,
+  )?.[0];
+  assert.ok(declared, "row-menu.tsx declares inWindowShift");
+  const inWindowShift = new Function(
+    "WINDOW_GUTTER",
+    `${declared.replace(/^export /, "").replace(/: number/g, "")}; return inWindowShift;`,
+  )(16) as (left: number, right: number, width: number) => number;
+
+  it("moves back from the right edge and never past the left one", () => {
+    // Fits: stays put.
+    assert.equal(inWindowShift(100, 300, 390), 0);
+    // Runs 40 px past the right gutter (374): moves back 40.
+    assert.equal(inWindowShift(150, 414, 390), -40);
+    // Starts left of the left gutter: moves right to it.
+    assert.equal(inWindowShift(4, 260, 390), 12);
+    // Wider than the room: its left edge stays at the gutter.
+    assert.equal(inWindowShift(20, 420, 390), -4);
+    assert.equal(inWindowShift(0, 500, 390), 16);
+  });
+
+  it("is placed before it is painted, after its side is chosen", () => {
+    assert.match(source, /useLayoutEffect\(\(\) => \{/);
+    assert.match(
+      source,
+      /inWindowShift\(rect\.left, rect\.right, window\.innerWidth\)/,
+    );
+    assert.match(source, /\}, \[open, toRight, up\]\);/);
+    // The keyboard behaviour stays: Escape closes it and returns focus; the first item
+    // takes the focus when it opens.
+    assert.match(source, /event\.key === "Escape"/);
+    assert.match(source, /button\.current\?\.focus\(\);/);
+    assert.match(
+      source,
+      /querySelector<HTMLElement>\("\.row-menu-list a, \.row-menu-list button"\)\n\s*\?\.focus\(\);/,
+    );
+  });
+
+  it("is never wider than the window, and its items wrap on a phone", () => {
+    const css = readFileSync("apps/web/app/globals.css", "utf8").replace(
+      /\r\n/g,
+      "\n",
+    );
+    const list = css.match(/\n\.row-menu-list \{([^}]*)\}/)?.[1] ?? "";
+    assert.match(list, /max-width: calc\(100vw - 2rem\);/);
+    assert.match(
+      css,
+      /@media \(max-width: 760px\) \{\n\s*\.row-menu-list a,\n\s*\.row-menu-list button,\n\s*\.row-menu-list small \{[^}]*white-space: normal;/,
+    );
   });
 });

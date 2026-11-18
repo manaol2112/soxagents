@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import {
   areaOf,
   scopeSteps,
   selectionCategory,
+  workStartLine,
 } from "../apps/web/src/controls-guide-model.ts";
 import {
   inScopeSystems,
@@ -17,7 +19,8 @@ import {
 // The Systems & Processes workflow's processes (SP3) and control selection (SP4), decided by
 // the product owner on 24 October 2026. Review and finalize (SP6) is removed: on 17 November
 // 2026 the product owner decided "Remove the requirement to finalize the scope. Scope keeps
-// changing so it will never be finalized." Each control's work starts when it is selected.
+// changing so it will never be finalized." Each control's work starts when it is selected on a
+// launched engagement, and at the launch for a control selected before it.
 
 const org = "11111111-1111-7111-8111-111111111111";
 const project = "22222222-2222-7222-8222-222222222222";
@@ -279,5 +282,77 @@ describe("a system taken out of scope (migration 0114)", () => {
       inScopeSystems(onboarding).map((system) => system.name),
       ["SAP ERP"],
     );
+  });
+});
+
+// Added 18 November 2026 (design review): scope_changes.reconcile_scope creates a control's
+// work only once the engagement is launched. Old: the copy said the work starts when a
+// control is selected on every engagement, and an engagement not launched with controls
+// selected showed neither the steps nor a banner. New: each screen says the work starts at
+// the launch until the engagement is launched, and Systems & Processes says so with the way
+// to the launch.
+describe("when a control's work starts, before and after the launch", () => {
+  const read = (path: string) =>
+    readFileSync(path, "utf8").replace(/\r\n/g, "\n");
+
+  it("is said once, from whether the engagement is launched", () => {
+    assert.equal(
+      workStartLine(true),
+      "Each control's walkthrough, evidence request, test, and review are created when it is selected.",
+    );
+    assert.equal(
+      workStartLine(false),
+      "Each control's walkthrough, evidence request, test, and review are created when the engagement is launched.",
+    );
+  });
+
+  it("shows Systems & Processes not launched with controls a banner to the launch", () => {
+    const view = read("apps/web/src/setup-view.tsx");
+    const page = view.slice(view.indexOf("export function ScopePage("));
+    assert.match(
+      page,
+      /\{!importing && !onboarding\.started && controls\.length > 0 \? \(\n\s*<Banner tone="info">\n\s*<span className="fz-banner">/,
+    );
+    assert.match(page, /work starts\n\s*when the engagement is launched\./);
+    assert.match(
+      page,
+      // "Go to launch", as the launched banner's "Go to Planning": "review" already means a
+      // system's decision on this screen (design review, 18 November 2026).
+      /<a className="text-link" href=\{setupHref\(model, "launch"\)\}>\n\s*Go to launch/,
+    );
+    // The launched banner is kept, and the steps still give way once a control is selected.
+    assert.match(
+      page,
+      /\{!importing && onboarding\.started && controls\.length > 0 \? \(/,
+    );
+    assert.match(
+      page,
+      /steps=\{controls\.length > 0 \? null : scopeSteps\(onboarding\)\}/,
+    );
+    // The Controls empty state words the work from the launch as well.
+    assert.match(
+      view,
+      /upload the organization's RCM\. \$\{workStartLine\(onboarding\.started\)\}`/,
+    );
+    assert.doesNotMatch(view, /review are created when it is selected\."/);
+  });
+
+  it("words the Select controls note from the launch", () => {
+    const view = read("apps/web/src/setup-view.tsx");
+    assert.equal(
+      view.match(
+        /rcm=\{controls\.length === 0\}\n\s*started=\{onboarding\.started\}/g,
+      )?.length,
+      2,
+    );
+    const actions = read("apps/web/src/scope-actions.tsx");
+    assert.match(
+      actions,
+      // In the Controls page's and the tour's words (design review, 18 November 2026).
+      /\{workStartLine\(started\)\}/,
+    );
+    // The standard's note already said so; the screens agree.
+    const matches = read("apps/web/src/standard-matches.tsx");
+    assert.match(matches, /when the engagement is launched\./);
   });
 });

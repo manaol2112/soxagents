@@ -17,6 +17,7 @@ import {
   RCM_UPLOAD_EVENT,
   SELECT_CONTROLS_EVENT,
   selectionCategory,
+  workStartLine,
 } from "./controls-guide-model";
 import {
   acceptRecommended,
@@ -268,14 +269,16 @@ function parseOptions(value: unknown): {
  * Select controls (decided by the product owner, SP4 of the Systems & Processes workflow):
  * the firm's library controls for one system or process at a time, filtered by category,
  * searched, and chosen together. The categories start on the areas a person approved for
- * it. Controls already in scope show as such. On a running engagement each control added
- * gets its work at once (no finalize step since 17 November 2026).
+ * it. Controls already in scope show as such. On a launched engagement each control added
+ * gets its work at once; before the launch, at the launch (no finalize step since 17
+ * November 2026).
  */
 export function SelectControls({
   organizationId,
   projectId,
   targets,
   rcm,
+  started,
   advice = {},
 }: {
   organizationId: string;
@@ -283,6 +286,8 @@ export function SelectControls({
   targets: Target[];
   /** Whether the client's RCM can still be uploaded: only while no control is set up. */
   rcm: boolean;
+  /** Whether the engagement is launched, which decides when a control's work is created. */
+  started: boolean;
   /** The agent's review of each system, by its id (adviceBySystem). */
   advice?: Record<string, SystemAdvice>;
 }) {
@@ -302,6 +307,7 @@ export function SelectControls({
       targets={targets}
       initial={start.target}
       rcm={rcm}
+      started={started}
       advice={advice}
       onClose={drawer.close}
     />
@@ -314,6 +320,7 @@ function SelectControlsDrawer({
   targets,
   initial,
   rcm,
+  started,
   advice,
   onClose,
 }: {
@@ -322,6 +329,7 @@ function SelectControlsDrawer({
   targets: Target[];
   initial: Target | null;
   rcm: boolean;
+  started: boolean;
   advice: Record<string, SystemAdvice>;
   onClose: () => void;
 }) {
@@ -923,8 +931,7 @@ function SelectControlsDrawer({
             <p className="mc-note">
               <UiIcon name="info" size={14} />
               <span>
-                Mapping links controls to {name}. Each control added gets its
-                work at once.
+                Mapping links controls to {name}. {workStartLine(started)}
               </span>
             </p>
           </aside>

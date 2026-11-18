@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { type IconName, UiIcon } from "./ui-icon";
 
@@ -55,6 +55,22 @@ function clippedBottom(list: HTMLElement): number {
   return edge;
 }
 
+/** The room a menu keeps from the window's left and right edges. */
+const WINDOW_GUTTER = 16;
+
+/** How far a menu moves sideways to stay inside the window: back from the right edge, and
+ * never past the left one. A narrow window (a phone) can otherwise cut a menu off. */
+export function inWindowShift(
+  left: number,
+  right: number,
+  windowWidth: number,
+  gutter = WINDOW_GUTTER,
+): number {
+  const overflow = right - (windowWidth - gutter);
+  const shift = overflow > 0 ? -overflow : 0;
+  return left + shift < gutter ? gutter - left : shift;
+}
+
 export function RowMenu({
   label,
   items,
@@ -86,24 +102,6 @@ export function RowMenu({
       setUp(false);
       return;
     }
-    const list = root.current?.querySelector<HTMLElement>(".row-menu-list");
-    if (
-      list !== null &&
-      list !== undefined &&
-      list.getBoundingClientRect().left < clippedLeft(list)
-    ) {
-      setToRight(true);
-    }
-    if (
-      list !== null &&
-      list !== undefined &&
-      list.getBoundingClientRect().bottom > clippedBottom(list) &&
-      (button.current?.getBoundingClientRect().top ?? 0) -
-        list.getBoundingClientRect().height >
-        8
-    ) {
-      setUp(true);
-    }
     const outside = (event: MouseEvent) => {
       if (!root.current?.contains(event.target as Node)) {
         setOpen(false);
@@ -127,6 +125,35 @@ export function RowMenu({
       document.removeEventListener("keydown", onKey, true);
     };
   }, [open]);
+  // Where the open menu sits, decided before it is painted and measured without any shift
+  // already applied: the side first (to the right where the left has no room, above where
+  // the space below is clipped), then, once the side is chosen, moved back by what still
+  // overflows the window.
+  useLayoutEffect(() => {
+    if (!open) {
+      return;
+    }
+    const list = root.current?.querySelector<HTMLElement>(".row-menu-list");
+    if (list === null || list === undefined) {
+      return;
+    }
+    list.style.transform = "";
+    const rect = list.getBoundingClientRect();
+    if (!toRight && rect.left < clippedLeft(list)) {
+      setToRight(true);
+      return;
+    }
+    if (
+      !up &&
+      rect.bottom > clippedBottom(list) &&
+      (button.current?.getBoundingClientRect().top ?? 0) - rect.height > 8
+    ) {
+      setUp(true);
+      return;
+    }
+    const shift = inWindowShift(rect.left, rect.right, window.innerWidth);
+    list.style.transform = shift === 0 ? "" : `translateX(${shift}px)`;
+  }, [open, toRight, up]);
   return (
     <div className={`row-menu${open ? " is-open" : ""}`} ref={root}>
       {trigger === null ? (

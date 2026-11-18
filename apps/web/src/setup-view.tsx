@@ -16,6 +16,7 @@ import {
   RCM_UPLOAD_EVENT,
   SELECT_CONTROLS_EVENT,
   scopeSteps,
+  workStartLine,
 } from "./controls-guide-model";
 import { ControlsPage, type ScopeAction } from "./controls-page";
 import { toPageRow } from "./controls-page-model";
@@ -2093,6 +2094,23 @@ export function ScopePage({
           </span>
         </Banner>
       ) : null}
+      {/* Before the launch the steps are gone once a control is selected, and its work is
+          created only at the launch (scope_changes.reconcile_scope): said here, with the way
+          to the launch (18 November 2026). */}
+      {!importing && !onboarding.started && controls.length > 0 ? (
+        <Banner tone="info">
+          <span className="fz-banner">
+            <span>
+              {controls.length} control{controls.length === 1 ? " is" : "s are"}{" "}
+              in scope. {controls.length === 1 ? "Its" : "Their"} work starts
+              when the engagement is launched.
+            </span>
+            <a className="text-link" href={setupHref(model, "launch")}>
+              Go to launch
+            </a>
+          </span>
+        </Banner>
+      ) : null}
       {importing && setup.rcmImport !== null ? (
         <>
           <RcmProgress upload={setup.rcmImport} />
@@ -2240,6 +2258,7 @@ export function ScopePage({
             targets={targets}
             advice={adviceBySystem(onboarding)}
             rcm={controls.length === 0}
+            started={onboarding.started}
           />
           {controls.length === 0 ? (
             <RcmUpload
@@ -2365,7 +2384,7 @@ export function RegisterPage({
             detail={
               systems.length + onboarding.processes.length === 0
                 ? "Controls are selected for each system and process. Add them on Systems & Processes first, or upload the organization's RCM, which finds the systems it names."
-                : "Choose controls from the firm's standard library for each system and process, or upload the organization's RCM. Each control's walkthrough, evidence request, test, and review are created when it is selected."
+                : `Choose controls from the firm's standard library for each system and process, or upload the organization's RCM. ${workStartLine(onboarding.started)}`
             }
           >
             {editable ? (
@@ -2406,6 +2425,7 @@ export function RegisterPage({
             targets={targets}
             advice={adviceBySystem(onboarding)}
             rcm={controls.length === 0}
+            started={onboarding.started}
           />
           {controls.length === 0 ? (
             <RcmUpload

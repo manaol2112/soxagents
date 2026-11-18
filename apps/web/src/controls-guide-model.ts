@@ -64,7 +64,8 @@ export function selectionCategory(domain: string): {
 
 // No Review and finalize (SP6) and its scope review: removed 17 November 2026 (the product
 // owner: "Remove the requirement to finalize the scope. Scope keeps changing so it will never
-// be finalized."). Each control's work starts when it is selected.
+// be finalized."). Each control's work starts when it is selected on a launched engagement,
+// and at the launch for a control selected before it (workStartLine).
 
 /** The Controls tour opens by itself the first time; afterwards it waits to be asked. */
 export const CONTROLS_GUIDE_SEEN_KEY = "aw.guide.controls-setup";
@@ -176,7 +177,18 @@ const TARGETS = {
   systems: ["#cs-pane-systems > :first-child"],
   processes: ["#cs-pane-processes > :first-child"],
   library: [".sp-step.is-controls"],
+  // The steps are hidden once a control is selected: the page's Add, which still selects
+  // controls from the library, takes their place (18 November 2026).
+  libraryAdd: [".is-controls-setup .page-actions .row-menu-trigger"],
 } as const;
+
+/** When a control's work is created (scope_changes.reconcile_scope): on selection once the
+ * engagement is launched, and at the launch for what was selected before it. */
+export function workStartLine(started: boolean): string {
+  return started
+    ? "Each control's walkthrough, evidence request, test, and review are created when it is selected."
+    : "Each control's walkthrough, evidence request, test, and review are created when the engagement is launched.";
+}
 
 /** The names in a list a person typed: split at commas, semicolons, and new lines. */
 export function listOf(text: string): string[] {
@@ -244,7 +256,7 @@ export function controlsTourSteps(onboarding: Onboarding): TourStep[] {
       targets: TARGETS.tiles,
       title: "Set up the engagement's controls",
       body: [
-        "The systems in scope, the business processes, the policies and procedures that govern them, and the references that describe them. The controls selected for each are listed on the Controls page; each gets its walkthrough, evidence request, test, and review as soon as it is selected.",
+        "The systems in scope, the business processes, the policies and procedures that govern them, and the references that describe them. The controls selected for each are listed on the Controls page.",
         "Nothing is requested from the organization until a plan is approved, and nothing is sent until an approver confirms it.",
       ],
       done: true,
@@ -281,7 +293,7 @@ export function controlsTourSteps(onboarding: Onboarding): TourStep[] {
     {
       id: "library",
       pane: "systems",
-      targets: TARGETS.library,
+      targets: state.controls > 0 ? TARGETS.libraryAdd : TARGETS.library,
       title: "Select the controls",
       body: [
         state.libraryControls > 0
@@ -296,10 +308,12 @@ export function controlsTourSteps(onboarding: Onboarding): TourStep[] {
     {
       id: "done",
       targets: [],
-      title: "Then the work starts",
+      title: "How the work follows the scope",
       body: [
-        "Each control's work starts when it is selected, and the scope can change at any time: a control added later gets its work, and one removed has its open work cancelled. The Controls page lists the controls and where each stands.",
-        "Evidence requests are drafted for approval; nothing is sent until an approver confirms it. This tour can be replayed from this page at any time.",
+        `${workStartLine(onboarding.started)} The scope can change at any time: ${
+          onboarding.started ? "a" : "once the engagement is launched, a"
+        } control added later is prepared the same way, and a control removed has its open work cancelled. The Controls page lists the controls and where each stands.`,
+        "This tour can be replayed from this page at any time.",
       ],
       done: true,
     },
@@ -401,7 +415,9 @@ export function controlsBrief(onboarding: Onboarding): ControlsBrief {
       ? "Next: add the first system, or upload the organization's RCM, which finds the systems it names."
       : state.controls === 0
         ? "Next: load the standard library for these systems, or upload the organization's RCM."
-        : "Controls are in place; their work has started.",
+        : onboarding.started
+          ? "Controls are in place; their work has started."
+          : "Controls are in place; their work starts when the engagement is launched.",
     tip: "A control added later, or taken out of scope, updates the engagement's work at once: added controls get their work, and a control taken out has its open work cancelled.",
   };
 }

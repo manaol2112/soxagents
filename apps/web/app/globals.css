@@ -14981,6 +14981,8 @@ button.answer-done:hover {
   z-index: 30;
   display: grid;
   min-width: 12rem;
+  /* Never wider than the window, less its gutters (a phone); row-menu.tsx keeps it in. */
+  max-width: calc(100vw - 2rem);
   padding: 0.3rem;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -15057,6 +15059,17 @@ button.answer-done:hover {
   margin-top: 0.15rem;
   color: var(--text-tertiary);
   font-size: var(--fs-xs);
+}
+
+/* On a narrow window a long item wraps inside the menu rather than widening it. */
+@media (max-width: 760px) {
+  .row-menu-list a,
+  .row-menu-list button,
+  .row-menu-list small {
+    line-height: 1.35;
+    white-space: normal;
+    overflow-wrap: break-word;
+  }
 }
 
 /* Which systems a policy applies to, asked before it is uploaded (evidence-intake.tsx). */
