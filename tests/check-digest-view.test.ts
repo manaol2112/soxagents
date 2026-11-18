@@ -438,9 +438,14 @@ describe("the first screen of a finished check", () => {
     // A note on a file's type, or a file left out, is said there in full whether or
     // not it has an action: the list is not narrowed to either kind.
     assert.equal(/check\.(confirm|leftOut)\.filter/.test(check), false);
+    // Rewritten 18 November 2026 (design review: a group's files are their own cards,
+    // marked "Not read", so its "Show the N files" is gone). The one line not drawn
+    // again is a group's empty one, whose sentence is the check's own line, said there.
+    // Old: 'const fileLines = (items: RequestCheck["leftOut"], acts = true) =>
+    // items.length === 0 ? null : ('.
     has(
       check,
-      'const fileLines = (items: RequestCheck["leftOut"], acts = true) => items.length === 0 ? null : (',
+      'const fileLines = (all: RequestCheck["leftOut"], acts = true) => { // A group whose sentence is the check\x27s own line is said there, once. const items = all.filter( (item) => item.line !== "" || groupFiles(item).length <= 1, ); return items.length === 0 ? null : (',
     );
     // In place, closed to start, and once opened it stays in the page (what was opened
     // inside it stays open).

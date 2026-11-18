@@ -988,6 +988,8 @@ button.wz-q-clear {
 .wz-flag {
   color: var(--warning);
   font-weight: 600;
+  /* "1 not read" stays one phrase at 390 (design review, 18 November 2026). */
+  white-space: nowrap;
 }
 
 .wz-flag.is-danger {
@@ -2831,6 +2833,16 @@ button.wz-open {
 
   .wz-stage-name {
     font-size: var(--fs-sm);
+  }
+
+  /* A narrow stage: its flag ("1 not read") on its own line under the count, so neither
+     breaks (design review, 18 November 2026, round 4). */
+  .wz-stage-count > .wz-flag {
+    display: block;
+  }
+
+  .wz-flag-sep {
+    display: none;
   }
 
   .wz-rc-head {

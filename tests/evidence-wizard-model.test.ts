@@ -36,17 +36,20 @@ import {
   formatElapsed,
   goneFromBatch,
   hintKey,
+  isEarlierSession,
   itemCards,
   itemResults,
   itemsPane,
   leftWithout,
   NEEDS_YOU_STEP,
   NOT_ADDED_CHIP,
+  NOT_READ_STEP,
   needsFix,
   noneAdded,
   notAddedTitle,
   OUT,
   OUT_LABEL,
+  PLACE_FILES,
   parseBatch,
   parseBatchFile,
   parseBatchList,
@@ -794,6 +797,9 @@ describe("the batch as the server sends it (section 2.4)", () => {
     });
     const [first, second, third] = batch.files;
     // Not known to have ended: pending, with nothing of an ended reading kept.
+    // 18 November 2026 (design review): a reading says whether it took text from the
+    // file and what clears one whose text was not read; one not ended has read nothing
+    // and offers nothing. Old: no textRead or action.
     assert.deepEqual(first?.read, {
       status: "PENDING",
       method: "NONE",
@@ -801,6 +807,8 @@ describe("the batch as the server sends it (section 2.4)", () => {
       startedAt: null,
       finishedAt: null,
       note: "",
+      textRead: false,
+      action: null,
     });
     assert.equal(first?.classification, null);
     assert.equal(first?.placement.status, "PENDING");
@@ -1657,6 +1665,331 @@ describe("step 2: the pipeline, each file's row, the elapsed time", () => {
       finishOf(0, { ...placedOnly, failedChecks: 0 }).tone,
       "success",
     );
+  });
+
+  // Design review, 18 November 2026: the dialog said "Read 3 of 3", each file "Read", and
+  // "Checked 1 of 1 item" and "Finished in 0:23" in green, while the item said none of
+  // its files was read. A file whose text was not read is not read; a held check is not
+  // checked; the finish is amber and says why. Round 3 (same day): "not read" is the
+  // file's own reading's word (read.text_read), before it is placed as after, never the
+  // check's held list.
+  it("never counts a file not read as read, nor a held check as checked", () => {
+    const base = finishedBatch();
+    const raw = {
+      ...base,
+      files: base.files.map((entry) =>
+        entry.file_id === F1
+          ? {
+              ...entry,
+              read: { ...entry.read, text_read: false, action: null },
+            }
+          : entry,
+      ),
+    };
+    const held = {
+      ...raw.items[0],
+      assurance: {
+        ...POLICY_CHECK,
+        status: "HELD",
+        held: { code: "UNREADABLE", reason: "" },
+        held_files: [
+          { file_id: F1, code: "UNREADABLE", reason: "", action: null },
+        ],
+        file_ids: [],
+        attributes: [],
+      },
+    };
+    const batch = batchOf({ ...raw, items: [held, raw.items[1]] });
+    const progress = progressOf([], batch, NOW);
+    assert.deepEqual([progress.notRead, progress.unchecked], [1, 1]);
+    assert.equal(progress.checked, 1);
+    assert.deepEqual(
+      progress.stages.map((stage) => [stage.state, stage.count, stage.flag]),
+      [
+        ["done", "Secured 7 of 7", ""],
+        ["partial", "Read 6 of 7", "1 not read"],
+        ["partial", "Sorted 6 of 7", "1 needs you"],
+        ["partial", "Checked 1 of 2 items", "1 not checked"],
+      ],
+    );
+    const finish = finishOf(23, progress);
+    assert.equal(finish.tone, "warning");
+    assert.equal(
+      finish.note,
+      "Finished in 0:23. 1 file needs you. 1 item not checked: 1 file could not be read.",
+    );
+    // Every file placed: still amber, never green over an item not checked.
+    assert.equal(finishOf(23, { ...progress, needs: 0 }).tone, "warning");
+    assert.equal(
+      finishOf(23, { ...progress, needs: 0 }).note,
+      "Finished in 0:23. 1 item not checked: 1 file could not be read.",
+    );
+    const line = progressLine({ progress, summary: null, seconds: 23 });
+    assert.equal(line?.tone, "warning");
+    assert.match(
+      line?.text ?? "",
+      /1 item not checked: 1 file could not be read./,
+    );
+    // The file's own Read step says it was not read, amber; the others keep theirs.
+    const lines = fileLines([], batch, facts());
+    const shot = lineOf(lines, F1);
+    assert.equal(shot.track[1], "needs");
+    assert.equal(shot.trackLabels[1], NOT_READ_STEP);
+    assert.equal(NOT_READ_STEP, "Not read");
+    const other = lineOf(lines, F2);
+    assert.deepEqual([other.track[1], other.trackLabels[1]], ["done", "Read"]);
+    // The only item held: "1 item not checked", never "Checked 0 of 1 item".
+    const alone = batchOf({ ...raw, items: [held] });
+    const check = progressOf([], alone, NOW).stages[3];
+    assert.deepEqual(
+      [check?.state, check?.count, check?.flag],
+      ["partial", "1 item not checked", ""],
+    );
+  });
+
+  // Design review, 18 November 2026, round 3: the dialog offered "Read it again" from the
+  // words of the server's reason while text recognition was not available; before the
+  // file was placed it said "Read 1 of 1" and "Read"; the item's line counted the whole
+  // request's files while the card counted this upload's.
+  describe("a file whose text was not read, in the dialog", () => {
+    const OCR_UNAVAILABLE =
+      "Text recognition is not available, so the text in the file's images could not be read. Review the file yourself, or read it again once an owner or admin turns on text recognition in Settings › AI workforce.";
+    const shot = (over: Record<string, unknown> = {}) =>
+      file({
+        name: "1_screenshot.png",
+        extension: "png",
+        read: {
+          status: "READY",
+          method: "NONE",
+          pages: 1,
+          started_at: at(2),
+          finished_at: at(9),
+          note: "",
+          text_read: false,
+          action: null,
+        },
+        placement: {
+          status: "NEEDS_PERSON",
+          method: "AGENT",
+          requirement_ids: [],
+          reason: OCR_UNAVAILABLE,
+          suggestions: [],
+          version: 1,
+        },
+        ...over,
+      });
+    const waiting = (read: Record<string, unknown> = {}) =>
+      batchOf(
+        finishedBatch({
+          files: [
+            shot({
+              read: {
+                status: "READY",
+                method: "NONE",
+                pages: 1,
+                started_at: at(2),
+                finished_at: at(9),
+                note: "",
+                text_read: false,
+                action: null,
+                ...read,
+              },
+            }),
+          ],
+          items: [],
+        }),
+      );
+
+    it("offers Read the file again only where the server says it can read it now", () => {
+      const off = waiting();
+      const [file] = off.files;
+      assert.ok(file !== undefined);
+      // The reason's own words ("read it again once…") offer nothing.
+      assert.match(file.placement.reason, /read it again once/);
+      assert.equal(needsFix(file), null);
+      const line = lineOf(fileLines([], off, facts()), F1);
+      assert.equal(line.dest?.kind === "needs" ? line.dest.fix : "", null);
+      const [now] = waiting({ action: "READ_AGAIN" }).files;
+      assert.ok(now !== undefined);
+      assert.equal(now.read.action, "READ_AGAIN");
+      assert.equal(needsFix(now), "reread");
+      // A reading that failed is read again, as before.
+      const [failed] = waiting({ status: "FAILED", text_read: false }).files;
+      assert.ok(failed !== undefined);
+      assert.equal(needsFix(failed), "reread");
+    });
+
+    it("says it was not read before it is placed, from its own reading", () => {
+      const before = waiting();
+      const progress = progressOf([], before, NOW);
+      assert.equal(progress.notRead, 1);
+      const read = progress.stages[1];
+      assert.deepEqual(
+        [read?.state, read?.count, read?.flag],
+        ["partial", "Read 0 of 1", "1 not read"],
+      );
+      const [line] = fileLines([], before, facts());
+      assert.deepEqual(
+        [line?.track[1], line?.trackLabels[1]],
+        ["needs", NOT_READ_STEP],
+      );
+      const finish = finishOf(9, progress);
+      assert.equal(finish.tone, "warning");
+      assert.match(finish.note, / 1 file could not be read\.$/);
+      // An older server that does not say text_read: a reading that ended READY is read.
+      const older = batchOf(finishedBatch({ files: [file()], items: [] }));
+      assert.equal(older.files[0]?.read.textRead, true);
+    });
+
+    it("words the item's line for this upload's files, and the request's others apart", () => {
+      const mine = [F1, F2];
+      const raw = finishedBatch({
+        files: mine.map((fileId, at) =>
+          shot({
+            file_id: fileId,
+            name: `${at + 1}_screenshot.png`,
+            placement: {
+              status: "PLACED",
+              method: "PERSON",
+              requirement_ids: [POLICY],
+              reason: "",
+              suggestions: [],
+              version: 2,
+            },
+          }),
+        ),
+        items: [
+          {
+            requirement_id: POLICY,
+            title: "Access review policy and designated owners list",
+            request_title: "Request PBC-1A2B3C4D",
+            letters: ["B", "C", "D", "E", "F"],
+            file_ids: mine,
+            assurance: {
+              ...POLICY_CHECK,
+              status: "HELD",
+              held: { code: "UNREADABLE", reason: OCR_UNAVAILABLE },
+              file_ids: [],
+              attributes: [],
+              held_files: [...mine, uuid(250)].map((fileId) => ({
+                file_id: fileId,
+                code: "UNREADABLE",
+                reason: OCR_UNAVAILABLE,
+                action: null,
+              })),
+            },
+          },
+        ],
+      });
+      const batch = batchOf(raw);
+      const [card] = itemCards(batch, {
+        items: ITEMS,
+        attributes: ATTRIBUTES,
+        now: NOW,
+      });
+      assert.equal(card?.count, "2 files");
+      assert.equal(
+        card?.status.text,
+        "2 files were not read, so the request was not checked: text recognition is not available. Review the files yourself, or read them again once an owner or admin turns on text recognition in Settings › AI workforce. 1 other file on this request was not read either.",
+      );
+      const progress = progressOf([], batch, NOW);
+      assert.equal(
+        finishOf(9, progress).note,
+        "Finished in 0:09. 1 item not checked: 2 files could not be read.",
+      );
+      assert.deepEqual(
+        [progress.stages[1]?.count, progress.stages[1]?.flag],
+        ["Read 0 of 2", "2 not read"],
+      );
+      // Round 4, 18 November 2026: the list line's banner says what the footer says of a
+      // held, not-read check ("1 item not checked"), never "did not finish".
+      const banner = progressLine({ progress, summary: null, seconds: 9 });
+      assert.equal(banner?.tone, "warning");
+      assert.equal(
+        banner?.text,
+        "2 files analyzed: 2 sorted into the items. 1 item not checked: 2 files could not be read.",
+      );
+      assert.ok(
+        (banner?.text ?? "").endsWith(
+          finishOf(9, progress).note.replace(/^Finished in 0:09\./, ""),
+        ),
+      );
+      assert.doesNotMatch(banner?.text ?? "", /did not finish/);
+    });
+
+    // Round 4, 18 November 2026: the banner above the first request said "2 files
+    // analyzed: 1 sorted into the items, 1 needs you. 1 check did not finish." for a
+    // session of that morning, taken up because one of its files still waited for a
+    // person, while the latest uploads had placed every file and the row said "Check on
+    // hold". A session older than the control's latest says only its waiting files.
+    it("an earlier session taken up for a waiting file says only that file", () => {
+      const summary = (batchId: string, minutes: number, needs: number) => ({
+        batchId,
+        createdAt: CREATED + minutes * 60_000,
+        createdBy: "Ryan James",
+        chosenRequirementId: null,
+        files: 2,
+        inProgress: false,
+        needsPerson: needs,
+        notDesign: 0,
+        finished: true,
+        finishedAt: CREATED + minutes * 60_000 + 30_000,
+      });
+      const older = summary(uuid(70), 0, 1);
+      const latest = summary(uuid(71), 600, 0);
+      const list = [latest, older];
+      // Taken up as before: a file of the older one still waits for a person.
+      assert.equal(batchToShow(list, new Set())?.batchId, uuid(70));
+      assert.equal(isEarlierSession(list, uuid(70)), true);
+      assert.equal(isEarlierSession(list, uuid(71)), false);
+      assert.equal(isEarlierSession(list, uuid(72)), false);
+      // Its own batch as it stands: 1 placed, 1 waiting, its item's check failed.
+      const raw = finishedBatch();
+      const [first, second] = raw.files;
+      const batch = batchOf({
+        ...raw,
+        files: [
+          first,
+          second
+            ? {
+                ...second,
+                placement: {
+                  ...second.placement,
+                  status: "NEEDS_PERSON",
+                  requirement_ids: [],
+                },
+              }
+            : second,
+        ],
+        items: [
+          {
+            ...raw.items[0],
+            file_ids: [F1],
+            assurance: { ...POLICY_CHECK, status: "FAILED" },
+          },
+        ],
+      });
+      const progress = progressOf([], batch, NOW);
+      assert.equal(progress.needs, 1);
+      assert.equal(progress.failedChecks, 1);
+      const shown = progressLine({
+        progress,
+        summary: older,
+        seconds: 30,
+        earlier: true,
+      });
+      assert.deepEqual(shown, {
+        text: "1 file from an earlier upload is waiting to be placed. Added by Ryan James on Nov 13, 2026.",
+        done: true,
+        action: PLACE_FILES,
+        tone: "warning",
+      });
+      // The latest session keeps its own full line.
+      assert.match(
+        progressLine({ progress, summary: older, seconds: 30 })?.text ?? "",
+        /1 check did not finish\./,
+      );
+    });
   });
 
   it("finishes when every file is read and sorted and every item's check has ended", () => {
@@ -3892,13 +4225,41 @@ describe("refusals said once, and the results in plain words", () => {
       })?.text,
       "1 file needs you; 2 not added.",
     );
+    // Rewritten 18 November 2026 (design review): files of an upload none of which is
+    // placed are said as what they are, an earlier upload's files to place, so the line
+    // never reads as the files on a request; its action says so. Old: "2 files need
+    // you." with "See results".
+    const waiting = progressLine({
+      progress: progressOf([], needs(2), NOW),
+      summary: null,
+      seconds: 4,
+    });
+    assert.equal(
+      waiting?.text,
+      "2 files from an earlier upload are waiting to be placed.",
+    );
+    assert.equal(waiting?.action, PLACE_FILES);
+    assert.equal(PLACE_FILES, "Place files");
+    assert.equal(waiting?.tone, "warning");
+    // With who added them and when, from the server's list.
     assert.equal(
       progressLine({
-        progress: progressOf([], needs(2), NOW),
-        summary: null,
+        progress: progressOf([], needs(3), NOW),
+        summary: {
+          batchId: BATCH,
+          createdAt: CREATED,
+          createdBy: "Ryan James",
+          chosenRequirementId: null,
+          files: 3,
+          inProgress: false,
+          needsPerson: 3,
+          notDesign: 0,
+          finished: true,
+          finishedAt: CREATED + 33_000,
+        },
         seconds: 4,
       })?.text,
-      "2 files need you.",
+      "3 files from an earlier upload are waiting to be placed. Added by Ryan James on Nov 13, 2026.",
     );
   });
 

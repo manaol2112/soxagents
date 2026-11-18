@@ -31,11 +31,12 @@ import {
   type Result,
   type ReviewView,
   requestCheck,
+  uploadHeldLine,
   VERDICTS,
   type Verdict,
 } from "./evidence-assurance-model.ts";
 import { MAX_UPLOAD_BYTES } from "./evidence-model.ts";
-import { formatBytes } from "./format.ts";
+import { formatBytes, formatDate } from "./format.ts";
 import type { IconName } from "./icon-name.ts";
 import { failureNoteOf, plainNote } from "./run-failure.ts";
 
@@ -118,6 +119,14 @@ export type BatchRead = {
   /** The server's failure sentence for a reading that failed, where it sent one
    * (run-failure.ts); absent otherwise. */
   failureNote?: string;
+  /** Whether the reading took text from the file, on the server's word (read.text_read):
+   * false for one that failed, one whose images no text recognition read, one with
+   * nothing readable, and one not ended. An older server that does not say it: a reading
+   * that ended READY. */
+  textRead: boolean;
+  /** What clears a file whose text was not read, as things stand (read.action): read it
+   * again, or replace it; null where nothing does now, or its text was read. */
+  action: "READ_AGAIN" | "REPLACE" | null;
 };
 
 /** A reading's one sentence when it ended without a usable answer (it failed), or null:
@@ -260,6 +269,14 @@ function parseRead(value: unknown): BatchRead {
     startedAt: timeOf(raw.started_at),
     finishedAt: ended ? timeOf(raw.finished_at) : null,
     note: ended ? str(raw.note).slice(0, 300) : "",
+    textRead:
+      typeof raw.text_read === "boolean"
+        ? raw.text_read && status === "READY"
+        : status === "READY",
+    action:
+      ended && (raw.action === "READ_AGAIN" || raw.action === "REPLACE")
+        ? raw.action
+        : null,
     ...(status === "FAILED" && failureNoteOf(raw) !== ""
       ? { failureNote: failureNoteOf(raw) }
       : {}),
@@ -1169,17 +1186,25 @@ export type Destination =
 export type NeedsFix = "confirm-kind" | "reread";
 
 /** The action a file that needs a person can take in place: confirming its kind where
- * the reader was not sure of it, reading it again where its reading failed. */
+ * the reader was not sure of it, reading it again where its reading failed or the server
+ * says reading it again can read it now (read.action; design review, 18 November 2026:
+ * the reason's words offered it while text recognition was not available). */
 export function needsFix(file: BatchFile): NeedsFix | null {
   if (file.placement.status !== "NEEDS_PERSON") {
     return null;
   }
-  const reason = file.placement.reason;
-  if (file.read.status === "FAILED" || /\bread it again\b/i.test(reason)) {
+  if (file.read.status === "FAILED" || file.read.action === "READ_AGAIN") {
     return "reread";
   }
-  return /\bconfirm its kind\b/i.test(reason) ? "confirm-kind" : null;
+  return /\bconfirm its kind\b/i.test(file.placement.reason)
+    ? "confirm-kind"
+    : null;
 }
+
+/** A file whose reading ended with none of its text read, on its own reading's word
+ * (before it is placed as after). */
+const textNotReadOf = (file: BatchFile): boolean =>
+  readEnded(file) && !file.read.textRead;
 
 export type FileLine = {
   key: string;
@@ -1233,6 +1258,9 @@ export type FileLine = {
   upload: Upload | null;
   file: BatchFile | null;
 };
+
+/** A file's Read step where none of its text was read (amber, never a tick). */
+export const NOT_READ_STEP = "Not read";
 
 /** Past this, a reading still under way says it is taking longer than usual. */
 export const STALLED_AFTER_MS = 180_000;
@@ -1424,6 +1452,8 @@ function activityOf(
 function trackOf(
   upload: Upload | null,
   file: BatchFile | null,
+  /** None of its text was read, as an item's check says it: its Read step is amber. */
+  notRead = false,
 ): FileLine["track"] {
   const secured: TrackState =
     file !== null
@@ -1441,7 +1471,9 @@ function trackOf(
   const status = file.read.status;
   const read: TrackState =
     status === "READY"
-      ? "done"
+      ? notRead
+        ? "needs"
+        : "done"
       : status === "FAILED"
         ? "failed"
         : status === "WORKING"
@@ -1571,10 +1603,10 @@ export function fileLines(
       folder: upload?.folder ?? "",
       mark,
       meta: restored ? [meta, RESTORED_META].filter(Boolean).join(" · ") : meta,
-      track: trackOf(upload, file),
+      track: trackOf(upload, file, file !== null && textNotReadOf(file)),
       trackLabels: [
         "Secured",
-        "Read",
+        file !== null && textNotReadOf(file) ? NOT_READ_STEP : "Read",
         "Classified",
         file !== null &&
         file.placement.status === "NEEDS_PERSON" &&
@@ -1767,8 +1799,17 @@ export type Progress = {
   notDesign: number;
   placed: number;
   items: number;
-  /** Items whose check gave a verdict (reviewed or held). */
+  /** Items whose check gave a verdict: reviewed. A held one is not checked (design
+   * review, 18 November 2026: "Checked 1 of 1 item" sat over "Not checked"). */
   checked: number;
+  /** Files whose reading ended but none of whose text was read, as an item's check
+   * says it (held, or checked without them): never counted as read. */
+  notRead: number;
+  /** Items whose check ended, or will not come, without a verdict and without failing:
+   * held, or not checked; counted once the session's work is over. */
+  unchecked: number;
+  /** Of the files not read, those on the items not checked. */
+  notReadUnchecked: number;
   /** Items whose check did not finish (FAILED, e.g. no model): never counted as checked,
    * and never shown as done (design review round 4, 18 November 2026). */
   failedChecks: number;
@@ -1850,6 +1891,9 @@ export function progressOf(
     (item) => item.state === "refused" || item.state === "failed",
   ).length;
   const read = files.filter(readEnded).length;
+  // A file none of whose text was read, on its own reading's word: its reading ended,
+  // but it was not read, before it is placed as after (design review, 18 November 2026).
+  const notRead = files.filter(textNotReadOf).length;
   const sorted = files.filter(
     (file) => readEnded(file) && file.placement.status !== "PENDING",
   ).length;
@@ -1867,9 +1911,10 @@ export function progressOf(
   const failedChecks = items.filter(
     (item) => item.check?.status === "FAILED",
   ).length;
-  // A failed check ended, but it gave no verdict: it is not "checked".
-  const checked =
-    items.filter((item) => checkEnded(item.check)).length - failedChecks;
+  // A failed check ended, but it gave no verdict: it is not "checked"; nor is a held one.
+  const checked = items.filter(
+    (item) => item.check?.status === "REVIEWED",
+  ).length;
   const uploading = sending.length > 0;
   const reading =
     arriving.length > 0 ||
@@ -1880,6 +1925,22 @@ export function progressOf(
   const checking = coming.length > 0;
   const allSorted = !uploading && !reading;
   const done = allSorted && !checking && (batch !== null || uploads.length > 0);
+  // Once nothing is still to come: the items neither checked nor failed (held, or never
+  // checked) are said as not checked, amber, never as done.
+  const uncheckedItems =
+    allSorted && !checking
+      ? items.filter(
+          (item) =>
+            item.check?.status !== "REVIEWED" &&
+            item.check?.status !== "FAILED",
+        )
+      : [];
+  const unchecked = uncheckedItems.length;
+  // Of the files not read, those on the items not checked: what the finish names.
+  const onUnchecked = new Set(uncheckedItems.flatMap((item) => item.fileIds));
+  const notReadUnchecked = files.filter(
+    (file) => textNotReadOf(file) && onUnchecked.has(file.fileId),
+  ).length;
   // Nothing reached the evidence store: no stage after Secure has anything to do.
   const nothingAdded = done && total === 0 && secured === 0 && notAdded > 0;
 
@@ -1897,7 +1958,9 @@ export function progressOf(
     total === 0
       ? "wait"
       : !uploading && arriving.length === 0 && read === files.length
-        ? "done"
+        ? notRead > 0
+          ? "partial"
+          : "done"
         : read > 0 || files.some((file) => file.read.status === "WORKING")
           ? "active"
           : "wait";
@@ -1920,7 +1983,9 @@ export function progressOf(
       : allSorted && !checking
         ? failedChecks > 0
           ? "problem"
-          : "done"
+          : unchecked > 0
+            ? "partial"
+            : "done"
         : checked > 0 || items.some((item) => item.check?.status === "CHECKING")
           ? "active"
           : "wait";
@@ -1945,8 +2010,8 @@ export function progressOf(
           ? total > 0
             ? "Waiting for a reader"
             : "Waiting"
-          : `Read ${read} of ${total}`,
-      flag: "",
+          : `Read ${read - notRead} of ${total}`,
+      flag: notRead > 0 ? `${notRead} not read` : "",
     },
     {
       key: "sort",
@@ -1975,9 +2040,14 @@ export function progressOf(
               ? "Waiting to start"
               : "Waiting for sorted files"
             : checkState === "problem"
-              ? `${failedChecks} of ${plural(items.length, "item")} not checked`
-              : `Checked ${checked} of ${plural(items.length, "item")}`,
-      flag: "",
+              ? `${failedChecks + unchecked} of ${plural(items.length, "item")} not checked`
+              : checkState === "partial" && checked === 0
+                ? `${plural(unchecked, "item")} not checked`
+                : `Checked ${checked} of ${plural(items.length, "item")}`,
+      flag:
+        checkState === "partial" && checked > 0
+          ? `${unchecked} not checked`
+          : "",
     },
   ];
   return {
@@ -1991,6 +2061,9 @@ export function progressOf(
     placed,
     items: items.length,
     checked,
+    notRead,
+    unchecked,
+    notReadUnchecked,
     failedChecks,
     checkingItems: coming.length,
     uploading,
@@ -2269,7 +2342,19 @@ export function itemCards(
       }
       if (status === "HELD" || status === "FAILED") {
         return {
-          text: checkLine(check, facts.attributes, files),
+          // Held because no file's text was read: said for this upload's files, so the
+          // card's count, its line and the footer agree; the rest of the request's
+          // files are said apart (design review, 18 November 2026).
+          text:
+            (check === null
+              ? null
+              : uploadHeldLine(
+                  check,
+                  item.fileIds,
+                  (fileId) =>
+                    files.find((file) => file.fileId === fileId)?.name ??
+                    "A file",
+                )) ?? checkLine(check, facts.attributes, files),
           mode: status === "HELD" ? "held" : "failed",
         };
       }
@@ -3239,6 +3324,24 @@ export function tookLine(seconds: number): string {
     : `Finished in ${formatElapsed(seconds)}`;
 }
 
+/** " 1 item not checked: 3 files could not be read.", after the finish, the files those
+ * on the items not checked; " 3 files could not be read." where files not read are on no
+ * such item (they wait for a person); "" where nothing is unread or unchecked. */
+function uncheckedWords(
+  progress: Pick<Progress, "unchecked" | "notRead" | "notReadUnchecked">,
+) {
+  const items = progress.unchecked;
+  const files = progress.notReadUnchecked;
+  if (items <= 0) {
+    return progress.notRead > 0
+      ? ` ${plural(progress.notRead, "file")} could not be read.`
+      : "";
+  }
+  return ` ${plural(items, "item")} not checked${
+    files > 0 ? `: ${plural(files, "file")} could not be read` : ""
+  }.`;
+}
+
 export function finishOf(seconds: number, progress: Progress): Finish {
   const took = tookLine(seconds);
   const needs =
@@ -3251,6 +3354,8 @@ export function finishOf(seconds: number, progress: Progress): Finish {
     progress.failedChecks > 0
       ? ` ${plural(progress.failedChecks, "check")} did not finish.`
       : "";
+  // An item held (its files not read) is not checked: said, and never green over it.
+  const unchecked = uncheckedWords(progress);
   if (progress.nothingAdded) {
     return {
       short: "",
@@ -3266,7 +3371,7 @@ export function finishOf(seconds: number, progress: Progress): Finish {
     const of = progress.secured + progress.notAdded;
     return {
       short: took,
-      note: `${took}. ${progress.notAdded} of ${plural(of, "file")} ${progress.notAdded === 1 ? "was" : "were"} not added.${needs}${failed}`,
+      note: `${took}. ${progress.notAdded} of ${plural(of, "file")} ${progress.notAdded === 1 ? "was" : "were"} not added.${needs}${failed}${unchecked}`,
       tone: "warning",
       action: "results",
       primary,
@@ -3274,9 +3379,14 @@ export function finishOf(seconds: number, progress: Progress): Finish {
   }
   return {
     short: took,
-    note: `${took}.${needs}${failed}`,
+    note: `${took}.${needs}${failed}${unchecked}`,
     tone:
-      progress.needs > 0 || progress.failedChecks > 0 ? "warning" : "success",
+      progress.needs > 0 ||
+      progress.failedChecks > 0 ||
+      progress.unchecked > 0 ||
+      progress.notRead > 0
+        ? "warning"
+        : "success",
     action: "results",
     primary,
   };
@@ -3322,12 +3432,38 @@ export function finishedNote(seconds: number, progress: Progress): string {
 // The list's line, and the session this browser remembers
 // ---------------------------------------------------------------------------------------
 
+/** The list line's action where an earlier upload's files wait to be placed. */
+export const PLACE_FILES = "Place files";
+
+/** Whether the control has a session newer than this one in its list (latest first, as
+ * the server sends it; by its time where both have one). */
+export function isEarlierSession(
+  list: readonly BatchSummary[],
+  batchId: string,
+): boolean {
+  const at = list.findIndex((item) => item.batchId === batchId);
+  if (at < 0) {
+    return false;
+  }
+  const self = list[at]?.createdAt ?? null;
+  return list.some(
+    (item, index) =>
+      item.batchId !== batchId &&
+      (item.createdAt !== null && self !== null
+        ? item.createdAt > self
+        : index < at),
+  );
+}
+
 /** The line on the D&I list while a session is open: "Analyzing 7 files · Read 3 of 7 ·
  * 0:42", then "7 files analyzed: 5 sorted into the items, 1 needs you." */
 export function progressLine(facts: {
   progress: Progress | null;
   summary: BatchSummary | null;
   seconds: number;
+  /** A newer session of the control exists (isEarlierSession): this one is shown only for
+   * its files that still wait for a person, so only they are said. */
+  earlier?: boolean;
 }): {
   text: string;
   done: boolean;
@@ -3384,6 +3520,7 @@ export function progressLine(facts: {
   const failedChecks = p?.failedChecks ?? 0;
   const failed =
     failedChecks > 0 ? ` ${plural(failedChecks, "check")} did not finish.` : "";
+  const unchecked = p === null ? "" : uncheckedWords(p);
   const by =
     s !== null && s.createdBy !== "" ? ` Added by ${s.createdBy}.` : "";
   const needsYou = `${plural(needs, "file")} ${needs === 1 ? "needs" : "need"} you`;
@@ -3394,19 +3531,53 @@ export function progressLine(facts: {
   ]
     .filter((part) => part !== "")
     .join("; ");
+  const tone =
+    notAdded > 0 || needs > 0 || failedChecks > 0 || unchecked !== ""
+      ? "warning"
+      : "success";
+  // Only files of the upload wait, none of them placed: said as what it is, an earlier
+  // upload's files to place, so it never reads as the files on a request (design
+  // review, 18 November 2026). Same target as See results. Round 4, the same day: a
+  // session older than the control's latest, shown because a file of it still waits for
+  // a person, says only that. Its other counts (what it sorted, a check of an item it
+  // placed on, perhaps another request) are its own past and read as the first request
+  // row's, which the banner sits above ("1 check did not finish" over "Check on hold").
+  if (
+    needs > 0 &&
+    (facts.earlier === true ||
+      (placed === 0 && notAdded === 0 && failed === ""))
+  ) {
+    const when =
+      s?.createdAt != null && Number.isFinite(s.createdAt)
+        ? ` on ${formatDate(new Date(s.createdAt).toISOString())}`
+        : "";
+    const who =
+      s !== null && s.createdBy !== ""
+        ? ` Added by ${s.createdBy}${when}.`
+        : when !== ""
+          ? ` Added${when}.`
+          : "";
+    return {
+      text: `${plural(needs, "file")} from an earlier upload ${needs === 1 ? "is" : "are"} waiting to be placed.${who}`,
+      done: true,
+      action: PLACE_FILES,
+      tone: "warning",
+    };
+  }
   return {
     text:
       placed === 0 && unplaced !== ""
-        ? `${capital(unplaced)}.${failed}${by}`
+        ? `${capital(unplaced)}.${failed}${unchecked}${by}`
         : `${plural(files, "file")} analyzed${
             placed !== null ? `: ${placed} sorted into the items` : ""
           }${needs > 0 ? `${placed !== null ? "," : ":"} ${needs} ${needs === 1 ? "needs" : "need"} you` : ""}.${
             notAdded > 0 ? ` ${notAdded} not added.` : ""
-          }${failed}${by}`,
+          }${failed}${unchecked}${by}`,
     done: true,
     action: "See results",
-    // Green only when every file was added and none waits for a person.
-    tone: notAdded > 0 || needs > 0 || failedChecks > 0 ? "warning" : "success",
+    // Green only when every file was added, none waits for a person, and every item's
+    // check gave a verdict.
+    tone,
   };
 }
 

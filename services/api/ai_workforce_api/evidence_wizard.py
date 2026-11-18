@@ -83,14 +83,19 @@ from ai_workforce_api.db import transaction
 from ai_workforce_api.evidence_assurance import (
     CUSTODY_FAILED_NOTE,
     HELD_REASONS,
+    OCR_AVAILABLE_NOW,
+    OCR_UNAVAILABLE,
     GateFacts,
     Held,
+    HeldAction,
     HeldCode,
     RequestBody,
     Verdict,
     attribute_letter,
     gate,
+    held_action,
     lens_for,
+    ocr_can_read,
     queue_for_file,
     queue_safely,
     read_assurance,
@@ -1758,6 +1763,16 @@ class ReadBody(BaseModel):
     # One plain sentence for the person when the file's reading gave no usable answer
     # (B1i): why, what was kept and what to do; "" unless FAILED.
     failure_note: str = ""
+    # Whether the reading took text from the file. False for a reading that failed, for
+    # one that ended with nothing read (its images unread by any text recognition, or
+    # nothing readable in it), and for one not ended (18 November 2026: the wizard
+    # counted a file none of whose text was read as read).
+    text_read: bool = False
+    # What clears a file whose text was not read, decided as things stand
+    # (evidence_assurance.held_action with ocr_can_read): READ_AGAIN where reading it
+    # again can read it, REPLACE where only another copy can, None otherwise (text
+    # recognition not available, or its text was read).
+    action: HeldAction | None = None
 
 
 def read_failure_note(status: str, note: str) -> str:
@@ -1890,7 +1905,7 @@ _LISTED = f"""
            EXISTS (SELECT 1 FROM evidence_batches ob WHERE ob.id = f.upload_batch_id),
            (SELECT m.filed_by FROM evidence_matches m
             WHERE m.evidence_file_id = f.id AND m.status = 'FILED'),
-           listed.restored
+           listed.restored, coalesce(a.extraction_status, '')
     FROM (
         SELECT f.upload_batch_id AS batch_id, f.id AS file_id, false AS duplicate,
                f.created_at AS listed_at, false AS restored
@@ -1962,15 +1977,30 @@ def _classification(row: tuple[Any, ...]) -> ClassificationBody | None:
     )
 
 
+def _not_read(row: tuple[Any, ...], read_status: ReadStatus) -> tuple[HeldCode, bool] | None:
+    """Why the file's own reading took no text from it, as the assurance gate holds it,
+    and whether its images wait for text recognition; None where its text was read or its
+    reading has not ended."""
+    if read_status == "FAILED":
+        custody = str(row[9]) == CUSTODY_FAILED_NOTE
+        return ("CUSTODY" if custody else "READ_FAILED"), False
+    if read_status == "READY" and not bool(row[13]):
+        return "UNREADABLE", str(row[18]) == "NEEDS_OCR"
+    return None
+
+
 def _file_body(
     row: tuple[Any, ...],
     current: Current | None,
     on_control: bool,
     actual: list[UUID],
     entries: dict[UUID, RequestBody],
+    ocr_available: bool = True,
 ) -> FileBody:
     """A file's entry: where it is now (its filing and links), never where a placement
-    said it was; its placement's record (who decided, why, at which version) beside it."""
+    said it was; its placement's record (who decided, why, at which version) beside it.
+    A file whose text was not read says so, with what clears it as things stand
+    (ocr_available: ocr_can_read)."""
     file_id = UUID(str(row[1]))
     status = str(row[4])
     read_status: ReadStatus = (
@@ -1978,9 +2008,14 @@ def _file_body(
         if status in ("PENDING", "WORKING", "READY", "FAILED")
         else "PENDING"
     )
+    not_read = _not_read(row, read_status)
     items = _ordered(() if current is None else current.requirement_ids, actual)
     shown: ShownStatus
     reason = "" if current is None else current.reason
+    # The gate's sentence for images no text recognition read was recorded when it held
+    # the file: said as things stand now, as the assurance chain says it (_held_files).
+    if not_read is not None and not_read[1] and reason in (OCR_UNAVAILABLE, OCR_AVAILABLE_NOW):
+        reason = OCR_AVAILABLE_NOW if ocr_available else OCR_UNAVAILABLE
     if not on_control:
         # Filed to another control since: not this control's D&I evidence any more.
         shown = "NOT_DESIGN"
@@ -2037,6 +2072,10 @@ def _file_body(
             finished_at=row[8],
             note=clean_line(str(row[9]), 300) if read_status in ("READY", "FAILED") else "",
             failure_note=read_failure_note(read_status, clean_line(str(row[9]), 300)),
+            text_read=read_status == "READY" and not_read is None,
+            action=(
+                None if not_read is None else held_action(not_read[0], not_read[1], ocr_available)
+            ),
         ),
         classification=_classification(row),
         placement=PlacementBody(
@@ -2114,6 +2153,7 @@ def _compose(
     project_id: UUID,
     control_id: UUID,
     batches: Sequence[Batch],
+    ocr_available: bool = True,
 ) -> dict[UUID, _Composed]:
     """The files and items of the sessions named, from the records, with one read of where
     the files are and, once any placed item has a check, one read of the assurance chain."""
@@ -2154,7 +2194,9 @@ def _compose(
     if checked:
         entries = {
             entry.requirement_id: entry
-            for entry in read_assurance(connection, project_id, control_id).requests
+            for entry in read_assurance(
+                connection, project_id, control_id, ocr_available=ocr_available
+            ).requests
         }
     else:
         by_file = {UUID(str(row[1])): row for row in rows}
@@ -2178,7 +2220,9 @@ def _compose(
             on_control, actual = located.get(file_id, (False, []))
             if not on_control:
                 away.add(file_id)
-            body = _file_body(row, currents.get(file_id), on_control, actual, entries)
+            body = _file_body(
+                row, currents.get(file_id), on_control, actual, entries, ocr_available
+            )
             files.append(body)
             if body.placement.status == "PLACED":
                 for requirement_id in body.placement.requirement_ids:
@@ -2216,13 +2260,17 @@ def _visible_batch(connection: Reader, project_id: UUID, control_id: UUID, batch
 
 
 def batch_state(
-    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID, batch_id: UUID
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    control_id: UUID,
+    batch_id: UUID,
+    ocr_available: bool = True,
 ) -> BatchBody:
     """The batch as the wizard shows it, every state from the records: each file's stage,
     reading, classification, where it is and the attributes it addresses; each item that
     holds one of its files, with its check (the assurance chain's entry for it)."""
     batch = _visible_batch(connection, project_id, control_id, batch_id)
-    composed = _compose(connection, project_id, control_id, [batch])[batch.id]
+    composed = _compose(connection, project_id, control_id, [batch], ocr_available)[batch.id]
     files, items, away = composed.files, composed.items, composed.away
     now = connection.execute("SELECT clock_timestamp()").fetchone()
     return BatchBody(
@@ -2249,7 +2297,10 @@ def batch_state(
 
 
 def list_batches(
-    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    control_id: UUID,
+    ocr_available: bool = True,
 ) -> BatchesBody:
     """The control's recent wizard sessions, the most recent first: how many files each
     holds, how many are still being read or sorted, wait for a person or are not D&I
@@ -2273,7 +2324,9 @@ def list_batches(
     ).fetchall()
     batches = [batch for batch in (_batch_of(row[:8]) for row in rows) if batch is not None]
     names = {UUID(str(row[0])): str(row[8]) for row in rows}
-    composed = _compose(connection, project_id, control_id, batches) if batches else {}
+    composed = (
+        _compose(connection, project_id, control_id, batches, ocr_available) if batches else {}
+    )
     found: list[BatchSummaryBody] = []
     for batch in batches:
         files, items = composed[batch.id].files, composed[batch.id].items
@@ -2308,8 +2361,9 @@ def file_entry(
     control_id: UUID,
     batch_id: UUID,
     file_id: UUID,
+    ocr_available: bool = True,
 ) -> FileBody:
-    body = batch_state(connection, project_id, control_id, batch_id)
+    body = batch_state(connection, project_id, control_id, batch_id, ocr_available)
     found = next((file for file in body.files if file.file_id == file_id), None)
     if found is None:
         raise NotVisible()
@@ -2346,6 +2400,7 @@ def move(
     batch_id: UUID,
     file_id: UUID,
     body: PlacementChange,
+    ocr_available: bool = True,
 ) -> tuple[FileBody, list[UUID]]:
     """A person places a file of the session (its own, or one dropped again in it): on the
     items named (none: not D&I evidence), at the version they saw; never onto an item a
@@ -2461,7 +2516,10 @@ def move(
             queued = [] if waits else queue_safely(cursor, project_id, file_id, principal.id)
     except UniqueViolation:
         raise WizardState("the placement changed") from None
-    return file_entry(connection, project_id, control_id, batch_id, file_id), queued
+    return (
+        file_entry(connection, project_id, control_id, batch_id, file_id, ocr_available),
+        queued,
+    )
 
 
 # --- Routes ----------------------------------------------------------------------------
@@ -2490,7 +2548,10 @@ def register_evidence_wizard(
         def work(connection: psycopg.Connection[Any], principal: Principal) -> BatchesBody:
             authorize(connection, principal=principal, action=Action.PROJECT_READ,
                       organization_id=organization_id, project_id=project_id)  # fmt: skip
-            return list_batches(connection, project_id, control_id)
+            return list_batches(
+                connection, project_id, control_id,
+                ocr_can_read(connection, settings, organization_id),
+            )  # fmt: skip
 
         return run(request, work)
 
@@ -2502,7 +2563,10 @@ def register_evidence_wizard(
         def work(connection: psycopg.Connection[Any], principal: Principal) -> BatchBody:
             authorize(connection, principal=principal, action=Action.PROJECT_READ,
                       organization_id=organization_id, project_id=project_id)  # fmt: skip
-            return batch_state(connection, project_id, control_id, batch_id)
+            return batch_state(
+                connection, project_id, control_id, batch_id,
+                ocr_can_read(connection, settings, organization_id),
+            )  # fmt: skip
 
         return run(request, work)
 
@@ -2512,9 +2576,14 @@ def register_evidence_wizard(
         file_id: UUID, body: PlacementChange, request: Request,
     ) -> FileBody:  # fmt: skip
         def work(connection: psycopg.Connection[Any], principal: Principal) -> FileBody:
+            # For the answer only, read once the caller may read the engagement; the move
+            # itself authorizes the change.
+            authorize(connection, principal=principal, action=Action.PROJECT_READ,
+                      organization_id=organization_id, project_id=project_id)  # fmt: skip
+            ocr_available = ocr_can_read(connection, settings, organization_id)
             entry, queued = move(
                 connection, principal, organization_id, project_id, control_id, batch_id,
-                file_id, body,
+                file_id, body, ocr_available,
             )  # fmt: skip
             after_commit(lambda: schedule_assessments(scheduler, queued))
             return entry

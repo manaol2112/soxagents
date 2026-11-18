@@ -61,7 +61,8 @@ from ai_workforce_api.evidence_assurance import (
     FILE_NOT_CHECKED,
     HELD_REASONS,
     MAX_READING_TEXT,
-    OCR_NOT_READ,
+    OCR_AVAILABLE_NOW,
+    OCR_UNAVAILABLE,
     POPULATION_PURPOSE,
     READ_IN_PART,
     READING_SECONDS,
@@ -1807,7 +1808,10 @@ def test_an_image_no_ocr_engine_read_is_not_called_empty() -> None:
     the sentence says the images were not read."""
     for engine in (1, 2):
         waiting = gate(_facts(readable=False, waiting_for_ocr=True), engine)
-        assert waiting == Held("UNREADABLE", OCR_NOT_READ)
+        # Rewritten 18 November 2026 (design review). Old: OCR_NOT_READ, "No OCR engine
+        # could read this file's images …". New: the gate records OCR_UNAVAILABLE; what is
+        # shown follows whether text recognition can read the file now (_held_files).
+        assert waiting == Held("UNREADABLE", OCR_UNAVAILABLE)
         assert gate(_facts(readable=False), engine) == Held(
             "UNREADABLE", HELD_REASONS["UNREADABLE"]
         )
@@ -2015,15 +2019,26 @@ def _add_png(bench: _Bench, name: str) -> str:
     return str(added.json()["file_id"])
 
 
-def test_a_screenshot_no_ocr_engine_read_is_held_as_not_read(migrated: Database) -> None:
+def test_a_screenshot_no_ocr_engine_read_is_held_as_not_read(
+    migrated: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Owner's report, 17 November 2026, in the database: a PNG on a D&I item, read where
     no OCR engine is installed and the firm has not turned on model OCR. Nothing of it
     goes to a model; the check is held, both its sentence and the file's say the images
     were not read, and the file says it can be read again. Neither the sentence nor the
     action moves the basis hash: the run stays current. Once the firm turns on model OCR,
-    reading the file again reads its image through the model and queues a new check."""
+    reading the file again reads its image through the model and queues a new check.
+
+    Rewritten 18 November 2026 after the design review. Old: the file always said "it can
+    be read again" (READ_AGAIN, OCR_NOT_READ), so with no text recognition anywhere
+    "Read all again" only held the files again. New: with none available (no local OCR,
+    model OCR off or no model) the file says so and has no action; once text recognition
+    is available it says so and can be read again (ocr_can_read). Neither moves the basis.
+    The local engine is pinned here, not left to whether this machine has Tesseract."""
+    from ai_workforce_api import evidence_ocr
     from ai_workforce_api.evidence_ocr import engines_for
 
+    monkeypatch.setattr(evidence_ocr, "local_ocr_available", lambda _settings: False)
     bench = _Bench(migrated, "noocr")
     shot = _add_png(bench, "3_access-request-ticket.png")
     bench.read_next(None)
@@ -2035,10 +2050,26 @@ def test_a_screenshot_no_ocr_engine_read_is_held_as_not_read(migrated: Database)
     assert status == "NEEDS_OCR" and "No OCR engine is installed" in note
     entry = bench.entry()
     assert entry["status"] == "HELD"
-    assert entry["held"] == {"code": "UNREADABLE", "reason": OCR_NOT_READ}
+    assert entry["held"] == {"code": "UNREADABLE", "reason": OCR_UNAVAILABLE}
     assert entry["held_files"] == [
-        {"file_id": shot, "code": "UNREADABLE", "reason": OCR_NOT_READ, "action": "READ_AGAIN"}
+        {"file_id": shot, "code": "UNREADABLE", "reason": OCR_UNAVAILABLE, "action": None}
     ]
+    # Text recognition available now (local OCR on the server): the same hold, said so,
+    # and the file can be read again.
+    monkeypatch.setattr(evidence_ocr, "local_ocr_available", lambda _settings: True)
+    entry = bench.entry()
+    assert entry["held"] == {"code": "UNREADABLE", "reason": OCR_AVAILABLE_NOW}
+    # Round 4, 18 November 2026: true whether recognition was off or tried and failed.
+    # Old: "Text recognition was not available when the file was read, so the text in its
+    # images was not read. It is available now: read the file again."
+    assert OCR_AVAILABLE_NOW == (
+        "The text in the file's images was not read. Text recognition is available now: "
+        "read the file again."
+    )
+    assert entry["held_files"] == [
+        {"file_id": shot, "code": "UNREADABLE", "reason": OCR_AVAILABLE_NOW, "action": "READ_AGAIN"}
+    ]
+    monkeypatch.setattr(evidence_ocr, "local_ocr_available", lambda _settings: False)
     assert [run[3] for run in bench.runs()] == ["UNREADABLE"]
     assert bench.calls() == []
 
@@ -2059,7 +2090,7 @@ def test_a_screenshot_no_ocr_engine_read_is_held_as_not_read(migrated: Database)
     waiting = chain_module._basis(request, control, attributes, links, context_sha256=context)
     empty = replace(request, files=tuple(replace(f, extraction_status="") for f in request.files))
     blank = chain_module._basis(empty, control, attributes, links, context_sha256=context)
-    assert waiting.files[0]["held"] == {"code": "UNREADABLE", "reason": OCR_NOT_READ}
+    assert waiting.files[0]["held"] == {"code": "UNREADABLE", "reason": OCR_UNAVAILABLE}
     assert blank.files[0]["held"] == {"code": "UNREADABLE", "reason": HELD_REASONS["UNREADABLE"]}
     assert waiting.sha256 == blank.sha256
     [(stored,)] = bench.rows(
@@ -2086,9 +2117,9 @@ def test_a_screenshot_no_ocr_engine_read_is_held_as_not_read(migrated: Database)
         assert made is not None
     entry = bench.entry()
     assert entry["status"] == "HELD" and entry["run_id"] == str(made[0])
-    assert entry["held"] == {"code": "UNREADABLE", "reason": OCR_NOT_READ}
-    assert entry["held_files"][0]["reason"] == OCR_NOT_READ
-    assert entry["held_files"][0]["action"] == "READ_AGAIN"
+    assert entry["held"] == {"code": "UNREADABLE", "reason": OCR_UNAVAILABLE}
+    assert entry["held_files"][0]["reason"] == OCR_UNAVAILABLE
+    assert entry["held_files"][0]["action"] is None
     assert bench.rows(
         "SELECT held_reason, files -> 0 -> 'held' ->> 'reason' FROM evidence_assessments "
         "WHERE id = %s",

@@ -34,6 +34,8 @@ import {
   MISSING,
   NEED_CONFIRM_TITLE,
   NEED_FILE_TITLE,
+  NEED_REPLACE_TITLE,
+  NEED_UNREAD_TITLE,
   needDetail,
   QUIET_NOT_ASKED,
   QUIET_READ_IN_PART,
@@ -2004,10 +2006,13 @@ describe("needs attention (rules 2 and 3)", () => {
         key: `FILE:${SECOND}`,
         kind: "FILE",
         mark: "E2",
-        headline: NEED_FILE_TITLE,
+        // Rewritten 18 November 2026 (design review: one fact, one word). A file none
+        // of whose text was read is said so, in its headline and its line. Old:
+        // NEED_FILE_TITLE and "Checked without Access_listing.xlsx: Reading it did
+        // not finish."
+        headline: NEED_UNREAD_TITLE,
         more: 0,
-        context:
-          "Checked without Access_listing.xlsx: Reading it did not finish.",
+        context: "Access_listing.xlsx was not read: reading it did not finish.",
         flag: "",
         status: null,
         control: {
@@ -2047,6 +2052,7 @@ describe("needs attention (rules 2 and 3)", () => {
     );
     assert.equal(NEED_CONFIRM_TITLE, "Confirm this file's type.");
     assert.equal(NEED_FILE_TITLE, "A file was left out.");
+    assert.equal(NEED_UNREAD_TITLE, "A file was not read.");
     assert.equal(DECIDE, "Decide");
     assert.equal(ASK_OWNER, "Ask owner");
     assert.equal(FINDING_TO_DECIDE, "Finding to decide");
@@ -2131,8 +2137,10 @@ describe("needs attention (rules 2 and 3)", () => {
         .map((each) => [each.mark, each.headline, each.control.type]),
       [
         ["E2", NEED_CONFIRM_TITLE, "ACT"],
-        ["E3", NEED_FILE_TITLE, "ACT"],
-        ["", NEED_FILE_TITLE, "ACT"],
+        // 18 November 2026 (design review): a file not read is said so, and one only
+        // another copy clears says that. Old: NEED_FILE_TITLE on both.
+        ["E3", NEED_UNREAD_TITLE, "ACT"],
+        ["", NEED_REPLACE_TITLE, "ACT"],
       ],
     );
     assert.equal(fileRef(files, FILE), "E1");
@@ -4002,6 +4010,7 @@ describe("plain words (rule 12)", () => {
       GIST_NOT_IN_FILES,
       NEED_CONFIRM_TITLE,
       NEED_FILE_TITLE,
+      NEED_UNREAD_TITLE,
       ASK_OWNER,
       ASK_UNSAID,
       DECIDE,
@@ -4466,9 +4475,14 @@ describe("the second review of the first screen (14 November 2026)", () => {
 // Owner's report, 17 November 2026: files left out for the same reason are one item
 // under "Needs attention", once, with the action for all of them where there is one; a
 // single file keeps its own item; files nobody can act on stay a caveat, counted.
+// 18 November 2026: the fixture is the server's sentence where text recognition is
+// available now (with READ_AGAIN). Old: "No OCR engine could read this file's images…".
+// Round 4, 18 November 2026: the server's available-now sentence no longer says why
+// (old: "Text recognition was not available when the file was read, so the text in its
+// images was not read. It is available now: read the file again.").
 describe("files left out for the same reason, under Needs attention", () => {
   const OCR =
-    "No OCR engine could read this file's images, so none of its text was read. A person reads it, or it is read again once OCR is available (local OCR on the server, or model OCR, which an owner or admin turns on under AI workforce).";
+    "The text in the file's images was not read. Text recognition is available now: read the file again.";
   const shots: RowFile[] = Array.from({ length: 9 }, (_, at) => ({
     id: uuid(200 + at),
     name: `${at + 1}_screenshot.png`,
@@ -4489,7 +4503,9 @@ describe("files left out for the same reason, under Needs attention", () => {
     const items = fileItems(made);
     assert.equal(items.length, 1);
     const [item] = items;
-    assert.equal(item?.headline, "9 files were left out.");
+    // Rewritten 18 November 2026 (design review): the headline says what the line says.
+    // Old: "9 files were left out.".
+    assert.equal(item?.headline, "9 files were not read.");
     assert.equal(item?.mark, "");
     assert.ok(item?.control.type === "ACT");
     assert.equal(item.control.action.kind, "REREAD_ALL");
@@ -4524,9 +4540,11 @@ describe("files left out for the same reason, under Needs attention", () => {
         item.control.type,
         item.control.type === "ACT" ? item.control.label : "",
       ]),
+      // Rewritten 18 November 2026 (design review): two reasons, two headlines, each
+      // from what holds the files. Old: "2 files were left out." on both.
       [
-        ["2 files were left out.", "ACT", "Read all 2 again"],
-        ["2 files were left out.", "NONE", ""],
+        ["2 files were not read.", "ACT", "Read all 2 again"],
+        ["2 files must be replaced.", "NONE", ""],
       ],
     );
   });
@@ -4538,7 +4556,8 @@ describe("files left out for the same reason, under Needs attention", () => {
     const built = check({ held_files: held([one]) }, files);
     const items = fileItems(checkDigest(built, [], files));
     assert.equal(items.length, 1);
-    assert.equal(items[0]?.headline, NEED_FILE_TITLE);
+    // 18 November 2026 (design review): said as its line says it. Old: NEED_FILE_TITLE.
+    assert.equal(items[0]?.headline, NEED_UNREAD_TITLE);
     assert.equal(items[0]?.mark, "E2");
     assert.ok(items[0]?.control.type === "ACT");
     assert.equal(items[0].control.label, "Read the file again");
@@ -4557,5 +4576,35 @@ describe("files left out for the same reason, under Needs attention", () => {
     assert.ok(
       (made?.quiet ?? []).some((each) => each.text === filesLeftOut(2)),
     );
+  });
+
+  // Design review, 18 November 2026: where no file passed, the group's sentence is the
+  // check's own line (its own is ""), so the item takes the check's line as its words and
+  // the check's "Read all N again" as its control, never an empty item. The digest is
+  // drawn for a finished check, so the held check is put to it as one.
+  it("a group whose sentence is the check's own line takes the check's words and action", () => {
+    const files = shots.slice(0, 3);
+    const built = check(
+      {
+        status: "HELD",
+        held: { code: "UNREADABLE", reason: OCR },
+        file_ids: [],
+        held_files: held(files),
+      },
+      files,
+    );
+    assert.equal(built.standing, "HELD");
+    assert.equal(checkDigest(built, [], files), null);
+    assert.equal(built.leftOut[0]?.line, "");
+    const made = checkDigest({ ...built, standing: "REVIEWED" }, [], files);
+    const items = fileItems(made);
+    assert.equal(items.length, 1);
+    const [item] = items;
+    assert.equal(item?.headline, "3 files were not read.");
+    assert.equal(item?.context, needDetail(built.line));
+    assert.notEqual(item?.context, "");
+    assert.ok(item?.control.type === "ACT");
+    assert.equal(item.control.action, built.action);
+    assert.equal(item.control.label, "Read all 3 again");
   });
 });

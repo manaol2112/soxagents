@@ -63,6 +63,7 @@ import {
 } from "./evidence-annotations-model";
 import {
   type AttributeLine,
+  afterReadAgain,
   assuranceProblem,
   type CheckAction,
   CONSIDERATIONS_TITLE,
@@ -71,19 +72,22 @@ import {
   FILES_TITLE,
   groupFiles,
   leftOutFileIds,
+  lineNotRead,
   offeredAction,
+  READ_AGAIN_LABEL,
   RESOLVED_TITLE,
   REVIEW_FOR,
   REVIEW_TITLE,
   type RequestCheck,
   type ReviewView,
   type RowFile,
+  readAgainDone,
+  readingAgainLine,
   reliabilityProblem,
   rereadAllOutcome,
   rereadProblem,
   type ShownPassage,
   STILL_CHECKING,
-  showFiles,
   UPGRADE_BODY,
   UPGRADE_CONFIRM,
   UPGRADE_DONE,
@@ -353,14 +357,15 @@ function useAssuranceAction(ids: Ids) {
   }
   /** Reads a group's files again, one request per file in the group's order, through
    * the same route as one file; the list is read again once, after the last answer.
-   * Says what the server confirmed, and which files did not start. */
+   * Says what the server confirmed, and which files did not start: both on the row the
+   * person acted on, under its line (design review, 18 November 2026), not the list. */
   async function rereadAll(
     key: string,
     group: readonly {
       name: string;
       analysis: { id: string; version: number };
     }[],
-  ): Promise<string | null> {
+  ): Promise<{ done: string | null; problem: string | null }> {
     setBusy(key);
     out.current = key;
     setProblem(null);
@@ -388,10 +393,8 @@ function useAssuranceAction(ids: Ids) {
     }
     setBusy("");
     out.current = "";
-    const said = rereadAllOutcome(results);
-    setProblem(said.problem);
     startTransition(() => router.refresh());
-    return said.done;
+    return rereadAllOutcome(results);
   }
   /** "busy" where another call of the list's checks is still on its way: nothing was
    * sent, and the person is told so rather than left with a dialog that closed. */
@@ -1621,6 +1624,15 @@ function Row({
   } | null>(null);
   // A change to one of its files, confirmed by the server.
   const [fileDone, setFileDone] = useState<string | null>(null);
+  // "Read all N again", asked on this row: its files, and what the server said of them.
+  // The row reads them until the list's refresh lands and their readings end, and says
+  // so on its own line; then, where the check holds them again, it says that plainly
+  // (design review, 18 November 2026).
+  const [again, setAgain] = useState<{
+    fileIds: readonly string[];
+    done: string | null;
+    problem: string | null;
+  } | null>(null);
   /** A file of the request, in the one viewer (section 5b; product owner, 14 November
    * 2026: "I still see the old reviewer when opening the file"): full size, the
    * request's other files in its switcher, on a D&I request with its annotations and
@@ -1698,6 +1710,7 @@ function Row({
       .join(","),
   );
   const ask = (next: Asking, prefill = "") => {
+    setAgain(null);
     setAsking(next);
     setWords(prefill);
     setPicker(null);
@@ -1760,6 +1773,10 @@ function Row({
 
   /** The one action that clears a hold, or runs the check again. */
   const actOn = (act: CheckAction) => {
+    // Another action on the row: what the last reading again said gives way to it.
+    if (act.kind !== "REREAD" && act.kind !== "REREAD_ALL") {
+      setAgain(null);
+    }
     if (act.kind === "RERUN") {
       void checkAgain();
     } else if (act.kind === "UPGRADE") {
@@ -1772,23 +1789,16 @@ function Row({
         return analysis === null ? [] : [{ name, analysis }];
       });
       if (group.length > 0) {
-        void checks.rereadAll(`reread-all-${item.id}`, group).then((done) => {
-          if (done !== null) {
-            onDone(done);
-          }
+        const fileIds = act.fileIds ?? [];
+        setAgain({ fileIds, done: null, problem: null });
+        void checks.rereadAll(rereadAllKey, group).then((said) => {
+          setAgain({ fileIds, ...said });
         });
       }
     } else if (act.fileId === null) {
       return;
     } else if (act.kind === "REREAD") {
-      const analysis = analysisOf(act.fileId);
-      if (analysis !== null) {
-        void checks.reread(act.fileId, analysis).then((ok) => {
-          if (ok) {
-            onDone("The file is being read again.");
-          }
-        });
-      }
+      rereadFile(act.fileId);
     } else if (act.kind === "REPLACE") {
       setFileForm({ fileId: act.fileId, form: "replace" });
       setFileDone(null);
@@ -1805,6 +1815,64 @@ function Row({
   };
   const analysisOf = (fileId: string) =>
     analyses.find((each) => each.fileId === fileId) ?? null;
+  /** "Read the file again", from the check's line or the file's own menu: the row reads
+   * it as it reads a group, and says the server's answer on its own line (a refusal is
+   * said where every refusal of the list's checks is). */
+  const rereadFile = (fileId: string) => {
+    const analysis = analysisOf(fileId);
+    if (analysis !== null) {
+      const fileIds = [fileId];
+      setAgain({ fileIds, done: null, problem: null });
+      void checks.reread(fileId, analysis).then((ok) => {
+        setAgain(
+          ok
+            ? { fileIds, done: "The file is being read again.", problem: null }
+            : null,
+        );
+      });
+    }
+  };
+  const rereadAllKey = `reread-all-${item.id}`;
+  const fileReading = (file: { readStatus: string | null }) =>
+    file.readStatus === "PENDING" || file.readStatus === "WORKING";
+  // While the files asked for are on their way (no answer yet), the refresh has not
+  // landed, or any of them is being read: the row reads them, its actions out of the way.
+  const againReading =
+    again !== null &&
+    ((again.done === null && again.problem === null) ||
+      (again.done !== null &&
+        (checks.pending ||
+          item.files.some(
+            (file) => again.fileIds.includes(file.fileId) && fileReading(file),
+          ))));
+  // Their readings ended, and the check holds them again: its line says so.
+  const shownCheck =
+    assured === null
+      ? null
+      : again !== null &&
+          again.done !== null &&
+          !againReading &&
+          (assured.check.standing === "HELD" ||
+            assured.check.standing === "REVIEWED")
+        ? afterReadAgain(assured.check, again.fileIds)
+        : assured.check;
+  // The files the current check did not read: each card says so, and a file of a group
+  // has its own action in its menu (the group's line keeps the one for all of them).
+  const notReadFiles = new Map<string, CheckAction | null>(
+    shownCheck !== null &&
+      row.reading === 0 &&
+      (shownCheck.standing === "HELD" || shownCheck.standing === "REVIEWED")
+      ? shownCheck.leftOut.filter(lineNotRead).flatMap((line) => {
+          const grouped = groupFiles(line);
+          return grouped.length > 0
+            ? grouped.map((file): [string, CheckAction | null] => [
+                file.fileId,
+                file.action,
+              ])
+            : [[line.fileId, line.action] as [string, CheckAction | null]];
+        })
+      : [],
+  );
   const rowFiles: RowFile[] = item.files.map((file) => ({
     id: file.fileId,
     name: file.name,
@@ -2118,13 +2186,30 @@ function Row({
         <ul className="de-files">
           {item.files.map((file) => {
             const line = lines.get(file.fileId);
+            // Being read, or asked to be read again and not yet through.
             const reading =
-              file.readStatus === "PENDING" || file.readStatus === "WORKING";
+              fileReading(file) ||
+              (againReading && again?.fileIds.includes(file.fileId) === true);
             const meta = fileMeta(
               files.find((each) => each.id === file.fileId),
               file,
             );
+            const notRead = notReadFiles.has(file.fileId) && !reading;
+            const own = notRead
+              ? offer(notReadFiles.get(file.fileId) ?? null)
+              : null;
             const fileMenu: RowMenuItem[] = [
+              // A file not read: its own "Read the file again" first, where it
+              // can be (its replacement is the menu's own "Replace file").
+              ...(own?.kind === "REREAD" && !againReading
+                ? [
+                    {
+                      label: READ_AGAIN_LABEL,
+                      unavailable: locked ? lockedWhy : null,
+                      onSelect: () => rereadFile(file.fileId),
+                    },
+                  ]
+                : []),
               // The file with the basis the agent proposed for it, to
               // review (docs/evidence-annotations.md): a file on a D&I
               // request only.
@@ -2136,7 +2221,7 @@ function Row({
                     },
                   ]
                 : []),
-              ...(line?.actions ?? []),
+              ...(line?.actions ?? []).filter((each) => each.danger !== true),
               ...(canAct && file.via === "LINK" && file.linkId !== null
                 ? [
                     {
@@ -2145,6 +2230,8 @@ function Row({
                     },
                   ]
                 : []),
+              // What cannot be undone in place ("Withdraw") stays last.
+              ...(line?.actions ?? []).filter((each) => each.danger === true),
             ];
             return (
               <li
@@ -2178,6 +2265,15 @@ function Row({
                     ) : null}
                     {line?.flag ?? null}
                   </span>
+                  {notRead && file.readStatus !== "FAILED" ? (
+                    // The check did not read its text: said on its card, in the
+                    // words of the check's line, in one place on every card (before
+                    // its menu, whatever the name's length).
+                    <span className="de-state tone-warning de-file-tag">
+                      <UiIcon name="info" size={12} />
+                      Not read
+                    </span>
+                  ) : null}
                   {fileMenu.length > 0 ? (
                     <RowMenu label={file.name} items={fileMenu} />
                   ) : null}
@@ -2654,10 +2750,35 @@ function Row({
         heldOff: locked ? lockedWhy : unavailable("held"),
       }
     : null;
-  const check =
-    assured !== null && row.reading === 0 ? (
+  // While the files asked for are read again: the row's line in its checking state, the
+  // server's confirmation under it, and no action (design review, 18 November 2026).
+  const readingAgain =
+    againReading && again !== null ? (
+      <div className="de-check is-checking">
+        <p className="de-check-line">
+          <UiIcon name="sparkles" size={13} />
+          <span className="ep-reading" role="status">
+            {readingAgainLine(again.fileIds.length)}
+            <span className="ep-dots" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+            </span>
+          </span>
+        </p>
+        {again.done !== null ? (
+          <p className="ep-done de-check-done" role="status">
+            <UiIcon name="check" size={14} />
+            <span>{again.done}</span>
+          </p>
+        ) : null}
+        <Problem text={again.problem} />
+      </div>
+    ) : null;
+  const checkView =
+    assured !== null && shownCheck !== null && row.reading === 0 ? (
       <CheckOfRequest
-        check={assured.check}
+        check={shownCheck}
         files={rowFiles}
         offer={offer}
         busy={checks.busy}
@@ -2741,6 +2862,35 @@ function Row({
         }
       />
     ) : null;
+  // The files read again were read: said on the row, confirmed, until the person's next
+  // action on it (where the check holds them again, its line says so instead).
+  const againRead =
+    again !== null &&
+    again.done !== null &&
+    !againReading &&
+    again.fileIds.every((fileId) =>
+      item.files.some(
+        (file) => file.fileId === fileId && file.readStatus === "READY",
+      ),
+    ) &&
+    !again.fileIds.some((fileId) => notReadFiles.has(fileId));
+  // A refusal of "Read all N again" stays on the row, under its check.
+  const check =
+    readingAgain ??
+    (again?.problem == null && !againRead ? (
+      checkView
+    ) : (
+      <>
+        {againRead ? (
+          <p className="ep-done" role="status">
+            <UiIcon name="check" size={14} />
+            <span>{readAgainDone(again?.fileIds.length ?? 0)}</span>
+          </p>
+        ) : null}
+        {checkView}
+        <Problem text={again?.problem ?? null} />
+      </>
+    ));
   // "7 files" in the row's own line: on a finished check it opens the files in place.
   const filesWord = `${item.files.length} file${item.files.length === 1 ? "" : "s"}`;
   const filesAt = row.sub.indexOf(` · ${filesWord}`);
@@ -3237,65 +3387,63 @@ function CheckOfRequest({
         <span>{check.kept}</span>
       </p>
     ) : null;
-  const actButton = (act: CheckAction, about: string) => (
-    <button
-      type="button"
-      className="btn btn-secondary btn-sm"
-      disabled={disabled}
-      aria-label={`${act.label}: ${about}`}
-      onClick={() => onAct(act)}
-    >
-      {act.kind === "RERUN" && busy === requirementId
+  // The button keeps its width while it works (its label and its busy word share one
+  // cell, the one not said hidden), and its name is what it shows: "Read all 3 again,
+  // Access management policy" at rest, "Reading…" while it reads.
+  const actButton = (act: CheckAction, about: string) => {
+    const busyWord =
+      act.kind === "RERUN"
         ? "Starting…"
-        : (act.kind === "REREAD" && busy === `reread-${act.fileId ?? ""}`) ||
-            (act.kind === "REREAD_ALL" &&
-              busy === `reread-all-${requirementId}`)
+        : act.kind === "REREAD" || act.kind === "REREAD_ALL"
           ? "Reading…"
-          : act.label}
-    </button>
-  );
+          : null;
+    const working =
+      (act.kind === "RERUN" && busy === requirementId) ||
+      (act.kind === "REREAD" && busy === `reread-${act.fileId ?? ""}`) ||
+      (act.kind === "REREAD_ALL" && busy === `reread-all-${requirementId}`);
+    return (
+      <button
+        type="button"
+        className="btn btn-secondary btn-sm"
+        disabled={disabled}
+        aria-label={working ? undefined : `${act.label}, ${about}`}
+        onClick={() => onAct(act)}
+      >
+        {busyWord === null ? (
+          act.label
+        ) : (
+          <span className="de-steady">
+            <span className={working ? "is-off" : undefined}>{act.label}</span>
+            <span className={working ? undefined : "is-off"}>{busyWord}</span>
+          </span>
+        )}
+      </button>
+    );
+  };
   // A file named on its own line, with the one action that clears it: a file left out
   // of the readings, or one read with its type still to confirm.
-  const fileLines = (items: RequestCheck["leftOut"], acts = true) =>
-    items.length === 0 ? null : (
+  const fileLines = (all: RequestCheck["leftOut"], acts = true) => {
+    // A group whose sentence is the check's own line is said there, once.
+    const items = all.filter(
+      (item) => item.line !== "" || groupFiles(item).length <= 1,
+    );
+    return items.length === 0 ? null : (
       <ul className="de-left-out">
         {items.map((item) => {
           const grouped = groupFiles(item);
           if (grouped.length > 1) {
-            // Files left out for the same reason: one line, its action for all of
-            // them, and each file, with its own action, on request. Where the line is
-            // the check's own (its HELD line), only the files are here.
-            const all = acts ? offer(item.action) : null;
+            // Files left out for the same reason: one line, with its one action for
+            // all of them. Each file is its own card above, marked "Not read" where it
+            // was not, its own action in its menu (design review, 18 November 2026).
+            // Where the line is the check's own (its HELD line), it is said there.
+            const forAll = acts ? offer(item.action) : null;
             return (
               <li key={item.fileId} className="de-left-group">
-                {item.line !== "" ? (
-                  <div className="de-check-line">
-                    <UiIcon name="info" size={13} />
-                    <span>{item.line}</span>
-                    {all !== null
-                      ? actButton(all, `${grouped.length} files`)
-                      : null}
-                  </div>
-                ) : null}
-                <details className="de-left-files">
-                  <summary>
-                    {showFiles(grouped.length)}
-                    <span className="de-attr-caret" aria-hidden="true">
-                      <UiIcon name="chevron" size={12} />
-                    </span>
-                  </summary>
-                  <ul>
-                    {grouped.map((file) => {
-                      const own = offer(file.action);
-                      return (
-                        <li key={file.fileId} className="de-check-line">
-                          <span>{file.name}</span>
-                          {own !== null ? actButton(own, file.name) : null}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </details>
+                <div className="de-check-line">
+                  <UiIcon name="info" size={13} />
+                  <span>{item.line}</span>
+                  {forAll !== null ? actButton(forAll, title) : null}
+                </div>
               </li>
             );
           }
@@ -3312,6 +3460,7 @@ function CheckOfRequest({
         })}
       </ul>
     );
+  };
   const leftOut = fileLines(check.leftOut);
   if (check.standing === "CHECKING") {
     return (
@@ -3350,8 +3499,7 @@ function CheckOfRequest({
           {action !== null
             ? actButton(
                 action,
-                files.find((file) => file.id === action.fileId)?.name ??
-                  "this request",
+                files.find((file) => file.id === action.fileId)?.name ?? title,
               )
             : null}
         </div>

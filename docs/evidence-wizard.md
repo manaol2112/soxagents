@@ -173,7 +173,12 @@ onto one.
    already on it stays.
 1. A file the assurance gate would hold (custody, a reading that did not finish,
    unreadable, kind unsure, population on a design item) is not placed: it needs a person,
-   with the gate's reason, and the items ranked.
+   with the gate's reason, and the items ranked. Each file's reading also says whether any
+   text was taken from it (`read.text_read`) and what clears its hold (`read.action`:
+   READ_AGAIN, REPLACE or null, as `evidence_assurance.held_action` decides it). A file
+   whose images no text recognition read is READ_AGAIN only while text recognition can read
+   it now (`ocr_can_read`: local OCR on the server, or model OCR the firm chose with a model
+   configured), and its reason says which (18 November 2026, after the design review).
 2. Candidates are the items the reader says the file covers (COVERED first, then PARTIAL).
 3. The file is placed when the reader is the model with high or medium confidence and one
    candidate stands out: the only COVERED item, or the only candidate whose category fits the

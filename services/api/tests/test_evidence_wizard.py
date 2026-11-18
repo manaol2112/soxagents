@@ -61,7 +61,8 @@ from ai_workforce_api.db import connect
 from ai_workforce_api.evidence_analysis import fail_analysis, run_analysis
 from ai_workforce_api.evidence_assurance import (
     HELD_REASONS,
-    OCR_NOT_READ,
+    OCR_AVAILABLE_NOW,
+    OCR_UNAVAILABLE,
     HeldCode,
     read_assurance,
     run_assessment,
@@ -107,7 +108,12 @@ FILE_KEYS = {
     "classification", "placement", "addresses",
 }  # fmt: skip
 # `failure_note` added 13 November 2026 (B1i): the reading's plain sentence when it fails.
-READ_KEYS = {"status", "method", "pages", "started_at", "finished_at", "note", "failure_note"}
+# 18 November 2026 (design review, round 3): a reading says whether it took text from the
+# file and what clears one whose text was not read. Old: without text_read and action.
+READ_KEYS = {
+    "status", "method", "pages", "started_at", "finished_at", "note", "failure_note",
+    "text_read", "action",
+}  # fmt: skip
 CLASSIFICATION_KEYS = {"kind", "label", "confidence", "summary"}
 PLACEMENT_KEYS = {"status", "method", "requirement_ids", "reason", "suggestions", "version"}
 ITEM_KEYS = {
@@ -361,9 +367,11 @@ def test_a_batch_is_sorted_into_the_items_and_its_state_follows_the_contract(
     # before any placed item has a check.
     reads: list[UUID] = []
 
-    def counted(connection: Any, project_id: UUID, control_id: UUID, *rest: Any) -> Any:
+    def counted(
+        connection: Any, project_id: UUID, control_id: UUID, *rest: Any, **options: Any
+    ) -> Any:
         reads.append(control_id)
-        return read_assurance(connection, project_id, control_id, *rest)
+        return read_assurance(connection, project_id, control_id, *rest, **options)
 
     monkeypatch.setattr(wizard_module, "read_assurance", counted)
     policy_item, walk_item = case.policy, case.walkthrough
@@ -435,6 +443,7 @@ def test_a_batch_is_sorted_into_the_items_and_its_state_follows_the_contract(
         assert set(entry["classification"]) == CLASSIFICATION_KEYS
         assert set(entry["placement"]) == PLACEMENT_KEYS
         assert (entry["read"]["status"], entry["read"]["method"]) == ("READY", "TEXT")
+        assert (entry["read"]["text_read"], entry["read"]["action"]) == (True, None)
         assert _when(entry["read"]["started_at"]) <= _when(entry["read"]["finished_at"])
         assert entry["extension"] == "txt" and entry["size_bytes"] > 0
         assert entry["addresses"] == []
@@ -704,7 +713,7 @@ def test_a_file_the_gate_would_hold_is_not_placed_and_waits_for_a_person(
 
 
 def test_a_screenshot_no_ocr_engine_read_waits_for_a_person_saying_it_was_not_read(
-    migrated: Database,
+    migrated: Database, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Owner's report, 17 November 2026: a PNG added in the wizard where no OCR engine is
     installed and model OCR is off is not placed, and its reason says the images were not
@@ -725,10 +734,80 @@ def test_a_screenshot_no_ocr_engine_read_waits_for_a_person_saying_it_was_not_re
     never = _Reader("walkthrough", covers={case.walkthrough["title"]: "COVERED"})
     assert case.read_file(shot, never) == "READY"
     assert never.requests == []
+    # 18 November 2026: the entry says the reason as things stand (ocr_can_read), so the
+    # test states its premise, no text recognition now, rather than taking the machine's.
+    monkeypatch.setattr(wizard_module, "ocr_can_read", lambda *_args: False)
     entry = case.file(shot)
     assert entry["placement"]["status"] == "NEEDS_PERSON"
-    assert entry["placement"]["reason"] == OCR_NOT_READ
+    # Old (17 November 2026): OCR_NOT_READ. New (18 November 2026, design review): the
+    # gate's OCR_UNAVAILABLE, the same hold in plainer words.
+    assert entry["placement"]["reason"] == OCR_UNAVAILABLE
     assert entry["placement"]["requirement_ids"] == []
+
+
+def test_a_file_whose_text_was_not_read_says_so_with_what_clears_it_as_things_stand(
+    migrated: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Design review, 18 November 2026: the wizard counted a screenshot no text recognition
+    read as read, and offered "Read it again" from the words of its reason while text
+    recognition was not available. Each file says whether its text was read, and what
+    clears it as things stand (held_action with ocr_can_read), on every route that returns
+    it; the stored reason is said as things stand too."""
+    case = _Wizard(migrated, "ocrstand")
+    added = case.owner.post(
+        f"{case.base}/evidence-uploads",
+        params={
+            "batch_id": case.batch,
+            "name": "1_population-user-listing.png",
+            "design_control_id": case.control,
+        },
+        content=_png("User listing"),
+        headers={"content-type": "image/png"},
+    )
+    assert added.status_code == 200, added.text
+    shot = str(added.json()["file_id"])
+    policy = case.add("access policy.txt", POLICY)
+    assert case.read_file(shot, _Reader("walkthrough")) == "READY"
+    case.read_file(policy, _Reader("policy", covers={case.policy["title"]: "COVERED"}))
+
+    available = {"now": False}
+    monkeypatch.setattr(wizard_module, "ocr_can_read", lambda *_args: available["now"])
+    off = case.file(shot)
+    assert (off["read"]["status"], off["read"]["text_read"]) == ("READY", False)
+    assert off["read"]["action"] is None
+    assert off["placement"]["reason"] == OCR_UNAVAILABLE
+    read = case.file(policy)
+    assert (read["read"]["text_read"], read["read"]["action"]) == (True, None)
+
+    available["now"] = True
+    on = case.file(shot)
+    assert (on["read"]["text_read"], on["read"]["action"]) == (False, "READ_AGAIN")
+    assert on["placement"]["reason"] == OCR_AVAILABLE_NOW
+
+    # A person's move answers with the same facts as things stand.
+    moved = case.place(shot, [case.walkthrough["id"]], on["placement"]["version"])
+    assert moved.status_code == 200, moved.text
+    assert (moved.json()["read"]["text_read"], moved.json()["read"]["action"]) == (
+        False,
+        "READ_AGAIN",
+    )
+    available["now"] = False
+    after = case.place(shot, [], moved.json()["placement"]["version"])
+    assert after.status_code == 200, after.text
+    assert after.json()["read"]["action"] is None
+    # The sessions list composes the same state, as things stand.
+    asked: list[bool] = []
+    compose = wizard_module._compose
+
+    def spied(*args: Any) -> Any:
+        asked.append(bool(args[4]))
+        return compose(*args)
+
+    monkeypatch.setattr(wizard_module, "_compose", spied)
+    available["now"] = True
+    listed = case.owner.get(f"{case.base}/controls/{case.control}/evidence-batches")
+    assert listed.status_code == 200, listed.text
+    assert asked == [True]
 
 
 def test_the_readers_own_findings_are_held_for_a_wizard_file_and_the_checks_stay(

@@ -19,6 +19,7 @@ import {
   assuranceProblem,
   FOLLOW_UP_TITLE,
   type Lettered,
+  READ_AGAIN_LABEL,
   REVIEW_TITLE,
 } from "./evidence-assurance-model";
 import { FileChanges } from "./evidence-change";
@@ -55,6 +56,7 @@ import {
   hintKey,
   type ItemCard,
   type ItemResult,
+  isEarlierSession,
   itemCards,
   itemResults,
   itemsPane,
@@ -203,6 +205,9 @@ export function useEvidenceWizard(setup: WizardSetup) {
   // When the shown batch's read set out (see goneFromBatch).
   const [readFrom, setReadFrom] = useState<number | null>(null);
   const [summary, setSummary] = useState<BatchSummary | null>(null);
+  // The session taken up from the list when a newer one exists: its line says only its
+  // files that still wait for a person (round 4, 18 November 2026).
+  const [earlierId, setEarlierId] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState<string[]>([]);
   const [placing, setPlacing] = useState<Record<string, boolean>>({});
   const [problems, setProblems] = useState<Record<string, string>>({});
@@ -379,6 +384,11 @@ export function useEvidenceWizard(setup: WizardSetup) {
         setReopenOnRead(true);
       }
       setSummary(list?.find((item) => item.batchId === pick.batchId) ?? shown);
+      setEarlierId(
+        list !== null && isEarlierSession(list, pick.batchId)
+          ? pick.batchId
+          : null,
+      );
       setSession(
         (current) =>
           current ?? {
@@ -912,7 +922,7 @@ export function useEvidenceWizard(setup: WizardSetup) {
     void read(session.batchId);
   }
 
-  /** "Confirm its kind" or "Read it again", where a reason names it: the reading's own
+  /** "Confirm its kind", or "Read the file again" where the server says it can: the reading's own
    * actions (the evidence dialog's route), said only once the server confirms them. */
   async function fixReading(
     line: FileLine,
@@ -1126,6 +1136,7 @@ export function useEvidenceWizard(setup: WizardSetup) {
           progress: known ? progress : null,
           summary: listed,
           seconds,
+          earlier: earlierId !== null && earlierId === session.batchId,
         });
   const line =
     shown === null ? null : { ...shown, text: `${shown.text}${offline}` };
@@ -2320,13 +2331,13 @@ function Analyze({
               </span>
               <span className="wz-stage-name">{stage.name}</span>
               <span className="wz-stage-count">
-                {stage.count}
+                <span className="wz-count-text">{stage.count}</span>
                 {stage.flag !== "" ? (
                   <span
                     className={`wz-flag${stage.key === "secure" ? " is-danger" : ""}`}
                   >
-                    {" "}
-                    · {stage.flag}
+                    <span className="wz-flag-sep"> · </span>
+                    {stage.flag}
                   </span>
                 ) : null}
                 <span className="sr-only">, {STAGE_WORDS[stage.state]}</span>
@@ -2680,7 +2691,8 @@ function FixReading({
           }}
         >
           {busy ? spinner : <UiIcon name="retry" size={13} />}
-          {busy ? "Starting…" : "Read it again"}
+          {/* The step's own name for it (design review, 18 November 2026). */}
+          {busy ? "Starting…" : READ_AGAIN_LABEL}
         </button>
       </span>
     );
