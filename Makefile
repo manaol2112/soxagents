@@ -17,12 +17,12 @@ else
 BASH := bash
 endif
 
-.PHONY: help toolchain check install start free-ports go awake stop status format lint typecheck api web migrate test test-fast test-critical test-demo test-changed test-full ci reset
+.PHONY: help toolchain check check-tesseract install install-tesseract start free-ports go awake stop status format lint typecheck api web migrate test test-fast test-critical test-demo test-changed test-full ci reset
 
 help:
 	@echo "make toolchain  Show pinned Node.js, pnpm, Python, and uv versions"
-	@echo "make check      Fail if the local toolchain does not match the pins"
-	@echo "make install    Install locked dependencies with pnpm and uv"
+	@echo "make check      Fail if the toolchain does not match the pins or Tesseract OCR is missing"
+	@echo "make install    Install Tesseract OCR if missing, then locked dependencies with pnpm and uv"
 	@echo "make start      Start PostgreSQL, Temporal, and MinIO, then migrate"
 	@echo "make go         Start everything: make start, then the API and the web app"
 	@echo "make free-ports Stop a server an earlier run left on port 8000 or 3000 (make go does this)"
@@ -49,7 +49,7 @@ toolchain:
 	@echo "Python $(PYTHON_VERSION)"
 	@echo "uv $(UV_VERSION)"
 
-check: check-node check-pnpm check-uv check-python
+check: check-node check-pnpm check-uv check-python check-tesseract
 
 check-node:
 	@current="$$(node -p 'process.versions.node')"; \
@@ -79,7 +79,15 @@ check-python:
 	@current="$$(uv python find $(PYTHON_VERSION))"; \
 	echo "Python $(PYTHON_VERSION) at $$current"
 
-install:
+# Tesseract OCR reads screenshots and scans of evidence. It is a system program that pnpm
+# and uv cannot install, so scripts/tesseract.sh installs it (make install) and checks it.
+check-tesseract:
+	@"$(BASH)" scripts/tesseract.sh check
+
+install-tesseract:
+	@"$(BASH)" scripts/tesseract.sh install
+
+install: install-tesseract
 	pnpm install --frozen-lockfile
 	uv sync --all-packages --frozen --python $(PYTHON_VERSION)
 
