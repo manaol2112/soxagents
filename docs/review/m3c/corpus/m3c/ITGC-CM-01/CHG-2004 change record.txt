@@ -1,0 +1,15 @@
+Change request CHG-2004: Credit limit workflow
+System: SAP ERP
+Raised on 2027-04-01
+Developer: Ravi Kumar
+Transport in the approved request: DEVK900504
+
+Testing
+- Test results: see the attached test log (QAS), 2027-04-08
+
+Approvals
+- Business owner approval: Elena Rossi approved on 2027-04-09
+- IT owner approval: Ravi Kumar approved on 2027-04-09
+
+Deployment
+- Transport DEVK900504 imported to PRD on 2027-04-12 by basis.oivanova (Olga Ivanova, Basis administrator)

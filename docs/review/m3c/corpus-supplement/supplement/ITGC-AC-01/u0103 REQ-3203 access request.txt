@@ -1,0 +1,13 @@
+Access request REQ-3203
+Requested for: Rita Mehta (u0103)
+Application: SAP ERP PRD
+Role requested: AR Clerk
+Requested by: Rita Mehta on 2027-09-14
+Line manager (HR record): Mei Tanaka
+
+Approvals
+- Line manager approval: Mei Tanaka approved on 2027-09-15
+- Application owner approval: Helen Cho approved on 2027-09-15
+
+Provisioning
+- Granted role AR Clerk in SAP ERP PRD on 2027-09-17 by adm.kfischer (Karl Fischer, IAM administrator)

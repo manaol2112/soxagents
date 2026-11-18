@@ -35,7 +35,28 @@ Review the app registration, the admin consent, and the application access polic
 
 ## Live send
 
-`EMAIL_LIVE_SEND_ENABLED` stays `false`. `GET /health` reports `live_email_enabled: false` even when the flag and the Graph values are all set. `GET /mailbox/configuration` reports whether the four Graph values are present. It does not return the mailbox address, the tenant id, the application id, or the secret. A signed-in caller can read that status. An anonymous caller cannot.
+Live email runs over SMTP (`smtp_mailbox.py`), by the product owner's decision. It is send only and goes only to allowlisted domains. The Graph mailbox above stays unavailable.
+
+Live sending turns on only when all of these hold:
+
+- `EMAIL_PROVIDER` is `smtp` or `gmail`;
+- `EMAIL_LIVE_SEND_ENABLED=true`;
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, and a valid `EMAIL_FROM` are set;
+- `EMAIL_ALLOWED_RECIPIENT_DOMAINS` names at least one domain.
+
+`SMTP_SECURE=true` uses TLS from the start (port 465); `false` uses STARTTLS (port 587). With Gmail, use an app password. Gmail sends as the account's own address unless `EMAIL_FROM` is a verified "Send mail as" alias.
+
+What goes out live:
+
+- approved evidence requests and their follow-up reminders;
+- the secure upload link's one-time codes;
+- team welcome emails. These are sent when someone is invited. Ones already held are sent with **Send welcome emails** on the Team step (`POST …/onboarding/team/welcomes/send`).
+
+Every address must be on an allowed domain, the people copied included. Submitting a request to anyone else is refused ("recipient is not allowed"), and the mailbox refuses again before connecting.
+
+A message is sent once. It is recorded in `mailbox_messages` only after the server accepts it, and a key already recorded is never sent again. Each message carries a stable `Message-ID`, so a repeat can be told apart. Nothing is attached: evidence comes back through the secure link. Replies arrive in the SMTP account's inbox and are not read by the platform. The SMTP user and password are never logged or returned, and tests always run on the mock.
+
+`GET /health` reports `live_email_enabled` as these conditions stand. `GET /mailbox/configuration` reports the provider (`mock`, `smtp`, or `unavailable`) and whether the four Graph values are present. It does not return the mailbox address, the tenant id, the application id, or the secret. A signed-in caller can read that status. An anonymous caller cannot.
 
 `EMAIL_MOCK_INBOUND_ENABLED` lets a team member simulate inbound mail in the mock mailbox for local testing. It has no effect with any other provider.
 

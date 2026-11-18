@@ -1,0 +1,256 @@
+{
+  "name": "summary_memo_assertions",
+  "title": "A manager's memo that asserts every attribute, without the ticket or the SAP records",
+  "synthetic": true,
+  "company": "Northwind Fabrics",
+  "system": "SAP S/4HANA",
+  "period": "2026-01-01/2026-12-31",
+  "control": {
+    "ref": "ITGC-AC-01",
+    "title": "New and changed SAP S/4HANA access is approved before it is granted",
+    "activity": "New and changed user access to SAP S/4HANA production (PRD, client 100) is requested through a ServiceNow catalog item that names the user and each role. The user's line manager and the owner of each role approve the request in ServiceNow before SAP Security assigns the role. SAP Security, who neither request nor approve the access, assign only the roles approved.",
+    "domain": "ACCESS"
+  },
+  "categories": [
+    "CONTROL_EXECUTION"
+  ],
+  "lens": "INSTANCE_RECORD",
+  "read_in_part": false,
+  "attributes": [
+    {
+      "code": "A",
+      "text": "The access was requested through a ServiceNow ticket that names the user and the SAP S/4HANA role.",
+      "criteria": {
+        "condition": "A ServiceNow request exists for the user's new or changed SAP S/4HANA access.",
+        "pass_when": "The ticket identifies the requester, the user who receives the access and the exact SAP role requested.",
+        "exception_when": "No ticket exists, or the ticket does not name the user or the role."
+      },
+      "expected": true
+    },
+    {
+      "code": "B",
+      "text": "The access was approved by the user's line manager and the role owner before it was granted.",
+      "criteria": {
+        "condition": "Approval of the request by the user's line manager and by the role owner is recorded.",
+        "pass_when": "Both approvals are timestamped before the SAP change document shows the role assigned.",
+        "exception_when": "An approval is missing, is given by someone other than the named approver, or is dated after the role was assigned."
+      },
+      "expected": true
+    },
+    {
+      "code": "C",
+      "text": "The requester, the approvers and the person who granted the access are different people.",
+      "criteria": {
+        "condition": "The requester, each approver and the SAP user who assigned the role are different people.",
+        "pass_when": "Neither approver is the requester or the user who receives the access, and the role was assigned by a member of SAP Security who did not approve the request.",
+        "exception_when": "A person approves their own request, or an approver also assigns the role."
+      },
+      "expected": true
+    },
+    {
+      "code": "D",
+      "text": "The access granted in SAP S/4HANA is the access approved, and was granted within the audit period.",
+      "criteria": {
+        "condition": "The SAP S/4HANA change document shows the role approved in the ticket assigned to the same user.",
+        "pass_when": "The assignment is dated within the audit period, 1 January 2026 to 31 December 2026.",
+        "exception_when": "A different role or user is changed, or the assignment falls outside the audit period."
+      },
+      "expected": true
+    }
+  ],
+  "files": [
+    {
+      "name": "Walkthrough memo RITM0048213.txt",
+      "kind": "other",
+      "lines": [
+        "NORTHWIND FABRICS LTD - INTERNAL MEMORANDUM",
+        "From: Grace Whitfield, Finance Manager",
+        "Date: 6 July 2026",
+        "Subject: Walkthrough of SAP S/4HANA access request RITM0048213 (Daniel Okafor)",
+        "",
+        "1. Daniel Okafor joined Accounts Payable on 2 March 2026 and requested the Z_FI_AP_CLERK role through ServiceNow.",
+        "2. I approved the request as his line manager on 2 March 2026, and Marcus Hale approved it as role owner the same day.",
+        "3. SAP Security assigned the role on 3 March 2026, after both approvals, and nobody involved approved their own request.",
+        "4. The access was granted as approved and within 2026.",
+        "5. The ServiceNow ticket and the SAP change documents are held by IT and can be provided on request.",
+        "",
+        "Grace Whitfield",
+        "Finance Manager"
+      ]
+    }
+  ],
+  "expected": {
+    "A": {
+      "verdict": "ISSUE",
+      "results": [
+        "NOT_MET",
+        "NOT_ADDRESSED"
+      ],
+      "unsettled_acceptable": true,
+      "reason": "A memo saying a ticket exists is not the ticket.",
+      "answer": {
+        "reason": "The memo states this but holds no record of it; the records are said to be held elsewhere.",
+        "elements": {
+          "condition": {
+            "result": "NOT_MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "Daniel Okafor joined Accounts Payable on 2 March 2026 and requested the Z_FI_AP_CLERK role through ServiceNow.",
+                "basis": "ASSERTION"
+              },
+              {
+                "file": 0,
+                "quote": "The ServiceNow ticket and the SAP change documents are held by IT and can be provided on request.",
+                "basis": "ASSERTION"
+              }
+            ],
+            "absent": "The ServiceNow ticket itself.",
+            "reason": "Only the memo's statement; no ticket."
+          },
+          "pass": {
+            "result": "NOT_MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "Daniel Okafor joined Accounts Payable on 2 March 2026 and requested the Z_FI_AP_CLERK role through ServiceNow.",
+                "basis": "ASSERTION"
+              }
+            ],
+            "absent": "The ticket's requester, user and role fields.",
+            "reason": "No ticket names requester, user and role."
+          }
+        }
+      }
+    },
+    "B": {
+      "verdict": "ISSUE",
+      "results": [
+        "NOT_MET",
+        "NOT_ADDRESSED"
+      ],
+      "unsettled_acceptable": true,
+      "reason": "Approvals asserted by the approver in a memo are not the approval records.",
+      "answer": {
+        "reason": "The memo states this but holds no record of it; the records are said to be held elsewhere.",
+        "elements": {
+          "condition": {
+            "result": "NOT_MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "I approved the request as his line manager on 2 March 2026, and Marcus Hale approved it as role owner the same day.",
+                "basis": "ASSERTION"
+              },
+              {
+                "file": 0,
+                "quote": "The ServiceNow ticket and the SAP change documents are held by IT and can be provided on request.",
+                "basis": "ASSERTION"
+              }
+            ],
+            "absent": "The ServiceNow approval records.",
+            "reason": "The approvals are asserted, not recorded."
+          },
+          "pass": {
+            "result": "NOT_MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "SAP Security assigned the role on 3 March 2026, after both approvals, and nobody involved approved their own request.",
+                "basis": "ASSERTION"
+              }
+            ],
+            "absent": "Approval timestamps and the SAP change document.",
+            "reason": "The timing is asserted, not recorded."
+          }
+        }
+      }
+    },
+    "C": {
+      "verdict": "ISSUE",
+      "results": [
+        "NOT_MET",
+        "NOT_ADDRESSED"
+      ],
+      "unsettled_acceptable": true,
+      "reason": "The memo's statement that nobody self-approved is not a record of who did what.",
+      "answer": {
+        "reason": "The memo states this but holds no record of it; the records are said to be held elsewhere.",
+        "elements": {
+          "condition": {
+            "result": "NOT_MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "SAP Security assigned the role on 3 March 2026, after both approvals, and nobody involved approved their own request.",
+                "basis": "ASSERTION"
+              },
+              {
+                "file": 0,
+                "quote": "The ServiceNow ticket and the SAP change documents are held by IT and can be provided on request.",
+                "basis": "ASSERTION"
+              }
+            ],
+            "absent": "The approval records and the SAP change document naming who assigned the role.",
+            "reason": "Segregation is asserted, not recorded."
+          },
+          "pass": {
+            "result": "NOT_MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "SAP Security assigned the role on 3 March 2026, after both approvals, and nobody involved approved their own request.",
+                "basis": "ASSERTION"
+              }
+            ],
+            "absent": "The SAP change document naming who assigned the role.",
+            "reason": "Who assigned the role is not recorded."
+          }
+        }
+      }
+    },
+    "D": {
+      "verdict": "ISSUE",
+      "results": [
+        "NOT_MET",
+        "NOT_ADDRESSED"
+      ],
+      "unsettled_acceptable": true,
+      "reason": "There is no SAP change document, only the memo's statement.",
+      "answer": {
+        "reason": "The memo states this but holds no record of it; the records are said to be held elsewhere.",
+        "elements": {
+          "condition": {
+            "result": "NOT_MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "The access was granted as approved and within 2026.",
+                "basis": "ASSERTION"
+              },
+              {
+                "file": 0,
+                "quote": "The ServiceNow ticket and the SAP change documents are held by IT and can be provided on request.",
+                "basis": "ASSERTION"
+              }
+            ],
+            "absent": "The SAP change document of the assignment.",
+            "reason": "The grant is asserted, not recorded."
+          },
+          "pass": {
+            "result": "NOT_MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "The access was granted as approved and within 2026.",
+                "basis": "ASSERTION"
+              }
+            ],
+            "absent": "A dated SAP change document.",
+            "reason": "The date of the grant is asserted, not recorded."
+          }
+        }
+      }
+    }
+  }
+}

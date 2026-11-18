@@ -8,6 +8,7 @@ Agents are not principals and cannot grant privileges. A user cannot change thei
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Any
 from uuid import UUID
@@ -18,6 +19,7 @@ from psycopg.types.json import Json
 from pydantic import BaseModel, Field
 
 from ai_workforce_api.db import ConcurrentUpdateError, connect, require_one_row, transaction
+from ai_workforce_api.entitlement_errors import TrialLimitReached, trial_limit_from
 from ai_workforce_api.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -43,6 +45,9 @@ class Action(StrEnum):
     TASK_UPDATE = "task.update"
     AGENT_READ = "agent.read"
     AGENT_UPDATE = "agent.update"
+    # Propose, approve, and apply the firm's testing methodology (methodology.py): Owner and
+    # Admin only, as every action not granted to the other roles.
+    METHODOLOGY_MANAGE = "methodology.manage"
 
 
 class PrincipalKind(StrEnum):
@@ -82,6 +87,11 @@ class OrganizationRecord:
     name: str
     slug: str
     role: Role
+    # The firm's subscription as it stands now (subscriptions.py): TRIAL, TRIAL_EXPIRED,
+    # ACTIVE, PAST_DUE, CANCELED, SUSPENDED; NONE for a firm without one.
+    subscription_state: str = "NONE"
+    plan_type: str = "TRIAL"
+    trial_expires_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -90,6 +100,28 @@ class ProjectRecord:
     name: str
     slug: str
     status: str
+    # What the engagements page shows on each card: the client, the kind of audit, the
+    # period, the owner, and how much is in scope.
+    client_name: str = ""
+    engagement_type: str = ""
+    period_end: date | None = None
+    owner_name: str = ""
+    controls: int = 0
+    open_deficiencies: int = 0
+    client_id: UUID | None = None
+    # Where the work stands, for the card (engagements page): agent tasks by status,
+    # evidence past due by the metrics rulebook, the next milestone, and the last activity.
+    task_counts: tuple[tuple[str, int], ...] = ()
+    overdue_requests: int = 0
+    next_milestone: str = ""
+    next_milestone_due: date | None = None
+    missed_milestones: int = 0
+    last_activity_at: datetime | None = None
+    # The engagement team's names, the lead first (engagements page).
+    team: tuple[str, ...] = ()
+    # The firm's synthetic demo engagement (demo.py, migration 0128): shown as such, and
+    # outside the trial's allowances.
+    demo: bool = False
 
 
 @dataclass(frozen=True)
@@ -107,6 +139,8 @@ class _Membership:
     role: Role
     status: str
     version: int
+    # A demo identity (migration 0130): acts on the firm's demo engagements only.
+    demo: bool = False
 
 
 _PROJECT_ACTIONS = frozenset(
@@ -172,6 +206,21 @@ class OrganizationBody(BaseModel):
     name: str
     slug: str
     role: Role
+    # The subscription as it stands now, so the web can show the trial and its end
+    # (subscriptions.py has the limits and the usage).
+    subscription_state: str = "NONE"
+    plan_type: str = "TRIAL"
+    trial_expires_at: datetime | None = None
+
+
+class TaskCountBody(BaseModel):
+    status: str
+    count: int
+
+
+class MilestoneDueBody(BaseModel):
+    name: str
+    due: date
 
 
 class ProjectBody(BaseModel):
@@ -179,6 +228,21 @@ class ProjectBody(BaseModel):
     name: str
     slug: str
     status: str
+    # The firm's client it belongs to (Milestone 8.18).
+    client_id: UUID | None = None
+    client_name: str = ""
+    engagement_type: str = ""
+    period_end: date | None = None
+    owner_name: str = ""
+    controls: int = 0
+    open_deficiencies: int = 0
+    progress: list[TaskCountBody] = Field(default_factory=list)
+    overdue_requests: int = 0
+    next_milestone: MilestoneDueBody | None = None
+    missed_milestones: int = 0
+    last_activity_at: datetime | None = None
+    team: list[str] = Field(default_factory=list)
+    demo: bool = False
 
 
 class MembershipBody(BaseModel):
@@ -199,6 +263,9 @@ def authorize(
 ) -> Access:
     """Allow the action only when an active membership grants it. Unknown actions are absent."""
     membership = _require_user_membership(connection, principal, organization_id)
+    # A demo identity sees and does nothing outside the firm's demo engagements.
+    if membership.demo and (project_id is None or not _demo_project(connection, project_id)):
+        raise NotVisible()
     if action in _PROJECT_ACTIONS and (
         project_id is None
         or not _project_visible(
@@ -244,10 +311,13 @@ def list_organizations(
     _require_user(principal)
     rows = connection.execute(
         """
-        SELECT o.id, o.name, o.slug, m.role::text
+        SELECT o.id, o.name, o.slug, m.role::text,
+               coalesce(subscription_state(o.id), 'NONE'), coalesce(s.plan_type, 'TRIAL'),
+               s.trial_expires_at
         FROM memberships AS m
         JOIN organizations AS o ON o.id = m.organization_id
         JOIN users AS u ON u.id = m.user_id
+        LEFT JOIN organization_subscriptions AS s ON s.organization_id = o.id
         WHERE m.user_id = %s
           AND m.status = 'ACTIVE'
           AND u.status = 'ACTIVE'
@@ -262,12 +332,53 @@ def list_organizations(
 def list_projects(
     connection: psycopg.Connection[Any], principal: Principal, organization_id: UUID
 ) -> list[ProjectRecord]:
+    # Overdue by the metrics rulebook: sent or partly received, and past its due date.
+    from ai_workforce_api.engagement_data import OVERDUE_GROUPS, REQUEST_GROUPS
+
+    late = [status for status, group in REQUEST_GROUPS.items() if group in OVERDUE_GROUPS]
     membership = _require_user_membership(connection, principal, organization_id)
     rows = connection.execute(
         """
-        SELECT p.id, p.name, p.slug, p.status::text
+        SELECT p.id, p.name, p.slug, p.status::text,
+               coalesce(s.client_name, ''), coalesce(s.engagement_type, ''), s.period_end,
+               coalesce(u.display_name, ''),
+               (SELECT count(*) FROM engagement_controls c
+                WHERE c.project_id = p.id AND c.included),
+               (SELECT count(*) FROM deficiencies d
+                WHERE d.project_id = p.id AND d.status <> 'CLOSED'),
+               s.client_id,
+               (SELECT coalesce(json_agg(json_build_object('status', t.status, 'count', t.n)
+                                         ORDER BY t.status), '[]'::json)
+                FROM (SELECT status::text AS status, count(*) AS n FROM tasks
+                      WHERE organization_id = p.organization_id AND project_id = p.id
+                      GROUP BY status) AS t),
+               (SELECT count(*) FROM pbc_requests r
+                WHERE r.organization_id = p.organization_id AND r.project_id = p.id
+                  AND r.status::text = ANY(%s) AND r.due_at < transaction_timestamp()),
+               (SELECT json_build_object('name', m.name, 'due', m.due_date)
+                FROM engagement_milestones m
+                WHERE m.project_id = p.id AND m.completed_at IS NULL
+                ORDER BY m.due_date, m.position LIMIT 1),
+               (SELECT count(*) FROM engagement_milestones m
+                WHERE m.project_id = p.id AND m.completed_at IS NULL AND m.due_date < %s),
+               (SELECT max(e.occurred_at) FROM audit_events e
+                WHERE e.organization_id = p.organization_id AND e.project_id = p.id),
+               (SELECT coalesce(json_agg(t.name ORDER BY t.lead DESC, t.name), '[]'::json)
+                FROM (SELECT DISTINCT tu.id,
+                                      coalesce(nullif(tu.display_name, ''), tu.email::text)
+                                      AS name,
+                                      tu.id = p.owner_user_id AS lead
+                      FROM project_memberships AS tm
+                      JOIN users AS tu ON tu.id = tm.user_id
+                      JOIN memberships AS om
+                        ON om.user_id = tm.user_id AND om.organization_id = tm.organization_id
+                      WHERE tm.project_id = p.id AND tm.organization_id = p.organization_id
+                        AND om.status = 'ACTIVE') AS t),
+               p.demo
         FROM projects AS p
-        WHERE p.organization_id = %s
+        LEFT JOIN engagement_settings AS s ON s.project_id = p.id
+        LEFT JOIN users AS u ON u.id = p.owner_user_id
+        WHERE p.organization_id = %s AND p.deleted_at IS NULL
           AND (
             %s
             OR EXISTS (
@@ -281,6 +392,8 @@ def list_projects(
         ORDER BY p.slug
         """,
         (
+            late,
+            datetime.now(UTC).date(),
             organization_id,
             membership.role in _ORG_WIDE_PROJECT_ACCESS,
             principal.id,
@@ -304,6 +417,7 @@ def list_memberships(
         FROM memberships AS m
         JOIN users AS u ON u.id = m.user_id
         WHERE m.organization_id = %s
+          AND u.demo_organization_id IS NULL
         ORDER BY u.email
         """,
         (organization_id,),
@@ -487,7 +601,8 @@ def _require_user_membership(
     _require_user(principal)
     row = connection.execute(
         """
-        SELECT m.id, m.role::text, m.status::text, m.version
+        SELECT m.id, m.role::text, m.status::text, m.version,
+               u.demo_organization_id IS NOT NULL
         FROM memberships AS m
         JOIN users AS u ON u.id = m.user_id
         JOIN organizations AS o ON o.id = m.organization_id
@@ -504,6 +619,11 @@ def _require_user_membership(
     return _membership_from_row(row)
 
 
+def _demo_project(connection: psycopg.Connection[Any], project_id: UUID) -> bool:
+    row = connection.execute("SELECT demo FROM projects WHERE id = %s", (project_id,)).fetchone()
+    return row is not None and row[0] is True
+
+
 def _project_visible(
     connection: psycopg.Connection[Any],
     user_id: UUID,
@@ -517,6 +637,7 @@ def _project_visible(
         FROM projects AS p
         WHERE p.id = %s
           AND p.organization_id = %s
+          AND p.deleted_at IS NULL
           AND (
             %s
             OR EXISTS (
@@ -610,7 +731,7 @@ def _audit(
 
 
 def _membership_from_row(row: tuple[Any, ...]) -> _Membership:
-    membership_id, role, status, version = row
+    membership_id, role, status, version, *rest = row
     if (
         not isinstance(membership_id, UUID)
         or not isinstance(role, str)
@@ -618,11 +739,17 @@ def _membership_from_row(row: tuple[Any, ...]) -> _Membership:
         or not isinstance(version, int)
     ):
         raise AccessDenied()
-    return _Membership(id=membership_id, role=Role(role), status=status, version=version)
+    return _Membership(
+        id=membership_id,
+        role=Role(role),
+        status=status,
+        version=version,
+        demo=bool(rest and rest[0] is True),
+    )
 
 
 def _organization_record(row: tuple[Any, ...]) -> OrganizationRecord:
-    organization_id, name, slug, role = row
+    organization_id, name, slug, role = row[:4]
     if (
         not isinstance(organization_id, UUID)
         or not isinstance(name, str)
@@ -631,11 +758,20 @@ def _organization_record(row: tuple[Any, ...]) -> OrganizationRecord:
         raise NotVisible()
     if not isinstance(role, str):
         raise NotVisible()
-    return OrganizationRecord(id=organization_id, name=name, slug=slug, role=Role(role))
+    subscription = row[4:7] if len(row) >= 7 else ("NONE", "TRIAL", None)
+    return OrganizationRecord(
+        id=organization_id,
+        name=name,
+        slug=slug,
+        role=Role(role),
+        subscription_state=str(subscription[0]),
+        plan_type=str(subscription[1]),
+        trial_expires_at=subscription[2] if isinstance(subscription[2], datetime) else None,
+    )
 
 
 def _project_record(row: tuple[Any, ...]) -> ProjectRecord:
-    project_id, name, slug, status = row
+    project_id, name, slug, status = row[:4]
     if (
         not isinstance(project_id, UUID)
         or not isinstance(name, str)
@@ -643,7 +779,47 @@ def _project_record(row: tuple[Any, ...]) -> ProjectRecord:
         or not isinstance(status, str)
     ):
         raise NotVisible()
-    return ProjectRecord(id=project_id, name=name, slug=slug, status=status)
+    extra = row[4:]
+    if len(extra) < 6:
+        return ProjectRecord(id=project_id, name=name, slug=slug, status=status)
+    return ProjectRecord(
+        id=project_id,
+        name=name,
+        slug=slug,
+        status=status,
+        client_name=str(extra[0] or ""),
+        engagement_type=str(extra[1] or ""),
+        period_end=extra[2] if isinstance(extra[2], date) else None,
+        owner_name=str(extra[3] or ""),
+        controls=int(extra[4] or 0),
+        open_deficiencies=int(extra[5] or 0),
+        client_id=extra[6] if len(extra) > 6 and isinstance(extra[6], UUID) else None,
+        **(_work_fields(extra[7:]) if len(extra) > 11 else {}),
+    )
+
+
+def _work_fields(extra: tuple[Any, ...]) -> dict[str, Any]:
+    """Where an engagement's work stands, and who is on it, as list_projects reads it for
+    the card."""
+    tasks, overdue, milestone, missed, last, *rest = extra
+    team = rest[0] if rest and isinstance(rest[0], list) else []
+    demo = rest[1] is True if len(rest) > 1 else False
+    counts = tuple(
+        (str(item["status"]), int(item["count"]))
+        for item in (tasks if isinstance(tasks, list) else [])
+        if isinstance(item, dict)
+    )
+    due = milestone.get("due") if isinstance(milestone, dict) else None
+    return {
+        "task_counts": counts,
+        "overdue_requests": int(overdue or 0),
+        "next_milestone": str(milestone.get("name", "")) if isinstance(milestone, dict) else "",
+        "next_milestone_due": date.fromisoformat(due) if isinstance(due, str) else None,
+        "missed_milestones": int(missed or 0),
+        "last_activity_at": last if isinstance(last, datetime) else None,
+        "team": tuple(str(name) for name in team if isinstance(name, str) and name != ""),
+        "demo": demo,
+    }
 
 
 def _membership_record(row: tuple[Any, ...]) -> MembershipRecord:
@@ -662,11 +838,44 @@ def _membership_record(row: tuple[Any, ...]) -> MembershipRecord:
 
 
 def _organization_body(record: OrganizationRecord) -> OrganizationBody:
-    return OrganizationBody(id=record.id, name=record.name, slug=record.slug, role=record.role)
+    return OrganizationBody(
+        id=record.id,
+        name=record.name,
+        slug=record.slug,
+        role=record.role,
+        subscription_state=record.subscription_state,
+        plan_type=record.plan_type,
+        trial_expires_at=record.trial_expires_at,
+    )
 
 
 def _project_body(record: ProjectRecord) -> ProjectBody:
-    return ProjectBody(id=record.id, name=record.name, slug=record.slug, status=record.status)
+    return ProjectBody(
+        id=record.id,
+        name=record.name,
+        slug=record.slug,
+        status=record.status,
+        client_id=record.client_id,
+        client_name=record.client_name,
+        engagement_type=record.engagement_type,
+        period_end=record.period_end,
+        owner_name=record.owner_name,
+        controls=record.controls,
+        open_deficiencies=record.open_deficiencies,
+        progress=[
+            TaskCountBody(status=status, count=count) for status, count in record.task_counts
+        ],
+        overdue_requests=record.overdue_requests,
+        next_milestone=(
+            MilestoneDueBody(name=record.next_milestone, due=record.next_milestone_due)
+            if record.next_milestone_due is not None
+            else None
+        ),
+        missed_milestones=record.missed_milestones,
+        last_activity_at=record.last_activity_at,
+        team=list(record.team),
+        demo=record.demo,
+    )
 
 
 def _membership_body(record: MembershipRecord) -> MembershipBody:
@@ -701,6 +910,17 @@ def _call[T](settings: Settings, work: Callable[[psycopg.Connection[Any]], T]) -
         raise HTTPException(status_code=409, detail="membership already exists") from None
     except ConcurrentUpdateError:
         raise HTTPException(status_code=409, detail="membership changed") from None
-    except psycopg.Error:
-        logger.warning("authorization query failed")
+    except psycopg.Error as error:
+        # A trial's allowance, refused by the database (migration 0127): answered as 402
+        # with the resource named, by the handler subscriptions.py registers.
+        limit = trial_limit_from(error)
+        if limit is not None:
+            raise TrialLimitReached(limit["resource"], limit["used"], limit["allowed"]) from None
+        # The class and SQLSTATE only: server messages can carry row values.
+        logger.warning(
+            "authorization query failed: %s %s %s",
+            type(error).__name__,
+            error.sqlstate or "",
+            error.diag.constraint_name or "",
+        )
         raise HTTPException(status_code=503, detail="authorization unavailable") from None

@@ -62,6 +62,9 @@ Every other business table belongs to an `organizations` row. Project-scoped row
 | `mailbox_notifications` | project + notification key | Immutable. A repeated key returns the first notice |
 | `pbc_requests` | project + operation key | One evidence request. Status follows the transitions in [pbc.md](pbc.md). A change does not send email |
 | `audit_events` | row id | Immutable. Updates, deletes, and truncates are rejected |
+| `plan_procedures` | plan + phase + procedure key | Restricted. Removed with a reason, never deleted; a change revises the plan |
+| `plan_versions` | plan + revision | Immutable. The plan's four sections as decided, with their SHA-256 hash |
+| `plan_decisions` | row id | Immutable. Approved or changes requested, by whom, when, on which version |
 | `auth_sessions` | `token_hash` | Restricted to the user. Expired and revoked rows do not authenticate |
 | `oidc_login_attempts` | `state_hash` | Deleted when the callback consumes the attempt |
 

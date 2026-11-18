@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-
+import { browserUrl } from "../../../src/browser-url";
 import { apiBaseUrl, sessionToken } from "../../../src/load-workspace";
 import { noticeForStatus, taskWrite } from "../../../src/task-form";
 
@@ -69,7 +69,7 @@ function redirectNotice(
   taskId: string,
   notice: string,
 ) {
-  const destination = new URL("/", request.url);
+  const destination = browserUrl("/", request);
   destination.searchParams.set("section", "tasks");
   const organizationId = fields.organization_id ?? "";
   const projectId = fields.project_id ?? "";

@@ -1,0 +1,63 @@
+import { cookies } from "next/headers";
+import { NextResponse } from "next/server";
+
+import { assuranceWrite } from "../../../src/evidence-assurance-model";
+import { apiBaseUrl, sessionToken } from "../../../src/load-workspace";
+
+/** "Check again" on a D&I request whose check failed or is out of date
+ * (docs/evidence-assurance.md, section 6), and "Check again with the current engine" on
+ * one an earlier engine finished (section 10.10: intent "upgrade", which assuranceWrite
+ * validates like "rerun"); and a person's tickmark on an attribute (section 10.13:
+ * intents "disposition" and "reopen-disposition", whose bodies assuranceWrite checks as
+ * the contract shapes them). Called in the background; answers as JSON with the API's
+ * status (any 2xx said as 200), and the page reads the checks again once it is
+ * confirmed. The API decides who may act and refuses, in one sentence, what it does not
+ * take. */
+export async function POST(request: Request) {
+  let fields: Record<string, unknown> = {};
+  try {
+    const body = (await request.json()) as unknown;
+    if (typeof body === "object" && body !== null && !Array.isArray(body)) {
+      fields = body as Record<string, unknown>;
+    }
+  } catch {
+    fields = {};
+  }
+  const write = assuranceWrite(fields);
+  if ("error" in write) {
+    return NextResponse.json({ status: 422, detail: "" });
+  }
+  const session = sessionToken((await cookies()).get("aw_session")?.value);
+  let status = 0;
+  let detail = "";
+  try {
+    const headers = new Headers();
+    if (session !== undefined) {
+      headers.set("cookie", `aw_session=${session}`);
+    }
+    if (write.body !== undefined) {
+      headers.set("content-type", "application/json");
+    }
+    const response = await fetch(`${apiBaseUrl()}${write.path}`, {
+      method: "POST",
+      headers,
+      ...(write.body !== undefined ? { body: JSON.stringify(write.body) } : {}),
+      cache: "no-store",
+      // The run is queued and worked in the background: the call itself is short.
+      signal: AbortSignal.timeout(30000),
+    });
+    // The server answers 202 (a check) or 200 (a tickmark) with the request's entry: any
+    // 2xx is its confirmation.
+    status = response.ok ? 200 : response.status;
+    if (status !== 200) {
+      const body = (await response.json()) as unknown;
+      if (typeof body === "object" && body !== null && "detail" in body) {
+        const value = (body as { detail?: unknown }).detail;
+        detail = typeof value === "string" ? value : "";
+      }
+    }
+  } catch {
+    status = status === 0 ? 0 : status;
+  }
+  return NextResponse.json({ status, detail });
+}

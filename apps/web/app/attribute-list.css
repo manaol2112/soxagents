@@ -1,0 +1,1583 @@
+/* ==========================================================================
+   A control's testing attributes (product owner, 2 November 2026), to the owner's
+   reference: the agent's recommendation, the list with its count and Add, one card per
+   attribute (select, letter, wording, source and confidence, status, edit, more), what
+   waits on a decision, and the dialog that edits one. Tokens only, so both themes follow.
+   ========================================================================== */
+
+.ta {
+  gap: 1rem;
+}
+
+/* The recommendation. */
+.ta-reco {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.9rem;
+  padding: 1rem 1.1rem;
+  background: var(--ai-soft);
+  border: 1px solid var(--ai-border);
+  border-radius: var(--radius-xl);
+}
+
+.ta-reco-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  color: var(--ai);
+}
+
+.ta-reco h4 {
+  margin: 0 0 0.15rem;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.ta-reco p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.ta-reco .ta-about {
+  margin-top: 0.5rem;
+  color: var(--text);
+}
+
+/* The heading with Add and Propose. */
+.ta-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  margin-top: 0.25rem;
+}
+
+.ta-head h4,
+.ta-waiting h4 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-title);
+  font-weight: 600;
+}
+
+.ta-count {
+  font-weight: 600;
+}
+
+.ta-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.ta-head-actions .btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 44px;
+  padding: 0 1rem;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  border-radius: var(--radius-xl);
+}
+
+/* A selection, decided as one decision. */
+.ta-bulk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0.6rem 0.75rem 0.6rem 1rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+}
+
+.ta-bulk-count {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.ta-bulk-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.ta-bulk .ta-retire:not(:disabled) {
+  color: var(--danger);
+}
+
+.ta-bulk-hint {
+  flex-basis: 100%;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.ta-done {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  color: var(--success);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.ta-done:empty {
+  display: none;
+}
+
+/* The list: one card per attribute. */
+.ta-list {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ta-row {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.85rem;
+  min-width: 0;
+  padding: 1rem 1rem 1rem 1.1rem;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
+}
+
+.ta-row:hover {
+  border-color: var(--border);
+}
+
+.ta-row.is-selected {
+  background: var(--surface);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+/* Drawn from the tokens, so its edge meets 3:1 in both themes; centred on the letter. */
+:is(.ta-row, .tar, .ta-tools) .ta-check {
+  appearance: none;
+  display: inline-grid;
+  width: 20px;
+  height: 20px;
+  margin: 7px 0 0;
+  place-items: center;
+  background: var(--surface);
+  border: 1.5px solid var(--border-control);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+:is(.ta-row, .tar, .ta-tools) .ta-check:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+:is(.ta-row, .tar, .ta-tools) .ta-check:checked::after {
+  width: 10px;
+  height: 6px;
+  border: solid var(--text-on-accent);
+  border-width: 0 0 2px 2px;
+  transform: translateY(-1px) rotate(-45deg);
+  content: "";
+}
+
+:is(.ta-row, .tar, .ta-tools) .ta-check:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+:is(.ta-row, .tar, .ta-tools) .ta-check:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.ta-letter {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  color: var(--accent-text);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  background: var(--accent-soft);
+  border-radius: var(--radius);
+}
+
+.ta-row.is-proposed .ta-letter {
+  color: var(--ai, var(--accent-text));
+  background: var(--ai-soft, var(--accent-soft));
+}
+
+.ta-main {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+  padding-top: 0.3rem;
+}
+
+.ta-text {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.ta-replaces {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.ta-replaces span {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+/* What the agent followed in the confirmed understanding, and what it set aside. */
+.ta-basis {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.5rem 0.7rem;
+  background: var(--surface-muted, var(--surface));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.ta-basis p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.ta-basis span {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.ta-quote,
+.ta-why {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.ta-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.ta-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 28px;
+  padding: 0 0.6rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+  font-weight: 500;
+  background: var(--surface-muted);
+  border-radius: var(--radius);
+}
+
+.ta-chip svg {
+  flex: none;
+}
+
+.ta-chip.is-low,
+.ta-chip.is-inferred {
+  color: var(--text-secondary);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.ta-chip.is-low::before,
+.ta-chip.is-inferred::before {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  content: "";
+  background: var(--warning);
+  border-radius: 999px;
+}
+
+.ta-chip.is-none {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.ta-how {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.75rem 0.9rem;
+  background: var(--surface-muted);
+  border-radius: var(--radius-lg);
+}
+
+.ta-how-title {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+/* The status that opens what can change it, edit, and more. */
+.ta-side {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.ta-status,
+.row-menu-trigger.ta-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 40px;
+  padding: 0 0.75rem;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xl);
+  box-shadow: none;
+}
+
+.ta-status.is-approved,
+.row-menu-trigger.ta-status.is-approved,
+.row-menu-trigger.ta-status.is-approved:hover:not(:disabled) {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: var(--success-border);
+}
+
+.ta-status.is-proposed,
+.row-menu-trigger.ta-status.is-proposed,
+.row-menu-trigger.ta-status.is-proposed:hover:not(:disabled) {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: var(--warning-border);
+}
+
+/* The arrow alone: no divider before it (the shared caret's, made for filled buttons). */
+.row-menu-trigger.ta-status .row-menu-caret {
+  display: inline-flex;
+  margin-left: 0.15rem;
+  padding-left: 0;
+  color: currentcolor;
+  border-left: 0;
+}
+
+.ta-icon-button,
+.ta-side .row-menu-button {
+  display: inline-grid;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  place-items: center;
+  color: var(--text-strong);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: none;
+}
+
+.ta-icon-button:hover:not(:disabled),
+.ta-side .row-menu-button:hover,
+.ta-side .row-menu.is-open .row-menu-button {
+  background: var(--surface-muted);
+  border-color: var(--border);
+}
+
+.ta-icon-gap {
+  width: 40px;
+  height: 40px;
+}
+
+.ta-reco .ta-about-button {
+  width: 36px;
+  height: 36px;
+  color: var(--text-secondary);
+  background: transparent;
+  border-color: transparent;
+}
+
+.ta-reco .ta-about-button:hover:not(:disabled),
+.ta-reco .ta-about-button[aria-expanded="true"] {
+  color: var(--text-strong);
+  background: var(--surface);
+  border-color: var(--border);
+}
+
+.ta-empty {
+  padding: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  border: 0;
+}
+
+.ta-waiting {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 0.4rem;
+}
+
+.ta-waiting .form-hint {
+  margin: 0;
+}
+
+/* The dialog that edits, adds, or reviews one attribute. */
+.record-dialog.tae-dialog {
+  width: min(760px, 100%);
+}
+
+.tae-dialog .rd-head {
+  align-items: center;
+  gap: 1.1rem;
+  padding: 1.4rem 1.5rem 1.2rem;
+}
+
+.tae-dialog .rd-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-xl);
+}
+
+.tae-dialog .rd-head h2 {
+  font-size: var(--fs-title);
+  font-weight: 600;
+}
+
+.tae-dialog .rd-body {
+  padding: 1.25rem 1.5rem 1.4rem;
+  background: var(--surface);
+}
+
+.tae-form {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.tae-field {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.tae-field label,
+.tae-facts dt {
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.tae-required {
+  margin-left: 0.2rem;
+  color: var(--danger);
+}
+
+.tae-field textarea {
+  width: 100%;
+  min-height: 104px;
+  padding: 0.75rem 0.9rem;
+  font-size: var(--fs-md);
+  line-height: 1.5;
+  border-radius: var(--radius-xl);
+  resize: vertical;
+}
+
+.tae-count {
+  justify-self: end;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.tae-facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin: 0;
+}
+
+.tae-facts > div {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.tae-facts dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 52px;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: var(--radius-xl);
+}
+
+.tae-facts .ta-chip {
+  min-height: 32px;
+  font-size: var(--fs-sm);
+}
+
+.tae-none {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.tae-replaces,
+.tae-why,
+.tae-note {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.tae-replaces span {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.tae-quote {
+  margin: 0;
+  padding: 0.6rem 0.9rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  border-left: 2px solid var(--border-strong);
+}
+
+.tae-how {
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: var(--radius-xl);
+}
+
+.tae-how summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.75rem;
+  padding: 0.9rem 1rem;
+  color: var(--text-secondary);
+  list-style: none;
+  cursor: pointer;
+}
+
+.tae-how summary::-webkit-details-marker {
+  display: none;
+}
+
+.tae-how summary > span {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.tae-how strong {
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+}
+
+.tae-how small {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.tae-how-caret {
+  display: inline-flex;
+  transform: rotate(90deg);
+  transition: transform 150ms ease;
+}
+
+.tae-how[open] .tae-how-caret {
+  transform: rotate(-90deg);
+}
+
+.tae-how dl {
+  margin: 0;
+  padding: 0 1rem 1rem 3rem;
+}
+
+.tae-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.25rem;
+  padding-top: 1.1rem;
+  border-top: 1px solid var(--border-subtle, var(--border));
+}
+
+.tae-foot-main {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.tae-foot .btn,
+.tae-foot .btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-width: 104px;
+  min-height: 48px;
+  padding: 0 1.3rem;
+  font-size: var(--fs-md);
+  border-radius: var(--radius-xl);
+}
+
+@media (max-width: 640px) {
+  .ta-row {
+    grid-template-columns: auto auto minmax(0, 1fr);
+    gap: 0.7rem;
+    padding: 0.85rem;
+  }
+
+  /* The status and actions under the wording, on the right. */
+  .ta-side {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+  }
+
+  .ta-reco {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .ta-reco-icon {
+    display: none;
+  }
+
+  .ta-head-actions,
+  .ta-head-actions .btn-secondary {
+    flex: 1 1 100%;
+    justify-content: center;
+  }
+
+  .tae-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tae-foot .btn,
+  .tae-foot .btn-secondary {
+    flex: 1;
+  }
+
+  .tae-foot-main {
+    flex: 1 1 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ta-row,
+  .tae-how-caret {
+    transition: none;
+  }
+}
+
+/* An approved attribute's pass and fail criteria, tailored to the control (product owner,
+   11 November 2026): what the testers judge evidence against, with who owns them. */
+.tc {
+  display: grid;
+  gap: 0.45rem;
+  margin-top: 0.55rem;
+  padding: 0.6rem 0.75rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.tc.is-missing {
+  background: color-mix(in srgb, var(--warning-soft) 55%, var(--surface));
+  border-color: var(--warning-border);
+}
+
+.tc.is-to_accept {
+  background: color-mix(in srgb, var(--ai-soft) 55%, var(--surface));
+  border-color: var(--ai-border);
+}
+
+.tc-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.6rem;
+}
+
+.tc-label {
+  color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.tc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  height: 20px;
+  padding: 0 0.5rem;
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border-radius: 999px;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+}
+
+.tc-chip.is-to_accept {
+  color: var(--ai);
+  background: var(--ai-soft);
+}
+
+.tc-acts {
+  display: inline-flex;
+  gap: 0.3rem;
+  margin-left: auto;
+}
+
+.tc-rules {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+}
+
+.tc-rules > div {
+  display: grid;
+  grid-template-columns: 7.5rem minmax(0, 1fr);
+  gap: 0.6rem;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.tc-rules dt {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.tc-rules dd {
+  margin: 0;
+  color: var(--text);
+}
+
+.tc-rules .is-pass dt {
+  color: var(--success);
+}
+
+.tc-rules .is-fail dt {
+  color: var(--danger);
+}
+
+.tc-missing,
+.tc-hint {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.tc-edit {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.tc-edit label {
+  display: grid;
+  gap: 0.25rem;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.tc-edit textarea {
+  width: 100%;
+  resize: vertical;
+  font-weight: 400;
+}
+
+.tc-edit .tc-judgment {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 500;
+}
+
+.tc-edit-acts {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.tc-problem {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--fs-sm);
+}
+
+.tc-all {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin: 0 0 0.75rem;
+  padding: 0.6rem 0.8rem;
+  background: color-mix(in srgb, var(--ai-soft) 60%, var(--surface));
+  border: 1px solid var(--ai-border);
+  border-radius: var(--radius-lg);
+}
+
+.tc-all p {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+@media (max-width: 640px) {
+  .tc-rules > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.1rem;
+  }
+
+  .tc-acts {
+    margin-left: 0;
+  }
+}
+
+/* ==========================================================================
+   The Attributes step inside its panel (product owner, 11 November 2026, approved
+   preview). The panel's frame gives the title, the status, the decision and the agent's
+   line; this is the work alone: a title row, one bordered list of rows that open on
+   request, and the settled detail folded below. Tokens only.
+   ========================================================================== */
+
+.ta.is-embedded {
+  gap: 0.75rem;
+}
+
+.ta-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem 1rem;
+  min-width: 0;
+}
+
+.ta-section-title {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ta-bar-acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.4rem;
+}
+
+.ta-bar-problem {
+  flex-basis: 100%;
+}
+
+/* A quiet text action: accent words, no fill. */
+button.btn-ghost.ta-quiet,
+.btn.btn-ghost.ta-quiet {
+  color: var(--accent-text);
+}
+
+/* The selection of proposals, decided as one decision: shown only while there are any. */
+.ta-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.75rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0.45rem 0.75rem;
+  background: color-mix(in srgb, var(--ai-soft) 50%, var(--surface));
+  border: 1px solid var(--ai-border);
+  border-radius: var(--radius-lg);
+}
+
+.ta-tools .ta-check {
+  margin: 0;
+}
+
+.ta-tools-count {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.ta-tools-hint {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.ta-tools-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-left: auto;
+}
+
+/* One bordered list: rows separated by hairlines, no card per row. */
+.tar-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+}
+
+.tar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  transition: background-color 120ms ease;
+}
+
+.tar + .tar,
+.tar-empty + .tar {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.tar.has-check {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+.tar.has-check > .ta-check {
+  align-self: start;
+  margin: 1.05rem 0 0 0.85rem;
+}
+
+.tar.has-check > .tar-body {
+  grid-column: 1 / -1;
+}
+
+.tar.is-open,
+.tar.is-selected {
+  background: var(--surface-muted);
+}
+
+button.tar-head {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto 14px;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  height: auto;
+  min-height: 52px;
+  padding: 0.6rem 0.9rem;
+  color: var(--text);
+  text-align: left;
+  white-space: normal;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  font-weight: 400;
+  line-height: 1.35;
+}
+
+button.tar-head:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+  border: 0;
+}
+
+button.tar-head:focus-visible:not(:disabled) {
+  position: relative;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.tar-letter {
+  display: inline-grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  background: var(--accent-soft);
+  border-radius: var(--radius);
+}
+
+.tar.is-proposed .tar-letter {
+  color: var(--ai);
+  background: var(--ai-soft);
+}
+
+.tar-name {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.tar-text {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+}
+
+/* Open, the wording reads in full. */
+.tar.is-open .tar-text {
+  display: block;
+}
+
+.tar-source {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* What the agent did to the row: violet, as all undecided agent output. */
+.tar-origin {
+  color: var(--ai);
+  font-weight: 600;
+}
+
+/* A retirement the agent suggests: the attribute still stands until a person accepts. */
+.tar.is-removal .tar-text {
+  color: var(--text-secondary);
+  text-decoration: line-through;
+}
+
+/* The agents at work, or a run that did not finish, above the list. */
+.ta-working,
+.ta-run-note {
+  margin: 0 0 0.5rem;
+  font-size: var(--fs-sm);
+}
+
+.ta-run-note {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--text-secondary);
+}
+
+.ta-run-note.tone-warning {
+  color: var(--warning);
+}
+
+/* A run that ended without a usable answer: its sentence, then its two ways on. */
+.ta-run-note.has-acts {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.ta-run-note.has-acts > span:first-of-type {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
+.ta-run-acts {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.tar-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 0.55rem;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  border-radius: 999px;
+}
+
+.tar-chip.tone-ai {
+  color: var(--ai);
+  background: var(--ai-soft);
+  border-color: var(--ai-border);
+}
+
+.tar-caret {
+  display: inline-flex;
+  color: var(--text-tertiary);
+  transition: transform 180ms ease;
+}
+
+.tar.is-open .tar-caret {
+  transform: rotate(90deg);
+}
+
+/* What opens under the wording, indented to it. */
+.tar-body {
+  display: grid;
+  gap: 0.6rem;
+  min-width: 0;
+  padding: 0 0.9rem 0.9rem calc(0.9rem + 26px + 0.75rem);
+  animation: tar-open 200ms ease;
+}
+
+.tar.has-check .tar-body {
+  padding-left: calc(0.85rem + 20px + 0.9rem + 26px + 0.75rem);
+}
+
+@keyframes tar-open {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.tar-body .ta-replaces,
+.tar-body .ta-quote,
+.tar-body .ta-why {
+  font-size: var(--fs-md);
+}
+
+.tar-body .ta-how {
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+}
+
+.tar-body .ta-how-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tar-body .ta-how-title .ta-chip {
+  min-height: 22px;
+  font-size: var(--fs-2xs);
+}
+
+.tar-empty {
+  padding: 0.85rem 0.9rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+/* The criteria inside a row: a plain grid, no box of its own (the row's chip names it). */
+.tc.is-flat {
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: 0;
+  border-radius: 0;
+}
+
+.tc.is-flat .tc-rules > div {
+  grid-template-columns: 4.5rem minmax(0, 1fr);
+  font-size: var(--fs-md);
+}
+
+.tc.is-flat .tc-missing {
+  font-size: var(--fs-md);
+}
+
+.tc-by {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.tc-row-acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.tc-row-acts .row-menu-button {
+  width: 28px;
+  height: 28px;
+}
+
+/* The settled detail, as quiet rows that open on request. */
+.ta-folds {
+  display: grid;
+  min-width: 0;
+}
+
+.ta-folds > .ta-fold,
+.ta-folds > .cc-history {
+  padding: 0.5rem 0.15rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.ta-folds > * + * {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ta-folds > .ta-fold > summary,
+.ta-folds > .cc-history > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: fit-content;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  list-style: none;
+  cursor: pointer;
+}
+
+.ta-folds > .ta-fold > summary::-webkit-details-marker,
+.ta-folds > .cc-history > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ta-folds > .ta-fold > summary::before,
+.ta-folds > .cc-history > summary::before {
+  display: inline-block;
+  width: 0.4rem;
+  height: 0.4rem;
+  border: solid currentcolor;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(-45deg);
+  transition: transform 180ms ease;
+  content: "";
+}
+
+.ta-folds > [open] > summary::before {
+  transform: rotate(45deg);
+}
+
+.ta-folds > .ta-fold > summary:hover,
+.ta-folds > .cc-history > summary:hover {
+  color: var(--text-strong);
+}
+
+.ta-folds > .ta-fold > p {
+  margin: 0.45rem 0 0;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.ta-folds .cc-update.is-bare {
+  margin-top: 0.5rem;
+}
+
+@media (max-width: 640px) {
+  button.tar-head {
+    grid-template-columns: 26px minmax(0, 1fr) 14px;
+    padding: 0.6rem 0.75rem;
+  }
+
+  /* The chip under the wording, beside the source line. */
+  .tar-chip {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: start;
+  }
+
+  .tar-text {
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+  }
+
+  .tar-body,
+  .tar.has-check .tar-body {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+
+  .tc.is-flat .tc-rules > div {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ta-tools-acts {
+    margin-left: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tar,
+  .tar-caret,
+  .ta-folds > .ta-fold > summary::before,
+  .ta-folds > .cc-history > summary::before {
+    transition: none;
+  }
+
+  .tar-body {
+    animation: none;
+  }
+}
+
+/* The agent's assumption on an attribute (B1j, 16 November 2026: "On the attribute"): the
+   agent's sentence with "That's right" and "Change…", quiet once a person decides it. */
+.tas-list {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tas-open {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  background: color-mix(in srgb, var(--warning-soft) 55%, var(--surface));
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+}
+
+.tas-assumed {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+}
+
+.tas-assumed strong {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+/* A conflict with a confirmed fact (B1l point 6): it holds the attribute's acceptance until a
+   person decides it, so it reads as a decision, in the danger tone at its edge. */
+.tas-open.is-conflict {
+  background: color-mix(in srgb, var(--danger-soft) 45%, var(--surface));
+  border-color: var(--danger-border);
+}
+
+.tas-kicker {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* Accepted with the attribute, not confirmed (B1l point 6): still to settle, quieter than an
+   open one; its kicker carries no alarm. */
+.tas-open.is-accepted {
+  background: var(--surface);
+}
+
+.tas-open.is-accepted .tas-kicker {
+  color: var(--text-secondary);
+}
+
+/* Why Accept is off on an attribute a conflict holds. */
+.tc-held {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+/* What "Accept all" leaves out, and the assumptions not confirmed that go with it. */
+.ta-accept-note {
+  margin: -0.25rem 0 0.5rem;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  text-align: right;
+}
+
+@media (max-width: 760px) {
+  .ta-accept-note {
+    text-align: left;
+  }
+}
+
+.tas-acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.tas-change {
+  display: grid;
+  gap: 0.35rem;
+  animation: tas-open 200ms ease;
+}
+
+.tas-change label {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.tas-change textarea {
+  width: 100%;
+  min-height: 4.5rem;
+  resize: vertical;
+}
+
+.tas-count,
+.tas-note {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.tas-done {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+.tas-done::before {
+  content: "✓";
+  margin-right: 0.4rem;
+  color: var(--text-tertiary);
+}
+
+/* Where the criteria came from, and their earlier versions on request. */
+.tas-trail {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.tas-meta {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.tas-link {
+  padding: 0;
+  color: var(--text-secondary);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  transition: color 120ms ease;
+}
+
+.tas-link:hover {
+  color: var(--text-strong);
+}
+
+/* An inline link-like button: the plain outline ring, not the button's filled one. */
+.tas-link:focus-visible:not(:disabled) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+  box-shadow: none;
+}
+
+.tas-history {
+  padding: 0.5rem 0.7rem;
+  background: var(--surface-muted, var(--surface));
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  animation: tas-open 200ms ease;
+}
+
+.tas-reading {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+.tas-versions {
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tas-versions li + li {
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.tas-versions .tc-rules > div {
+  grid-template-columns: 4.5rem minmax(0, 1fr);
+  color: var(--text-secondary);
+}
+
+.tas-versions .tc-rules dd {
+  color: var(--text-secondary);
+}
+
+.tas-by {
+  margin: 0.25rem 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+@keyframes tas-open {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .tas-versions .tc-rules > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.1rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tas-change,
+  .tas-history {
+    animation: none;
+  }
+
+  .tas-link {
+    transition: none;
+  }
+}

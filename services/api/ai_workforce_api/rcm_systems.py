@@ -26,9 +26,17 @@ import psycopg
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field, ValidationError
 
-from ai_workforce_api.db import connect, independent_steps, transaction
-from ai_workforce_api.model_providers import CLAUDE_CONFIG, call_note, live_model, provider_for
-from ai_workforce_api.models import ModelProvider, ModelRequest, complete, record_call
+from ai_workforce_api.db import (
+    connect,
+    hold_claim,
+    independent_steps,
+    releasing_claims,
+    transaction,
+)
+from ai_workforce_api.model_providers import fallback_note, live_model, provider_for
+from ai_workforce_api.models import ModelProvider, ModelRequest
+from ai_workforce_api.prompt_data import neutral
+from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.rcm_import import FIELD_KEYS, Sheet, data_rows, headers
 from ai_workforce_api.settings import Settings
 
@@ -135,6 +143,68 @@ KNOWN_SYSTEMS: tuple[tuple[str, Layer, tuple[str, ...]], ...] = (
     ("Veeam", "TOOL", (r"\bveeam\b",)),
     ("Commvault", "TOOL", (r"\bcommvault\b",)),
 )
+# What each catalog system is, in a word or two, for the Add system picker (SP2).
+KNOWN_CATEGORIES: dict[str, str] = {
+    "SAP S/4HANA": "ERP",
+    "SAP ECC": "ERP",
+    "SAP BW": "Data warehouse",
+    "SAP SuccessFactors": "HR",
+    "SAP Ariba": "Procurement",
+    "SAP Concur": "Travel and expense",
+    "Oracle E-Business Suite": "ERP",
+    "Oracle Fusion Cloud ERP": "ERP",
+    "Oracle NetSuite": "ERP",
+    "Oracle PeopleSoft": "ERP / HR",
+    "Oracle Hyperion": "Consolidation",
+    "JD Edwards": "ERP",
+    "Oracle Database": "Database",
+    "Microsoft Dynamics 365": "ERP / CRM",
+    "Microsoft Dynamics AX": "ERP",
+    "Microsoft Dynamics GP": "ERP",
+    "Business Central": "ERP",
+    "Workday": "HR",
+    "Salesforce": "CRM",
+    "ServiceNow": "IT service management",
+    "Jira": "Change tracking",
+    "Coupa": "Procurement",
+    "Kyriba": "Treasury",
+    "BlackLine": "Account reconciliation",
+    "OneStream": "Consolidation",
+    "Anaplan": "Financial planning",
+    "ADP": "Payroll",
+    "UKG": "Payroll",
+    "QuickBooks": "Accounting",
+    "Sage Intacct": "Accounting",
+    "Epicor": "ERP",
+    "Infor": "ERP",
+    "Tableau": "Reporting",
+    "Power BI": "Reporting",
+    "Snowflake": "Data warehouse",
+    "Microsoft SQL Server": "Database",
+    "IBM Db2": "Database",
+    "PostgreSQL": "Database",
+    "MySQL": "Database",
+    "Microsoft Entra ID": "Identity",
+    "Active Directory": "Identity",
+    "Okta": "Identity",
+    "CyberArk": "Privileged access",
+    "SailPoint": "Identity governance",
+    "Windows Server": "Operating system",
+    "Linux": "Operating system",
+    "UNIX": "Operating system",
+    "IBM i": "Operating system",
+    "Mainframe": "Operating system",
+    "Amazon Web Services": "Cloud infrastructure",
+    "Microsoft Azure": "Cloud infrastructure",
+    "Google Cloud": "Cloud infrastructure",
+    "Azure DevOps": "Change and deployment",
+    "GitHub": "Source control",
+    "GitLab": "Source control",
+    "Control-M": "Job scheduling",
+    "Veeam": "Backup",
+    "Commvault": "Backup",
+}
+
 _KNOWN = tuple(
     (name, layer, tuple(re.compile(pattern, re.IGNORECASE) for pattern in patterns))
     for name, layer, patterns in KNOWN_SYSTEMS
@@ -409,11 +479,13 @@ def scan_prompt(rows: list[ScanRow]) -> str:
             break
         lines.append(line)
     data = json.dumps({"systems_column_values": cells[:300]}, ensure_ascii=False)
+    # The RCM is the client's: every tag in it is made inert (prompt_data; 18 November 2026,
+    # owner-approved S1).
     return (
         "List the in-scope systems in this RCM.\n\n<rcm>\n"
-        + data
+        + neutral(data)
         + "\n"
-        + "\n".join(lines)
+        + neutral("\n".join(lines))
         + "\n</rcm>"
     )
 
@@ -501,7 +573,8 @@ def scan_runner(settings: Settings, provider: ModelProvider | None = None) -> Sc
         from ai_workforce_api.rcm_terms import run_terms
 
         chosen = model if use_model else None
-        with connect(settings.database_url) as connection:
+        # A run that raises gives its claims back, so the retry runs them (db.Claim).
+        with releasing_claims(settings.database_url), connect(settings.database_url) as connection:
             systems = run_scan(connection, chosen, import_id)
             terms = run_terms(connection, chosen, import_id)
         return "READY" if "READY" in (systems, terms) else "SKIPPED"
@@ -527,6 +600,12 @@ def run_scan(
             """,
             (LEASE_MINUTES, import_id, MAX_ATTEMPTS),
         ).fetchone()
+        if claimed is not None:
+            hold_claim(
+                cursor, "rcm_imports", "id", import_id, "systems_status",
+                attempts_column="systems_attempts", lease_column="systems_lease_until",
+                working="SCANNING",
+            )  # fmt: skip
     if claimed is None:
         return "SKIPPED"
     (
@@ -558,17 +637,21 @@ def run_scan(
             cancelled=False,
             system=SYSTEM_PROMPT,
         )
-        status, raw = complete(provider, request, CLAUDE_CONFIG)
-        call_id = record_call(
+        # The prompt is /2 (18 November 2026, owner-approved S1): the RCM's tags are made inert.
+        call = AgentCaller(
             connection,
-            requester,
-            organization_id,
-            project_id,
-            "claude",
-            status,
-            raw,
-            CLAUDE_CONFIG,
-        )
+            provider,
+            Job(
+                "evidence-reader",
+                "rcm_import",
+                import_id,
+                organization_id,
+                project_id,
+                requester,
+                agent_instance_id=agent_actor(connection, project_id, "evidence-coordinator"),
+            ),  # fmt: skip
+        ).generate(request, "rcm-systems/2", {"import": str(import_id), "rows": len(rows)})
+        status, raw, call_id = call.status, call.raw, call.call_id
         if status == "SUCCEEDED" and raw.output is not None:
             try:
                 read = len(scan_prompt_rows(rows))
@@ -577,9 +660,11 @@ def run_scan(
                 )
                 source = "MODEL"
             except ValueError as error:
-                note = f"Model answer rejected: {error}."
+                source = "FALLBACK"
+                note = f"Model answer rejected: {error}. The reviewed rules scanned the RCM."
         else:
-            note = call_note(status)
+            source = "FALLBACK"
+            note = fallback_note(status, "the reviewed rules scanned the RCM instead")
     if proposals is None:
         proposals = rules_scan(rows)
     with transaction(connection) as cursor:

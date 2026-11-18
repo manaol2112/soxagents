@@ -1,0 +1,4233 @@
+/* ==========================================================================
+   A control's guided setup (product owner, 2 November 2026), laid out to the owner's
+   reference: an icon tile beside the title, the steps on the left with what the setup
+   gives, and on the right the step with its progress, one question per card, and Back
+   and Save & continue. Tokens only, so both themes follow.
+   ========================================================================== */
+
+.cs-resume {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 36px;
+  padding: 0 0.85rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: none;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.cs-resume.is-mine {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: var(--accent-border, var(--accent));
+}
+
+.cs-resume:hover {
+  border-color: var(--accent-border, var(--accent));
+}
+
+/* Pinned near the top, so the introduction and the steps open in the same place. Only
+   where the backdrop keeps its margin: at 960px and below the dialog fills the screen,
+   and a top margin there pushed Back and Continue below the bottom edge. */
+@media (min-width: 961px) {
+  .record-backdrop:has(> .cs-dialog) {
+    place-items: start center;
+    padding-top: max(2rem, 5vh);
+  }
+}
+
+/* The dialog: a soft tile beside the title, as the owner's dialogs carry. */
+.record-dialog.cs-dialog {
+  width: min(1120px, 100%);
+  background: var(--surface);
+}
+
+/* One size for every step (product owner, 2 November 2026): the frame never grows or
+   shrinks with the step. A long step scrolls inside its card; the title, the steps, and
+   Back and Continue stay where they are. */
+.record-dialog.cs-dialog:not(.cs-intro) {
+  height: min(880px, calc(100dvh - 4rem));
+}
+
+.cs-dialog:not(.cs-intro) .rd-body {
+  grid-template-rows: minmax(0, 1fr);
+  align-content: stretch;
+  overflow: hidden;
+}
+
+.rd-icon {
+  display: inline-grid;
+  flex: none;
+  width: 64px;
+  height: 64px;
+  place-items: center;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: var(--radius-xl);
+}
+
+.cs-dialog .rd-head {
+  align-items: center;
+  gap: 1.25rem;
+  padding: 1.6rem 1.75rem 1.25rem;
+  background: transparent;
+  border-bottom: 1px solid var(--border-subtle, var(--border));
+}
+
+.cs-dialog .rd-eyebrow {
+  color: var(--text-secondary);
+  letter-spacing: 0.06em;
+}
+
+.cs-dialog .rd-head h2 {
+  font-size: var(--fs-display);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.cs-dialog.is-ready .rd-icon {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.cs-dialog .rd-body {
+  padding: 0;
+  background: transparent;
+}
+
+.cs-layout {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  min-height: 0;
+}
+
+/* The steps, numbered and joined by a line, and what the setup gives. */
+.cs-rail {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 1.5rem;
+  min-height: 0;
+  padding: 1.5rem 1.25rem 1.5rem 1.5rem;
+  overflow-y: auto;
+  border-right: 1px solid var(--border-subtle, var(--border));
+  scrollbar-width: thin;
+}
+
+.cs-steps {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cs-steps li {
+  position: relative;
+}
+
+/* The line between one step's mark and the next. */
+.cs-steps li:not(:last-child)::after {
+  position: absolute;
+  top: calc(0.8rem + 36px);
+  bottom: calc(-0.8rem + 2px);
+  left: calc(0.85rem + 17px);
+  width: 2px;
+  background: var(--border);
+  content: "";
+}
+
+.cs-steps li.is-done:not(:last-child)::after {
+  background: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.cs-steps button {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.9rem;
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  margin: 0.45rem 0;
+  white-space: normal;
+  padding: 0.8rem 0.85rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-lg);
+  line-height: 1.3;
+  font-weight: 600;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: var(--radius-xl);
+  box-shadow: none;
+  cursor: pointer;
+  transition: background-color 150ms ease;
+}
+
+.cs-steps button:hover:not(:disabled) {
+  background: var(--surface-muted);
+}
+
+.cs-steps button:disabled {
+  cursor: default;
+}
+
+/* The current step keeps its highlight under the pointer too. */
+.cs-steps .is-on button,
+.cs-steps .is-on button:hover:not(:disabled) {
+  color: var(--text-strong);
+  background: var(--accent-soft);
+}
+
+.cs-step-mark {
+  display: inline-grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: 999px;
+}
+
+.cs-steps .is-on .cs-step-mark {
+  color: var(--text-on-accent);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.cs-steps .is-done .cs-step-mark {
+  color: var(--accent-text);
+  background: var(--surface);
+  border-color: var(--accent);
+}
+
+.cs-step-name {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.cs-step-name small {
+  line-height: 1.3;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+}
+
+/* On the current step's tint the tertiary text fell to 4.49:1 in the dark theme. */
+.cs-steps .is-on .cs-step-name small {
+  color: var(--text-secondary);
+}
+
+.cs-gets {
+  display: grid;
+  gap: 0.75rem;
+  padding: 1.1rem 1.15rem;
+  background: var(--accent-soft);
+  border-radius: var(--radius-xl);
+}
+
+.cs-gets h3 {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.cs-gets h3 svg {
+  color: var(--accent-text);
+}
+
+.cs-gets ul {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cs-gets li {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+.cs-gets li svg {
+  flex: none;
+  color: var(--accent-text);
+}
+
+/* The step: its progress, its card, and the way on. The card fills the fixed frame and
+   scrolls on its own, its links held at the bottom; progress and actions never move. */
+.cs-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  min-width: 0;
+  min-height: 0;
+  padding: 1.5rem 1.75rem 1.5rem;
+}
+
+.cs-main > .cs-progress,
+.cs-main > .cs-actions {
+  flex: none;
+}
+
+.cs-main > .cs-card {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  /* Clipped sideways: the links' ground reaches past the padding below, and on its own
+     that gave a long step a horizontal scrollbar. */
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  /* A field reached by Tab scrolls clear of the pinned links (WCAG 2.2, 2.4.11). */
+  scroll-padding-bottom: 6rem;
+}
+
+.cs-main > .cs-card > * {
+  flex: none;
+}
+
+/* The card's links stay on its bottom edge with their rule, so a long step scrolls under
+   a clean line instead of being cut at the border. */
+.cs-main > .cs-card:has(> .cs-card-foot) {
+  padding-bottom: 0;
+}
+
+.cs-main > .cs-card > .cs-card-foot {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin-top: auto;
+  padding-bottom: 1.1rem;
+  background: var(--surface);
+}
+
+/* Its ground also covers the card's side padding (below its rule), so nothing scrolling
+   underneath shows beside the links; the card clips what reaches past its edge. */
+.cs-main > .cs-card > .cs-card-foot::before {
+  position: absolute;
+  inset: 1px -2rem 0;
+  z-index: -1;
+  background: var(--surface);
+  content: "";
+}
+
+/* A soft shadow over the rule while more of the step lies below it; none at the end,
+   and none on a step that fits. Deeper in the dark theme (--guide-dim has a value for each). */
+
+@supports (animation-timeline: scroll()) {
+  .cs-main > .cs-card > .cs-card-foot {
+    animation: cs-more linear both;
+    animation-timeline: scroll(nearest block);
+  }
+
+  @keyframes cs-more {
+    0%,
+    96% {
+      box-shadow: 0 -14px 18px -14px color-mix(in srgb, var(--guide-dim) 50%, transparent);
+    }
+
+    100% {
+      box-shadow: none;
+    }
+  }
+}
+
+.cs-progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.cs-progress ol {
+  display: flex;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cs-progress li {
+  width: 64px;
+  height: 7px;
+  background: var(--border);
+  border-radius: 999px;
+}
+
+.cs-progress li.is-done {
+  background: color-mix(in srgb, var(--accent) 45%, var(--surface));
+}
+
+.cs-progress li.is-on {
+  background: var(--accent);
+}
+
+.cs-card {
+  display: grid;
+  gap: 0.9rem;
+  min-width: 0;
+  padding: 1.6rem 1.75rem 1.1rem;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
+}
+
+.cs-card h3 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-title);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.cs-help {
+  margin: -0.3rem 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
+  line-height: 1.55;
+}
+
+.cs-kicker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.cs-done,
+.cs-optional,
+.cs-waiting {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+}
+
+.cs-optional {
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+}
+
+.cs-required {
+  padding: 0.1rem 0.5rem;
+  color: var(--accent-text);
+  font-size: var(--fs-2xs);
+  font-style: normal;
+  font-weight: 600;
+  background: var(--accent-soft);
+  border-radius: 999px;
+}
+
+.cs-source {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+}
+
+/* Above the question: what it is about. */
+.cs-topic {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+/* Why it is asked opens on request. */
+.cs-why {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.cs-why summary {
+  width: fit-content;
+  color: var(--accent-text);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.cs-why p {
+  margin: 0.4rem 0 0;
+}
+
+/* Where the answer already chosen comes from. */
+.cs-tag {
+  flex: none;
+  margin-left: auto;
+  padding: 0.1rem 0.55rem;
+  color: var(--accent-text);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  background: var(--accent-soft);
+  border-radius: 999px;
+}
+
+/* The summary before anything is confirmed. */
+.cs-summary {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cs-summary li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.2rem 1rem;
+  align-items: start;
+  padding: 0.8rem 0;
+  border-top: 1px solid var(--border-subtle, var(--border));
+}
+
+.cs-summary li:first-child {
+  border-top: 0;
+}
+
+.cs-summary small {
+  grid-column: 1;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.cs-summary strong {
+  grid-column: 1;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.cs-summary p {
+  grid-column: 1;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.cs-summary .cs-link {
+  grid-column: 2;
+  grid-row: 1 / span 3;
+}
+
+.cs-unchecked {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+/* The answers as large pill options, two to a row. */
+.cs-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  min-width: 0;
+  margin: 0.25rem 0 0;
+  padding: 0;
+  border: 0;
+}
+
+/* Full statements and quotes read better one to a row. */
+.cs-options.is-long {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.cs-option {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 56px;
+  padding: 0.75rem 1.1rem;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 500;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
+}
+
+.cs-option:hover {
+  border-color: var(--accent-border, var(--accent));
+}
+
+.cs-option.is-on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.cs-option input {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.cs-other {
+  width: 100%;
+  min-height: 46px;
+  font-size: var(--fs-md);
+  border-radius: var(--radius-xl);
+}
+
+.cs-card-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  margin-top: 0.4rem;
+  padding-top: 1rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
+  border-top: 1px solid var(--border-subtle, var(--border));
+}
+
+.cs-card-links {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+}
+
+.cs-link {
+  padding: 0;
+  color: var(--accent-text);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  text-decoration: none;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.cs-link:hover {
+  text-decoration: underline;
+}
+
+.cs-panel {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+/* The questions that name the governing policy, answered from a linked document. */
+.cs-docq {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.cs-docq-item {
+  display: grid;
+  gap: 0.6rem;
+  min-width: 0;
+  margin: 0;
+  padding: 1rem 1.1rem;
+  background: var(--surface-muted, var(--surface));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+}
+
+.cs-docq-item legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  float: left;
+  width: 100%;
+  margin: 0 0 0.1rem;
+  padding: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.cs-docq-item legend + * {
+  clear: both;
+}
+
+.cs-docq .cs-option {
+  min-height: 48px;
+  overflow-wrap: anywhere;
+}
+
+.cs-docq .cs-option svg {
+  flex: none;
+  color: var(--text-secondary);
+}
+
+.cs-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+
+.cs-actions .btn,
+.cs-actions .btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-width: 104px;
+  min-height: 48px;
+  padding: 0 1.4rem;
+  font-size: var(--fs-md);
+  border-radius: var(--radius-xl);
+}
+
+/* The test plan to approve. */
+.cs-plan {
+  display: grid;
+  gap: 1rem;
+}
+
+.cs-plan-facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin: 0;
+}
+
+.cs-plan-facts > div {
+  padding: 0.65rem 0.8rem;
+  background: var(--surface-muted);
+  border-radius: var(--radius-lg);
+}
+
+.cs-plan-facts dt {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.cs-plan-facts dd {
+  margin: 0.15rem 0 0;
+  color: var(--text-strong);
+  font-size: var(--fs-title);
+  font-weight: 600;
+}
+
+.cs-empty {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.cs-holds {
+  padding: 0.75rem 0.9rem;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  background: var(--warning-soft);
+  border-radius: var(--radius-lg);
+}
+
+.cs-holds p {
+  margin: 0 0 0.35rem;
+  font-weight: 600;
+}
+
+.cs-holds ul {
+  margin: 0;
+  padding-left: 1.1rem;
+}
+
+/* Scope & Sampling inside its step panel (product owner, 11 November 2026, approved
+   preview): the frame gives the title, status and decision, so the plan's content sits
+   flat: its figures as one bordered strip divided by hairlines, and what else holds
+   evidence gathering under a section title as one bordered list. */
+.cs-embedded {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+
+.cs-embedded .cs-plan-facts {
+  gap: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+}
+
+.cs-embedded .cs-plan-facts > div {
+  padding: 0.6rem 0.9rem;
+  background: none;
+  border-radius: 0;
+}
+
+.cs-embedded .cs-plan-facts > div + div {
+  border-left: 1px solid var(--border-subtle);
+}
+
+.cs-embedded .cs-plan-facts dt {
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.cs-embedded .cs-plan-facts dd {
+  font-size: var(--fs-lg);
+}
+
+.cs-section-title {
+  margin: 0 0 0.5rem;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.cs-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+}
+
+.cs-list > li {
+  padding: 0.6rem 0.9rem;
+  color: var(--text);
+  font-size: var(--fs-md);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.cs-list > li + li {
+  border-top: 1px solid var(--border-subtle);
+}
+
+@media (max-width: 900px) {
+  /* The figures as a list, one to a line, where four across would crowd. */
+  .cs-embedded .cs-plan-facts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cs-embedded .cs-plan-facts > div {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 1rem;
+  }
+
+  .cs-embedded .cs-plan-facts > div + div {
+    border-top: 1px solid var(--border-subtle);
+    border-left: 0;
+  }
+
+  .cs-embedded .cs-plan-facts dd {
+    margin: 0;
+  }
+}
+
+/* Ready for evidence. */
+.cs-ready {
+  justify-items: start;
+  align-items: flex-start;
+}
+
+.cs-ready-mark {
+  display: inline-grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  color: var(--text-on-accent);
+  background: var(--success);
+  border-radius: 999px;
+}
+
+.cs-ready-list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cs-ready-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.cs-ready-list svg {
+  color: var(--success);
+}
+
+.cs-ready-list small {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+@media (max-width: 900px) {
+  .cs-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .cs-rail {
+    padding: 1rem 1rem 0;
+    overflow: visible;
+    border-right: 0;
+  }
+
+  /* The steps as a row of marks; the current step's name is in the progress line. */
+  .cs-steps {
+    display: flex;
+    gap: 0.4rem;
+    overflow-x: auto;
+  }
+
+  .cs-steps li:not(:last-child)::after,
+  .cs-step-name,
+  .cs-gets {
+    display: none;
+  }
+
+  .cs-steps button {
+    margin: 0;
+    padding: 0.25rem;
+  }
+
+  .cs-main {
+    padding: 1rem;
+  }
+}
+
+@media (max-width: 640px) {
+  /* The whole screen, measured by what is visible above the phone's browser bar. */
+  .record-dialog.cs-dialog:not(.cs-intro) {
+    height: 100dvh;
+    max-height: 100dvh;
+  }
+
+  .rd-icon {
+    width: 48px;
+    height: 48px;
+  }
+
+  .cs-dialog .rd-head {
+    padding: 1.1rem 1rem 1rem;
+  }
+
+  .cs-dialog .rd-head h2 {
+    font-size: var(--fs-title);
+  }
+
+  .cs-card {
+    padding: 1.1rem 1rem 0.9rem;
+  }
+
+  .cs-card h3 {
+    font-size: var(--fs-xl);
+  }
+
+  .cs-options {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cs-progress li {
+    width: 28px;
+  }
+
+  /* The bars on their own line on every step, so a longer step name never pushes the
+     card down (it moved 15px between steps when it wrapped on some). */
+  .cs-progress {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .cs-plan-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .cs-actions .btn,
+  .cs-actions .btn-secondary {
+    flex: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cs-resume,
+  .cs-steps button,
+  .cs-option {
+    transition: none;
+  }
+}
+
+/* Control Understanding as a conversation with the engagement planner (product owner,
+   9 November 2026). The planner speaks on the left, the person on the right; suggested
+   answers are one-click chips under the question, with a reply box for their own words. */
+
+.uc {
+  display: grid;
+  /* One column that never grows past the card: a long answer wraps inside it. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 0.875rem 1rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
+}
+
+.uc-head {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding-bottom: 0.625rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.uc-avatar {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 2rem;
+  height: 2rem;
+  color: var(--ai);
+  background: var(--ai-soft);
+  border: 1px solid var(--ai-border);
+  border-radius: 999px;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.uc-who {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.uc-who strong {
+  color: var(--text);
+  font-size: var(--fs-md);
+}
+
+.uc-who small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+.uc-log {
+  display: grid;
+  gap: 0.5rem;
+  max-height: min(60vh, 34rem);
+  margin: 0;
+  padding: 0.25rem 0.125rem;
+  overflow-y: auto;
+  list-style: none;
+  overscroll-behavior: contain;
+}
+
+.uc-msg {
+  max-width: min(88%, 38rem);
+  padding: 0.55rem 0.85rem;
+  color: var(--text);
+  border-radius: var(--radius-xl);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  animation: uc-in 180ms ease-out;
+}
+
+.uc-msg > p {
+  margin: 0;
+}
+
+.uc-msg > * + * {
+  margin-top: 0.4rem;
+}
+
+.uc-msg.is-agent {
+  justify-self: start;
+  background: var(--surface-sunken);
+  border-bottom-left-radius: var(--radius-sm);
+}
+
+.uc-msg.is-agent.is-past {
+  color: var(--text-secondary);
+}
+
+.uc-msg.is-person {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.625rem;
+  justify-self: end;
+  color: var(--text-on-accent);
+  background: var(--accent);
+  border-bottom-right-radius: var(--radius-sm);
+}
+
+/* Reset from the global button: no fill, shadow or fixed height. */
+.uc-change {
+  width: auto;
+  height: auto;
+  min-height: 0;
+  padding: 0;
+  color: inherit;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  font-size: var(--fs-sm);
+  text-decoration: underline;
+  opacity: 0.85;
+  cursor: pointer;
+}
+
+.uc-change:hover {
+  opacity: 1;
+}
+
+.uc-msg.is-ask {
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.uc-topic {
+  display: block;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.uc-question {
+  color: var(--text);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+}
+
+.uc-question .cs-required {
+  margin-left: 0.5rem;
+}
+
+.uc-hint {
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+}
+
+.uc-summary {
+  display: grid;
+  gap: 0.375rem;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.uc-summary li {
+  display: grid;
+  gap: 0.0625rem;
+  padding: 0.375rem 0.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.uc-summary small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+.uc-summary strong {
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.uc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.uc-systems {
+  display: grid;
+  gap: 0.375rem;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.uc-system {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.375rem 0.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.uc-system span {
+  display: grid;
+  font-weight: 600;
+}
+
+.uc-system small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+}
+
+.uc-msg.is-typing {
+  display: inline-flex;
+  gap: 0.3rem;
+  padding: 0.75rem 0.9rem;
+}
+
+.uc-msg.is-typing span[aria-hidden="true"] {
+  width: 0.4rem;
+  height: 0.4rem;
+  background: var(--text-tertiary);
+  border-radius: 999px;
+  animation: uc-dot 1s ease-in-out infinite;
+}
+
+.uc-msg.is-typing span[aria-hidden="true"]:nth-of-type(3) {
+  animation-delay: 150ms;
+}
+
+.uc-msg.is-typing span[aria-hidden="true"]:nth-of-type(4) {
+  animation-delay: 300ms;
+}
+
+.uc-reply {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.5rem;
+  justify-items: start;
+  padding-top: 0.625rem;
+  border-top: 1px solid var(--border);
+}
+
+.uc-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Long answers, such as a source's own words, read as a list: one to a row. */
+.uc-chips.is-long {
+  flex-direction: column;
+  align-items: stretch;
+  justify-self: stretch;
+}
+
+.uc-chips.is-long .uc-chip {
+  justify-content: flex-start;
+  width: 100%;
+  padding: 0.5rem 0.8rem;
+  border-radius: var(--radius-lg);
+  line-height: 1.45;
+}
+
+.uc-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  max-width: 100%;
+  /* A long answer wraps: the global button's fixed height and shadow are reset. */
+  height: auto;
+  min-height: 2rem;
+  padding: 0.3rem 0.8rem;
+  box-shadow: none;
+  color: var(--accent-text);
+  background: var(--surface);
+  border: 1px solid var(--accent-border);
+  border-radius: 999px;
+  font: inherit;
+  font-size: var(--fs-md);
+  text-align: left;
+  /* The global button keeps its label on one line; an answer wraps. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.uc-chip:hover:not(:disabled) {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.uc-chip.is-suggested {
+  border-color: var(--accent);
+  border-width: 1.5px;
+}
+
+.uc-chip:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.uc-compose {
+  display: flex;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.uc-compose input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.uc-back {
+  margin: 0 0 0.5rem;
+}
+
+@keyframes uc-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes uc-dot {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .uc-msg,
+  .uc-msg.is-typing span[aria-hidden="true"] {
+    animation: none;
+  }
+
+  .uc-chip {
+    transition: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .uc {
+    padding: 0.75rem;
+  }
+
+  /* The name keeps one line; "Review all answers" goes below it when it does not fit. */
+  .uc-head {
+    flex-wrap: wrap;
+    row-gap: 0.25rem;
+  }
+
+  .uc-who {
+    flex: 1 1 10rem;
+  }
+
+  .uc-msg {
+    max-width: 94%;
+  }
+
+  .uc-log {
+    max-height: none;
+  }
+}
+
+/* Control Understanding, reviewed one point at a time (product owner, 9 November 2026: "does
+   not feel premium or enterprise grade"; mock-up approved the same day). One header says what
+   this is, how far along and what else can be done; the understanding reads as a document on
+   the left, and the right asks one point at a time. */
+.ur {
+  display: grid;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
+  overflow: hidden;
+}
+
+.ur-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+/* The header */
+.ur-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 16px 18px;
+  align-items: center;
+  padding: 22px 26px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.ur-tile {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border-radius: var(--radius-xl);
+  background: var(--ai-soft);
+}
+
+.ur-head-text {
+  min-width: 0;
+}
+
+.ur-eyebrow,
+.ur-label {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ur-eyebrow {
+  margin-bottom: 2px;
+}
+
+.ur-head h2 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-title);
+  font-weight: 600;
+  letter-spacing: -0.012em;
+  text-wrap: balance;
+}
+
+.ur-lede {
+  max-width: 62ch;
+  margin: 3px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+}
+
+.ur-head-tools {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.ur .btn {
+  height: 38px;
+  padding: 0 16px;
+  border-radius: var(--radius-lg);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.ur .btn.btn-quiet {
+  height: 34px;
+  padding: 0 10px;
+}
+
+.ur .btn.btn-sm {
+  height: 30px;
+  padding: 0 10px;
+  font-size: var(--fs-sm);
+}
+
+.ur-progress {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: 14px;
+}
+
+.ur-segments {
+  display: flex;
+  flex: 1;
+  gap: 4px;
+}
+
+.ur-segments span {
+  flex: 1;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--border);
+  transition: background 200ms ease;
+}
+
+.ur-segments span.is-done {
+  background: var(--accent);
+}
+
+.ur-progress-label {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Where the answers start from (11 November 2026): a quiet line across the header while
+   another system's answers are proposed, with the choice of system beside it. */
+.ur-start {
+  display: flex;
+  flex-wrap: wrap;
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: 6px 14px;
+  min-width: 0;
+  padding: 8px 12px;
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  font-size: var(--fs-sm);
+}
+
+.ur-start.is-off {
+  padding: 0;
+  background: none;
+  border: 0;
+}
+
+.ur-start[aria-busy="true"] {
+  opacity: 0.75;
+}
+
+.ur-start-text {
+  display: flex;
+  flex: 1 1 280px;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  line-height: 1.45;
+}
+
+.ur-start-text svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--text-tertiary);
+}
+
+.ur-start-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.ur-start-pick select {
+  max-width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius-sm);
+  font: inherit;
+}
+
+.ur-start-pick select:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+.ur-start-link {
+  transition: color 120ms ease;
+}
+
+.ur-start-status {
+  color: var(--text-tertiary);
+}
+
+/* The two panes */
+.ur-body {
+  display: grid;
+  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+}
+
+.ur-fold {
+  display: none;
+}
+
+.ur-doc {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+  padding: 24px 26px 26px;
+  background: var(--surface-muted);
+  border-right: 1px solid var(--border-subtle);
+}
+
+.ur-doc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ur-statement {
+  margin: 0;
+  color: var(--text-strong);
+  font-family: var(--font-display);
+  font-size: var(--fs-xl);
+  line-height: 1.75;
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+}
+
+/* A slot of the statement: a link to its point, inline so a long answer wraps with the
+   sentence; its tint wraps with it. */
+.ur-slot {
+  display: inline;
+  padding: 1px 4px;
+  color: var(--text-strong);
+  background: var(--accent-soft);
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  text-decoration: none;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  cursor: pointer;
+  transition:
+    background 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.ur-slot:focus-visible {
+  outline: 0;
+  box-shadow: var(--ring);
+}
+
+.ur-slot:hover {
+  color: var(--text-strong);
+  background: var(--accent-border);
+  text-decoration: none;
+}
+
+.ur-slot.is-proposed {
+  color: var(--text);
+  background: var(--warning-soft);
+  font-weight: 500;
+  text-decoration: underline dashed var(--warning);
+  text-underline-offset: 4px;
+}
+
+.ur-slot.is-empty {
+  color: var(--text-tertiary);
+  background: var(--surface-sunken);
+  font-family: var(--font-ui);
+  font-size: var(--fs-md);
+  font-style: italic;
+  font-weight: 500;
+}
+
+.ur-slot.is-proposed:hover,
+.ur-slot.is-empty:hover {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+}
+
+/* The point being asked: tinted and underlined, which stays light when its answer runs over
+   several lines (the authentication control's settings). */
+.ur-slot.is-current,
+.ur-slot.is-current:hover {
+  color: var(--text-strong);
+  background: var(--accent-soft);
+  box-shadow: inset 0 -2px 0 var(--accent);
+  text-decoration: none;
+}
+
+/* The walkthrough as answered, under the statement (11 November 2026): one short paragraph
+   per topic in the server's order, led by a quiet topic label; each answer is a slot that
+   opens its topic to change. While a save is read again it dims and says so. */
+.ur-narrative {
+  display: grid;
+  gap: 12px;
+  margin-top: -4px;
+}
+
+.ur-narrative-topic {
+  display: grid;
+  gap: 2px;
+}
+
+.ur-narrative-label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ur-narrative-label small {
+  margin-left: auto;
+  font-size: var(--fs-2xs);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.ur-narrative-text {
+  margin: 0;
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: var(--fs-lg);
+  line-height: 1.7;
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+  transition: opacity 150ms ease;
+}
+
+.ur-narrative.is-updating .ur-narrative-text {
+  opacity: 0.7;
+}
+
+/* The IT audit specialist's review of the questions asked (B1k; approved prototype
+   brief-proto/ureview2.png): under the understanding, after a rule, in the narrative's own
+   serif. The matters not yet established are marked quietly, a warm tint that wraps with the
+   text; nothing moves. */
+.ur-review {
+  display: grid;
+  gap: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ur-review-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ur-review-tile {
+  display: inline-grid;
+  place-items: center;
+  width: 26px;
+  height: 22px;
+  color: var(--ai);
+  background: var(--ai-soft);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.ur-review-by {
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.ur-review-text {
+  margin: 0;
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: var(--fs-lg);
+  line-height: 1.7;
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+}
+
+.ur-review-mark {
+  padding: 1px 2px;
+  color: inherit;
+  background: color-mix(in srgb, var(--warning-soft) 70%, transparent);
+  border-radius: var(--radius-sm);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+.ur-review-when {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.ur-review-quiet {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+}
+
+/* A question's reason line: what cannot be written without the fact (B1l point 5). */
+.ur-blocks {
+  margin-top: -10px;
+}
+
+/* "Not known yet, proceed" (B1l point 1): an optional note under the question's foot. */
+.ur-notknown {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  animation: ur-notknown-in 200ms ease;
+}
+
+.ur-notknown label {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.ur-notknown textarea {
+  width: 100%;
+  min-height: 64px;
+  font: inherit;
+  font-size: var(--fs-md);
+}
+
+.ur-notknown-hint {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+.ur-notknown .ur-foot-actions {
+  justify-content: flex-end;
+}
+
+@keyframes ur-notknown-in {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ur-notknown {
+    animation: none;
+  }
+}
+
+/* What the understanding is ready for: the gates' own verdicts. */
+.ur-ready {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ur-ready li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
+}
+
+.ur-ready li.is-ok {
+  color: var(--text);
+}
+
+.ur-ready small {
+  margin-left: auto;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.ur-ready.is-updating small {
+  opacity: 0.7;
+}
+
+.ur-check {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 1.5px solid var(--border-control);
+  border-radius: 50%;
+  background: var(--surface);
+}
+
+.ur-ready li.is-ok .ur-check,
+.ur-check.is-ok {
+  color: var(--text-on-status);
+  background: var(--success);
+  border-color: var(--success);
+}
+
+.ur-systems {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.ur-systems input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 3px;
+  accent-color: var(--accent);
+}
+
+.ur-systems strong {
+  display: block;
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.ur-systems span span {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+/* Several other systems: each chosen on its own. */
+.ur-systems.is-many {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  cursor: default;
+}
+
+.ur-systems.is-many legend {
+  display: grid;
+  float: left;
+  gap: 2px;
+  width: 100%;
+  padding: 0;
+}
+
+.ur-systems.is-many legend > span {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.ur-systems.is-many ul {
+  display: grid;
+  clear: both;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ur-systems.is-many li label {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  margin: 0 -10px;
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.ur-systems.is-many li label:hover {
+  background: var(--surface-hover);
+}
+
+.ur-systems.is-many li label > span {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.ur-systems.is-many li strong {
+  font-size: var(--fs-md);
+}
+
+.ur-systems.is-many .ur-skip {
+  justify-self: start;
+}
+
+.ur-chip,
+.ur-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 9px;
+  color: var(--text-secondary);
+  background: var(--surface-sunken);
+  border-radius: 999px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ur-count {
+  height: 20px;
+  padding: 0 7px;
+  font-size: var(--fs-xs);
+}
+
+.ur-chip.is-accent {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+.ur-chip.is-warm {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.ur-chip.is-ok {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+/* On record: folded under the document. */
+.ur-record {
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ur-record > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+  font-weight: 600;
+  list-style: none;
+  cursor: pointer;
+}
+
+.ur-record > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ur-record > summary svg {
+  margin-left: auto;
+  color: var(--text-tertiary);
+  transform: rotate(90deg);
+  transition: transform 150ms ease;
+}
+
+.ur-record[open] > summary svg {
+  transform: rotate(-90deg);
+}
+
+.ur-record ul {
+  display: grid;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ur-record li {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 4px 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--fs-base);
+}
+
+.ur-record li:first-child {
+  border-top: 0;
+}
+
+.ur-record-q {
+  color: var(--text-secondary);
+}
+
+.ur-record-a {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  min-width: 0;
+}
+
+.ur-record-a strong {
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+
+.ur-record-a small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+.ur-record .ur-answer {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 8px;
+}
+
+/* A point that takes more than one answer, changed in place (12 November 2026): its tick
+   chips, then Save and Cancel on one line. */
+.ur-answer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.ur-record .ur-multi .ur-wt-chip {
+  min-height: 30px;
+  padding: 4px 12px;
+  font-size: var(--fs-sm);
+}
+
+/* The point being asked */
+.ur-ask {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  min-width: 0;
+  padding: 26px 28px 24px;
+  scroll-margin-top: calc(var(--header-height) + 16px);
+}
+
+.ur-step,
+.ur-point {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+.ur-step {
+  animation: ur-in 200ms ease-out;
+}
+
+@keyframes ur-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.ur-kicker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.ur-kicker:empty {
+  display: none;
+}
+
+.ur-q {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-title);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  text-wrap: balance;
+}
+
+.ur-hint {
+  max-width: 62ch;
+  margin: -8px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+}
+
+.ur-saved {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--success);
+  font-size: var(--fs-base);
+  font-weight: 500;
+}
+
+.ur-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.ur-option {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  min-height: 52px;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-xl);
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.ur-option:hover {
+  border-color: var(--accent-border);
+}
+
+.ur-option input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.ur-option input:disabled {
+  cursor: default;
+}
+
+.ur-dot {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid var(--border-control);
+  border-radius: 50%;
+}
+
+.ur-option.is-on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.ur-option.is-on .ur-dot {
+  border-color: var(--accent);
+}
+
+.ur-option.is-on .ur-dot::after {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  content: "";
+}
+
+.ur-option:has(input:focus-visible) {
+  box-shadow: var(--ring);
+}
+
+.ur-option-text {
+  min-width: 0;
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.ur-option.is-other .ur-option-text {
+  color: var(--text-secondary);
+}
+
+.ur-tag {
+  margin-left: auto;
+  color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.ur-option.is-on .ur-tag {
+  color: var(--accent-text);
+}
+
+/* An agent's question answered in place: each step of a short interview, with its own
+   question above its choices. */
+.ur-ask {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.ur-ask-q {
+  margin: 0.25rem 0 0;
+  color: var(--text);
+  font-size: var(--fs-base);
+  font-weight: 600;
+}
+
+.ur-other {
+  width: 100%;
+  height: 44px;
+  padding: 0 14px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1.5px solid var(--border-control);
+  border-radius: var(--radius-lg);
+  font: inherit;
+}
+
+.ur-other:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+.ur-why {
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ur-why summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+  font-weight: 500;
+  list-style: none;
+  cursor: pointer;
+}
+
+.ur-why summary::-webkit-details-marker {
+  display: none;
+}
+
+.ur-why summary::before {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--surface-sunken);
+  font-size: var(--fs-sm);
+  content: "+";
+}
+
+.ur-why[open] summary::before {
+  content: "\2013";
+}
+
+.ur-why p {
+  max-width: 60ch;
+  margin: 8px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+}
+
+/* Last year's answers: one decision for all of them. */
+.ur-carried {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ur-carried li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 4px 12px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+}
+
+.ur-carried li.is-done {
+  background: var(--surface-muted);
+}
+
+.ur-carried input {
+  width: 16px;
+  height: 16px;
+  margin-top: 3px;
+  accent-color: var(--accent);
+}
+
+.ur-carried-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ur-carried-q {
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+}
+
+.ur-carried strong {
+  color: var(--text-strong);
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.ur-carried small {
+  color: var(--success);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.ur-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* Why the step's Save is off, beside it (design review, 17 November 2026). */
+.ur-foot-hint {
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+.ur-foot-where {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Reset from the global button: a quiet text link. */
+.ur-skip {
+  width: auto;
+  height: auto;
+  padding: 0;
+  color: var(--text-secondary);
+  background: none;
+  border: 0;
+  box-shadow: none;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.ur-skip:hover:not(:disabled) {
+  color: var(--text-strong);
+  background: none;
+  border: 0;
+}
+
+.ur-foot-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+/* The end of the course */
+.ur-end {
+  display: grid;
+  justify-items: start;
+  gap: 16px;
+}
+
+.ur-seal {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  color: var(--success);
+  background: var(--success-soft);
+  border: 1px solid var(--success-border);
+  border-radius: 50%;
+}
+
+.ur-answers {
+  display: grid;
+  width: 100%;
+  margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+}
+
+.ur-answers div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ur-answers div:first-child {
+  border-top: 0;
+}
+
+.ur-answers dt {
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+}
+
+.ur-answers dd {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.ur-left {
+  display: grid;
+  width: 100%;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ur-left li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  font-size: var(--fs-md);
+}
+
+.ur-left li > span {
+  min-width: 0;
+}
+
+/* Walkthrough notes, in a dialog. */
+.record-dialog.ur-notes-dialog {
+  width: min(660px, 100%);
+}
+
+.ur-notes {
+  display: grid;
+  gap: 16px;
+}
+
+.ur-notes-form {
+  display: grid;
+  gap: 14px;
+}
+
+.ur-notes textarea {
+  width: 100%;
+  min-height: 170px;
+  padding: 12px 14px;
+  color: var(--text);
+  background: var(--surface-muted);
+  border: 1.5px solid var(--border-control);
+  border-radius: var(--radius-xl);
+  font: inherit;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+.ur-notes textarea:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+.ur-notes-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.ur-notes .btn {
+  height: 38px;
+  padding: 0 16px;
+  border-radius: var(--radius-lg);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.ur-reading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: auto;
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+}
+
+.ur-found {
+  display: grid;
+  gap: 14px;
+}
+
+.ur-found .ur-hint {
+  margin: 0;
+}
+
+.ur-proposals {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ur-proposals li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+}
+
+.ur-proposals input {
+  width: 16px;
+  height: 16px;
+  margin-top: 3px;
+  accent-color: var(--accent);
+}
+
+.ur-proposals label {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  cursor: pointer;
+}
+
+.ur-proposal-q {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.ur-proposals strong {
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+
+.ur-proposals small {
+  color: var(--warning);
+  font-size: var(--fs-sm);
+}
+
+.ur-proposals blockquote {
+  grid-column: 2;
+  margin: 4px 0 0;
+  padding-left: 10px;
+  color: var(--text-secondary);
+  border-left: 2px solid var(--border-strong);
+  font-family: var(--font-display);
+  font-size: var(--fs-md);
+  font-style: normal;
+  overflow-wrap: anywhere;
+}
+
+/* The walkthrough (11 November 2026): a topic's questions together, each with the control
+   for its kind. A proposed answer is selected in the agents' colours, dashed, until the
+   person touches it or saves: agent output never reads as a decision. */
+.ur-wt {
+  display: grid;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+}
+
+.ur-wt-item {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 16px 18px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ur-wt-item:first-child {
+  border-top: 0;
+}
+
+.ur-wt-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.ur-wt-q {
+  min-width: 0;
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.ur-wt-tags {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Reset from the global button: a quiet round icon button. */
+.ur-wt-info {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--text-tertiary);
+  background: none;
+  border: 0;
+  border-radius: 50%;
+  box-shadow: none;
+  transition:
+    color 120ms ease,
+    background 120ms ease;
+}
+
+.ur-wt-info:hover:not(:disabled),
+.ur-wt-info[aria-expanded="true"] {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border: 0;
+}
+
+.ur-wt-why {
+  max-width: 62ch;
+  margin: -4px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+  line-height: 1.5;
+  animation: ur-in 180ms ease-out;
+}
+
+.ur-wt-why[hidden],
+.ur-wt-quote[hidden] {
+  display: none;
+}
+
+.ur-wt-chips,
+.ur-wt-seg {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.ur-wt-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ur-wt-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  min-height: 34px;
+  padding: 6px 14px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: 999px;
+  font-size: var(--fs-base);
+  font-weight: 500;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.ur-wt-chip:hover {
+  border-color: var(--accent-border);
+}
+
+.ur-wt-chip input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.ur-wt-chip input:disabled {
+  cursor: default;
+}
+
+.ur-wt-chip:has(input:focus-visible) {
+  box-shadow: var(--ring);
+}
+
+.ur-wt-chip.is-on {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.ur-wt-box {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  color: var(--text-on-accent);
+  border: 1.5px solid var(--border-control);
+  border-radius: var(--radius-sm);
+}
+
+.ur-wt-chip.is-on .ur-wt-box {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Yes or No (product owner, 11 November 2026: "Feels cheap"): one pill-shaped track holding
+   two equal segments, the one chosen a raised thumb that slides between them. Native radios
+   underneath: the arrow keys move, and the focus ring sits on the thumb. */
+.ur-wt-seg-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  justify-self: start;
+  min-width: 0;
+}
+
+.ur-wt-seg {
+  position: relative;
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(84px, 1fr));
+  min-width: 180px;
+  padding: 2px;
+  background: var(--surface-sunken);
+  border: 0;
+  border-radius: var(--radius);
+}
+
+.ur-wt-thumb {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  left: 2px;
+  width: calc(50% - 2px);
+  background: var(--surface);
+  border: 0;
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-xs);
+  pointer-events: none;
+  transition:
+    transform 150ms ease-out,
+    opacity 150ms ease-out,
+    background 150ms ease-out,
+    border-color 150ms ease-out;
+}
+
+.ur-wt-thumb[data-at="1"] {
+  transform: translateX(100%);
+}
+
+.ur-wt-thumb.is-none {
+  opacity: 0;
+}
+
+.ur-wt-seg .ur-wt-chip {
+  z-index: 1;
+  justify-content: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 4px 14px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  transition:
+    color 120ms ease,
+    background 120ms ease;
+}
+
+.ur-wt-seg .ur-wt-chip svg {
+  flex: none;
+  opacity: 0.7;
+}
+
+.ur-wt-seg .ur-wt-chip:not(.is-on):hover {
+  color: var(--text);
+  background: var(--surface-hover);
+  border: 0;
+}
+
+.ur-wt-seg .ur-wt-chip.is-on {
+  color: var(--text-strong);
+  background: transparent;
+  border: 0;
+}
+
+.ur-wt-seg .ur-wt-chip.is-on svg {
+  opacity: 1;
+}
+
+/* Keyboard focus: on the thumb when the focused segment is chosen, else on the segment. */
+.ur-wt-seg .ur-wt-chip:has(input:focus-visible) {
+  box-shadow: none;
+}
+
+.ur-wt-seg .ur-wt-chip:has(input:focus-visible:not(:checked)) {
+  box-shadow: var(--ring);
+}
+
+.ur-wt-seg:has(input:checked:focus-visible) .ur-wt-thumb {
+  box-shadow: var(--ring);
+}
+
+/* An untouched proposal on the thumb: the agents' tint, dashed, with a word beside it. */
+.ur-wt-seg.is-proposed .ur-wt-thumb {
+  background: var(--ai-soft);
+  border: 1px dashed var(--ai);
+  box-shadow: none;
+}
+
+.ur-wt-seg.is-proposed .ur-wt-chip.is-on {
+  color: var(--ai);
+}
+
+.ur-wt-seg-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  color: var(--ai);
+  background: var(--ai-soft);
+  border-radius: 999px;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Locked: muted, and nothing reacts. */
+.ur-wt-seg:has(input:disabled) {
+  opacity: 0.5;
+}
+
+.ur-wt-seg:has(input:disabled) .ur-wt-chip:not(.is-on):hover {
+  color: var(--text-secondary);
+  background: transparent;
+}
+
+/* A proposal still untouched: the agents' colours, dashed. */
+.ur-wt-chips.is-proposed .ur-wt-chip.is-on {
+  color: var(--ai);
+  background: var(--ai-soft);
+  border-color: var(--ai);
+  border-style: dashed;
+}
+
+.ur-wt-chips.is-proposed .ur-wt-chip.is-on .ur-wt-box {
+  background: var(--ai);
+  border-color: var(--ai);
+}
+
+.ur-wt-text {
+  width: 100%;
+  min-height: 76px;
+  padding: 10px 12px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1.5px solid var(--border-control);
+  border-radius: var(--radius-lg);
+  font: inherit;
+  font-size: var(--fs-md);
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.ur-wt-text:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+/* "Other" (11 November 2026): the person's own words, right below the chips while Other is
+   chosen. The rule reads as a quiet hint until they have typed or tried to save. */
+.ur-wt-other {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  max-width: 62ch;
+  animation: ur-in 180ms ease-out;
+}
+
+.ur-wt-other-label {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.ur-wt-other-input {
+  height: 40px;
+  border-radius: var(--radius-lg);
+}
+
+.ur-wt-other-input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.ur-wt-other-hint {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+}
+
+.ur-wt-other-hint.is-error {
+  color: var(--danger);
+}
+
+.ur-wt-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  min-width: 0;
+  font-size: var(--fs-sm);
+}
+
+.ur-wt-na {
+  margin-left: auto;
+}
+
+.ur-wt-quote {
+  margin: 0;
+  padding-left: 10px;
+  color: var(--text-secondary);
+  border-left: 2px solid var(--border-strong);
+  font-family: var(--font-display);
+  font-size: var(--fs-base);
+  font-style: normal;
+  overflow-wrap: anywhere;
+  animation: ur-in 180ms ease-out;
+}
+
+.ur-wt-onfile,
+.ur-wt-left {
+  margin: -6px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+}
+
+/* On record: the walkthrough's answers under their topic. */
+.ur-record-topic {
+  display: grid;
+  padding-top: 10px;
+}
+
+.ur-record-topic h4 {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ur-record .ur-record-topic ul {
+  margin-top: 4px;
+}
+
+/* A step whose work carries its own header. */
+.stp-bare {
+  min-width: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ur-step {
+    animation: none;
+  }
+
+  .ur-wt-why,
+  .ur-wt-quote,
+  .ur-wt-other {
+    animation: none;
+  }
+
+  .ur-wt-thumb,
+  .ur-wt-seg .ur-wt-chip,
+  .ur-start-link {
+    transition: none;
+  }
+
+  .ur-segments span,
+  .ur-slot,
+  .ur-narrative-text,
+  .ur-option,
+  .ur-wt-chip,
+  .ur-wt-info,
+  .ur-systems.is-many li label,
+  .ur-record > summary svg,
+  .ur-fold svg {
+    transition: none;
+  }
+}
+
+/* Phone: the understanding folds above the question, and the step's actions stay in reach. */
+@media (max-width: 760px) {
+  .ur-head {
+    grid-template-columns: auto minmax(0, 1fr);
+    padding: 18px 18px 16px;
+  }
+
+  .ur-head-tools {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+
+  .ur-tile {
+    align-self: start;
+    width: 44px;
+    height: 44px;
+    border-radius: var(--radius-xl);
+  }
+
+  .ur-head h2 {
+    font-size: var(--fs-xl);
+  }
+
+  .ur-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* Reset from the global button: a full-width disclosure row. */
+  .ur-fold {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    height: auto;
+    padding: 14px 18px;
+    color: var(--text);
+    background: var(--surface-muted);
+    border: 0;
+    border-bottom: 1px solid var(--border-subtle);
+    border-radius: 0;
+    box-shadow: none;
+    text-align: left;
+  }
+
+  .ur-fold:hover {
+    color: var(--text);
+    background: var(--surface-hover);
+    border: 0;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .ur-fold .ur-label {
+    flex: 1;
+  }
+
+  .ur-fold svg {
+    color: var(--text-tertiary);
+    transform: rotate(90deg);
+    transition: transform 150ms ease;
+  }
+
+  .ur-fold[aria-expanded="true"] svg {
+    transform: rotate(-90deg);
+  }
+
+  .ur-doc {
+    display: none;
+    padding: 4px 18px 18px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .ur-doc.is-open {
+    display: grid;
+  }
+
+  .ur-doc .ur-doc-head .ur-label {
+    display: none;
+  }
+
+  .ur-statement {
+    font-size: var(--fs-lg);
+  }
+
+  .ur-narrative-text {
+    font-size: var(--fs-md);
+  }
+
+  .ur-ask {
+    padding: 20px 18px 0;
+  }
+
+  .ur-options {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ur-wt-item {
+    padding: 14px;
+  }
+
+  .ur-wt-na {
+    margin-left: 0;
+  }
+
+  .ur-q {
+    font-size: var(--fs-xl);
+  }
+
+  .ur-foot {
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
+    margin: 0 -18px;
+    padding: 12px 18px calc(12px + env(safe-area-inset-bottom, 0px));
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    box-shadow: none;
+  }
+
+  .ur-foot-where {
+    width: 100%;
+  }
+
+  .ur-foot-where:empty {
+    display: none;
+  }
+
+  .ur-foot-actions {
+    flex: 1;
+  }
+
+  .ur-foot-actions .btn {
+    flex: 1;
+  }
+
+  .ur-end {
+    padding-bottom: 20px;
+  }
+
+  .ur-record li {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Step 01: the control's details from the client's RCM, with what is missing asked one at a
+   time (10 November 2026). It shares Control Understanding's layout (.ur); these are its own
+   parts: the record, the owner's fields and the offer to other systems. */
+.cd-record {
+  display: grid;
+  margin: 0;
+}
+
+.cd-record > div {
+  display: grid;
+  grid-template-columns: minmax(0, 0.42fr) minmax(0, 1fr);
+  gap: 4px 14px;
+  padding: 11px 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.cd-record > div:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.cd-record dt {
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+}
+
+.cd-record dd {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  min-width: 0;
+  margin: 0;
+}
+
+.cd-value {
+  min-width: 0;
+  color: var(--text-strong);
+  font-family: var(--font-display);
+  font-size: var(--fs-lg);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.cd-record > div.is-current {
+  margin: 0 -10px;
+  padding-inline: 10px;
+  border-radius: var(--radius-lg);
+  box-shadow: inset 0 0 0 2px var(--accent);
+  background: var(--surface);
+}
+
+.cd-record > div.is-current + div {
+  border-top-color: transparent;
+}
+
+.cd-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.cd-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cd-field > span {
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+  font-weight: 600;
+}
+
+.cd-field input {
+  width: 100%;
+  height: 44px;
+  padding: 0 14px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1.5px solid var(--border-control);
+  border-radius: var(--radius-lg);
+  font: inherit;
+}
+
+.cd-field input:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+.cd-field input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.cd-offer {
+  padding: 12px 14px;
+}
+
+/* The owner suggested from the other controls on the system (11 November 2026): marked as a
+   proposal in the agent's colours, never as recorded, until the server confirms the save. */
+.cd-suggest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--text);
+  background: var(--ai-soft);
+  border: 1px solid var(--ai-border);
+  border-radius: var(--radius-lg);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  animation: cd-suggest-in 200ms ease-out;
+}
+
+@keyframes cd-suggest-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.cd-field input.is-suggested {
+  background: var(--ai-soft);
+}
+
+.cd-field input {
+  transition: background-color 150ms ease;
+}
+
+.cd-apply {
+  padding: 12px 14px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cd-suggest {
+    animation: none;
+  }
+
+  .cd-field input {
+    transition: none;
+  }
+}
+
+.cd-readonly {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-lg);
+  background: var(--surface-sunken);
+}
+
+.cd-more {
+  margin-top: 16px;
+}
+
+@media (max-width: 760px) {
+  .cd .ur-doc {
+    display: grid;
+    order: 2;
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  /* The question first on a phone; the record follows it. */
+  .cd .ur-ask {
+    order: 1;
+    padding-bottom: 20px;
+  }
+
+  .cd-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cd-record > div {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* The authentication control's sign-in settings, asked by how users sign in (10 November
+   2026): where the settings come from, and the sentence they compose. */
+.au-basis {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  font-size: var(--fs-base);
+}
+
+.au-basis p {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+
+.au-basis.is-none {
+  display: block;
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: transparent;
+}
+
+.au-composed {
+  max-width: 62ch;
+  margin: -6px 0 0;
+  color: var(--text-strong);
+  font-family: var(--font-display);
+  font-size: var(--fs-lg);
+  line-height: 1.55;
+}
+
+.au-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 10px;
+}
+
+/* The agents' new question while the reviewer agent checks its wording (14 November 2026). */
+.ur-checking {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.5rem 0 0;
+}
+
+/* The understanding complete once (B1j): the time it was recorded, and the way on. */
+.ur-complete {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  width: 100%;
+  padding: 12px 14px;
+  background: var(--success-soft);
+  border: 1px solid var(--success-border);
+  border-radius: var(--radius-xl);
+}
+
+.ur-complete p {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--success);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.ur-once {
+  margin: 0;
+}
+
+/* The understanding as a document (prototype approved 17 November 2026): the statement as
+   the summary, the key facts as a strip, each walkthrough topic as a labelled section, and the
+   answers marked with a quiet underline in place of a shaded box, dashed where carried from
+   last year. The same answers as a table of facts and their sources. */
+.ur-doc {
+  background: var(--surface);
+}
+
+.ud-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px 10px;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+.ud-confirmed {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--success);
+  font-weight: 500;
+}
+
+.ud-views {
+  display: inline-flex;
+  gap: 2px;
+  width: fit-content;
+  min-width: 0;
+  margin: 0;
+  padding: 2px;
+  background: var(--surface-sunken);
+  border: 0;
+  border-radius: var(--radius);
+}
+
+.ud-views button {
+  padding: 4px 11px;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.ud-views button:hover {
+  color: var(--text-strong);
+}
+
+.ud-views button[aria-pressed="true"] {
+  color: var(--text-strong);
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+}
+
+.ud-views button:focus-visible {
+  outline: 0;
+  box-shadow: var(--ring);
+}
+
+/* An answer on record, in place: underlined, opens its point. */
+.ur-doc .ur-slot.is-filled {
+  padding: 0;
+  color: var(--text-strong);
+  background: none;
+  font-weight: 500;
+  text-decoration: underline;
+  text-decoration-color: var(--accent-border);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 4px;
+  border-radius: 3px;
+}
+
+.ur-doc .ur-slot.is-filled:hover {
+  background: var(--accent-soft);
+  text-decoration-color: var(--accent);
+}
+
+.ur-doc .ur-slot.is-prior {
+  text-decoration-style: dashed;
+}
+
+.ur-doc .ur-slot.is-filled.is-current,
+.ur-doc .ur-slot.is-filled.is-current:hover {
+  background: var(--accent-soft);
+  text-decoration-color: var(--accent);
+}
+
+/* Each row of facts is filled edge to edge, whatever their number: a fact grows into the
+   space, so no empty cell shows. */
+.ud-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  background: var(--border-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.ud-fact {
+  flex: 1 1 200px;
+  min-width: 0;
+  padding: 9px 13px;
+  background: var(--surface);
+}
+
+.ud-fact dt {
+  color: var(--text-tertiary);
+  text-wrap: balance;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+}
+
+.ud-fact dd {
+  margin: 2px 0 0;
+  color: var(--text-strong);
+  font-size: var(--fs-base);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.ud-sections {
+  gap: 0;
+  margin-top: 0;
+}
+
+.ud-section {
+  display: grid;
+  grid-template-columns: minmax(120px, 150px) minmax(0, 1fr);
+  gap: 4px 18px;
+  padding: 14px 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ud-section:first-of-type {
+  padding-top: 2px;
+  border-top: 0;
+}
+
+.ud-section-label {
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  margin: 0;
+}
+
+.ud-section-label strong {
+  color: var(--text-strong);
+  font-size: var(--fs-base);
+  font-weight: 600;
+}
+
+.ud-section-label small {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.ud-sections .ur-narrative-text {
+  max-width: 64ch;
+  font-family: var(--font-ui);
+  font-size: var(--fs-md);
+  line-height: 1.7;
+}
+
+.ud-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin: 0;
+  padding-top: 12px;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ud-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ud-swatch {
+  display: inline-block;
+  width: 20px;
+  border-bottom: 2px solid var(--accent-border);
+}
+
+.ud-swatch.is-prior {
+  border-bottom-style: dashed;
+}
+
+.ud-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.ud-table {
+  width: 100%;
+  font-size: var(--fs-base);
+  border-collapse: collapse;
+}
+
+.ud-table th {
+  padding: 8px 12px;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
+  background: var(--surface-muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.ud-table td {
+  padding: 9px 12px;
+  color: var(--text-secondary);
+  vertical-align: top;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.ud-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.ud-table .ud-answer strong {
+  color: var(--text-strong);
+  font-weight: 500;
+}
+
+.ud-table .ud-group th {
+  padding-top: 12px;
+  color: var(--text-secondary);
+  letter-spacing: 0;
+  text-transform: none;
+  font-size: var(--fs-sm);
+}
+
+.ud-source {
+  display: inline-flex;
+  padding: 1px 8px;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  white-space: nowrap;
+  background: var(--surface-sunken);
+  border-radius: 999px;
+}
+
+.ud-source.is-prior {
+  color: var(--ai);
+  background: var(--ai-soft);
+}
+
+.ud-change {
+  width: 1%;
+  text-align: right;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .ud-section {
+    grid-template-columns: 1fr;
+  }
+
+  .ud-fact dd {
+    white-space: normal;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ud-views button {
+    transition: none;
+  }
+}
+
+/* The document responds to its own width, not the window's: the drawer gives it a narrow
+   column beside the question. Narrow, each section's label sits over its text and each fact
+   is a compact row, its change beside its point. */
+.ur-doc {
+  container-type: inline-size;
+}
+
+@container (max-width: 600px) {
+  .ud-section {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .ud-section-label {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 8px;
+  }
+
+  .ud-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .ud-table tbody tr:not(.ud-group) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 2px 12px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .ud-table tbody tr:not(.ud-group):last-child {
+    border-bottom: 0;
+  }
+
+  .ud-table tbody tr:not(.ud-group) td {
+    padding: 0;
+    border-bottom: 0;
+  }
+
+  .ud-table tbody tr:not(.ud-group) td:first-child {
+    grid-column: 1;
+    grid-row: 1;
+    font-size: var(--fs-sm);
+  }
+
+  .ud-table tbody tr:not(.ud-group) td.ud-change {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+    align-self: start;
+    width: auto;
+    margin: -3px -6px 0 0;
+  }
+
+  .ud-table tbody tr:not(.ud-group) td.ud-answer {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .ud-table tbody tr:not(.ud-group) td:nth-child(3) {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    margin-top: 2px;
+  }
+
+  .ud-table .ud-group,
+  .ud-table .ud-group th {
+    display: block;
+  }
+}
+
+/* A fact's Edit: quiet, the row's own action, shown where the pointer or the focus is (always
+   on a touch screen); the fact being edited on the right is marked (17 November 2026: the bold
+   "Change" on every row was the loudest thing in the table). */
+.ud-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  color: var(--text-tertiary);
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity 120ms ease,
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.ud-table tbody tr:hover .ud-edit,
+.ud-table tbody tr:focus-within .ud-edit,
+.ud-table tbody tr.is-open .ud-edit {
+  opacity: 1;
+}
+
+.ud-edit:hover {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+}
+
+.ud-edit:focus-visible {
+  outline: 0;
+  opacity: 1;
+  box-shadow: var(--ring);
+}
+
+@media (hover: none) {
+  .ud-edit {
+    opacity: 1;
+  }
+}
+
+.ud-table tbody tr {
+  transition: background 120ms ease;
+}
+
+.ud-table tbody tr:not(.ud-group):hover {
+  background: var(--surface-muted);
+}
+
+.ud-table tbody tr.is-open,
+.ud-table tbody tr.is-open:hover {
+  background: var(--accent-soft);
+  box-shadow: none;
+}
+
+.ud-table tbody tr.is-open .ud-edit {
+  color: var(--accent-text);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ud-edit,
+  .ud-table tbody tr {
+    transition: none;
+  }
+}
+
+/* The statement in the serif's regular weight; its answers carry the emphasis. */
+.ur-doc .ur-statement {
+  font-weight: 400;
+}
+
+.ur-doc .ur-statement .ur-slot.is-filled {
+  font-weight: 600;
+}
+
+.ud-edit {
+  min-height: 24px;
+}
+
+/* The understanding, simple and clean (option C, approved 17 November 2026: "more simple and
+   clean"; the serif, the bold answers and the underlines read as odd). One typeface at the
+   product's text size; the summary, then each topic as one closed line. An answer is part of
+   its sentence: marked only while the pointer or the focus is in the document. */
+.ur-doc .ur-statement {
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--fs-md);
+  font-weight: 400;
+  line-height: 1.7;
+}
+
+.ur-doc .ur-slot.is-filled,
+.ur-doc .ur-statement .ur-slot.is-filled {
+  color: var(--text-strong);
+  font-weight: 400;
+  text-decoration: none;
+}
+
+.ur-doc:hover .ur-slot.is-filled,
+.ur-doc:focus-within .ur-slot.is-filled {
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+}
+
+.ur-doc .ur-slot.is-filled:hover,
+.ur-doc .ur-slot.is-filled.is-current {
+  background: var(--accent-soft);
+  text-decoration-color: var(--accent);
+}
+
+@media (hover: none) {
+  .ur-doc .ur-slot.is-filled {
+    text-decoration: underline;
+    text-decoration-color: var(--border-strong);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 4px;
+  }
+}
+
+.ud-sections {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.ud-topic {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ud-topic > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 0;
+  color: var(--text-strong);
+  font-size: var(--fs-base);
+  font-weight: 500;
+  list-style: none;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.ud-topic > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ud-topic > summary:focus-visible {
+  outline: 0;
+  box-shadow: var(--ring);
+}
+
+.ud-topic > summary > svg {
+  flex: none;
+  color: var(--text-tertiary);
+  transition: transform 160ms ease;
+}
+
+.ud-topic[open] > summary > svg {
+  transform: rotate(90deg);
+}
+
+.ud-topic > summary small {
+  margin-left: auto;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+  font-weight: 400;
+}
+
+.ud-topic .ur-narrative-text,
+.ud-sections .ud-topic .ur-narrative-text {
+  max-width: none;
+  padding: 0 0 12px 23px;
+  color: var(--text-secondary);
+  font-family: var(--font-ui);
+  font-size: var(--fs-md);
+  line-height: 1.7;
+}
+
+.ud-hint {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ud-topic > summary > svg {
+    transition: none;
+  }
+}
+
+/* Design review of the simplified narrative (17 November 2026). */
+.ur-doc .ur-slot.is-filled:focus-visible,
+.ur-doc .ur-slot.is-filled.is-current:focus-visible {
+  box-shadow: var(--ring);
+}
+
+.ud-topic .ur-narrative-text,
+.ud-sections .ud-topic .ur-narrative-text {
+  color: var(--text);
+}
+
+.ur-doc:hover .ur-slot.is-filled,
+.ur-doc:focus-within .ur-slot.is-filled {
+  text-decoration-style: dotted;
+}
+
+@media (hover: none) {
+  .ur-doc .ur-slot.is-filled {
+    text-decoration-style: dotted;
+  }
+}
+
+/* A point not answered yet: plain, like the paragraph it sits in. */
+.ur-doc .ur-slot.is-empty,
+.ur-doc .ur-slot.is-proposed {
+  padding: 0 2px;
+  font-size: inherit;
+  border-radius: 2px;
+}
+
+.ur-doc .ur-slot.is-empty.is-current,
+.ur-doc .ur-slot.is-proposed.is-current {
+  box-shadow: none;
+  text-decoration: underline;
+  text-decoration-color: var(--accent);
+  text-underline-offset: 4px;
+}
+
+.ud-topic > summary {
+  margin-inline: -6px;
+  padding-inline: 6px;
+}
+
+/* shadcn/ui sweep: the approval sits right under the decision; its comment beside it. */
+.cs-plan {
+  display: flex;
+  flex-direction: column;
+}
+
+.cs-plan > .pl-review-actions,
+.cs-plan > :has(.pl-actions-buttons) {
+  order: -1;
+}
+
+.cs-plan .pl-actions-buttons {
+  justify-content: flex-start;
+}
+
+.cs-plan .pl-approve {
+  display: inline-flex;
+  flex-direction: row-reverse;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* On a phone the decisions stack full width, the approval first (design review,
+   17 November 2026). */
+@media (max-width: 640px) {
+  .cs-plan .pl-review-actions .pl-actions-buttons {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .cs-plan .pl-review-actions .pl-approve {
+    order: -1;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .cs-plan .pl-review-actions .pl-actions-buttons .btn {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+.cs-plan-facts > div {
+  background: var(--surface);
+  border: 1px solid var(--border);
+}

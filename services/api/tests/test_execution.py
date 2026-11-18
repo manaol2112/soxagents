@@ -5,13 +5,12 @@ from uuid import UUID, uuid4
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
-from support import Database
+from support import Database, unrestricted
 
 from ai_workforce_api.approvals import payload_hash
 from ai_workforce_api.auth import token_hash
 from ai_workforce_api.db import connect, transaction
 from ai_workforce_api.main import create_app
-from ai_workforce_api.migrate import apply_migrations, migrations_dir
 from ai_workforce_api.settings import Settings
 
 
@@ -203,9 +202,10 @@ def test_closed_approvals_do_not_perform_an_action(migrated: Database) -> None:
 
 
 @pytest.fixture
-def migrated(empty_database: Database) -> Database:
-    apply_migrations(empty_database.url, migrations_dir())
-    return empty_database
+def migrated(migrated_database: Database) -> Database:
+    # Cloned from the session's migrated template (conftest): the state apply_migrations
+    # produces, without running the migrations again for every test.
+    return migrated_database
 
 
 def _approved(
@@ -272,6 +272,8 @@ def _seed_org(connection: psycopg.Connection[Any], slug: str) -> dict[str, Any]:
             (name, name),
         )
         organization = cursor.fetchone()
+        assert organization is not None
+        unrestricted(cursor, organization[0])
         cursor.execute(
             "INSERT INTO users (email, display_name) VALUES (%s, %s) RETURNING id",
             (email, email),

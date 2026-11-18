@@ -1,0 +1,7 @@
+Access request REQ-6603
+Requested for: Ines Duarte (u0603)
+Application: SAP ERP PRD; role requested: AR Clerk
+Requested by Ines Duarte on 2027-04-01
+
+Approval record
+- Helen Cho, application owner: approved AR Clerk in SAP ERP PRD on 2027-04-14 11:00

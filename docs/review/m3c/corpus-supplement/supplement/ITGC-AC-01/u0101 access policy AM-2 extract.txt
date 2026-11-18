@@ -1,0 +1,3 @@
+Access management policy AM-2 (extract), section 4
+Approval of new access: the user's line manager approves every request. The application owner also approves a privileged role: any role whose name ends in Admin.
+Other roles need the line manager's approval only.

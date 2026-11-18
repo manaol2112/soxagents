@@ -1,7 +1,17 @@
 import { cookies } from "next/headers";
-
+import { parseAnalyses, parseReviews } from "./analysis-model";
 import {
-  DETAIL_TABS,
+  parseConclusionNotice,
+  parseControlConclusion,
+} from "./control-conclusion-model";
+import { parseContext } from "./control-context-model";
+import { parseActivity } from "./control-workspace-model";
+import {
+  parseDesignConclusion,
+  parseDesignConclusionNotice,
+} from "./design-conclusion-model";
+import type { ControlFiles } from "./engagement-model";
+import {
   EMPTY_ENGAGEMENT,
   type EngagementState,
   parseControls,
@@ -11,60 +21,359 @@ import {
   parsePlan,
   QUEUES,
 } from "./engagement-model";
+import { parseAssurance } from "./evidence-assurance-model";
+import { parseChangeNotice } from "./evidence-change-model";
+import { parseInstances } from "./evidence-dialog-model";
+import { parseFindings } from "./evidence-findings-model";
+import { parseEvidenceMapping } from "./evidence-mapping-model";
+import { parseRegister } from "./evidence-model";
+import { parsePlan as parseEvidencePlan } from "./evidence-plan-model";
+import { parseAutomation } from "./execution-model";
+import { parseExports } from "./exports-model";
+import { parseNextSteps } from "./home-model";
+import { parseImpact } from "./impact-model";
 import { apiGet, sessionToken } from "./load-workspace";
+import { parseMasterPlan, parsePhaseProgress } from "./planning-model";
+import { parseQueue } from "./queue-model";
+import { parseRequestDetails } from "./request-details-model";
+import {
+  parseReviews as parseControlReviews,
+  parseReviewNotice,
+  reviewFor,
+} from "./review-model";
+import { parseRounds } from "./round-model";
+import { parseSheetNotice, parseSheets, sheetFor } from "./sheet-model";
 import type { ShellModel } from "./shell-model";
+import { parseSignoffs, receipts } from "./signoff-model";
+import { parseTestBasis } from "./test-basis-model";
 import { parseTestNotice, parseTests } from "./testing-model";
+import {
+  parseWorkpaperNotice,
+  parseWorkpapers,
+  type Workpaper,
+} from "./workpaper-model";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const STAGE = /^[A-Z_]{1,30}$/;
+const SORTS = [
+  "control",
+  "stage",
+  "attention",
+  "owner",
+  "application",
+  "due",
+] as const;
 
 /** Load only what the engagement page being shown needs. */
+/** A filter's values from the address: names, or "" for "none"; at most twenty. */
+function list(value: readonly string[] | null | undefined): string[] {
+  return [...new Set((value ?? []).map((item) => item.slice(0, 120)))].slice(
+    0,
+    20,
+  );
+}
+
 export async function loadEngagement(
   model: ShellModel,
   query: {
     category: string | null;
-    stage: string | null;
+    stage: string[] | null;
+    app?: string[] | null;
+    area?: string[] | null;
+    owner?: string[] | null;
+    key?: string | null;
     q: string | null;
     control: string | null;
     deficiency: string | null;
     notice: string | null;
     queue?: string | null;
     tab?: string | null;
+    /** The guided workspace's step (?step=), when a link names one. */
+    step?: string | null;
     group?: string | null;
+    sort?: string | null;
+    layout?: string | null;
+    workpaper?: string | null;
+    workpaperVersion?: string | null;
+    ev?: string | null;
+    request?: string | null;
+    /** A file to open in the evidence dialog (?file=). */
+    file?: string | null;
+    /** The queue filter on Home (?filter=). */
+    filter?: string | null;
   },
 ): Promise<EngagementState> {
   if (model.status !== "ready" || model.selectedProject === null) {
     return EMPTY_ENGAGEMENT;
   }
   const section = model.section;
+  // The Testing destination (M2b) reads the controls, sheets, rounds, reviews and the
+  // queue the guided workspace reads, for every control.
+  const testing = section === "testing" || section === "review";
+  // The deficiencies page shows each deficiency's remediation history from the rounds,
+  // sheets and reviews of its control.
+  const remediation = section === "deficiencies";
   const wanted = {
     dashboard: section === "overview",
-    controls: section === "controls" || section === "deficiencies",
+    // Settings › AI workforce shows the engagement's open work by agent (docs/home-plan.md, D5).
+    agentWork: section === "agents",
+    // Planning's Prior year tab assigns items to the engagement's controls.
+    // Controls shows where each control's plan and testing stand.
+    controls:
+      section === "controls" ||
+      section === "register" ||
+      section === "deficiencies" ||
+      section === "planning" ||
+      testing,
     plan:
       section === "plan" ||
       section === "timeline" ||
       (section === "controls" && query.control !== null),
     deficiencies: section === "deficiencies" || section === "controls",
+    // Reports › Status and reports lists the engagement's exports and reports.
+    exports: section === "reports",
   };
   if (!Object.values(wanted).some(Boolean)) {
     return EMPTY_ENGAGEMENT;
   }
   const session = sessionToken((await cookies()).get("aw_session")?.value);
   const base = `/organizations/${model.organization.id}/projects/${model.selectedProject.id}`;
-  const [dashboard, controls, plan, deficiencies, tests] = await Promise.all([
-    wanted.dashboard ? apiGet(`${base}/workspace/dashboard`, session) : null,
+  // An open control shows its evidence files and what the agents made of them.
+  const open = section === "controls" && query.control !== null;
+  const viewing =
+    query.workpaper != null &&
+    UUID.test(query.workpaper) &&
+    query.workpaperVersion != null &&
+    /^\d{1,5}$/.test(query.workpaperVersion)
+      ? { id: query.workpaper, version: Number(query.workpaperVersion) }
+      : null;
+  const [
+    dashboard,
+    nextSteps,
+    impact,
+    automation,
+    work,
+    controls,
+    plan,
+    deficiencies,
+    tests,
+    sheets,
+    rounds,
+    register,
+    analyses,
+    reviews,
+    papers,
+    shownPaper,
+    controlReviews,
+    context,
+    evidencePlan,
+    activity,
+    testBasis,
+    masterPlan,
+    phaseProgress,
+    evidenceMapping,
+    evidenceFindings,
+    evidenceAssurance,
+    walkthroughInstances,
+    exportsListed,
+    designConclusion,
+    controlConclusion,
+  ] = await Promise.all([
+    wanted.dashboard || wanted.agentWork
+      ? apiGet(`${base}/workspace/dashboard`, session)
+      : null,
+    wanted.dashboard ? apiGet(`${base}/next-steps`, session) : null,
+    open ? apiGet(`${base}/impact`, session) : null,
+    section === "controls" || testing
+      ? apiGet(`${base}/workspace/automation`, session)
+      : null,
+    wanted.dashboard ||
+    section === "controls" ||
+    section === "console" ||
+    testing
+      ? apiGet(`${base}/queue`, session)
+      : null,
     wanted.controls ? apiGet(`${base}/workspace/controls`, session) : null,
     wanted.plan ? apiGet(`${base}/workspace/plan`, session) : null,
     wanted.deficiencies ? apiGet(`${base}/deficiencies`, session) : null,
-    section === "controls" ? apiGet(`${base}/control-tests`, session) : null,
+    section === "controls" || testing || remediation
+      ? apiGet(`${base}/control-tests`, session)
+      : null,
+    section === "controls" || testing || remediation
+      ? apiGet(`${base}/test-sheets`, session)
+      : null,
+    section === "controls" || testing || remediation
+      ? apiGet(`${base}/test-rounds`, session)
+      : null,
+    open ? apiGet(`${base}/evidence-register`, session) : null,
+    open ? apiGet(`${base}/evidence-analyses`, session) : null,
+    open ? apiGet(`${base}/evidence-reviews`, session) : null,
+    open
+      ? apiGet(`${base}/workpapers?control_id=${query.control}`, session)
+      : null,
+    open && viewing !== null
+      ? apiGet(
+          `${base}/workpapers/${viewing.id}/versions/${viewing.version}`,
+          session,
+        )
+      : null,
+    section === "controls" || testing || remediation
+      ? apiGet(`${base}/reviews`, session)
+      : null,
+    open ? apiGet(`${base}/controls/${query.control}/context`, session) : null,
+    open
+      ? apiGet(`${base}/controls/${query.control}/evidence-plan`, session)
+      : null,
+    open ? apiGet(`${base}/controls/${query.control}/activity`, session) : null,
+    open
+      ? apiGet(`${base}/controls/${query.control}/test-basis`, session)
+      : null,
+    // The Plan step reviews the plan in place (M2d): the master plan, and the phases
+    // for its release strip.
+    open
+      ? apiGet(`${base}/controls/${query.control}/master-plan`, session)
+      : null,
+    open ? apiGet(`${base}/phase-progress`, session) : null,
+    // The Test step's evidence mapping (M3b): the latest run, read only.
+    open
+      ? apiGet(`${base}/controls/${query.control}/evidence-mapping`, session)
+      : null,
+    // The evidence workspace's findings (docs/evidence-intelligence.md, increment 2).
+    open
+      ? apiGet(`${base}/controls/${query.control}/evidence-findings`, session)
+      : null,
+    // The assurance chain's check of each D&I file (docs/evidence-assurance.md).
+    open
+      ? apiGet(`${base}/controls/${query.control}/evidence-assurance`, session)
+      : null,
+    // The walkthrough instances picked in the evidence dialog (31 October 2026).
+    open
+      ? apiGet(
+          `${base}/controls/${query.control}/walkthrough-instances`,
+          session,
+        )
+      : null,
+    wanted.exports ? apiGet(`${base}/exports`, session) : null,
+    // The D&I conclusion a reviewer signs, which clears OE (migration 0143).
+    open
+      ? apiGet(`${base}/design-conclusions/${query.control}`, session)
+      : null,
+    // The control's proposed conclusion and its deficiencies' ratings (migration 0144).
+    open
+      ? apiGet(`${base}/control-conclusions/${query.control}`, session)
+      : null,
   ]);
+  // The request opened on the control's Evidence tab, with its details for review.
+  const focus =
+    open && query.request != null && UUID.test(query.request)
+      ? query.request
+      : null;
+  const focused =
+    focus !== null
+      ? await apiGet(`${base}/pbc-requests/${focus}/details`, session)
+      : null;
   const ok = (result: { status: number; body: unknown } | null) =>
     result !== null && result.status === 200 ? result.body : undefined;
+  const parsedSheets =
+    ok(sheets) === undefined ? null : parseSheets(ok(sheets));
+  const parsedReviews =
+    ok(controlReviews) === undefined
+      ? null
+      : parseControlReviews(ok(controlReviews));
+  // The open control's sign-offs on record (its interim sheet's and its own review's):
+  // the receipts the guided workspace shows.
+  const openSheet =
+    open && query.control !== null
+      ? sheetFor(parsedSheets, query.control)
+      : null;
+  const openReview =
+    open && query.control !== null
+      ? reviewFor(parsedReviews, query.control)
+      : null;
+  const [sheetSignoffs, reviewSignoffs] = await Promise.all([
+    openSheet !== null
+      ? apiGet(`${base}/test-sheets/${openSheet.id}/signoffs`, session)
+      : null,
+    openReview !== null
+      ? apiGet(`${base}/reviews/${openReview.id}/signoffs`, session)
+      : null,
+  ]);
   return {
+    focusRequest:
+      ok(focused) === undefined ? null : parseRequestDetails(ok(focused)),
     tests: ok(tests) === undefined ? null : parseTests(ok(tests)),
     testNotice: section === "controls" ? parseTestNotice(query.notice) : null,
+    sheets: parsedSheets,
+    signoffs: open
+      ? receipts(
+          parseSignoffs(ok(sheetSignoffs) ?? [], "TESTING"),
+          parseSignoffs(ok(reviewSignoffs) ?? [], "REVIEW"),
+        )
+      : null,
+    rounds: ok(rounds) === undefined ? null : parseRounds(ok(rounds)),
+    exports:
+      ok(exportsListed) === undefined ? null : parseExports(ok(exportsListed)),
+    sheetNotice: section === "controls" ? parseSheetNotice(query.notice) : null,
+    workpapers: withVersion(ok(papers), ok(shownPaper)),
+    workpaperNotice: open ? parseWorkpaperNotice(query.notice) : null,
+    workpaperViewing: viewing,
+    designConclusion:
+      ok(designConclusion) === undefined
+        ? null
+        : // Who is reading is the session's own user: section 7 knows the reviewer a
+          // request names without the review notes' route (section 3.8).
+          parseDesignConclusion(ok(designConclusion), model.userId),
+    designConclusionNotice: open
+      ? parseDesignConclusionNotice(query.notice)
+      : null,
+    controlConclusion:
+      ok(controlConclusion) === undefined
+        ? null
+        : parseControlConclusion(ok(controlConclusion)),
+    controlConclusionNotice: open ? parseConclusionNotice(query.notice) : null,
+    reviews: parsedReviews,
+    reviewNotice:
+      section === "controls" ? parseReviewNotice(query.notice) : null,
+    context: ok(context) === undefined ? null : parseContext(ok(context)),
+    evidencePlan:
+      ok(evidencePlan) === undefined
+        ? null
+        : parseEvidencePlan(ok(evidencePlan)),
+    files: controlFiles(ok(register), ok(analyses), ok(reviews), query.control),
+    activity: ok(activity) === undefined ? null : parseActivity(ok(activity)),
+    testBasis:
+      ok(testBasis) === undefined ? null : parseTestBasis(ok(testBasis)),
+    changeNotice: open ? parseChangeNotice(query.notice) : null,
     dashboard:
       ok(dashboard) === undefined ? null : parseDashboard(ok(dashboard)),
+    impact: ok(impact) === undefined ? null : parseImpact(ok(impact)),
+    masterPlan:
+      ok(masterPlan) === undefined ? null : parseMasterPlan(ok(masterPlan)),
+    phaseProgress:
+      ok(phaseProgress) === undefined
+        ? null
+        : parsePhaseProgress(ok(phaseProgress)),
+    evidenceMapping:
+      ok(evidenceMapping) === undefined
+        ? null
+        : parseEvidenceMapping(ok(evidenceMapping)),
+    evidenceFindings:
+      ok(evidenceFindings) === undefined
+        ? null
+        : parseFindings(ok(evidenceFindings)),
+    evidenceAssurance:
+      ok(evidenceAssurance) === undefined
+        ? null
+        : parseAssurance(ok(evidenceAssurance)),
+    walkthroughInstances:
+      ok(walkthroughInstances) === undefined
+        ? null
+        : parseInstances(ok(walkthroughInstances)),
+    automation:
+      ok(automation) === undefined ? null : parseAutomation(ok(automation)),
+    work: ok(work) === undefined ? null : parseQueue(ok(work)),
+    nextSteps:
+      ok(nextSteps) === undefined ? null : parseNextSteps(ok(nextSteps)),
     controls: ok(controls) === undefined ? null : parseControls(ok(controls)),
     plan: ok(plan) === undefined ? null : parsePlan(ok(plan)),
     deficiencies:
@@ -79,8 +388,11 @@ export async function loadEngagement(
         query.category === "reports"
           ? query.category
           : null,
-      stage:
-        query.stage !== null && STAGE.test(query.stage) ? query.stage : null,
+      stage: list(query.stage).filter((value) => STAGE.test(value)),
+      application: list(query.app),
+      area: list(query.area),
+      owner: list(query.owner),
+      keyOnly: query.key === "1",
       query: (query.q ?? "").slice(0, 80),
       control:
         query.control !== null && UUID.test(query.control)
@@ -91,8 +403,76 @@ export async function loadEngagement(
           ? query.deficiency
           : null,
       queue: QUEUES.find((queue) => queue === query.queue) ?? null,
-      tab: DETAIL_TABS.find((tab) => tab === query.tab) ?? null,
-      group: query.group === "application" ? "application" : "area",
+      // The tab as asked; detailTab() maps the names older links used.
+      tab:
+        query.tab !== null &&
+        query.tab !== undefined &&
+        /^[a-z]{1,20}$/.test(query.tab)
+          ? query.tab
+          : null,
+      // A workflow step's key (control-workflow-model.STEPS), the longest "understanding".
+      step:
+        query.step !== null &&
+        query.step !== undefined &&
+        /^[a-z]{1,24}$/.test(query.step)
+          ? query.step
+          : null,
+      workFilter:
+        typeof query.filter === "string" &&
+        /^[A-Za-z:,_-]{1,80}$/.test(query.filter)
+          ? query.filter
+          : null,
+      evidenceView:
+        query.ev != null && /^[a-z]{1,20}$/.test(query.ev) ? query.ev : null,
+      request: focus,
+      focusFile:
+        query.file != null && UUID.test(query.file) ? query.file : null,
+      group: query.group === "area" ? "area" : "application",
+      sort: SORTS.find((sort) => sort === query.sort) ?? "control",
+      layout: query.layout === "table" ? "table" : "applications",
     },
   };
+}
+
+function controlFiles(
+  register: unknown,
+  analyses: unknown,
+  reviews: unknown,
+  control: string | null,
+): ControlFiles | null {
+  const parsed = register === undefined ? null : parseRegister(register);
+  if (parsed === null || control === null) {
+    return null;
+  }
+  const mine = parsed.controls.find((item) => item.id === control);
+  return {
+    // The instance's own files, and those a sibling instance of the same control
+    // shares with it: tagged for every application, or for this one.
+    files: parsed.files.filter(
+      (file) =>
+        file.control !== null &&
+        (file.control.id === control ||
+          (mine !== undefined &&
+            file.control.controlRef === mine.controlRef &&
+            (file.applicationScope === "ALL" ||
+              (file.applicationScope === "ONE" &&
+                mine.application !== "" &&
+                file.application?.name === mine.application)))),
+    ),
+    applications: mine?.applications ?? [],
+    analyses: analyses === undefined ? [] : (parseAnalyses(analyses) ?? []),
+    reviews: reviews === undefined ? [] : (parseReviews(reviews) ?? []),
+  };
+}
+
+/** The workpapers, with the one a person chose shown at the version they chose. */
+function withVersion(papers: unknown, shown: unknown): Workpaper[] | null {
+  const parsed = papers === undefined ? null : parseWorkpapers(papers);
+  if (parsed === null || shown === undefined) {
+    return parsed;
+  }
+  const [older] = parseWorkpapers([shown]) ?? [];
+  return older === undefined
+    ? parsed
+    : parsed.map((paper) => (paper.id === older.id ? older : paper));
 }

@@ -1,0 +1,8 @@
+Access request REQ-4402
+Requested for: Leo Martins (u0402)
+Application: SAP ERP PRD
+Role requested: GL Viewer
+
+Approvals
+- Approved by Sofia Lindqvist (line manager) on 2027-10-09
+- Approved by Helen Cho (application owner) on 2027-10-09

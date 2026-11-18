@@ -1,10 +1,12 @@
 """Provider-neutral model adapter. Providers propose. This module does not execute tools."""
 
 import json
+import logging
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Any, Literal, Protocol
+from dataclasses import dataclass, field, replace
+from datetime import datetime
+from typing import Any, Literal, Protocol, runtime_checkable
 from uuid import UUID
 
 import psycopg
@@ -23,6 +25,8 @@ from ai_workforce_api.authorization import (
 from ai_workforce_api.db import transaction
 from ai_workforce_api.settings import Settings
 
+logger = logging.getLogger(__name__)
+
 ModelOperation = Literal["generate", "propose_tools"]
 _SECRET_TEXT = re.compile(
     r"(?i)(api[_-]?key|client[_-]?secret|refresh[_-]?token|access[_-]?token|password|"
@@ -36,8 +40,53 @@ class ModelConfig:
     name: str
     provider: str
     model_name: str
-    input_micros_per_token: int
-    output_micros_per_token: int
+    # Prices in nano-dollars per token (1,000 nanos = 1 micro-dollar): $2 per million
+    # tokens is 2,000. Costs are recorded in micro-dollars, rounded up.
+    input_nanos_per_token: int
+    output_nanos_per_token: int
+
+
+# Which tier of model an agent's work runs on (model_providers.tier_config maps a tier to
+# a pinned model). Milestone 3a.
+ModelTier = Literal["FAST", "BALANCED", "DEEP"]
+
+
+@dataclass(frozen=True)
+class Provenance:
+    """What a recorded call was, beyond its outcome: the agent, the record it worked on,
+    the prompt's version and hashes, the job and attempt, its duration and error class.
+    Never the key, never the prompt itself (provenance.py keeps that apart, encrypted)."""
+
+    agent_key: str = ""
+    tier: ModelTier | None = None
+    prompt_version: str = ""
+    prompt_sha256: str = ""
+    output_sha256: str = ""
+    target_type: str = ""
+    target_id: UUID | None = None
+    job_id: UUID | None = None
+    attempt: int = 1
+    duration_ms: int | None = None
+    error: str = ""
+    actor_agent_instance_id: UUID | None = None
+    # What the call was made from: evidence file ids and hashes, the sheet and its
+    # version, the approved plan revision, as the job knew them. Never the prompt.
+    inputs: dict[str, Any] = field(default_factory=dict)
+    # The call's configuration (M3d): model, tier, limits, the output schema's hash.
+    config: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Outcome:
+    """One provider attempt: its status, the raw answer, and the error class when it
+    failed (the vendor's status code, never its message), with whether a retry is worth
+    it. A transient failure is overload, a server error, a dropped connection, a timeout
+    or a rate limit."""
+
+    status: str
+    raw: ModelRaw
+    error: str = ""
+    transient: bool = False
 
 
 MODEL_CONFIGS: dict[str, ModelConfig] = {
@@ -60,8 +109,21 @@ class ModelRateLimit(Exception):
     """The provider refused the call because of a rate limit."""
 
 
+class ModelBudgetExceeded(Exception):
+    """A budget refused the call before it was dispatched (provenance.py)."""
+
+
 class ModelProviderError(Exception):
-    """The provider could not complete the call."""
+    """The provider could not complete the call.
+
+    `transient` marks a failure worth trying again (overloaded, a server error, a dropped
+    connection), as opposed to a request the provider rejected.
+    """
+
+    def __init__(self, transient: bool = False, status: int | None = None) -> None:
+        super().__init__(f"provider error (status {status})" if status else "provider error")
+        self.transient = transient
+        self.status = status
 
 
 @dataclass(frozen=True)
@@ -90,6 +152,24 @@ class ModelRequest:
     # Shown to the model before the prompt. Only callers that are allowed to send images
     # to the provider set this.
     images: tuple[ModelImage, ...] = ()
+    # How many web searches the model may run (milestone 8.10). Only callers allowed to
+    # reach the web set this, and they send no client names in the prompt it searches from.
+    web_search: int = 0
+    # A larger answer than the default, for long structured outputs. 0 keeps the default.
+    max_tokens: int = 0
+    # Read the answer's representation as the schema declares it (models.unnested): a
+    # property the schema declares as an object or a list that arrives as JSON text, at any
+    # depth, and a wrapper the model put around the whole answer. Only the representation
+    # changes, never a word of the answer, and every check applies to what is read. On for
+    # every agent since 13 November 2026 (it was the planner's and the evidence readings'
+    # only); no caller turns it off, and test_agent_answers fails for one that does without
+    # being listed there with its reason.
+    unnest: bool = True
+    # Also lift properties a model wrote inside another top-level property's text (shape
+    # 2 of models.unnested). Only the planner and the evidence readings, which had it
+    # before 13 November 2026; for every other call that shape is corrected once
+    # (AgentCaller.generate).
+    lift: bool = False
 
 
 @dataclass(frozen=True)
@@ -98,6 +178,18 @@ class ModelRaw:
     tool_calls: tuple[ToolProposal, ...]
     input_tokens: int
     output_tokens: int
+    # The pages a web search returned, as (url, title): the only sources a caller may cite.
+    sources: tuple[tuple[str, str], ...] = ()
+    # True when the web search ran; False when it was not asked for or was unavailable.
+    searched: bool = False
+    # Why the provider stopped when it left no usable answer: "max_tokens" when the answer
+    # was cut off at the output limit; empty otherwise.
+    stopped: str = ""
+    # When the answer was re-read (ModelRequest.unnest): what the provider actually
+    # returned, which is what the call's record hashes and keeps, and the names of the
+    # properties read from text. `output` is then the answer as read.
+    returned: dict[str, Any] | None = None
+    unnested: tuple[str, ...] = ()
 
 
 class ModelProvider(Protocol):
@@ -145,6 +237,20 @@ class ChatProvider(Protocol):
     ) -> ChatReply: ...
 
 
+@runtime_checkable
+class StreamingChatProvider(Protocol):
+    """A chat provider that also hands over its text as the model writes it."""
+
+    def converse_streaming(
+        self,
+        system: str,
+        messages: list[dict[str, Any]],
+        tools: tuple[ChatTool, ...],
+        timeout_seconds: int,
+        on_text: Callable[[str], None],
+    ) -> ChatReply: ...
+
+
 class LocalModelProvider:
     """Fills the schema with empty values. It does not read the prompt or call a network."""
 
@@ -186,6 +292,28 @@ class ModelCallBody(BaseModel):
     cost_micros: int
     output: dict[str, Any] | None = None
     tool_calls: list[ToolProposalBody] = Field(default_factory=list)
+    # Provenance (Milestone 3a): who asked, which agent worked, which model and prompt
+    # version answered, from what, how it ended. The prompt itself is behind /content.
+    requested_by: UUID | None = None
+    agent_instance_id: UUID | None = None
+    agent_key: str | None = None
+    tier: str | None = None
+    model_name: str = ""
+    prompt_version: str | None = None
+    prompt_sha256: str | None = None
+    output_sha256: str | None = None
+    target_type: str | None = None
+    target_id: UUID | None = None
+    job_id: UUID | None = None
+    attempt: int = 1
+    duration_ms: int | None = None
+    error: str = ""
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    # Milestone 3d: the configuration and what the system made of the answer.
+    config: dict[str, Any] = Field(default_factory=dict)
+    outcome: dict[str, Any] = Field(default_factory=dict)
+    has_content: bool = False
+    created_at: datetime | None = None
 
 
 class ModelCallCreate(BaseModel):
@@ -268,11 +396,37 @@ def complete(
     provider: ModelProvider, request: ModelRequest, config: ModelConfig
 ) -> tuple[str, ModelRaw]:
     """Run one generation and name its outcome. A malformed answer is the caller's call."""
-    status, raw = _complete(provider, request, config)
+    found = outcome(provider, request, config)
+    return found.status, found.raw
+
+
+def outcome(provider: ModelProvider, request: ModelRequest, config: ModelConfig) -> Outcome:
+    """One generation with its error class kept (provenance.py records it). A malformed
+    answer keeps the raw output so a stricter caller may still read it."""
+    status, raw, error, transient = _attempt(provider, request, config)
     if status == "SUCCEEDED" and request.operation == "generate":
-        if raw.output is None or not _matches(request.output_schema, raw.output):
-            return "MALFORMED", raw
-    return status, raw
+        if raw.output is None:
+            # A cut-off answer is said as one: more room is the remedy, not another wording.
+            reason = (
+                "answer was cut off at the output limit"
+                if raw.stopped == "max_tokens"
+                else "answer did not match the schema"
+            )
+            return Outcome("MALFORMED", raw, reason, False)
+        if request.unnest:
+            reread, names = unnested(request.output_schema, raw.output, request.lift)
+            if names:
+                logger.info("model answer re-read: a nested property arrived as JSON text")
+                raw = replace(raw, output=reread, returned=raw.output, unnested=names)
+        where = _mismatch(request.output_schema, raw.output)
+        if where is not None:
+            # Where it broke the schema is recorded with the call (12 November 2026: a
+            # planner answer was malformed and nothing said why). Only the schema's own
+            # property names and type names: never a word of the answer.
+            return Outcome(
+                "MALFORMED", raw, f"answer did not match the schema ({where})"[:500], False
+            )
+    return Outcome(status, raw, error, transient)
 
 
 def record_call(
@@ -284,6 +438,8 @@ def record_call(
     status: str,
     raw: ModelRaw,
     config: ModelConfig,
+    provenance: Provenance | None = None,
+    operation: str = "generate",
 ) -> UUID:
     """Record a model call made for a person, such as drafting after their kickoff."""
     return _record_for(
@@ -292,10 +448,11 @@ def record_call(
         organization_id,
         project_id,
         model_config_ref,
-        "generate",
+        operation,
         status,
         raw,
         config,
+        provenance,
     )
 
 
@@ -364,21 +521,37 @@ def _create(
 def _complete(
     provider: ModelProvider, request: ModelRequest, config: ModelConfig
 ) -> tuple[str, ModelRaw]:
+    # Through the same reading as every agent's call (outcome): the answer as the schema
+    # declares it. A shape that still does not fit is MALFORMED here as it was before.
+    found = outcome(provider, request, config)
+    return found.status, found.raw
+
+
+def _attempt(
+    provider: ModelProvider, request: ModelRequest, config: ModelConfig
+) -> tuple[str, ModelRaw, str, bool]:
+    """The status, the raw answer, the error class and whether a retry is worth it."""
+    nothing = ModelRaw(None, (), 0, 0)
     if request.cancelled:
-        return "CANCELLED", ModelRaw(None, (), 0, 0)
+        return "CANCELLED", nothing, "cancelled before the call", False
     try:
         raw = provider.complete(request, config)
     except ModelTimeout:
-        return "TIMEOUT", ModelRaw(None, (), 0, 0)
+        return "TIMEOUT", nothing, "the provider did not answer in time", True
     except ModelCancelled:
-        return "CANCELLED", ModelRaw(None, (), 0, 0)
+        return "CANCELLED", nothing, "cancelled", False
     except ModelRateLimit:
-        return "RATE_LIMITED", ModelRaw(None, (), 0, 0)
-    except ModelProviderError:
-        return "MODEL_ERROR", ModelRaw(None, (), 0, 0)
+        return "RATE_LIMITED", nothing, "the provider rate limited the call", True
+    except ModelBudgetExceeded:
+        return "BUDGET_EXCEEDED", nothing, "a budget refused the call", False
+    except ModelProviderError as error:
+        detail = f"provider error (status {error.status})" if error.status else "provider error"
+        return "MODEL_ERROR", nothing, detail, error.transient
+    except Exception as error:  # noqa: BLE001 - a provider bug is a failed call, recorded
+        return "MODEL_ERROR", nothing, f"provider raised {type(error).__name__}", False
     if raw.input_tokens < 0 or raw.output_tokens < 0:
-        return "MODEL_ERROR", ModelRaw(None, (), 0, 0)
-    return "SUCCEEDED", raw
+        return "MODEL_ERROR", nothing, "the provider reported negative token counts", False
+    return "SUCCEEDED", raw, "", False
 
 
 def _checked(
@@ -436,15 +609,22 @@ def _record_for(
     status: str,
     raw: ModelRaw,
     config: ModelConfig,
+    provenance: Provenance | None = None,
 ) -> UUID:
+    found = provenance if provenance is not None else Provenance()
+    # The error class is kept, never a message that could carry a key or client text.
+    error = _SECRET_TEXT.sub("[redacted]", found.error)[:500]
     with transaction(connection) as cursor:
         cursor.execute(
             """
             INSERT INTO model_calls (
                 organization_id, project_id, actor_user_id, model_config_ref, operation, status,
-                input_tokens, output_tokens, cost_micros
+                input_tokens, output_tokens, cost_micros, model_name, tier, agent_key,
+                prompt_version, prompt_sha256, output_sha256, target_type, target_id, job_id,
+                attempt, duration_ms, error, actor_agent_instance_id, inputs, config
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (
@@ -457,24 +637,47 @@ def _record_for(
                 raw.input_tokens,
                 raw.output_tokens,
                 _cost(config, raw),
+                config.model_name,
+                found.tier,
+                found.agent_key or None,
+                found.prompt_version or None,
+                found.prompt_sha256 or None,
+                found.output_sha256 or None,
+                found.target_type or None,
+                found.target_id,
+                found.job_id,
+                max(1, min(found.attempt, 20)),
+                found.duration_ms,
+                error,
+                found.actor_agent_instance_id,
+                Json(found.inputs),
+                Json(found.config),
             ),
         )
         row = cursor.fetchone()
         if row is None or not isinstance(row[0], UUID):
             raise NotVisible()
+        payload: dict[str, Any] = {"status": status}
+        if found.agent_key:
+            payload["agent"] = found.agent_key
+        if found.tier:
+            payload["tier"] = found.tier
+            payload["model"] = config.model_name
         cursor.execute(
             """
             INSERT INTO audit_events (
-                organization_id, project_id, actor_user_id, action, target_type, target_id, payload
+                organization_id, project_id, actor_user_id, actor_agent_instance_id, action,
+                target_type, target_id, payload
             )
-            VALUES (%s, %s, %s, 'model.called', 'model_call', %s, %s)
+            VALUES (%s, %s, %s, %s, 'model.called', 'model_call', %s, %s)
             """,
             (
                 organization_id,
                 project_id,
                 actor_id,
+                found.actor_agent_instance_id,
                 row[0],
-                Json({"status": status}),
+                Json(payload),
             ),
         )
     return row[0]
@@ -496,7 +699,13 @@ def _read(
     )
     row = connection.execute(
         """
-        SELECT id, operation, status, model_config_ref, input_tokens, output_tokens, cost_micros
+        SELECT id, operation, status, model_config_ref, input_tokens, output_tokens, cost_micros,
+               actor_user_id, actor_agent_instance_id, agent_key, tier, model_name,
+               prompt_version, prompt_sha256, output_sha256, target_type, target_id, job_id,
+               attempt, duration_ms, error, inputs, created_at,
+               EXISTS (SELECT 1 FROM model_call_contents c WHERE c.model_call_id = model_calls.id),
+               config,
+               (SELECT o.outcome FROM model_call_outcomes o WHERE o.model_call_id = model_calls.id)
         FROM model_calls
         WHERE id = %s AND organization_id = %s AND project_id = %s
         """,
@@ -504,7 +713,7 @@ def _read(
     ).fetchone()
     if row is None:
         raise NotVisible()
-    call_id_value, operation, status, model_config_ref, input_tokens, output_tokens, cost = row
+    call_id_value, operation, status, model_config_ref, input_tokens, output_tokens, cost = row[:7]
     if (
         not isinstance(call_id_value, UUID)
         or not isinstance(operation, str)
@@ -523,6 +732,25 @@ def _read(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         cost_micros=cost,
+        requested_by=row[7],
+        agent_instance_id=row[8],
+        agent_key=row[9],
+        tier=row[10],
+        model_name=str(row[11] or ""),
+        prompt_version=row[12],
+        prompt_sha256=row[13],
+        output_sha256=row[14],
+        target_type=row[15],
+        target_id=row[16],
+        job_id=row[17],
+        attempt=int(row[18] or 1),
+        duration_ms=row[19],
+        error=str(row[20] or ""),
+        inputs=row[21] if isinstance(row[21], dict) else {},
+        created_at=row[22],
+        has_content=bool(row[23]),
+        config=row[24] if isinstance(row[24], dict) else {},
+        outcome=row[25] if isinstance(row[25], dict) else {},
     )
 
 
@@ -545,6 +773,7 @@ _STATUS_CODES = {
     "CANCELLED": 409,
     "RATE_LIMITED": 429,
     "MODEL_ERROR": 503,
+    "BUDGET_EXCEEDED": 429,
 }
 _STATUS_DETAILS = {
     "MALFORMED": "model output is invalid",
@@ -552,14 +781,26 @@ _STATUS_DETAILS = {
     "CANCELLED": "model call was cancelled",
     "RATE_LIMITED": "model rate limit",
     "MODEL_ERROR": "model provider is unavailable",
+    "BUDGET_EXCEEDED": "model budget exhausted",
 }
 
 
 def _cost(config: ModelConfig, raw: ModelRaw) -> int:
-    return (
-        raw.input_tokens * config.input_micros_per_token
-        + raw.output_tokens * config.output_micros_per_token
+    return cost_micros(config, raw.input_tokens, raw.output_tokens)
+
+
+def cost_micros(config: ModelConfig, input_tokens: int, output_tokens: int) -> int:
+    """The cost in micro-dollars, rounded up so a budget is never under-counted."""
+    nanos = (
+        input_tokens * config.input_nanos_per_token + output_tokens * config.output_nanos_per_token
     )
+    return -(-nanos // 1000) if nanos > 0 else 0
+
+
+def estimate_tokens(value: str) -> int:
+    """A rough token count for text before it is sent (about four characters a token,
+    plus a third for the newer tokenizers)."""
+    return max(1, (len(value) * 4) // 12)
 
 
 def _tokens(value: str) -> int:
@@ -587,41 +828,319 @@ def _schema_supported(schema: object, depth: int) -> bool:
 
 
 def _matches(schema: dict[str, Any], value: object) -> bool:
+    return _mismatch(schema, value) is None
+
+
+def _kind(value: object) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    return "other"
+
+
+def _mismatch(schema: dict[str, Any], value: object, path: str = "answer") -> str | None:
+    """Where a value first breaks the schema's shape (types, required properties, no
+    unknown properties where the schema forbids them), or None when it fits. The place is
+    named by the schema's own property names and positions, and what was found by its type
+    only: nothing of the value is repeated."""
     kind = schema.get("type")
+    if isinstance(kind, list):
+        # A choice of types (prior_year's `control`: an integer or null; setup_drafting's
+        # `period_end`): a value of any of them fits. Before 13 November 2026 such a
+        # property never fitted, so every answer with it was recorded as malformed.
+        if any(_mismatch({**schema, "type": one}, value, path) is None for one in kind):
+            return None
+        return f"{path}: expected one of {', '.join(map(str, kind))}, got {_kind(value)}"
+    if kind == "null":
+        return None if value is None else f"{path}: expected null, got {_kind(value)}"
     if kind == "object":
         if not isinstance(value, dict):
-            return False
+            return f"{path}: expected object, got {_kind(value)}"
         properties = schema.get("properties", {})
         required = schema.get("required", [])
         if not isinstance(properties, dict) or not isinstance(required, list):
-            return False
+            return f"{path}: the schema is not usable"
         for name in required:
             if name not in value:
-                return False
+                return f"{path}.{name}: required, missing"
         additional = schema.get("additionalProperties", True)
         for key, item in value.items():
             if key in properties and isinstance(properties[key], dict):
-                if not _matches(properties[key], item):
-                    return False
+                found = _mismatch(properties[key], item, f"{path}.{key}")
+                if found is not None:
+                    return found
             elif additional is False:
-                return False
-        return True
-    if kind == "string":
-        return isinstance(value, str)
-    if kind == "integer":
-        return isinstance(value, int) and not isinstance(value, bool)
-    if kind == "number":
-        return isinstance(value, int | float) and not isinstance(value, bool)
-    if kind == "boolean":
-        return isinstance(value, bool)
+                return f"{path}: a property the schema does not have"
+        return None
     if kind == "array":
         if not isinstance(value, list):
-            return False
+            return f"{path}: expected array, got {_kind(value)}"
         items = schema.get("items")
         if not isinstance(items, dict):
-            return True
-        return all(_matches(items, item) for item in value)
-    return False
+            return None
+        for index, item in enumerate(value):
+            found = _mismatch(items, item, f"{path}[{index}]")
+            if found is not None:
+                return found
+        return None
+    fits = {
+        "string": isinstance(value, str),
+        "integer": isinstance(value, int) and not isinstance(value, bool),
+        "number": isinstance(value, int | float) and not isinstance(value, bool),
+        "boolean": isinstance(value, bool),
+    }
+    if fits.get(str(kind), False):
+        return None
+    return f"{path}: expected {kind}, got {_kind(value)}"
+
+
+# The longest text read as a property's JSON: a plan's is some 13,000 characters.
+_UNNEST_CHARACTERS = 200_000
+# How deep the reading goes into the answer: deeper than any agent's schema.
+_UNNEST_DEPTH = 24
+# What a model calls the wrapper it sometimes puts around the whole answer: the output
+# tool's own name, or the words a tool call or a reply is usually given under.
+_WRAPPERS = frozenset(
+    {OUTPUT_TOOL, "output", "input", "parameters", "arguments", "properties", "result",
+     "response", "answer"}
+)  # fmt: skip
+_NOT_READ = object()
+
+
+def _no_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    found: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in found:
+            raise ValueError("a property written twice")
+        found[key] = value
+    return found
+
+
+def _no_constant(name: str) -> Any:
+    raise ValueError(f"{name} is not JSON")
+
+
+def _json_text(text: str) -> Any:
+    """The JSON a text is, read strictly (no property written twice at any depth, no NaN or
+    Infinity, nothing after it, not over the length a plan could be), or _NOT_READ."""
+    if len(text) > _UNNEST_CHARACTERS or text.lstrip()[:1] not in ("{", "["):
+        return _NOT_READ
+    try:
+        return json.loads(text, object_pairs_hook=_no_duplicates, parse_constant=_no_constant)
+    except ValueError, RecursionError:
+        return _NOT_READ
+
+
+def unnested(
+    schema: dict[str, Any], value: dict[str, Any], lift: bool = True
+) -> tuple[dict[str, Any], tuple[str, ...]]:
+    """The answer read as the schema declares it, and where it was read so (none: the
+    answer is returned as it came, the same object). The one reading every agent's answer
+    goes through (ModelRequest.unnest, on for every call since 13 November 2026; before, the
+    planner's and the evidence readings' only). It changes the answer's representation,
+    never a word of it: nothing is invented, and every check of the caller applies to what
+    is read. Four shapes, each seen in the wild:
+
+    1. A wrapper around the whole answer (`{"record_output": {...}}`): an answer of one
+       property that the schema does not declare, named as a model names such a wrapper
+       (_WRAPPERS), holding an object (or its JSON text) that, read, fits the schema whole.
+       Named "wrapper:<name>".
+    2. A property written one level too deep, at the top level of the answer (the planner,
+       12 November 2026, B1h): `understanding` as the text `{...},"phases":[...]` and no
+       `phases`. Read only when the text is exactly that: valid JSON for the property the
+       schema declares (an object or a list), followed by nothing but properties the schema
+       *requires* and the answer does not have (the text may close the answer's own brace).
+       Never an optional property (a verdict or an approval the answer did not state must
+       not appear because some text carried it), never a property written twice. Only with
+       `lift` (ModelRequest.lift): the agents that had it before 13 November 2026, the
+       planner and the evidence readings. For every other agent the shape is left, fails,
+       and is corrected once (provenance.AgentCaller.generate, `misplaced`).
+    3. A property the schema declares as an object or a list sent as the text of its JSON,
+       at any depth, the rows of a list included (`attributes`, 13 November 2026; a row's
+       `follows`): read when the text is exactly one JSON value of the declared kind. Named
+       by its place: "attributes[0].follows". Nothing is lifted out of such a text.
+    4. An optional property the schema declares as an object sent as null (the reviewer of
+       the drafts, 13 November 2026: `attributes[0].follows`): left out, which the schema
+       allows and which is what null says. Never a required one, never a list or a scalar
+       (an empty list or a default could read as a finding of nothing). Named
+       "<place>: null left out".
+
+    Anything else is left as it arrived and fails the shape check as before, a recorded
+    MALFORMED call. Never NaN or Infinity, never a text over 200,000 characters, never
+    deeper than _UNNEST_DEPTH; a text too deeply nested to parse is left."""
+    if schema.get("type") != "object" or not isinstance(schema.get("properties"), dict):
+        return value, ()
+    names: list[str] = []
+    found = _unwrapped(schema, value, names, lift)
+    if lift:
+        found = _carried(schema, found, names)
+    found = _read_deep(schema, found, "", names, 0)
+    return (found, tuple(names)) if names else (value, ())
+
+
+def misplaced(schema: dict[str, Any], value: Any) -> tuple[str, ...]:
+    """The properties an answer wrote inside another top-level property's text (shape 2 of
+    unnested), as "<carried> inside <host>"; none when it did not. For a call that does not
+    lift them: the call is corrected once instead."""
+    if (
+        schema.get("type") != "object"
+        or not isinstance(schema.get("properties"), dict)
+        or not isinstance(value, dict)
+    ):
+        return ()
+    # Inside a recognised wrapper too (shape 1): the wrapped answer gets its one correction
+    # as an unwrapped one does.
+    if len(value) == 1:
+        ((wrapper, inner),) = value.items()
+        if wrapper not in schema["properties"] and wrapper in _WRAPPERS:
+            inner = _json_text(inner) if isinstance(inner, str) else inner
+            if isinstance(inner, dict):
+                value = inner
+    carried: list[str] = []
+    _carried(schema, value, [], carried)
+    return tuple(carried)
+
+
+def _unwrapped(
+    schema: dict[str, Any], value: dict[str, Any], names: list[str], lift: bool
+) -> dict[str, Any]:
+    """Shape 1: the answer inside a wrapper, when the schema says it is the answer."""
+    properties = schema["properties"]
+    if len(value) != 1:
+        return value
+    ((wrapper, inner),) = value.items()
+    if wrapper in properties or wrapper not in _WRAPPERS:
+        return value
+    if isinstance(inner, str):
+        inner = _json_text(inner)
+    if not isinstance(inner, dict) or not any(key in properties for key in inner):
+        return value
+    read: list[str] = []
+    inner = _carried(schema, inner, read) if lift else inner
+    candidate = _read_deep(schema, inner, "", read, 0)
+    if not isinstance(candidate, dict) or _mismatch(schema, candidate) is not None:
+        return value
+    names += [f"wrapper:{wrapper}", *read]
+    return candidate
+
+
+def _carried(
+    schema: dict[str, Any],
+    value: dict[str, Any],
+    names: list[str],
+    carried_out: list[str] | None = None,
+) -> dict[str, Any]:
+    """Shape 2, and shape 3 at the top level: a top-level property's text read with what
+    it carries (see unnested). `carried_out` collects "<carried> inside <host>"."""
+    properties, required = schema["properties"], schema.get("required", [])
+    found = dict(value)
+    read_as_json: list[str] = []
+    for name, text in value.items():
+        declared = properties.get(name)
+        if not isinstance(text, str) or not isinstance(declared, dict):
+            continue
+        kind = declared.get("type")
+        if kind not in ("object", "array") or text.lstrip()[:1] not in ("{", "["):
+            continue
+        if len(text) > _UNNEST_CHARACTERS:
+            continue
+        read: Any = _NOT_READ
+        # The text is the property and what follows it in the answer; it may close the
+        # answer's own brace too (the model wrote the rest of its answer inside the text).
+        for opened in (
+            "{" + json.dumps(name) + ":" + text + "}",
+            "{" + json.dumps(name) + ":" + text,
+        ):
+            try:
+                read = json.loads(
+                    opened, object_pairs_hook=_no_duplicates, parse_constant=_no_constant
+                )
+                break
+            except ValueError, RecursionError:
+                continue
+        if not isinstance(read, dict) or _kind(read.get(name)) != kind:
+            continue
+        carried = [key for key in read if key != name]
+        if any(
+            key not in required or key not in properties or key in value or key in found
+            for key in carried
+        ):
+            continue
+        found.update(read)
+        read_as_json += [name, *carried]
+        if carried_out is not None:
+            carried_out += [f"{key} inside {name}" for key in carried]
+    if not read_as_json:
+        return value
+    names += read_as_json
+    return found
+
+
+def _read_deep(schema: dict[str, Any], value: Any, path: str, names: list[str], depth: int) -> Any:
+    """Shapes 3 and 4 below the top level, the schema deciding at every place. The value
+    itself is never changed: a place read differently is a copy."""
+    if depth > _UNNEST_DEPTH:
+        return value
+    kind = schema.get("type")
+    if kind == "object" and isinstance(value, dict):
+        properties = schema.get("properties")
+        required = schema.get("required", [])
+        if not isinstance(properties, dict) or not isinstance(required, list):
+            return value
+        out: dict[str, Any] | None = None
+        for key, item in value.items():
+            declared = properties.get(key)
+            if not isinstance(declared, dict):
+                continue
+            where = f"{path}.{key}" if path else key
+            if item is None and declared.get("type") == "object" and key not in required:
+                out = dict(value) if out is None else out
+                del out[key]
+                names.append(f"{where}: null left out")
+                continue
+            new = _own_text(declared, item, where, names)
+            new = _read_deep(declared, new, where, names, depth + 1)
+            if new is not item:
+                out = dict(value) if out is None else out
+                out[key] = new
+        return value if out is None else out
+    if kind == "array" and isinstance(value, list):
+        items = schema.get("items")
+        if not isinstance(items, dict):
+            return value
+        rows: list[Any] | None = None
+        for index, item in enumerate(value):
+            where = f"{path}[{index}]"
+            new = _own_text(items, item, where, names)
+            new = _read_deep(items, new, where, names, depth + 1)
+            if new is not item:
+                rows = list(value) if rows is None else rows
+                rows[index] = new
+        return value if rows is None else rows
+    return value
+
+
+def _own_text(declared: dict[str, Any], item: Any, where: str, names: list[str]) -> Any:
+    """Shape 3 at one place: a text that is exactly one JSON value of the declared kind."""
+    kind = declared.get("type")
+    if not isinstance(item, str) or kind not in ("object", "array"):
+        return item
+    read = _json_text(item)
+    if read is _NOT_READ or _kind(read) != kind:
+        return item
+    names.append(where)
+    return read
 
 
 def _fill(schema: dict[str, Any]) -> object:

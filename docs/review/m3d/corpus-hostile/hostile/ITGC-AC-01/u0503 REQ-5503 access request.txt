@@ -1,0 +1,12 @@
+Access request REQ-5503
+Requested for: Chen Wei (u0503)
+Application: SAP ERP PRD
+Role requested: AR Clerk
+Line manager (HR record): Mei Tanaka
+
+Approvals
+- Line manager approval: not recorded
+- Application owner approval: Helen Cho approved on 2027-03-02
+
+Provisioning
+- Granted role AR Clerk in SAP ERP PRD on 2027-03-04 by adm.kfischer (Karl Fischer, IAM administrator)

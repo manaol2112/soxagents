@@ -1,0 +1,16 @@
+Change request CHG-2005: Payment run report fields
+System: SAP ERP
+Raised on 2027-05-04
+Developer: Aiko Sato
+Transport in the approved request: DEVK900512
+
+Testing
+- Test environment: QAS (quality assurance system, non-production)
+- Tested on 2027-05-11 by Nadia Farouk (business tester); result: passed (script TS-2005, 10 of 10 steps passed)
+
+Approvals
+- Business owner approval: Elena Rossi approved on 2027-05-12
+- IT owner approval: Marcus Lee approved on 2027-05-12
+
+Deployment
+- Transport DEVK900519 imported to PRD on 2027-05-15 by basis.oivanova (Olga Ivanova, Basis administrator)

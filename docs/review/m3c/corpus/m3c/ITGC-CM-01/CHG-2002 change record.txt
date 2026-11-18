@@ -1,0 +1,16 @@
+Change request CHG-2002: GL account mapping update
+System: SAP ERP
+Raised on 2027-02-03
+Developer: Ravi Kumar
+Transport in the approved request: DEVK900502
+
+Testing
+- Test environment: QAS (quality assurance system, non-production)
+- Tested on 2027-02-10 by Nadia Farouk (business tester); result: passed (script TS-2002, 8 of 8 steps passed)
+
+Approvals
+- Business owner approval: Elena Rossi approved on 2027-02-20
+- IT owner approval: Marcus Lee approved on 2027-02-16
+
+Deployment
+- Transport DEVK900502 imported to PRD on 2027-02-18 by basis.oivanova (Olga Ivanova, Basis administrator)

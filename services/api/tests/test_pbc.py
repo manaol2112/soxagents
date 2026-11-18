@@ -1,3 +1,4 @@
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -9,10 +10,11 @@ from test_execution import _add_project_member, _add_user, _client, _ready
 from ai_workforce_api.db import connect
 from ai_workforce_api.mailbox import MockMailbox
 from ai_workforce_api.main import create_app
-from ai_workforce_api.migrate import apply_migrations, migrations_dir
 from ai_workforce_api.settings import Settings
 
-_DUE = "2026-11-01T00:00:00Z"
+# Always ahead: a fixed date here expired on 1 November 2026, and a request past its due date
+# cannot be submitted, which failed every test built on an approved request.
+_DUE = (datetime.now(UTC) + timedelta(days=60)).strftime("%Y-%m-%dT00:00:00Z")
 
 
 def test_a_pbc_request_follows_its_status_path(migrated: Database) -> None:
@@ -48,20 +50,26 @@ def test_a_pbc_request_follows_its_status_path(migrated: Database) -> None:
     jumped = _move(client, seeded, project_id, request_id, _draft(), "RECEIVED", pending["version"])
     assert jumped.status_code == 409
     assert jumped.json()["detail"] == "pbc status is not allowed"
-    missing = _move(client, seeded, project_id, request_id, _draft(), "SENT", pending["version"])
-    assert missing.status_code == 409
-    assert missing.json()["detail"] == "outbound message is required"
-    sent = _move(
-        client,
-        seeded,
-        project_id,
-        request_id,
-        _draft(),
-        "SENT",
-        pending["version"],
-        outbound_message_id=message.provider_message_id,
-        thread_id=message.thread_id,
-    )
+    # Rewritten 9 November 2026 (bug hunt): before, this route moved an awaiting-approval
+    # request to SENT given any message id in the project's mailbox, with no approval and no
+    # delivery of this request. Only delivering the approved message sends a request (outbound
+    # sets SENT itself), so the route refuses SENT even with a real message.
+    for extra in ({}, {"outbound_message_id": message.provider_message_id,
+                       "thread_id": message.thread_id}):  # fmt: skip
+        refused = _move(
+            client, seeded, project_id, request_id, _draft(), "SENT", pending["version"], **extra
+        )
+        assert refused.status_code == 409
+        assert refused.json()["detail"] == "pbc status is not allowed"
+    # Delivered as the send path records it; the response states follow on this route.
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE pbc_requests SET status = 'SENT', outbound_message_id = %s, thread_id = %s, "
+            "version = version + 1 WHERE id = %s",
+            (message.provider_message_id, message.thread_id, request_id),
+        )
+        connection.commit()
+    sent = client.get(f"{_requests(seeded, project_id)}/{request_id}").json()
     assert sent["status"] == "SENT"
     assert sent["outbound_message_id"] == message.provider_message_id
     waiting = _move(
@@ -206,9 +214,10 @@ def test_closed_pbc_records_do_not_send(migrated: Database) -> None:
 
 
 @pytest.fixture
-def migrated(empty_database: Database) -> Database:
-    apply_migrations(empty_database.url, migrations_dir())
-    return empty_database
+def migrated(migrated_database: Database) -> Database:
+    # Cloned from the session's migrated template (conftest): the state apply_migrations
+    # produces, without running the migrations again for every test.
+    return migrated_database
 
 
 def _move(

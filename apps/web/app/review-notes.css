@@ -1,0 +1,1838 @@
+/* Workpaper review notes (docs/workpaper-review.md, section 6): the highlighted words in
+   the Document view, its right margin (the numbered markers and "Add review note"), the
+   rail beside it with the new note's form and the notes, All notes, and the reviewer's
+   step line. Calm: the criticality's colour (--note-*) is its dots and its highlighted
+   words, and nothing else; status, owner and time are quiet text; no filled pills;
+   buttons are black, white and grey. Motion is short and off when asked (globals.css).
+   The rail is option 3, inbox, and the margin icon option 2 (product owner, 16 November
+   2026). */
+
+.rn-urgent {
+  --rn-c: var(--note-urgent);
+}
+
+.rn-normal {
+  --rn-c: var(--note-normal);
+}
+
+.rn-follow-up {
+  --rn-c: var(--note-follow-up);
+}
+
+/* Buttons: black for the one action, white outlined, or quiet text. */
+
+button.rn-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  height: 28px;
+  padding: 0 0.75rem;
+  color: var(--text-strong);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: none;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+button.rn-btn:hover:not(:disabled) {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+  border-color: var(--border-control);
+}
+
+button.rn-btn.is-primary {
+  color: var(--surface);
+  background: var(--text-strong);
+  border-color: var(--text-strong);
+}
+
+button.rn-btn.is-primary:hover:not(:disabled) {
+  color: var(--surface);
+  background: var(--text);
+  border-color: var(--text);
+}
+
+button.rn-btn.is-quiet {
+  color: var(--text-secondary);
+  background: transparent;
+  border-color: transparent;
+}
+
+button.rn-btn.is-quiet:hover:not(:disabled) {
+  color: var(--text-strong);
+  background: var(--surface-sunken);
+  border-color: transparent;
+}
+
+.rn-quiet {
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+.rn-problem {
+  margin: 0.5rem 0 0;
+  color: var(--danger);
+  font-size: var(--fs-sm);
+}
+
+/* A field in the document ------------------------------------------------------------ */
+
+.rn-sheet {
+  position: relative;
+}
+
+.rn-field {
+  position: relative;
+  border-radius: var(--radius-sm);
+  transition: box-shadow 150ms ease;
+}
+
+.rn-field.is-selected {
+  box-shadow: 0 0 0 1px var(--border-control);
+}
+
+.rn-field.is-inline {
+  display: inline;
+}
+
+.rn-text {
+  display: block;
+}
+
+span.rn-text {
+  display: inline;
+}
+
+/* Highlighted words: the words take the criticality's colour, with a thin underline; no
+   background. */
+mark.rn-hl {
+  color: var(--rn-c);
+  background: none;
+  text-decoration-line: underline;
+  text-decoration-color: var(--rn-c);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  transition: text-decoration-thickness 120ms ease;
+}
+
+mark.rn-hl.is-selected {
+  text-decoration-thickness: 2px;
+}
+
+mark.rn-hl.is-pending {
+  text-decoration-style: dashed;
+}
+
+/* A field's "Add review note" from the keyboard: it takes no room and is not seen; while
+   it has the focus, the margin shows its icon, ringed, level with the field. */
+button.rn-add {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The margin: inside the sheet's right padding, never over the text. */
+.rn-margin {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.rn-margin > button {
+  position: absolute;
+  pointer-events: auto;
+}
+
+/* Narrow sheets have a thin padding: it is widened while the notes are on, so the margin
+   has room. */
+@container dw (max-width: 760px) {
+  .rn-sheet.is-noting .dw-sheet {
+    padding-right: 2.5rem;
+  }
+}
+
+button.rn-margin-add {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-xs);
+  animation: rn-fade 120ms ease-out;
+  transition:
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+button.rn-margin-add:hover,
+button.rn-margin-add.is-focus {
+  color: var(--text-strong);
+  background: var(--surface);
+  border-color: var(--border-control);
+}
+
+button.rn-margin-add.is-focus {
+  box-shadow: var(--ring);
+}
+
+.rn-tip {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: -2px;
+  padding: 4px 8px;
+  color: var(--surface);
+  background: var(--text-strong);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+button.rn-margin-add:hover .rn-tip,
+button.rn-margin-add.is-focus .rn-tip {
+  opacity: 1;
+}
+
+/* Words selected that are too many for a note: the icon is quiet and its tip says why,
+   shown at once (independent review, 16 November 2026). */
+button.rn-margin-add.is-refused {
+  color: var(--text-tertiary);
+  border-style: dashed;
+  cursor: not-allowed;
+}
+
+button.rn-margin-add.is-refused .rn-tip {
+  opacity: 1;
+}
+
+/* A field's notes: small, quiet numbers in the margin. */
+button.rn-marker {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  box-shadow: none;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  transition:
+    color 120ms ease,
+    border-color 120ms ease,
+    top 150ms ease;
+}
+
+button.rn-marker:hover {
+  color: var(--text-strong);
+  background: var(--surface);
+  border-color: var(--border-control);
+}
+
+button.rn-marker.is-selected {
+  color: var(--surface);
+  background: var(--text-strong);
+  border-color: var(--text-strong);
+}
+
+button.rn-marker:focus-visible:not(:disabled) {
+  box-shadow: var(--ring);
+}
+
+@keyframes rn-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+}
+
+@keyframes rn-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+/* The rail (option 3, inbox: product owner, 16 November 2026) ------------------------- */
+
+.rn-with-rail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 16px;
+  align-items: start;
+}
+
+/* One quiet panel: the header stays, the notes scroll under it. */
+.rn-rail {
+  position: sticky;
+  top: 12px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-height: calc(100vh - 24px);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
+  animation: rn-in 200ms ease-out;
+}
+
+.rn-rail > p.rn-rail-wait,
+.rn-rail > .rn-failed {
+  margin: 0;
+  padding: 14px 16px;
+}
+
+.rn-rail-head {
+  position: relative;
+  z-index: 4;
+  flex: none;
+  padding: 10px 10px 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.rn-head-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  min-height: 30px;
+}
+
+.rn-rail-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+
+/* An icon button: search, filter, close, resolve. */
+button.rn-icon-btn {
+  position: relative;
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  color: var(--text-tertiary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  line-height: 1;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+button.rn-icon-btn:hover:not(:disabled) {
+  color: var(--text-strong);
+  background: var(--surface-sunken);
+  border: 0;
+}
+
+button.rn-icon-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+button.rn-icon-btn.is-set {
+  color: var(--text-strong);
+}
+
+/* A filter is on: a small dark dot on the icon (no colour: colour is criticality's). */
+button.rn-icon-btn.is-set::after {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 6px;
+  height: 6px;
+  background: var(--text-strong);
+  border: 1.5px solid var(--surface);
+  border-radius: 999px;
+  content: "";
+}
+
+.rn-filter-wrap.is-open > button.rn-icon-btn {
+  color: var(--text-strong);
+  background: var(--surface-sunken);
+}
+
+/* The search, in the title's place. */
+.rn-rail-search {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 32px;
+  padding: 0 8px;
+  color: var(--text-tertiary);
+  background: var(--surface);
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius);
+  animation: rn-fade 150ms ease-out;
+}
+
+.rn-rail-search:focus-within {
+  background: var(--surface);
+  border-color: var(--border-control);
+  box-shadow: var(--ring);
+}
+
+.rn-rail-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  color: var(--text-strong);
+  background: transparent;
+  border: 0;
+  outline: 0;
+  box-shadow: none;
+  font: inherit;
+  font-size: var(--fs-sm);
+}
+
+.rn-rail-search input:focus,
+.rn-rail-search input:hover {
+  border: 0;
+  box-shadow: none;
+}
+
+.rn-rail-search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+/* One switch: Open · Mine · Resolved. It never wraps. */
+fieldset.rn-tabs {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+  margin: 8px 0 0;
+  padding: 2px;
+  background: var(--surface-sunken);
+  border: 0;
+  border-radius: var(--radius);
+}
+
+button.rn-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: auto;
+  height: 26px;
+  padding: 0 10px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+button.rn-tab:hover {
+  color: var(--text-strong);
+  background: transparent;
+  border: 0;
+}
+
+button.rn-tab[aria-pressed="true"] {
+  color: var(--text-strong);
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+}
+
+.rn-tab-count {
+  color: var(--text-tertiary);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.rn-filter-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  margin: 8px 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.rn-filter-line span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.rn-link,
+button.rn-pop-clear {
+  flex: none;
+  width: auto;
+  height: auto;
+  padding: 0;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+button.rn-link:hover,
+button.rn-pop-clear:hover {
+  color: var(--text-strong);
+  background: transparent;
+  border: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* The small menus: the filter's, the criticality's. */
+.rn-filter-wrap,
+.rn-pill-wrap {
+  position: relative;
+  flex: none;
+}
+
+fieldset.rn-pop,
+.rn-menu {
+  position: absolute;
+  z-index: 30;
+  display: grid;
+  margin: 0;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-pop);
+  animation: rn-in 150ms ease-out;
+}
+
+fieldset.rn-pop {
+  top: calc(100% + 4px);
+  right: 0;
+  width: 220px;
+  min-width: 0;
+}
+
+.rn-pop-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 8px;
+  color: var(--text-strong);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.rn-pop-item:hover {
+  background: var(--surface-hover);
+}
+
+.rn-pop-item input {
+  accent-color: var(--text-strong);
+}
+
+.rn-pop-item input:focus:not(:focus-visible) {
+  box-shadow: none;
+}
+
+.rn-pop-owner {
+  display: grid;
+  gap: 4px;
+  margin: 4px 0 0;
+  padding: 8px 8px 4px;
+  color: var(--text-tertiary);
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+button.rn-pop-clear {
+  justify-self: start;
+  margin: 6px 8px 4px;
+}
+
+select.rn-select {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding: 0 1.75rem 0 0.5rem;
+  color: var(--text-strong);
+  background-color: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: none;
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 400;
+  background-position: right 0.4rem center;
+}
+
+select.rn-select:hover:not(:disabled) {
+  border-color: var(--border-control);
+}
+
+select.rn-select:focus {
+  border-color: var(--border-control);
+  box-shadow: var(--ring);
+}
+
+/* The notes, under the header. */
+.rn-rail-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.rn-groups {
+  padding: 2px 0 6px;
+}
+
+.rn-group + .rn-group {
+  margin-top: 4px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.rn-group-label {
+  margin: 0;
+  padding: 10px 16px 4px;
+  color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.rn-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rn-list > *,
+.rn-groups > * {
+  min-width: 0;
+}
+
+/* A note: one line; opened, the note under it. */
+.rn-item {
+  position: relative;
+  min-width: 0;
+  font-size: var(--fs-base);
+}
+
+.rn-item p {
+  margin: 0;
+}
+
+.rn-item-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  padding-right: 8px;
+  transition: background 120ms ease;
+}
+
+.rn-item:not(.is-open) > .rn-item-head:hover {
+  background: var(--surface-hover);
+}
+
+button.rn-card-pick {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  width: auto;
+  min-width: 0;
+  height: 34px;
+  padding: 0 8px 0 16px;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  font-size: var(--fs-base);
+  font-weight: 400;
+  line-height: 1.4;
+  text-align: left;
+}
+
+button.rn-card-pick:hover {
+  color: var(--text);
+  background: transparent;
+  border: 0;
+}
+
+button.rn-card-pick:focus-visible:not(:disabled) {
+  border-radius: var(--radius-sm);
+  box-shadow: inset 0 0 0 2px var(--border-control);
+}
+
+.rn-line-words {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rn-card-pick time,
+.rn-line-tag {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.rn-count {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  color: var(--text-secondary);
+  background: var(--surface-sunken);
+  border-radius: var(--radius);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The criticality's colour: its dot, and nothing else of the note. */
+.rn-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  background: var(--rn-c, var(--neutral));
+  border-radius: 999px;
+}
+
+.rn-check {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 7px;
+  color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
+}
+
+/* A resolved note: one faint line. */
+.rn-item.is-closed:not(.is-open) .rn-line-words {
+  color: var(--text-tertiary);
+}
+
+/* The open note: a soft ground and a thin dark rule at its left. */
+.rn-item.is-open:not(.is-panel) {
+  background: var(--surface-muted);
+  box-shadow: inset 2px 0 0 var(--text-strong);
+  animation: rn-fade 150ms ease-out;
+}
+
+.rn-item.is-open > .rn-item-head button.rn-card-pick {
+  align-items: baseline;
+  height: auto;
+  min-height: 36px;
+  padding-top: 9px;
+  padding-bottom: 2px;
+}
+
+.rn-item.is-open > .rn-item-head {
+  align-items: flex-start;
+  padding-top: 4px;
+}
+
+.rn-item.is-open > .rn-item-head .rn-dot,
+.rn-item.is-open > .rn-item-head .rn-check {
+  align-self: center;
+  margin-top: 4px;
+}
+
+.rn-item.is-open .rn-line-words {
+  align-self: center;
+  color: var(--text-strong);
+  font-weight: 600;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.rn-item-head .row-menu {
+  flex: none;
+}
+
+.rn-item-head .row-menu-button {
+  width: 28px;
+  height: 28px;
+  color: var(--text-tertiary);
+}
+
+.rn-item-head .row-menu-button:hover {
+  color: var(--text-strong);
+}
+
+.rn-item-body {
+  padding: 0 16px 12px 31px;
+}
+
+.rn-card-line {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+.rn-text-body {
+  margin-top: 6px !important;
+  color: var(--text-strong);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+
+.rn-item.is-closed .rn-text-body {
+  color: var(--text-secondary);
+}
+
+.rn-gone {
+  margin-top: 4px !important;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-style: normal;
+}
+
+/* The replies: a thin ruled thread. */
+.rn-thread {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 0 0 0 12px;
+  border-left: 2px solid var(--border);
+  list-style: none;
+}
+
+.rn-reply-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 6px;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+}
+
+.rn-reply-head b {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.rn-reply-text {
+  margin-top: 1px !important;
+  color: var(--text);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+
+/* The note's whole history, from its "···". */
+.rn-history {
+  margin-top: 10px;
+  padding-top: 8px;
+  color: var(--text-tertiary);
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--fs-xs);
+  animation: rn-fade 150ms ease-out;
+}
+
+.rn-history-head {
+  margin-bottom: 4px !important;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+.rn-history ol {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rn-history time {
+  white-space: nowrap;
+}
+
+.rn-history-text {
+  display: block;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+/* The action row: the criticality's pill, the reply box, Resolve. */
+form.rn-act {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  min-width: 0;
+  margin-top: 12px;
+}
+
+.rn-act-gap {
+  flex: 1 1 auto;
+}
+
+button.rn-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  height: 30px;
+  padding: 0 8px 0 10px;
+  color: var(--text-strong);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  box-shadow: none;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  white-space: nowrap;
+  transition:
+    border-color 120ms ease,
+    opacity 120ms ease;
+}
+
+button.rn-pill:hover {
+  color: var(--text-strong);
+  background: var(--surface);
+  border-color: var(--border-control);
+}
+
+button.rn-pill svg {
+  color: var(--text-tertiary);
+}
+
+button.rn-pill.is-busy {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.rn-menu {
+  top: calc(100% + 4px);
+  left: 0;
+  width: 172px;
+}
+
+.rn-menu.is-up {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
+button.rn-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  color: var(--text-strong);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  text-align: left;
+}
+
+button.rn-menu-item:hover,
+button.rn-menu-item:focus-visible:not(:disabled) {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+  border: 0;
+  box-shadow: none;
+}
+
+button.rn-menu-item[aria-checked="true"] {
+  background: var(--surface-sunken);
+  font-weight: 600;
+}
+
+.rn-menu-word {
+  flex: 1;
+}
+
+.rn-key {
+  color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The reply box: one line that grows, the send arrow inside it. */
+.rn-reply-wrap {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: flex-end;
+  gap: 4px;
+  min-width: 0;
+  padding: 2px 2px 2px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.rn-reply-wrap:hover {
+  border-color: var(--border-control);
+}
+
+.rn-reply-wrap:focus-within {
+  border-color: var(--border-control);
+  box-shadow: var(--ring);
+}
+
+.rn-reply-wrap textarea.rn-reply-box,
+.rn-reply-wrap textarea.rn-reply-box:hover,
+.rn-reply-wrap textarea.rn-reply-box:focus {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 24px;
+  max-height: 160px;
+  padding: 3px 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+}
+
+button.rn-send {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: var(--text-tertiary);
+  background: var(--surface-sunken);
+  border: 0;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+}
+
+button.rn-send:hover:not(:disabled) {
+  color: var(--text-strong);
+  background: var(--surface-sunken);
+  border: 0;
+}
+
+button.rn-send.is-ready,
+button.rn-send.is-ready:hover:not(:disabled) {
+  color: var(--surface);
+  background: var(--text-strong);
+}
+
+button.rn-resolve.is-busy {
+  cursor: progress;
+}
+
+/* A dismissal's or a reopening's reason, a new owner: a box, then Cancel and the act. */
+textarea.rn-input {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  color: var(--text-strong);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: none;
+  font: inherit;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  resize: none;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+textarea.rn-input:hover:not(:disabled) {
+  border-color: var(--border-control);
+}
+
+textarea.rn-input:focus-visible,
+textarea.rn-input:focus {
+  background: var(--surface);
+  border-color: var(--border-control);
+  outline: 0;
+  box-shadow: var(--ring);
+}
+
+form.rn-compose:not(.rn-act) {
+  margin-top: 12px;
+}
+
+form.rn-compose:not(.rn-act) textarea.rn-reply-box {
+  min-height: 52px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.rn-compose-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+  animation: rn-fade 150ms ease-out;
+}
+
+.rn-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-right: auto;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.rn-hint.is-shown {
+  opacity: 1;
+}
+
+.rn-hint kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: var(--fs-2xs);
+}
+
+.rn-owner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.rn-owner label {
+  flex: none;
+}
+
+/* The new note, at the top of the list (on a narrow window, a sheet at the bottom). */
+.rn-new {
+  position: relative;
+  margin: 10px 12px 6px;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
+  animation: rn-in 200ms ease-out;
+}
+
+.rn-new p {
+  margin: 0;
+}
+
+.rn-new-head {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.rn-new .rn-card-line {
+  margin-top: 2px;
+}
+
+.rn-new textarea.rn-input {
+  margin-top: 10px;
+  min-height: 76px;
+  resize: vertical;
+}
+
+.rn-new-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 8px;
+}
+
+.rn-new-owner {
+  flex: none;
+  min-width: 3rem;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.rn-new-row select.rn-select {
+  flex: 1 1 auto;
+}
+
+.rn-new .rn-compose-row {
+  margin-top: 10px;
+}
+
+.rn-empty {
+  margin: 0;
+  padding: 14px 16px;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+.rn-failed {
+  display: grid;
+  gap: 0.5rem;
+  justify-items: start;
+  padding: 0.75rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.rn-failed p {
+  margin: 0;
+}
+
+/* "+ Note on the whole workpaper": a quiet link at the bottom. */
+button.rn-whole {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
+  height: 40px;
+  padding: 0 16px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+  box-shadow: none;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+button.rn-whole:hover {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+  border-color: var(--border-subtle);
+}
+
+button.rn-whole:focus-visible:not(:disabled) {
+  box-shadow: inset 0 0 0 2px var(--border-control);
+}
+
+.rn-quote {
+  color: var(--text-secondary);
+  font-style: italic;
+  quotes: "\201C" "\201D";
+}
+
+.rn-crit {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--text-strong);
+  font-weight: 500;
+}
+
+/* All notes' pane: the same open note, in a panel of its own. */
+.rn-item.is-panel {
+  padding: 2px 0 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.rn-item.is-panel button.rn-card-pick {
+  cursor: default;
+}
+
+/* All notes -------------------------------------------------------------------------- */
+
+.rn-all {
+  display: grid;
+  gap: 12px;
+}
+
+.rn-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+button.rn-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  height: 28px;
+  padding: 0 0.7rem;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: none;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  transition:
+    border-color 120ms ease,
+    color 120ms ease;
+}
+
+button.rn-chip:hover {
+  color: var(--text-strong);
+  background: var(--surface);
+  border-color: var(--border-control);
+}
+
+button.rn-chip.is-set {
+  color: var(--text-strong);
+  border-color: var(--text-strong);
+  box-shadow: inset 0 0 0 1px var(--text-strong);
+}
+
+/* Above the table, so a filter's choices open over it. */
+.rn-all-bar {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 10px 12px;
+}
+
+.rn-search {
+  display: inline-flex;
+  flex: 1 1 300px;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: 360px;
+  height: 32px;
+  padding: 0 0.6rem;
+  color: var(--text-tertiary);
+  background: var(--surface);
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius);
+}
+
+.rn-search:focus-within {
+  border-color: var(--border-control);
+  box-shadow: var(--ring);
+}
+
+.rn-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  color: var(--text-strong);
+  background: transparent;
+  border: 0;
+  outline: 0;
+  font: inherit;
+  font-size: var(--fs-sm);
+}
+
+.rn-filter {
+  position: relative;
+}
+
+.rn-filter-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  display: grid;
+  min-width: 14rem;
+  margin: 0;
+  padding: 0.3rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-pop);
+  animation: rn-in 150ms ease-out;
+}
+
+.rn-filter-list label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 32px;
+  padding: 0 0.5rem;
+  color: var(--text-strong);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.rn-filter-list label:hover {
+  background: var(--surface-hover);
+}
+
+.rn-filter-count {
+  margin-left: auto;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.rn-all-count {
+  margin: 0 0 0 auto;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+.rn-all-count b {
+  color: var(--text-strong);
+}
+
+.rn-all-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
+  gap: 12px;
+  align-items: start;
+}
+
+.rn-table-wrap {
+  overflow: auto;
+  padding: 0;
+}
+
+.rn-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-base);
+}
+
+.rn-table th {
+  padding: 0.55rem 0.7rem;
+  color: var(--text-tertiary);
+  background: var(--surface-muted);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.rn-table td {
+  padding: 0.6rem 0.7rem;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.rn-table tbody tr {
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.rn-table tbody tr:hover {
+  background: var(--surface-hover);
+}
+
+.rn-table tbody tr.is-selected {
+  background: var(--surface-sunken);
+}
+
+.rn-table .is-num {
+  width: 2.5rem;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.rn-table .is-where small {
+  display: block;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+.rn-table td.rn-status {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+button.rn-row-pick {
+  display: block;
+  height: auto;
+  padding: 0;
+  color: var(--text-strong);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  font-size: inherit;
+  font-weight: 500;
+  line-height: 1.4;
+  text-align: left;
+  white-space: normal;
+}
+
+button.rn-row-pick:hover {
+  color: var(--text-strong);
+  background: transparent;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.rn-detail {
+  position: sticky;
+  top: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.rn-detail-foot {
+  display: grid;
+  gap: 6px;
+  padding: 0 4px;
+}
+
+.rn-detail-head {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.rn-passage {
+  margin: 0;
+  padding: 0.55rem 0.7rem;
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.rn-passage p {
+  margin: 0;
+}
+
+.rn-passage mark.rn-hl {
+  cursor: default;
+}
+
+button.rn-open-at {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 0.35rem;
+  height: auto;
+  padding: 0;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+button.rn-open-at:hover {
+  color: var(--text-strong);
+  background: transparent;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* The reviewer's step. */
+.rn-step-line {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.rn-step-line.is-held span {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.rn-step-line a {
+  color: var(--text-strong);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* Narrower windows: the rail under the document, and the new note's form a sheet at the
+   bottom of the window, over the lower part only (the words above stay readable); at a
+   phone's width, the table a list. */
+
+@media (max-width: 1100px) {
+  .rn-with-rail {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .rn-rail {
+    position: static;
+    max-height: none;
+  }
+
+  .rn-rail-body {
+    overflow: visible;
+  }
+
+  .rn-all-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .rn-detail {
+    position: static;
+  }
+
+  .rn-new {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 70;
+    max-height: 55vh;
+    overflow: auto;
+    margin: 0;
+    padding: 14px 16px max(14px, env(safe-area-inset-bottom));
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    box-shadow: var(--shadow-pop);
+  }
+}
+
+@media (max-width: 640px) {
+  .rn-search {
+    max-width: none;
+  }
+
+  .rn-all-count {
+    margin-left: 0;
+  }
+
+  .rn-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+
+  .rn-table,
+  .rn-table tbody,
+  .rn-table tr,
+  .rn-table td {
+    display: block;
+  }
+
+  .rn-table tr {
+    display: grid;
+    grid-template-columns: 2rem minmax(0, 1fr);
+    padding: 0.55rem 0.4rem;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .rn-table td {
+    grid-column: 2;
+    padding: 0.1rem 0.3rem;
+    border: 0;
+  }
+
+  .rn-table td.is-num {
+    grid-row: 1 / span 5;
+    grid-column: 1;
+    width: auto;
+  }
+}
+
+@media print {
+  .rn-rail,
+  .rn-margin,
+  .rn-add,
+  .rn-new {
+    display: none !important;
+  }
+
+  mark.rn-hl {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .rn-with-rail {
+    display: block;
+  }
+}
+
+fieldset.rn-filters {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+/* Focus mode (product owner, 16 November 2026: focus mode, option A): the notes at the
+   step panel's right edge, a slim strip (the notes icon, the open count, one dot per open
+   note) that opens the rail as a column beside the document, not over it. Outside focus
+   the rail is beside the sheet, as above. */
+
+.rn-side {
+  display: flex;
+  min-height: 0;
+  background: var(--surface);
+  border-left: 1px solid var(--border-subtle);
+}
+
+.rn-side > .rn-rail {
+  position: static;
+  width: 340px;
+  max-height: none;
+  border: 0;
+  border-right: 1px solid var(--border-subtle);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.rn-side > .rn-rail .rn-rail-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.rn-strip {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  width: 52px;
+  padding: 14px 0;
+}
+
+button.rn-strip-btn {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+button.rn-strip-btn:hover {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+}
+
+button.rn-strip-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+.rn-strip.is-open button.rn-strip-btn {
+  color: var(--text-strong);
+  background: var(--surface-sunken);
+  border-color: var(--border-strong, var(--border));
+}
+
+.rn-strip-count {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  display: grid;
+  place-items: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  color: var(--surface);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  background: var(--text-strong);
+  border: 2px solid var(--surface);
+  border-radius: 999px;
+  box-sizing: content-box;
+}
+
+.rn-strip-dots {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+}
+
+.rn-strip-dots .rn-dot {
+  width: 6px;
+  height: 6px;
+}
+
+.rn-strip-more {
+  color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button.rn-strip-btn {
+    transition: none;
+  }
+}

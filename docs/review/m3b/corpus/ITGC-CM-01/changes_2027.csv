@@ -1,0 +1,7 @@
+Change,Description,Deployed on,Deployed by,Type
+CHG-1001,Vendor master validation,2027-01-20,svc_deploy,Standard
+CHG-1002,AP aging report fix,2027-02-17,svc_deploy,Standard
+CHG-1003,Three-way match tolerance,2027-05-04,svc_deploy,Standard
+CHG-1004,Payroll interface patch,2027-06-11,svc_deploy,Standard
+CHG-1005,Month-end job rescheduling,2027-07-02,svc_deploy,Standard
+CHG-1006,Hotfix for GL posting,2027-08-09,lbrandt,Emergency

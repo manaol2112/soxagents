@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
-
+import { homeListsWork, isClosed, pausedNotice } from "./engagement-lifecycle";
 import {
-  CATEGORIES,
   type ControlRow,
   DEFICIENCY_STATUSES,
   type Deficiency,
@@ -10,17 +9,34 @@ import {
   LIKELIHOODS,
   MAGNITUDES,
   type Milestone,
+  openPhases,
   type Phase,
   type Plan,
   type PlanTask,
   SEVERITIES,
-  STAGES,
   timelineMonths,
   timelinePercent,
 } from "./engagement-model";
 import { formatDate } from "./format";
+import type { NextSteps } from "./home-model";
+import { JourneyBar } from "./home-view";
+import { HomeWorkPanel } from "./home-work";
+import {
+  dueWords,
+  headerAction,
+  heldRecipients,
+  stageHref,
+  systemConditions,
+} from "./home-work-model";
+import { PlanMissingButton } from "./plan-missing";
+import { parseQueueFilter, type Queue } from "./queue-model";
+import { QueuePanel } from "./queue-panel";
+import { RemediationHistoryCard } from "./remediation-history";
+import { ReviewWaiting } from "./review-waiting";
+import { canonicalQuery, placeSetup } from "./routes";
 import { canManageProjects, type ShellModel } from "./shell-model";
 import { UiIcon } from "./ui-icon";
+import { canRequestEvidence } from "./workflow-model";
 import {
   Banner,
   CardHeader,
@@ -33,14 +49,12 @@ import {
 
 type Ready = Extract<ShellModel, { status: "ready" }>;
 
-const _STAGE_LABEL: Record<string, string> = Object.fromEntries(STAGES);
 const SEVERITY_LABEL: Record<string, string> = Object.fromEntries(SEVERITIES);
 const STATUS_LABEL: Record<string, string> =
   Object.fromEntries(DEFICIENCY_STATUSES);
 const LIKELIHOOD_LABEL: Record<string, string> =
   Object.fromEntries(LIKELIHOODS);
 const MAGNITUDE_LABEL: Record<string, string> = Object.fromEntries(MAGNITUDES);
-const _CATEGORY_LABEL: Record<string, string> = Object.fromEntries(CATEGORIES);
 
 const NOTICES: Record<EngagementNotice, string> = {
   saved: "Saved.",
@@ -92,6 +106,7 @@ function pageHref(
     organization: model.organization.id,
     section,
   });
+  canonicalQuery(params);
   if (model.selectedProject !== null) {
     params.set("project", model.selectedProject.id);
   }
@@ -132,6 +147,75 @@ function Identity({
   );
 }
 
+/**
+ * The conditions of the environment that hold work, said once at the top instead of on
+ * every row they hold (docs/home-plan.md, H2). Clearing them is an administrator's
+ * configuration, not a step in the engagement, so the notice names who clears them.
+ */
+function SystemNotices({ queue }: { queue: Queue | null }) {
+  const conditions = systemConditions(queue);
+  if (conditions.length === 0) {
+    return null;
+  }
+  return (
+    <>
+      {conditions.map((condition) => (
+        <div
+          key={condition.code}
+          className="banner banner-warning period-alert"
+          role="status"
+        >
+          <UiIcon
+            name={condition.code === "NO_WORKER" ? "server" : "mail"}
+            size={16}
+          />
+          <div>
+            {condition.code === "NO_WORKER" ? (
+              <>
+                <strong>
+                  Agent work cannot start: no worker is configured.
+                </strong>{" "}
+                {condition.items} item{condition.items === 1 ? " is" : "s are"}{" "}
+                held until an administrator starts the agent worker for this
+                environment.
+              </>
+            ) : condition.code === "RECIPIENT_NOT_ALLOWED" ? (
+              <>
+                <strong>
+                  {condition.items} request
+                  {condition.items === 1 ? " is" : "s are"} addressed outside
+                  the allowed recipient domains.
+                </strong>{" "}
+                This environment sends evidence requests only to approved
+                domains, so these requests cannot be approved until an
+                administrator allows the organization's domain or the recipient
+                is changed.
+                <span className="notice-examples">
+                  Held for{" "}
+                  {heldRecipients(condition.texts).slice(0, 3).join(", ")}
+                  {heldRecipients(condition.texts).length > 3
+                    ? `, and ${heldRecipients(condition.texts).length - 3} more`
+                    : ""}
+                  .
+                </span>
+              </>
+            ) : (
+              <>
+                <strong>
+                  {condition.items} item
+                  {condition.items === 1 ? " is" : "s are"} held by a system
+                  condition.
+                </strong>{" "}
+                {condition.texts[0] ?? ""}
+              </>
+            )}
+          </div>
+        </div>
+      ))}
+    </>
+  );
+}
+
 function Notice({ notice }: { notice: EngagementNotice | null }) {
   if (notice === null) {
     return null;
@@ -146,7 +230,7 @@ function NotStarted({ model, what }: { model: Ready; what: string }) {
       <EmptyState
         icon="briefcase"
         title={`The ${what} starts with the engagement`}
-        detail="Finish setup and approve the kickoff plan. The planner then lays out the phases, milestones, tasks, and controls this page shows."
+        detail="Finish setup and launch the engagement to see the phases, milestones, and tasks here."
         action={
           <a className="btn" href={sectionHref(model, "setup")}>
             Open setup <UiIcon name="arrow" size={15} />
@@ -186,11 +270,29 @@ function Meter({ value, tone = "" }: { value: number; tone?: string }) {
 export function EngagementDashboard({
   model,
   engagement,
+  home,
   attention,
+  next = null,
+  queue = null,
+  allWork = false,
+  workHref,
+  activity = null,
 }: {
   model: Ready;
   engagement: EngagementState;
+  /** The older journey and list, used only when the queue is not available. */
+  home?: ReactNode;
   attention: ReactNode;
+  /** The journey of stages (next_steps). */
+  next?: NextSteps | null;
+  /** The engagement's one queue, as this viewer sees it (Milestone 2). */
+  queue?: Queue | null;
+  /** The full list of open work with its filters, instead of Home's sections. */
+  allWork?: boolean;
+  /** Home's address with a work filter ("all" for the full list, "" for Home). */
+  workHref?: ((filter: string) => string) | undefined;
+  /** The engagement's recent activity, folded at the foot of Home in every state. */
+  activity?: ReactNode;
 }) {
   const project = model.selectedProject;
   const data = engagement.dashboard;
@@ -200,321 +302,485 @@ export function EngagementDashboard({
   if (data === null) {
     return (
       <div className="page">
-        <PageHeader context="Dashboard" title={project.name} />
+        <PageHeader context={project.name} title="Home" />
+        {home}
         <Unavailable what="dashboard" />
         {attention}
       </div>
     );
   }
-  const { controls, evidence, deficiencies, schedule, work } = data;
-  const current =
-    schedule.phases.find((phase) => phase.status === "AT_RISK") ??
-    schedule.phases.find((phase) => phase.status === "IN_PROGRESS") ??
-    schedule.phases.find((phase) => phase.status === "NOT_STARTED");
+  const { controls, evidence, deficiencies, schedule } = data;
+  const today = new Date().toISOString().slice(0, 10);
   const severe =
     (deficiencies.bySeverity.SIGNIFICANT_DEFICIENCY ?? 0) +
     (deficiencies.bySeverity.MATERIAL_WEAKNESS ?? 0);
-  const next = schedule.nextMilestones[0];
+  const nextMilestone = schedule.nextMilestones[0];
+  const stage =
+    next !== null
+      ? (next.stages.find((item) => item.key === next.current)?.label ?? null)
+      : null;
+  // Paused, completed or archived: Home shows where it stands, without work to do.
+  const closed = !homeListsWork(project.status);
+  const top = closed
+    ? null
+    : headerAction(queue, model.organization.id, project.id);
+  // A completed or archived engagement has no milestones ahead of it.
+  const finished = isClosed(project.status);
+  const ids = { organizationId: model.organization.id, projectId: project.id };
+  const line = [
+    schedule.periodEnd !== null
+      ? `Period ends ${formatDate(schedule.periodEnd)}`
+      : null,
+    stage !== null ? `${stage} stage` : null,
+    !finished && nextMilestone !== undefined
+      ? `Next: ${nextMilestone.name}, ${formatDate(nextMilestone.dueDate)} (${dueWords(nextMilestone.dueDate, today)})`
+      : null,
+  ]
+    .filter((part) => part !== null)
+    .join(" · ");
+  const idle =
+    nextMilestone !== undefined
+      ? `Next on the engagement: ${nextMilestone.name}, ${formatDate(nextMilestone.dueDate)}.`
+      : "";
+  const deepest = [...SEVERITIES]
+    .reverse()
+    .find(([key]) => (deficiencies.bySeverity[key] ?? 0) > 0);
   return (
-    <div className="page">
+    <div className="page home-page">
       <PageHeader
-        context="Dashboard"
-        title={project.name}
+        context={project.name}
+        title="Home"
         badge={<StatusPill status={project.status} />}
-        description={
-          <>
-            {schedule.periodEnd !== null
-              ? `Fiscal year ending ${formatDate(schedule.periodEnd)}. `
-              : ""}
-            {current !== undefined ? `Current phase: ${current.name}. ` : ""}
-            {work.total - work.done} of {work.total} tasks open.
-          </>
-        }
+        description={line}
         actions={
           <>
-            <a className="btn btn-secondary" href={pageHref(model, "timeline")}>
-              Timeline
-            </a>
-            <a className="btn" href={pageHref(model, "plan")}>
-              Project plan <UiIcon name="arrow" size={15} />
-            </a>
+            <details className="row-menu home-menu">
+              <summary className="btn btn-secondary">
+                More <UiIcon name="chevron" size={13} />
+              </summary>
+              <div className="row-menu-panel home-menu-panel">
+                <a href={pageHref(model, "timeline")}>Timeline</a>
+                <a href={pageHref(model, "plan")}>Project plan</a>
+              </div>
+            </details>
+            {top !== null ? (
+              <a className="btn home-primary" href={top.href} title={top.title}>
+                <span>{top.label}</span>
+                <UiIcon name="arrow" size={15} />
+              </a>
+            ) : null}
           </>
         }
       />
-      {schedule.scheduleMissing ? (
+      <LifecycleNotice status={project.status} />
+      {data.periodConflicts.length > 0 ? (
+        // A div, not Banner's paragraph: the alert holds a list.
+        <div className="banner banner-warning period-alert" role="status">
+          <UiIcon name="risk" size={16} />
+          <div>
+            <strong>Review the audit period.</strong> The recorded period is
+            inconsistent with the engagement's name or scope:
+            <ul>
+              {data.periodConflicts.map((message) => (
+                <li key={message}>{message}</li>
+              ))}
+            </ul>
+            <a
+              href={`/?${placeSetup(
+                canonicalQuery(
+                  new URLSearchParams({
+                    organization: model.organization.id,
+                    project: project.id,
+                    section: "setup",
+                    step: "profile",
+                  }),
+                ),
+                project.status,
+              ).toString()}`}
+            >
+              Review the period
+            </a>
+          </div>
+        </div>
+      ) : null}
+      {/* Notices that lead to work appear only while Home lists work. */}
+      {!closed && data.unplannedControls + data.unrequestedControls > 0 ? (
+        // A div, not Banner's paragraph: the alert holds a button.
+        <div className="banner banner-warning period-alert" role="status">
+          <UiIcon name="risk" size={16} />
+          <div>
+            {data.unplannedControls > 0 ? (
+              <>
+                <strong>
+                  {data.unplannedControls} control
+                  {data.unplannedControls === 1 ? " has" : "s have"} no evidence
+                  plan.
+                </strong>{" "}
+                This engagement launched before evidence planning was
+                introduced, so any requests drafted for these controls were
+                prepared without a plan. Plan the evidence; each kickoff draft
+                is then reconciled with its plan.{" "}
+              </>
+            ) : null}
+            {data.unrequestedControls > 0 ? (
+              <>
+                <strong>
+                  {data.unrequestedControls} control
+                  {data.unrequestedControls === 1 ? " has" : "s have"} planned
+                  evidence that has not been requested.
+                </strong>{" "}
+                No recipient was available at launch, so no requests were
+                drafted. Draft the requests now; each awaits a recipient and
+                approval.{" "}
+              </>
+            ) : null}
+            No request is sent or replaced without approval.
+            {canRequestEvidence(model.organization.role) ? (
+              <div className="banner-action">
+                <PlanMissingButton
+                  organizationId={model.organization.id}
+                  projectId={project.id}
+                  unplanned={data.unplannedControls}
+                  unrequested={data.unrequestedControls}
+                />
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+      {/* One cause behind many held requests, with its one fix (docs/home-plan.md). */}
+      {!closed && data.unaddressedRequests > 0 ? (
+        <div className="banner banner-warning period-alert" role="status">
+          <UiIcon name="mail" size={16} />
+          <div>
+            <strong>
+              {data.unaddressedRequests} drafted request
+              {data.unaddressedRequests === 1 ? " has" : "s have"} no recipient.
+            </strong>{" "}
+            No control owner email or evidence coordinator is set. Assigning an
+            evidence coordinator addresses all of them; requests cannot be
+            approved until a recipient is set.{" "}
+            <a
+              href={`/?${new URLSearchParams({
+                organization: model.organization.id,
+                project: project.id,
+                section: "evidence",
+                tab: "requests",
+              }).toString()}#contacts-title`}
+            >
+              Assign the evidence coordinator
+            </a>
+          </div>
+        </div>
+      ) : null}
+      {closed ? null : <SystemNotices queue={queue} />}
+      {!closed && schedule.scheduleMissing ? (
         <Banner tone="warning">
           This engagement started before project plans existed.{" "}
           <a href={pageHref(model, "plan")}>Create its standard plan</a> to see
           phases and milestones.
         </Banner>
       ) : null}
-      <section className="kpis kpis-five" aria-label="Engagement health">
-        <Metric
-          icon="shield"
-          label="Controls in scope"
-          value={controls.inScope}
-          detail={`${controls.key} key · ${controls.samples} samples`}
+      {next !== null ? (
+        <JourneyBar
+          next={next}
+          hrefFor={(key) => stageHref(key, ids.organizationId, ids.projectId)}
         />
-        <Metric
-          icon="check"
-          label="Testing concluded"
-          value={controls.concluded}
-          detail={`${percent(controls.concluded, controls.inScope)}% · ${controls.exceptions} with exceptions`}
-          tone={controls.exceptions > 0 ? "risk" : "default"}
-        />
-        <Metric
-          icon="inbox"
-          label="Evidence received"
-          value={evidence.received}
-          detail={
-            evidence.overdue > 0
-              ? `${evidence.overdue} overdue of ${evidence.total}`
-              : `of ${evidence.total} requests`
-          }
-          tone={evidence.overdue > 0 ? "risk" : "default"}
-        />
-        <Metric
-          icon="risk"
-          label="Open deficiencies"
-          value={deficiencies.open}
-          detail={
-            severe > 0
-              ? `${severe} significant or material`
-              : deficiencies.open === 0
-                ? "None open"
-                : "Control deficiencies only"
-          }
-          tone={
-            severe > 0
-              ? "risk"
-              : deficiencies.open === 0
-                ? "positive"
-                : "default"
-          }
-        />
-        <Metric
-          icon="clock"
-          label="Schedule"
-          value={schedule.atRisk}
-          detail={
-            schedule.atRisk > 0
-              ? `${schedule.atRisk === 1 ? "phase" : "phases"} at risk`
-              : next !== undefined
-                ? `On track · next ${formatDate(next.dueDate)}`
-                : "On track"
-          }
-          tone={schedule.atRisk > 0 ? "risk" : "positive"}
-        />
-      </section>
-      <div className="layout-two dashboard-row">
-        <section className="card" aria-labelledby="testing-title">
-          <CardHeader
-            title="Control testing progress"
-            titleId="testing-title"
-            description="Where every in-scope control is, by type."
-            aside={
-              <a className="text-link" href={pageHref(model, "controls")}>
-                Controls
-              </a>
-            }
+      ) : null}
+      {allWork && queue !== null && workHref !== undefined ? (
+        <>
+          <p className="home-back">
+            <a href={workHref("")}>
+              <span className="icon-back" aria-hidden="true">
+                <UiIcon name="arrow" size={13} />
+              </span>
+              Back to Home
+            </a>
+          </p>
+          <QueuePanel
+            queue={queue}
+            filter={parseQueueFilter(engagement.filters.workFilter ?? null)}
+            organizationId={ids.organizationId}
+            projectId={ids.projectId}
+            baseHref={(filter) => workHref(filter === "" ? "all" : filter)}
           />
-          <div className="card-body stack">
-            {CATEGORIES.map(([key, label]) => {
-              const stages = controls.byCategory[key] ?? {};
-              const total = Object.values(stages).reduce((a, b) => a + b, 0);
-              return (
-                <div key={key} className="progress-row">
-                  <div className="progress-head">
-                    <strong>{label}</strong>
-                    <span className="num">
-                      {stages.CONCLUDED ?? 0} of {total} concluded
-                    </span>
-                  </div>
-                  {total === 0 ? (
-                    <span className="form-hint">None in scope</span>
-                  ) : (
-                    <span
-                      className="stacked"
-                      role="img"
-                      aria-label={`${label} by stage`}
-                    >
-                      {STAGES.filter(([stage]) => (stages[stage] ?? 0) > 0).map(
-                        ([stage, stageLabel]) => (
-                          <span
-                            key={stage}
-                            className={`stack-${stage.toLowerCase()}`}
-                            style={{
-                              width: `${percent(stages[stage] ?? 0, total)}%`,
-                            }}
-                            title={`${stageLabel}: ${stages[stage]}`}
-                          />
-                        ),
-                      )}
-                    </span>
-                  )}
-                </div>
-              );
-            })}
-            <ul className="legend">
-              {STAGES.filter(([stage]) => stage !== "NOT_PLANNED").map(
-                ([stage, label]) => (
-                  <li key={stage}>
-                    <span className={`swatch stack-${stage.toLowerCase()}`} />
-                    {label}
-                  </li>
-                ),
-              )}
-            </ul>
-          </div>
-        </section>
-        <section className="card" aria-labelledby="deficiency-title">
-          <CardHeader
-            title="Deficiencies"
-            titleId="deficiency-title"
-            description="Open findings by severity, as approved by the reviewer."
-            aside={
-              <a className="text-link" href={pageHref(model, "deficiencies")}>
-                Register
-              </a>
-            }
-          />
-          <div className="card-body">
-            <ul className="severity-grid">
-              {[...SEVERITIES].reverse().map(([key, label]) => (
-                <li
-                  key={key}
-                  className={`severity-cell ${(deficiencies.bySeverity[key] ?? 0) > 0 ? SEVERITY_TONE[key] : "severity-none"}`}
-                >
-                  <strong className="num">
-                    {deficiencies.bySeverity[key] ?? 0}
-                  </strong>
-                  <span>{label}</span>
-                </li>
-              ))}
-            </ul>
-            <dl className="facts">
-              <div>
-                <dt>Waiting for the reviewer</dt>
-                <dd className="num">{deficiencies.awaitingApproval}</dd>
-              </div>
-              <div>
-                <dt>Remediation past due</dt>
-                <dd className="num">{deficiencies.remediationOverdue}</dd>
-              </div>
-            </dl>
-          </div>
-        </section>
-      </div>
-      <div className="layout-two dashboard-row">
-        <section className="card" aria-labelledby="schedule-title">
-          <CardHeader
-            title="Schedule"
-            titleId="schedule-title"
-            description="Phases against today."
-            aside={
-              <a className="text-link" href={pageHref(model, "timeline")}>
-                Timeline
-              </a>
-            }
-          />
-          <div className="card-body">
-            {schedule.phases.length === 0 ? (
-              <p className="form-hint">No plan yet.</p>
-            ) : (
-              <MiniTimeline phases={schedule.phases} />
+        </>
+      ) : (
+        <div className="home-layout">
+          <div className="home-main">
+            {/* Section 3.8 of docs/design-workpaper.md: the D&I workpapers sent to the
+                viewer for review, each opening its section 7. Not drawn when none wait. */}
+            {closed ? null : (
+              <ReviewWaiting
+                organizationId={ids.organizationId}
+                projectId={ids.projectId}
+              />
             )}
-          </div>
-        </section>
-        <section className="card" aria-labelledby="milestones-title">
-          <CardHeader title="Next milestones" titleId="milestones-title" />
-          {schedule.nextMilestones.length === 0 ? (
-            <div className="card-body">
-              <p className="form-hint">No open milestones.</p>
-            </div>
-          ) : (
-            <ul className="rows">
-              {schedule.nextMilestones.map((milestone) => (
-                <li key={milestone.key}>
-                  <span className="row-text">
-                    <span>{milestone.name}</span>
-                    <small>{formatDate(milestone.dueDate)}</small>
-                  </span>
-                  <span
-                    className={`pill pill-dot ${MILESTONE_TONE[milestone.status]}`}
-                  >
-                    {MILESTONE_STATUS[milestone.status]}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </section>
-      </div>
-      <div className="layout-two dashboard-row">
-        <section className="card" aria-labelledby="evidence-title">
-          <CardHeader
-            title="Evidence"
-            titleId="evidence-title"
-            aside={
-              <a className="text-link" href={sectionHref(model, "evidence")}>
-                Requests
-              </a>
-            }
-          />
-          <div className="card-body stack">
-            {(
-              [
-                ["Drafted, not sent", evidence.draft, ""],
-                [
-                  "Outstanding with the client",
-                  evidence.outstanding,
-                  "tone-info",
-                ],
-                ["Overdue", evidence.overdue, "tone-danger"],
-                ["Received", evidence.received, "tone-success"],
-              ] as const
-            ).map(([label, value, tone]) => (
-              <div key={label} className="bar-row">
-                <span>{label}</span>
-                <Meter value={percent(value, evidence.total)} tone={tone} />
-                <span className="num">{value}</span>
-              </div>
-            ))}
-          </div>
-        </section>
-        <section className="card" aria-labelledby="agents-title">
-          <CardHeader
-            title="Open work by agent"
-            titleId="agents-title"
-            description={`${work.waiting} tasks are waiting on earlier work.`}
-          />
-          <div className="card-body stack">
-            {Object.entries(work.byAgent).length === 0 ? (
-              <p className="form-hint">No open work.</p>
+            {closed ? null : queue !== null && workHref !== undefined ? (
+              <HomeWorkPanel
+                queue={queue}
+                organizationId={ids.organizationId}
+                projectId={ids.projectId}
+                allHref={workHref("all")}
+                idle={idle}
+              />
             ) : (
-              Object.entries(work.byAgent).map(([agent, value]) => (
-                <div key={agent} className="bar-row">
-                  <span>{agent}</span>
-                  <Meter
-                    value={percent(
-                      value,
-                      Math.max(...Object.values(work.byAgent)),
-                    )}
-                    tone="tone-info"
+              (home ?? <Unavailable what="work" />)
+            )}
+            {/* The older inbox stands in only when the queue cannot be read: beside the
+                queue it would list the same work again, without its controls. */}
+            {closed || queue !== null ? null : attention}
+            {activity}
+          </div>
+          <aside className="home-rail" aria-label="The engagement at a glance">
+            <section className="card glance" aria-labelledby="glance-title">
+              <CardHeader title="At a glance" titleId="glance-title" />
+              <ul className="glance-grid">
+                <Glance
+                  label="Testing"
+                  value={`${controls.concluded} of ${controls.inScope}`}
+                  detail={
+                    controls.exceptions > 0
+                      ? `concluded · ${controls.exceptions} control${controls.exceptions === 1 ? "" : "s"} with exceptions so far`
+                      : "concluded"
+                  }
+                  tone={controls.exceptions > 0 ? "attention" : "plain"}
+                  href={stageHref("TESTING", ids.organizationId, ids.projectId)}
+                />
+                <Glance
+                  label="Evidence"
+                  // Nothing requested yet reads as such, never "0 of 0" (design review,
+                  // 17 November 2026).
+                  value={
+                    evidence.total === 0
+                      ? "None"
+                      : `${evidence.received} of ${evidence.total}`
+                  }
+                  detail={
+                    evidence.total === 0
+                      ? "requested yet"
+                      : evidence.overdue > 0
+                        ? `received · ${evidence.overdue} overdue`
+                        : "received · none overdue"
+                  }
+                  tone={evidence.overdue > 0 ? "risk" : "plain"}
+                  href={sectionHref(model, "evidence")}
+                />
+                <Glance
+                  label="Deficiencies"
+                  value={String(deficiencies.open)}
+                  detail={
+                    deficiencies.open === 0
+                      ? "none open"
+                      : `open · most severe: ${(deepest?.[1] ?? "").toLowerCase()}`
+                  }
+                  tone={
+                    severe > 0
+                      ? "risk"
+                      : deficiencies.open > 0
+                        ? "attention"
+                        : "good"
+                  }
+                  href={pageHref(model, "deficiencies")}
+                />
+                {schedule.phases.length === 0 ? (
+                  // Nothing planned is not "on track": the figure says so plainly.
+                  <Glance
+                    label="Schedule"
+                    value="Not planned"
+                    detail="no phases or milestones yet"
+                    tone="plain"
+                    href={pageHref(model, "plan")}
                   />
-                  <span className="num">{value}</span>
-                </div>
-              ))
+                ) : (
+                  <Glance
+                    label="Schedule"
+                    value={
+                      schedule.atRisk > 0
+                        ? `${schedule.atRisk} behind`
+                        : "On track"
+                    }
+                    detail={
+                      schedule.atRisk > 0
+                        ? `phase${schedule.atRisk === 1 ? "" : "s"} past their planned dates`
+                        : "no phase behind its planned dates"
+                    }
+                    tone={schedule.atRisk > 0 ? "risk" : "good"}
+                    href={pageHref(model, "timeline")}
+                  />
+                )}
+              </ul>
+            </section>
+            {finished ? null : (
+              <section className="card" aria-labelledby="milestones-title">
+                <CardHeader
+                  title="Next milestones"
+                  titleId="milestones-title"
+                />
+                {schedule.nextMilestones.length === 0 ? (
+                  <div className="card-body">
+                    <p className="form-hint">No open milestones.</p>
+                  </div>
+                ) : (
+                  <ul className="rows home-milestones">
+                    {schedule.nextMilestones.slice(0, 3).map((milestone) => (
+                      <li key={milestone.key}>
+                        <span className="row-text">
+                          <span>{milestone.name}</span>
+                          <small>
+                            {formatDate(milestone.dueDate)} ·{" "}
+                            {dueWords(milestone.dueDate, today)}
+                          </small>
+                        </span>
+                        {milestone.status === "DUE_SOON" ||
+                        milestone.status === "MISSED" ? (
+                          <span
+                            className={`pill pill-dot ${MILESTONE_TONE[milestone.status]}`}
+                          >
+                            {MILESTONE_STATUS[milestone.status]}
+                          </span>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
             )}
-          </div>
-        </section>
-      </div>
-      {attention}
+            <section className="card" aria-labelledby="deficiency-title">
+              <CardHeader
+                title="Deficiencies"
+                titleId="deficiency-title"
+                aside={
+                  <a
+                    className="text-link"
+                    href={pageHref(model, "deficiencies")}
+                  >
+                    Register
+                  </a>
+                }
+              />
+              <ul className="rows home-severity">
+                {[...SEVERITIES].reverse().map(([key, label]) => (
+                  <li key={key}>
+                    <span className="row-text">
+                      <span>{label}</span>
+                    </span>
+                    <strong
+                      className={`num ${(deficiencies.bySeverity[key] ?? 0) > 0 ? SEVERITY_TONE[key] : "severity-none"}`}
+                    >
+                      {deficiencies.bySeverity[key] ?? 0}
+                    </strong>
+                  </li>
+                ))}
+              </ul>
+              {deficiencies.awaitingApproval + deficiencies.remediationOverdue >
+              0 ? (
+                <p className="card-foot form-hint">
+                  {deficiencies.awaitingApproval} waiting for the reviewer ·{" "}
+                  {deficiencies.remediationOverdue} remediation past due
+                </p>
+              ) : null}
+            </section>
+            <section
+              className="card home-schedule"
+              aria-labelledby="schedule-title"
+            >
+              <CardHeader
+                title="Schedule"
+                titleId="schedule-title"
+                aside={
+                  <a className="text-link" href={pageHref(model, "timeline")}>
+                    Timeline
+                  </a>
+                }
+              />
+              <div className="card-body">
+                {schedule.phases.length === 0 ? (
+                  <p className="form-hint">No plan yet.</p>
+                ) : (
+                  <MiniTimeline phases={schedule.phases} today={today} />
+                )}
+              </div>
+            </section>
+          </aside>
+        </div>
+      )}
     </div>
   );
 }
 
-function MiniTimeline({ phases }: { phases: Phase[] }) {
+/**
+ * The engagement's agent work by agent (docs/home-plan.md, D5): a workforce view, shown
+ * in Settings › AI workforce beside the agents it describes rather than on Home.
+ */
+export function AgentWorkCard({
+  work,
+  projectName,
+}: {
+  work: { waiting: number; byAgent: Record<string, number> };
+  projectName: string;
+}) {
+  const largest = Math.max(1, ...Object.values(work.byAgent));
+  return (
+    <section className="card" aria-labelledby="agent-work-title">
+      <CardHeader
+        title="Open work by agent"
+        titleId="agent-work-title"
+        description={`On ${projectName}. ${work.waiting} task${work.waiting === 1 ? " is" : "s are"} waiting on earlier work.`}
+      />
+      {Object.keys(work.byAgent).length === 0 ? (
+        <div className="card-body">
+          <p className="form-hint">No agent work is open on this engagement.</p>
+        </div>
+      ) : (
+        <div className="card-body stack">
+          {Object.entries(work.byAgent).map(([agent, value]) => (
+            <div key={agent} className="bar-row">
+              <span>{agent}</span>
+              <Meter value={percent(value, largest)} tone="tone-info" />
+              <span className="num">{value}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/** Said once at the top while the engagement is paused. A completed or archived one
+ * already carries the shell's read-only strip (`closedNotice`), so it is not repeated. */
+function LifecycleNotice({ status }: { status: string }) {
+  const notice = pausedNotice(status);
+  return notice === null ? null : <Banner tone="warning">{notice}</Banner>;
+}
+
+/** One figure of the engagement at a glance, opening where it is worked on. Colour
+ * carries meaning only: risk, needs attention, or good. */
+function Glance({
+  label,
+  value,
+  detail,
+  tone,
+  href,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+  tone: "plain" | "attention" | "risk" | "good";
+  href: string;
+}) {
+  return (
+    <li className={`glance-item is-${tone}`}>
+      <a href={href}>
+        <span className="glance-label">{label}</span>
+        <strong className="glance-value num">{value}</strong>
+        <span className="glance-detail">{detail}</span>
+      </a>
+    </li>
+  );
+}
+
+function MiniTimeline({ phases, today }: { phases: Phase[]; today: string }) {
   const start = phases.reduce(
     (min, phase) => (phase.plannedStart < min ? phase.plannedStart : min),
     phases[0]?.plannedStart ?? "",
@@ -523,10 +789,36 @@ function MiniTimeline({ phases }: { phases: Phase[] }) {
     (max, phase) => (phase.plannedEnd > max ? phase.plannedEnd : max),
     phases[0]?.plannedEnd ?? "",
   );
-  const today = new Date().toISOString().slice(0, 10);
   const now = timelinePercent(today, start, end);
+  const inside = today >= start && today <= end;
+  const all = timelineMonths(start, end);
+  // At most five month labels, evenly spaced, and none crowding the "Today" mark, so the
+  // labels never collide in the rail's width.
+  const step = Math.max(1, Math.ceil(all.length / 5));
+  // Each month with its year, so a label can name the year where it changes.
+  let year = Number(start.slice(0, 4));
+  const dated = all.map((month) => {
+    if (month.year !== null) {
+      year = Number(month.year);
+    }
+    return { ...month, fullYear: year };
+  });
+  let shownYear: number | null = null;
+  const months = dated
+    .filter(
+      (month, i) =>
+        i % step === 0 && (!inside || Math.abs(month.at - now) > 12),
+    )
+    .map((month) => {
+      const label =
+        month.fullYear !== shownYear
+          ? `${month.label} ${month.fullYear}`
+          : month.label;
+      shownYear = month.fullYear;
+      return { ...month, label };
+    });
   return (
-    <div className="mini-timeline">
+    <div className="mini-timeline is-stacked">
       {phases.map((phase) => {
         const left = timelinePercent(phase.plannedStart, start, end);
         const width = Math.max(
@@ -535,20 +827,43 @@ function MiniTimeline({ phases }: { phases: Phase[] }) {
         );
         return (
           <div key={phase.key} className="mini-row">
-            <span className="mini-label">{phase.name}</span>
+            <span className="mini-label">
+              {phase.name}
+              <small>
+                {formatDate(phase.plannedStart)} to{" "}
+                {formatDate(phase.plannedEnd)}
+              </small>
+            </span>
             <span className="mini-track">
               <span
                 className={`gantt-bar gantt-${phase.status.toLowerCase()}`}
                 style={{ left: `${left}%`, width: `${width}%` }}
-                title={`${formatDate(phase.plannedStart)} to ${formatDate(phase.plannedEnd)}`}
               />
-              {today >= start && today <= end ? (
+              {inside ? (
                 <span className="gantt-today" style={{ left: `${now}%` }} />
               ) : null}
             </span>
           </div>
         );
       })}
+      <div className="mini-axis" aria-hidden="true">
+        {months.map((month) => (
+          <span
+            key={`${month.label}-${month.at}`}
+            style={{ left: `${month.at}%` }}
+          >
+            {month.label}
+          </span>
+        ))}
+        {inside ? (
+          <span
+            className={`mini-today${now < 8 ? " is-start" : now > 92 ? " is-end" : ""}`}
+            style={{ left: `${now}%` }}
+          >
+            Today
+          </span>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -577,13 +892,13 @@ function PlanMissing({
         <div>
           <h2>Create the standard plan</h2>
           <p className="form-hint">
-            This engagement started before project plans existed. The planner
-            lays out the standard SOX calendar from the kickoff date and the
-            period end, and gives every task its phase's deadline.
+            Create a project plan from the standard SOX calendar, based on the
+            kickoff date and the period end. Each task gets its phase's
+            deadline.
           </p>
         </div>
         {canManageProjects(model.organization.role) ? (
-          <form method="post" action="/workspace/engagement">
+          <form autoComplete="off" method="post" action="/workspace/engagement">
             <Identity
               model={model}
               intent="create-schedule"
@@ -632,6 +947,7 @@ export function PlanMain({
   const done = plan.tasks.filter(
     (task) => task.status === "SUCCEEDED" || task.status === "CANCELLED",
   ).length;
+  const opened = openPhases(plan.phases);
   return (
     <div className="page">
       <PageHeader
@@ -656,6 +972,7 @@ export function PlanMain({
           key={phase.key}
           model={model}
           phase={phase}
+          open={opened.has(phase.key)}
           tasks={plan.tasks.filter((task) => task.phaseKey === phase.key)}
           milestones={plan.milestones.filter((m) => m.phaseKey === phase.key)}
           editable={editable}
@@ -677,12 +994,14 @@ export function PlanMain({
 function PhaseCard({
   model,
   phase,
+  open,
   tasks,
   milestones,
   editable,
 }: {
   model: Ready;
   phase: Phase;
+  open: boolean;
   tasks: PlanTask[];
   milestones: Milestone[];
   editable: boolean;
@@ -717,13 +1036,13 @@ function PhaseCard({
       {tasks.length === 0 ? (
         <p className="phase-empty form-hint">
           {phase.key === "PLANNING"
-            ? "Done in engagement setup: scope and period, team, RCM, systems, workpaper templates, and the PBC plan."
+            ? "Completed during setup: scope, period, team, controls, systems, workpaper templates, and the evidence request plan."
             : phase.key === "ROLLFORWARD" || phase.key === "REMEDIATION"
               ? "Tasks are added when interim testing is reviewed and its results are known."
               : "No tasks in this phase yet."}
         </p>
       ) : (
-        <details className="phase-tasks" open={phase.status !== "DONE"}>
+        <details className="phase-tasks" open={open}>
           <summary>
             {tasks.length} task{tasks.length === 1 ? "" : "s"}
             {phase.overdue > 0 ? ` · ${phase.overdue} overdue` : ""}
@@ -735,6 +1054,7 @@ function PhaseCard({
         <details className="phase-edit">
           <summary>Change dates</summary>
           <form
+            autoComplete="off"
             method="post"
             action="/workspace/engagement"
             className="toolbar"
@@ -1041,49 +1361,65 @@ export function TimelineMain({
                   </td>
                   {editable ? (
                     <td className="cell-end">
-                      <form
-                        method="post"
-                        action="/workspace/engagement"
-                        className="milestone-form"
-                      >
-                        <Identity
-                          model={model}
-                          intent="milestone"
-                          section="timeline"
-                        />
-                        <input
-                          type="hidden"
-                          name="milestone_key"
-                          value={milestone.key}
-                        />
-                        <input
-                          type="hidden"
-                          name="version"
-                          value={milestone.version}
-                        />
-                        <input
-                          type="date"
-                          name="due_date"
-                          defaultValue={milestone.dueDate}
-                          aria-label={`Due date for ${milestone.name}`}
-                          required
-                        />
-                        <label
-                          className="check"
-                          htmlFor={`done-${milestone.key}`}
+                      <details className="milestone-edit">
+                        <summary className="btn btn-ghost btn-sm">
+                          <span className="when-closed">
+                            Change
+                            <span className="sr-only"> {milestone.name}</span>
+                          </span>
+                          <span className="when-open">
+                            Cancel
+                            <span className="sr-only">
+                              {" "}
+                              changing {milestone.name}
+                            </span>
+                          </span>
+                        </summary>
+                        <form
+                          autoComplete="off"
+                          method="post"
+                          action="/workspace/engagement"
+                          className="milestone-form"
                         >
-                          <input
-                            id={`done-${milestone.key}`}
-                            type="checkbox"
-                            name="completed"
-                            defaultChecked={milestone.completedAt !== null}
+                          <Identity
+                            model={model}
+                            intent="milestone"
+                            section="timeline"
                           />
-                          Done
-                        </label>
-                        <button type="submit" className="btn-secondary btn-sm">
-                          Save
-                        </button>
-                      </form>
+                          <input
+                            type="hidden"
+                            name="milestone_key"
+                            value={milestone.key}
+                          />
+                          <input
+                            type="hidden"
+                            name="version"
+                            value={milestone.version}
+                          />
+                          <input
+                            type="date"
+                            name="due_date"
+                            defaultValue={milestone.dueDate}
+                            aria-label={`Due date for ${milestone.name}`}
+                            required
+                          />
+                          <label
+                            className="check"
+                            htmlFor={`done-${milestone.key}`}
+                          >
+                            <input
+                              id={`done-${milestone.key}`}
+                              type="checkbox"
+                              name="completed"
+                              defaultChecked={milestone.completedAt !== null}
+                            />
+                            Done
+                          </label>
+                          <button type="submit" className="btn-sm">
+                            Save
+                          </button>
+                        </form>
+                      </details>
                     </td>
                   ) : null}
                 </tr>
@@ -1133,7 +1469,7 @@ export function DeficienciesMain({
       <PageHeader
         context={project.name}
         title="Deficiencies"
-        description="Every control deficiency found, its severity under the SOX evaluation, and its remediation. The engagement reviewer approves any significant deficiency or material weakness, and every closure."
+        description="Every deficiency found, its severity, and its remediation. The engagement reviewer approves significant deficiencies, material weaknesses, and every closure."
       />
       <Notice notice={engagement.notice} />
       <section className="kpis kpis-five" aria-label="Deficiency summary">
@@ -1141,14 +1477,14 @@ export function DeficienciesMain({
           icon="risk"
           label="Material weaknesses"
           value={count("MATERIAL_WEAKNESS")}
-          detail="Open"
+          detail={count("MATERIAL_WEAKNESS") > 0 ? "Open" : "None open"}
           tone={count("MATERIAL_WEAKNESS") > 0 ? "risk" : "positive"}
         />
         <Metric
           icon="risk"
           label="Significant deficiencies"
           value={count("SIGNIFICANT_DEFICIENCY")}
-          detail="Open"
+          detail={count("SIGNIFICANT_DEFICIENCY") > 0 ? "Open" : "None open"}
           tone={count("SIGNIFICANT_DEFICIENCY") > 0 ? "risk" : "positive"}
         />
         <Metric
@@ -1171,20 +1507,26 @@ export function DeficienciesMain({
         />
       </section>
       {selected !== null ? (
-        <DeficiencyDetail model={model} item={selected} controls={controls} />
+        <DeficiencyDetail
+          model={model}
+          item={selected}
+          controls={controls}
+          engagement={engagement}
+        />
       ) : null}
       <section className="card" aria-labelledby="log-title">
-        <details
-          className="log-deficiency"
-          open={logFor !== null || items.length === 0}
-        >
+        <details className="log-deficiency" open={logFor !== null}>
           <summary>
+            <span className="log-deficiency-icon" aria-hidden="true">
+              <UiIcon name="plus" size={14} />
+            </span>
             <span>
               <strong id="log-title">Log a deficiency</strong>
               <small className="cell-sub">
                 Condition, criteria, cause, and effect, then its severity.
               </small>
             </span>
+            <UiIcon name="chevron" size={15} />
           </summary>
           <DeficiencyForm
             model={model}
@@ -1204,7 +1546,7 @@ export function DeficienciesMain({
           <EmptyState
             icon="check"
             title="No deficiencies logged"
-            detail="Findings from walkthroughs and testing are logged here, by people now and by the testing agents later."
+            detail="Deficiencies from walkthroughs and testing appear here."
           />
         ) : (
           <div className="table-wrap">
@@ -1228,8 +1570,8 @@ export function DeficienciesMain({
                       <div className="cell-request">
                         <span className="mono item-ref">
                           {item.reference}
-                          {item.controlRef !== null
-                            ? ` · ${item.controlRef}`
+                          {item.controlLabel !== null
+                            ? ` · ${item.controlLabel}`
                             : ""}
                         </span>
                         <a
@@ -1304,6 +1646,7 @@ function DeficiencyForm({
   const id = item?.id ?? "new";
   return (
     <form
+      autoComplete="off"
       method="post"
       action="/workspace/engagement"
       className="form deficiency-form"
@@ -1482,12 +1825,16 @@ function DeficiencyDetail({
   model,
   item,
   controls,
+  engagement,
 }: {
   model: Ready;
   item: Deficiency;
   controls: ControlRow[];
+  /** The control's sheets, rounds and reviews, for the remediation history. */
+  engagement: EngagementState;
 }) {
   const closed = item.status === "CLOSED";
+  const project = model.selectedProject;
   return (
     <section
       className="card control-editor"
@@ -1498,7 +1845,7 @@ function DeficiencyDetail({
         titleId="deficiency-detail-title"
         description={
           <>
-            {item.controlRef !== null ? `${item.controlRef} · ` : ""}
+            {item.controlLabel !== null ? `${item.controlLabel} · ` : ""}
             {item.type === "DESIGN"
               ? "Design deficiency"
               : "Operating deficiency"}{" "}
@@ -1540,6 +1887,7 @@ function DeficiencyDetail({
             </div>
             {item.canDecide ? (
               <form
+                autoComplete="off"
                 method="post"
                 action="/workspace/engagement"
                 className="toolbar"
@@ -1600,15 +1948,27 @@ function DeficiencyDetail({
             <dt>Status</dt>
             <dd>
               {STATUS_LABEL[item.status]}
+              {item.remediatedOn !== null
+                ? ` · fixed ${formatDate(item.remediatedOn)}`
+                : ""}
               {item.retestResult !== "NOT_STARTED"
                 ? ` · retest ${item.retestResult.toLowerCase()} ${item.retestedAt ? formatDate(item.retestedAt) : ""}`
                 : ""}
             </dd>
           </div>
         </dl>
+        {project !== null && item.controlId !== null ? (
+          <RemediationHistoryCard
+            item={item}
+            engagement={engagement}
+            organizationId={model.organization.id}
+            projectId={project.id}
+          />
+        ) : null}
         {!closed ? (
           <div className="deficiency-actions">
             <form
+              autoComplete="off"
               method="post"
               action="/workspace/engagement"
               className="toolbar"
@@ -1631,14 +1991,38 @@ function DeficiencyDetail({
                 </button>
               ) : null}
               {item.status === "REMEDIATION_IN_PROGRESS" ? (
-                <button
-                  type="submit"
-                  name="status"
-                  value="READY_FOR_RETEST"
-                  className="btn-sm"
-                >
-                  Ready for retest
-                </button>
+                item.controlId !== null ? (
+                  <>
+                    <label htmlFor={`fixed-${item.id}`}>
+                      Fix took effect on
+                      <input
+                        id={`fixed-${item.id}`}
+                        type="date"
+                        name="remediated_on"
+                        required
+                        max={new Date().toISOString().slice(0, 10)}
+                        defaultValue={item.remediatedOn ?? ""}
+                      />
+                    </label>
+                    <button
+                      type="submit"
+                      name="status"
+                      value="READY_FOR_RETEST"
+                      className="btn-sm"
+                    >
+                      Ready for retest
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="submit"
+                    name="status"
+                    value="READY_FOR_RETEST"
+                    className="btn-sm"
+                  >
+                    Ready for retest
+                  </button>
+                )
               ) : null}
               {item.status === "READY_FOR_RETEST" ? (
                 <>
@@ -1663,6 +2047,7 @@ function DeficiencyDetail({
             </form>
             {item.pending === null ? (
               <form
+                autoComplete="off"
                 method="post"
                 action="/workspace/engagement"
                 className="toolbar"

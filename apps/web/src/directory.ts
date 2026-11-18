@@ -1,3 +1,4 @@
+import { canonicalQuery } from "./routes.ts";
 export const PAGE_SIZE = 6;
 
 export const TASK_STATUSES = [
@@ -126,7 +127,8 @@ export function directoryHref(input: {
   if (input.projectId !== null && input.projectId !== "") {
     params.set("project", input.projectId);
   }
-  if (input.section !== "overview") {
+  // The console is the default page, so only it can leave the section out.
+  if (input.section !== "console") {
     params.set("section", input.section);
   }
   if (input.agentId) {
@@ -150,7 +152,7 @@ export function directoryHref(input: {
   if ((input.agentPage ?? 1) > 1) {
     params.set("agentPage", String(input.agentPage));
   }
-  return `/?${params.toString()}`;
+  return `/?${canonicalQuery(params).toString()}`;
 }
 
 function first(value: string | string[] | undefined): string | null {

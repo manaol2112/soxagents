@@ -1,0 +1,3597 @@
+/**
+ * The evidence assurance chain on the D&I Evidence list (docs/evidence-assurance.md,
+ * sections 6 and 7). The in-force files of each D&I request are read together, as one
+ * walkthrough, against the control's approved attributes by two independent readings,
+ * and code on the server decides what stands: one run per request. This module reads
+ * what the server sent and words it for the request's row: a check not run yet, a check
+ * at work, a check on hold with the one action that clears it, a check to run again, a
+ * file left out of the readings with why, and a finished check with each attribute's
+ * state.
+ *
+ * Pure. Nothing here decides a verdict: the server does. A value this module does not
+ * know falls back to the cautious reading, never to "supported": an unknown status reads
+ * as still being checked (nothing of it is shown), an unknown verdict as needing the
+ * person's judgment, and support that came without what support needs (the agreed
+ * result, a passage) is not shown as support. Nothing reads as an issue unless the
+ * server's verdict says both readings agree on it, and no file of the request is left
+ * out of what the row says without saying so. D&I needs both the design and its
+ * implementation: an attribute is evidenced only where the records of an instance show
+ * it, never on a policy's word alone.
+ *
+ * Engine 2 (section 10) adds, for a finished check, the review a person reads first:
+ * whether the evidence is sufficient for what the request tests, what is still open,
+ * and what to ask for. It is proposed and never a conclusion: nothing of it accepts
+ * evidence or decides a finding. A check of the first engine carries none, and reads
+ * exactly as it did.
+ */
+
+import {
+  CLOSED_STATUSES,
+  FINDING_STATUSES,
+  type FindingStatus,
+} from "./evidence-findings-model.ts";
+import type { IconName } from "./icon-name.ts";
+import { failureNoteOf, plainNote } from "./run-failure.ts";
+
+type Raw = Record<string, unknown>;
+const isRecord = (value: unknown): value is Raw =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+const str = (value: unknown): string =>
+  typeof value === "string" ? value.trim() : "";
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const uuidOrNull = (value: unknown): string | null =>
+  typeof value === "string" && UUID.test(value) ? value : null;
+
+// What the server sends (section 6)
+
+export const STATUSES = [
+  "NOT_CHECKED",
+  "QUEUED",
+  "CHECKING",
+  "HELD",
+  "REVIEWED",
+  "FAILED",
+  "OUT_OF_DATE",
+] as const;
+export type CheckStatus = (typeof STATUSES)[number];
+
+export const STAGES = ["GATE", "ASSESS", "VERIFY", "COMPARE", "DONE"] as const;
+export type Stage = (typeof STAGES)[number];
+
+export const VERDICTS = [
+  "SUPPORTED",
+  // The request shows some of the attribute's elements and does not bear on the rest:
+  // the rest is left to other requests. Never an issue, never a finding.
+  "PARTLY_SUPPORTED",
+  "ISSUE",
+  "UNSETTLED",
+  "NOT_ADDRESSED",
+] as const;
+export type Verdict = (typeof VERDICTS)[number];
+
+export const RESULTS = [
+  "MET",
+  "PARTLY_MET",
+  "NOT_MET",
+  "CONTRADICTED",
+  "CANNOT_TELL",
+  "NOT_ADDRESSED",
+  // A partly supported attribute's result: some elements shown, the rest not borne on.
+  "SHOWN_IN_PART",
+] as const;
+export type Result = (typeof RESULTS)[number];
+
+/** An element's agreed result; null where the two readings differ on it. */
+export type ElementResult = Exclude<Result, "SHOWN_IN_PART">;
+
+const HELD_CODES = [
+  "CUSTODY",
+  "UNREADABLE",
+  "READ_FAILED",
+  "KIND_UNSURE",
+  "POPULATION",
+  "NO_ATTRIBUTES",
+  "TOO_LARGE",
+] as const;
+/** Why the gate stopped a check, or left a file out. OTHER is a code this page does
+ * not know. */
+export type HeldCode = (typeof HELD_CODES)[number] | "OTHER";
+
+export type Lens = "DESIGN_DOCUMENT" | "INSTANCE_RECORD";
+
+/** What a supported attribute's evidence shows: the documented design (a policy or
+ * procedure requires it) or its implementation (the records of an instance show it). */
+export type Shows = "DESIGN" | "IMPLEMENTATION";
+
+/** A file's own words a result rests on, and where they sit. */
+export type Passage = {
+  quote: string;
+  /** The file the words are in; null where the server named none this page can read
+   * and the request read more than one file. */
+  fileId: string | null;
+  /** "Page 3", "Image 2", "Sheet Users, row 4, column B"; "" where the server located
+   * nothing. */
+  location: string;
+  page: number | null;
+};
+
+/** One reading's answer for an attribute: both, where the readings do not agree, or
+ * where the request does not ask for the attribute. */
+export type View = {
+  role: "ASSESSOR" | "REVIEWER";
+  result: Result | null;
+  reason: string;
+};
+
+/** One part of an attribute's criteria (its condition, what passes), with the result
+ * both readings agree on for it. */
+export type AssuredElement = {
+  key: string;
+  text: string;
+  /** Null where the two readings differ on the element. */
+  result: ElementResult | null;
+  passages: Passage[];
+  absent: string[];
+  /** Both readings rest its NOT_MET on the same record, naming nothing absent: the
+   * records show an exception, not a gap (a self-approval plainly in a ticket; section
+   * 3, rule 5). Never set on any other result. */
+  deviation: boolean;
+};
+
+/** Where an attribute the request asks for stands (section 10.6). */
+export const ASSESSMENTS = [
+  "SATISFIED",
+  "PARTIALLY_SUPPORTED",
+  "CONTRADICTED",
+  "NOT_DEMONSTRATED",
+  "INDETERMINATE",
+] as const;
+export type Assessment = (typeof ASSESSMENTS)[number];
+
+export const CODE_CHECK_STATUSES = [
+  "PASSED",
+  "FAILED",
+  // It fails on one reading's values only.
+  "FAILED_ONE",
+  "NOT_RUN",
+] as const;
+export type CodeCheckStatus = (typeof CODE_CHECK_STATUSES)[number];
+
+/** A comparison of the records' own values (a date before another, two names that
+ * differ), made in code on the server, with its one sentence. */
+export type CodeCheck = {
+  element: string;
+  test: string;
+  status: CodeCheckStatus;
+  sentence: string;
+};
+
+export type AssuredAttribute = {
+  /** "" where the server sent none this page can read: its code is then its letter. */
+  attributeId: string;
+  code: string;
+  expected: boolean;
+  verdict: Verdict;
+  /** False when what the server sent could not be taken as it stands (a verdict this
+   * page does not know, or one its own result contradicts): shown as needing the
+   * person's judgment, without the claim that two readings disagree. */
+  understood: boolean;
+  /** Unsettled only because a file was not read (or was read in part): both readings stand
+   * the same, and it waits on the file, not on a choice between readings. */
+  pending: "" | "FILE_NOT_READ" | "READ_IN_PART";
+  result: Result | null;
+  /** What a supported attribute's evidence shows; null where it is not supported or
+   * the server did not say. */
+  shows: Shows | null;
+  /** The attribute's elements, each with its agreed result; empty where the server
+   * sent none. */
+  elements: AssuredElement[];
+  summary: string;
+  passages: Passage[];
+  absent: string[];
+  views: View[];
+  findingId: string | null;
+  /** The finding's status, where the server sent one this page knows. */
+  findingStatus: FindingStatus | null;
+  /** Where the attribute stands for the request (engine 2); null for an attribute the
+   * request does not ask for, and for every attribute of an engine 1 check. */
+  assessment: Assessment | null;
+  /** The comparisons made in code for the attribute's elements (engine 2); empty
+   * otherwise. */
+  checks: CodeCheck[];
+  /** The current check finds the records contradict the attribute: the server's own
+   * `contradicted` (section 10.13, "As built (server)"), by the rule recording refuses
+   * the closing kinds by, for a run of either engine. Only an exception can be recorded
+   * on it then. Read as sent and never worked out here: the list's elements carry no
+   * deviation, and a run of the first engine records no assessment. */
+  contradicted: boolean;
+  /** A person's disposition of the attribute on this request that stands (section
+   * 10.13); null where none does, or where what the server sent is not one. */
+  disposition: Disposition | null;
+  /** The ended ones, newest first, at most 10. */
+  history: EndedDisposition[];
+};
+
+/** A person's disposition of an attribute (docs/evidence-assurance.md, section 10.13). */
+export const DISPOSITION_KINDS = [
+  "SHOWN_ON_REVIEW",
+  "NOT_APPLICABLE",
+  "NOT_AVAILABLE",
+  "EXCEPTION",
+] as const;
+export type DispositionKind = (typeof DISPOSITION_KINDS)[number];
+/** The kinds after which the attribute no longer waits on the person: EXCEPTION closes
+ * nothing. */
+export const CLOSING_KINDS: readonly DispositionKind[] = [
+  "SHOWN_ON_REVIEW",
+  "NOT_APPLICABLE",
+  "NOT_AVAILABLE",
+];
+export const ENDINGS = [
+  "REPLACED",
+  "REOPENED",
+  "SUPERSEDED_BY_CHECK",
+  "OVERTAKEN_BY_CHECK",
+  "ANNOTATION_GONE",
+] as const;
+/** OTHER: an ending this page does not know; said as no longer standing, nothing more. */
+export type Ending = (typeof ENDINGS)[number] | "OTHER";
+
+/** The bounds of a disposition's texts (attribute_dispositions.py). */
+export const DISPOSITION_BOUNDS = {
+  reasonMin: 10,
+  reasonMax: 1000,
+  reliedOnMax: 600,
+  history: 10,
+} as const;
+
+export type Disposition = {
+  id: string;
+  kind: DispositionKind;
+  reason: string;
+  /** What was relied on instead ("Evidence not available, accepted" only); "" otherwise. */
+  reliedOn: string;
+  /** The annotation a "Shown, on my review" rests on; null for every other kind. */
+  annotationId: string | null;
+  recordedBy: string;
+  recordedAt: string;
+  version: number;
+  /** Whether it was recorded on the request's current check (section 10.15, item 9):
+   * false only where the server says it was recorded on an earlier run and stands
+   * through a later one. Anything else the server sends, or nothing, reads as current. */
+  onCurrentCheck: boolean;
+};
+
+export type EndedDisposition = Disposition & {
+  endedAt: string;
+  /** Null where a check ended it. */
+  endedBy: string | null;
+  endedAs: Ending;
+  endedReason: string;
+};
+
+/**
+ * A disposition as the server sent it, or null. Strict: a kind this page does not know,
+ * an id that is not one, a version that is not a whole number from 1, or a "Shown, on my
+ * review" without the annotation it rests on is not taken, so it never closes an
+ * attribute: the attribute waits on the person as the check left it.
+ */
+function parseDisposition(value: unknown): Disposition | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const id = uuidOrNull(value.id);
+  const kind = DISPOSITION_KINDS.find((item) => item === value.kind) ?? null;
+  const version =
+    typeof value.version === "number" &&
+    Number.isInteger(value.version) &&
+    value.version >= 1
+      ? value.version
+      : null;
+  const annotationId = uuidOrNull(value.annotation_id);
+  if (
+    id === null ||
+    kind === null ||
+    version === null ||
+    (kind === "SHOWN_ON_REVIEW" && annotationId === null)
+  ) {
+    return null;
+  }
+  return {
+    id,
+    kind,
+    reason: str(value.reason).slice(0, DISPOSITION_BOUNDS.reasonMax),
+    reliedOn:
+      kind === "NOT_AVAILABLE"
+        ? str(value.relied_on).slice(0, DISPOSITION_BOUNDS.reliedOnMax)
+        : "",
+    annotationId: kind === "SHOWN_ON_REVIEW" ? annotationId : null,
+    recordedBy: str(value.recorded_by_name).slice(0, 120),
+    recordedAt: str(value.recorded_at).slice(0, 40),
+    version,
+    // The server's own answer, nothing else: anything but false is the current check.
+    onCurrentCheck: value.on_current_check !== false,
+  };
+}
+
+/** An ended disposition; null where it is not one. An ending this page does not know is
+ * kept, said only as no longer standing. */
+function parseEnded(value: unknown): EndedDisposition | null {
+  const said = parseDisposition(value);
+  if (said === null || !isRecord(value)) {
+    return null;
+  }
+  return {
+    ...said,
+    endedAt: str(value.ended_at).slice(0, 40),
+    endedBy: str(value.ended_by_name).slice(0, 120) || null,
+    endedAs: ENDINGS.find((item) => item === value.ended_as) ?? "OTHER",
+    endedReason: str(value.ended_reason).slice(0, DISPOSITION_BOUNDS.reasonMax),
+  };
+}
+
+// A person's decision on a file's reliability (docs/evidence-assurance.md, section 10.14)
+
+/** "Reliability established on my review" and "Not relied on". */
+export const RELIABILITY_KINDS = [
+  "ESTABLISHED_ON_REVIEW",
+  "NOT_RELIED_ON",
+] as const;
+export type ReliabilityKind = (typeof RELIABILITY_KINDS)[number];
+export const RELIABILITY_ENDINGS = [
+  "REPLACED",
+  "REOPENED",
+  "FILE_GONE",
+] as const;
+/** OTHER: an ending this page does not know; said as no longer standing, nothing more. */
+export type ReliabilityEnding = (typeof RELIABILITY_ENDINGS)[number] | "OTHER";
+
+/** The bounds of a decision's texts (section 10.14): a reason of 10 to 1000 characters,
+ * and, for "Reliability established on my review", what was relied on, 10 to 600. */
+export const RELIABILITY_BOUNDS = {
+  reasonMin: 10,
+  reasonMax: 1000,
+  reliedOnMin: 10,
+  reliedOnMax: 600,
+  history: 10,
+  files: 60,
+} as const;
+
+export type ReliabilityDecision = {
+  id: string;
+  kind: ReliabilityKind;
+  reason: string;
+  /** What was relied on ("Reliability established on my review" only); "" otherwise. */
+  reliedOn: string;
+  recordedBy: string;
+  recordedAt: string;
+};
+
+export type EndedReliability = ReliabilityDecision & {
+  endedAt: string;
+  /** Null where no person ended it (the file is no longer on the request). */
+  endedBy: string | null;
+  endedAs: ReliabilityEnding;
+  endedReason: string;
+};
+
+/** One file of the check's review whose reliability is not established, or that carries
+ * a decision: the server's `file_reliability` entry. */
+export type FileReliability = {
+  fileId: string;
+  /** The check's own sentence on the file's reliability; "" where it sent none. */
+  question: string;
+  /** The decision that stands; null where none does, or where what the server sent is
+   * not one (the file's reliability then waits on the person, as the check left it). */
+  decision: ReliabilityDecision | null;
+  /** The ended ones, newest first, at most 10. */
+  history: EndedReliability[];
+};
+
+/**
+ * A decision as the server sent it, or null. Strict: a kind this page does not know, an
+ * id that is not one, or "Reliability established on my review" without what was relied
+ * on is not taken, so it never settles a file: the file's reliability stays open.
+ */
+function parseReliabilityDecision(value: unknown): ReliabilityDecision | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const id = uuidOrNull(value.id);
+  const kind = RELIABILITY_KINDS.find((item) => item === value.kind) ?? null;
+  const reliedOn = str(value.relied_on).slice(
+    0,
+    RELIABILITY_BOUNDS.reliedOnMax,
+  );
+  if (
+    id === null ||
+    kind === null ||
+    (kind === "ESTABLISHED_ON_REVIEW" && reliedOn === "")
+  ) {
+    return null;
+  }
+  return {
+    id,
+    kind,
+    reason: str(value.reason).slice(0, RELIABILITY_BOUNDS.reasonMax),
+    reliedOn: kind === "ESTABLISHED_ON_REVIEW" ? reliedOn : "",
+    recordedBy: str(value.recorded_by_name).slice(0, 120),
+    recordedAt: str(value.recorded_at).slice(0, 40),
+  };
+}
+
+/** An ended decision; null where it is not one. An ending this page does not know is
+ * kept, said only as no longer standing. */
+function parseEndedReliability(value: unknown): EndedReliability | null {
+  const said = parseReliabilityDecision(value);
+  if (said === null || !isRecord(value)) {
+    return null;
+  }
+  return {
+    ...said,
+    endedAt: str(value.ended_at).slice(0, 40),
+    endedBy: str(value.ended_by_name).slice(0, 120) || null,
+    endedAs:
+      RELIABILITY_ENDINGS.find((item) => item === value.ended_as) ?? "OTHER",
+    endedReason: str(value.ended_reason).slice(0, RELIABILITY_BOUNDS.reasonMax),
+  };
+}
+
+function parseFileReliability(value: unknown): FileReliability | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const fileId = uuidOrNull(value.file_id);
+  if (fileId === null) {
+    return null;
+  }
+  return {
+    fileId,
+    question: str(value.question).slice(0, 600),
+    decision: parseReliabilityDecision(value.decision),
+    history: (Array.isArray(value.history) ? value.history : [])
+      .map(parseEndedReliability)
+      .filter((item): item is EndedReliability => item !== null)
+      .filter(
+        (item, at, all) => all.findIndex((each) => each.id === item.id) === at,
+      )
+      .slice(0, RELIABILITY_BOUNDS.history),
+  };
+}
+
+/** The request's `file_reliability`, one entry per file; empty where the server sent
+ * none (a server from before section 10.14), so the page reads as it did. */
+function parseFileReliabilities(value: unknown): FileReliability[] {
+  return distinct(
+    (Array.isArray(value) ? value : [])
+      .map(parseFileReliability)
+      .filter((item): item is FileReliability => item !== null),
+    (item) => item.fileId,
+  ).slice(0, RELIABILITY_BOUNDS.files);
+}
+
+/** A file the gate left out of the readings; the run went ahead on the rest. */
+export type HeldFile = { fileId: string; code: HeldCode; reason: string };
+
+// The review of a request's evidence (section 10.7)
+
+export const OUTCOMES = [
+  "SUFFICIENT",
+  "ADDITIONAL_EVIDENCE",
+  "CLARIFICATION",
+  "POTENTIAL_EXCEPTION",
+  "UNABLE_TO_CONCLUDE",
+] as const;
+/** The check's proposed outcome for a request. Never a conclusion. */
+export type Outcome = (typeof OUTCOMES)[number];
+
+export const COMPLETENESS_STATES = [
+  "COMPLETE",
+  "INCOMPLETE",
+  "PARTLY_UNREADABLE",
+  "RELIABILITY_UNRESOLVED",
+] as const;
+export type CompletenessState = (typeof COMPLETENESS_STATES)[number];
+
+const RELEVANCES = [
+  "RELEVANT",
+  "PARTLY_RELEVANT",
+  "NOT_RELEVANT",
+  "CANNOT_TELL",
+] as const;
+export type FileRelevance = (typeof RELEVANCES)[number];
+
+const SOURCES = [
+  "SYSTEM_RECORD",
+  "MANAGEMENT_PREPARED",
+  "DOCUMENT",
+  "UNKNOWN",
+] as const;
+export type FileSource = (typeof SOURCES)[number];
+
+const LEGIBILITIES = ["CLEAR", "PARTLY_UNREADABLE", "UNREADABLE"] as const;
+export type FileLegibility = (typeof LEGIBILITIES)[number];
+
+const REPORT_BASES = [
+  "SHOWN",
+  "PARTLY_SHOWN",
+  "NOT_SHOWN",
+  "NOT_A_REPORT",
+] as const;
+export type ReportBasis = (typeof REPORT_BASES)[number];
+
+/** What the two readings say of one file the check read. */
+export type ReviewFile = {
+  fileId: string;
+  relevance: FileRelevance;
+  source: FileSource;
+  legibility: FileLegibility;
+  reportBasis: ReportBasis;
+  notes: string[];
+};
+
+const PRIORITIES = ["HIGH", "MEDIUM", "LOW"] as const;
+export type FollowUpPriority = (typeof PRIORITIES)[number];
+
+/** Something to ask for, for an element the files do not show. Text for the person,
+ * who sends it through the request's own follow-up step: the check sends nothing. */
+export type FollowUp = {
+  /** "" where the server sent none. */
+  key: string;
+  attributeIds: string[];
+  codes: string[];
+  elements: string[];
+  missing: string;
+  why: string;
+  request: string;
+  alternatives: string;
+  kind: "EVIDENCE" | "CLARIFICATION";
+  priority: FollowUpPriority;
+  raisedBy: View["role"][];
+  status: "OPEN" | "RESOLVED";
+};
+
+export type Review = {
+  overall: Outcome;
+  explanation: string;
+  completeness: { state: CompletenessState; reasons: string[] };
+  /** No fact of the control's understanding is confirmed. */
+  contextThin: boolean;
+  files: ReviewFile[];
+  /** Files read as the type they appear to be: a person still confirms the type. */
+  confirmations: HeldFile[];
+  /** What code found on the facts both readings state alike (another system named,
+   * different subjects, a date outside the period), each in one sentence. */
+  concerns: Array<{ code: string; sentence: string; fileIds: string[] }>;
+  followUps: FollowUp[];
+  /** Open follow-ups the server (or this page's bound) did not list. */
+  followUpsMore: number;
+  /** Asks a reading made for an element that is shown: counted, never listed. */
+  followUpsDropped: number;
+  /** Follow-ups of the earlier check whose element the new evidence now supports. */
+  resolved: Array<{ key: string; request: string; codes: string[] }>;
+  /** What a careful auditor would raise that no attribute asks about. An observation:
+   * never a finding, an attribute, or a change to the test plan. */
+  considerations: Array<{
+    text: string;
+    passages: Passage[];
+    raisedBy: View["role"][];
+  }>;
+};
+
+/** The bounds on what is read of a review: a longer list is cut, never trusted. */
+export const REVIEW_BOUNDS = {
+  followUps: 12,
+  considerations: 10,
+  files: 60,
+  checks: 12,
+} as const;
+
+/** One request's latest run. */
+export type AssuredRequest = {
+  requirementId: string;
+  runId: string | null;
+  status: CheckStatus;
+  stage: Stage | null;
+  /** Null unless the whole request is held. */
+  held: { code: HeldCode; reason: string } | null;
+  heldFiles: HeldFile[];
+  /** The files the readings included. */
+  fileIds: string[];
+  lens: Lens | null;
+  readInPart: boolean;
+  /** Empty unless the check is finished and current. */
+  attributes: AssuredAttribute[];
+  /** Why the check is out of date, in the server's sentences. */
+  outOfDate: string[];
+  /** Why a failed check failed, in one plain sentence; "" otherwise. */
+  note: string;
+  /** The server's failure sentence for a failed check, where it sent one
+   * (run-failure.ts); absent otherwise. */
+  failureNote?: string;
+  finishedAt: string | null;
+  /** Which engine made the run: 1 unless the server says 2 (section 10.1). */
+  engineVersion: 1 | 2;
+  /** The engine the server named, as it named it: 1 where it named none (forward only,
+   * section 10.1); null where what it sent is not a whole number. Only a known engine
+   * earlier than the current one is offered a check again (section 10.10). */
+  engine: number | null;
+  /** The review of a finished engine 2 check; null for engine 1, for a check that is
+   * not finished and current, and where what the server sent is not a review. */
+  review: Review | null;
+  /** Each file whose reliability the check's review does not establish, or that carries
+   * a person's decision (section 10.14). Empty unless the check is finished and current,
+   * and where the server sent none. */
+  fileReliability: FileReliability[];
+  /** The tickmarks a person recorded on the request that are kept while its check is
+   * not current (section 10.15, item 8): the server's own count; 0 where it sent none
+   * this page can read. */
+  tickmarksKept: number;
+};
+
+/** The server's counts. Each is null where it sent none this page can read. */
+export type AssuranceSummary = {
+  /** Requests. */
+  checking: number | null;
+  held: number | null;
+  failed: number | null;
+  outOfDate: number | null;
+  /** Attribute verdicts; issues counts only the open ones. */
+  supported: number | null;
+  issues: number | null;
+  unsettled: number | null;
+};
+
+export type EvidenceAssurance = {
+  requests: AssuredRequest[];
+  /** Null when the server sent no summary. */
+  summary: AssuranceSummary | null;
+};
+
+const strings = (value: unknown, limit: number): string[] =>
+  (Array.isArray(value) ? value : [])
+    .map(str)
+    .filter((item) => item !== "")
+    .slice(0, limit);
+
+/** Sentences as sent: at most `limit` of them, each cut at `max` characters. */
+const texts = (value: unknown, limit: number, max: number): string[] =>
+  strings(value, limit).map((item) => item.slice(0, max));
+
+const heldCode = (value: unknown): HeldCode =>
+  HELD_CODES.find((item) => item === value) ?? "OTHER";
+
+const positive = (value: unknown): number | null =>
+  typeof value === "number" && Number.isInteger(value) && value > 0
+    ? value
+    : null;
+
+/**
+ * Where a passage sits. The server sends `{label, page, sheet, row, column, cell}`
+ * (evidence_assurance._where): `label` is already plain words ("Page 3", "Image 2",
+ * "Sheet Users, row 4, column B") and is shown as it is; without it the parts are
+ * composed. A bare string is taken as the label.
+ */
+function parseLocation(value: unknown): {
+  location: string;
+  page: number | null;
+} {
+  if (typeof value === "string") {
+    return { location: value.trim().slice(0, 120), page: null };
+  }
+  if (!isRecord(value)) {
+    return { location: "", page: null };
+  }
+  const page = positive(value.page);
+  const label = str(value.label).slice(0, 120);
+  if (label !== "") {
+    return { location: label, page };
+  }
+  const sheet = str(value.sheet);
+  const row = positive(value.row);
+  const column = str(value.column);
+  const cell = str(value.cell);
+  return {
+    location: [
+      page !== null ? `Page ${page}` : "",
+      sheet !== "" ? `Sheet ${sheet}` : "",
+      row !== null ? `row ${row}` : "",
+      column !== "" ? `column ${column}` : "",
+      row === null && column === "" && cell !== "" ? `cell ${cell}` : "",
+    ]
+      .filter((part) => part !== "")
+      .join(", "),
+    page,
+  };
+}
+
+function parsePassage(value: unknown, only: string | null): Passage | null {
+  if (!isRecord(value) || str(value.quote) === "") {
+    return null;
+  }
+  return {
+    quote: str(value.quote).slice(0, 600),
+    // Every passage names its file. Where one does not, it is in the request's one
+    // file if the readings read one; otherwise its file is not known.
+    fileId: uuidOrNull(value.file_id) ?? only,
+    ...parseLocation(value.location),
+  };
+}
+
+function parseView(value: unknown): View | null {
+  if (
+    !isRecord(value) ||
+    (value.role !== "ASSESSOR" && value.role !== "REVIEWER")
+  ) {
+    return null;
+  }
+  return {
+    role: value.role,
+    result: RESULTS.find((item) => item === value.result) ?? null,
+    reason: str(value.reason),
+  };
+}
+
+function parseElement(
+  value: unknown,
+  only: string | null,
+): AssuredElement | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const key = str(value.key).slice(0, 80);
+  const text = str(value.text).slice(0, 400);
+  if (key === "" || text === "") {
+    return null;
+  }
+  const result =
+    RESULTS.find(
+      (item): item is ElementResult =>
+        item === value.result && item !== "SHOWN_IN_PART",
+    ) ?? null;
+  const passages = (Array.isArray(value.passages) ? value.passages : [])
+    .map((item) => parsePassage(item, only))
+    .filter((item): item is Passage => item !== null)
+    .slice(0, 6);
+  const absent =
+    typeof value.absent === "string"
+      ? strings([value.absent], 1)
+      : strings(value.absent, 6);
+  return {
+    key,
+    text,
+    result,
+    passages,
+    absent,
+    // An exception the records show: only a NOT_MET that rests on a passage and names
+    // nothing absent is one (the server's own rule); anything else claiming it is not.
+    deviation:
+      value.deviation === true &&
+      result === "NOT_MET" &&
+      passages.length > 0 &&
+      absent.length === 0,
+  };
+}
+
+const ISSUE_RESULTS: readonly Result[] = [
+  "PARTLY_MET",
+  "NOT_MET",
+  "CONTRADICTED",
+  "NOT_ADDRESSED",
+];
+
+/** The verdicts each assessment can come from (the table of section 10.6). */
+const ASSESSMENT_VERDICTS: Record<Assessment, readonly Verdict[]> = {
+  SATISFIED: ["SUPPORTED"],
+  PARTIALLY_SUPPORTED: ["PARTLY_SUPPORTED", "ISSUE"],
+  CONTRADICTED: ["ISSUE", "UNSETTLED"],
+  NOT_DEMONSTRATED: ["ISSUE", "NOT_ADDRESSED"],
+  INDETERMINATE: VERDICTS,
+};
+
+/**
+ * Where an attribute stands, as sent, or the cautious reading: one this page does not
+ * know, one its own verdict cannot come from (satisfied without support), one on a
+ * result this page could not take as it stands, and one missing on an attribute the
+ * request asks for all read as not determined. Never as satisfied.
+ */
+function assessmentOf(
+  value: unknown,
+  facts: { verdict: Verdict; understood: boolean; expected: boolean },
+): Assessment | null {
+  if (value === null || value === undefined) {
+    return facts.expected ? "INDETERMINATE" : null;
+  }
+  const said = ASSESSMENTS.find((item) => item === value) ?? null;
+  return said !== null &&
+    facts.understood &&
+    ASSESSMENT_VERDICTS[said].includes(facts.verdict)
+    ? said
+    : "INDETERMINATE";
+}
+
+/** A comparison made in code. A status this page does not know reads as not run: a
+ * comparison supports nothing by itself, and is never shown as passed unless said. */
+function parseCodeCheck(value: unknown): CodeCheck | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const sentence = str(value.sentence).slice(0, 400);
+  const test = str(value.test).slice(0, 40);
+  if (sentence === "" && test === "") {
+    return null;
+  }
+  return {
+    element: str(value.element).slice(0, 80),
+    test,
+    status:
+      CODE_CHECK_STATUSES.find((item) => item === value.status) ?? "NOT_RUN",
+    sentence,
+  };
+}
+
+function parseAttribute(
+  value: unknown,
+  only: string | null,
+  engine: 1 | 2 = 1,
+): AssuredAttribute | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const attributeId = uuidOrNull(value.attribute_id) ?? "";
+  const code = str(value.code).slice(0, 8);
+  if (attributeId === "" && code === "") {
+    return null;
+  }
+  const said = VERDICTS.find((item) => item === value.verdict) ?? null;
+  const result = RESULTS.find((item) => item === value.result) ?? null;
+  const passages = (Array.isArray(value.passages) ? value.passages : [])
+    .map((item) => parsePassage(item, only))
+    .filter((item): item is Passage => item !== null)
+    .slice(0, 12);
+  const elements = (Array.isArray(value.elements) ? value.elements : [])
+    .map((item) => parseElement(item, only))
+    .filter((item): item is AssuredElement => item !== null)
+    .filter(
+      (item, at, all) => all.findIndex((each) => each.key === item.key) === at,
+    )
+    .slice(0, 12);
+  const each = (results: readonly (ElementResult | null)[]) =>
+    elements.every((item) => results.includes(item.result));
+  const some = (wanted: ElementResult) =>
+    elements.some((item) => item.result === wanted);
+  // What stands as sent. Support needs the agreed result, a passage it rests on, and
+  // (where the elements are sent) every element shown (rules 2 and 6 and the comparison
+  // of section 3). Support in part needs something shown (an element shown, or half
+  // shown) and something left to another request (an element these files do not bear
+  // on, or the half of one they do not show), as the server decides it
+  // (evidence_assurance.py, _defers: shown, half shown resting on absence, or not borne
+  // on; never an element the files bear on and do not show). Before 14 November 2026
+  // only whole elements counted (shown beside not borne on), so a check whose elements
+  // were each half shown read as "could not be read as it was sent".
+  // An issue or "not addressed" that carries the result "met" contradicts itself.
+  // Anything else is left for the person.
+  const stands =
+    said === "SUPPORTED"
+      ? result === "MET" && passages.length > 0 && each(["MET"])
+      : said === "PARTLY_SUPPORTED"
+        ? (result === null || result === "SHOWN_IN_PART") &&
+          passages.length > 0 &&
+          (elements.length === 0 ||
+            (each(["MET", "PARTLY_MET", "NOT_ADDRESSED"]) &&
+              (some("MET") || some("PARTLY_MET")) &&
+              (some("NOT_ADDRESSED") || some("PARTLY_MET"))))
+        : said === "ISSUE"
+          ? result === null || ISSUE_RESULTS.includes(result)
+          : said === "NOT_ADDRESSED"
+            ? result === null || result === "NOT_ADDRESSED"
+            : said === "UNSETTLED";
+  const verdict: Verdict = said !== null && stands ? said : "UNSETTLED";
+  const understood = said !== null && stands;
+  const expected = value.expected === true;
+  const findingId = verdict === "ISSUE" ? uuidOrNull(value.finding_id) : null;
+  const views = (Array.isArray(value.views) ? value.views : [])
+    .map(parseView)
+    .filter((item): item is View => item !== null)
+    .slice(0, 2);
+  return {
+    attributeId,
+    code,
+    expected,
+    verdict,
+    understood,
+    pending:
+      verdict === "UNSETTLED" &&
+      (value.pending === "FILE_NOT_READ" || value.pending === "READ_IN_PART")
+        ? value.pending
+        : "",
+    result: verdict === "UNSETTLED" ? null : result,
+    shows:
+      (verdict === "SUPPORTED" || verdict === "PARTLY_SUPPORTED") &&
+      (value.shows === "DESIGN" || value.shows === "IMPLEMENTATION")
+        ? value.shows
+        : null,
+    elements,
+    summary: str(value.summary),
+    passages,
+    absent: strings(value.absent, 12),
+    // Both readings: where they do not agree, and where the request does not ask for
+    // the attribute (available on open, never a judgment). An issue shows them too where
+    // the server sends one from each reading: a split shortfall, one reading finding it
+    // not met and the other met in part (docs/evidence-assurance.md, rule 4).
+    views:
+      verdict === "UNSETTLED" || verdict === "NOT_ADDRESSED"
+        ? views
+        : verdict === "ISSUE" &&
+            views.length === 2 &&
+            new Set(views.map((view) => view.role)).size === 2
+          ? views
+          : [],
+    findingId,
+    findingStatus:
+      findingId === null
+        ? null
+        : (FINDING_STATUSES.find((item) => item === value.finding_status) ??
+          null),
+    // Engine 2 only: an engine 1 result is shown exactly as before.
+    assessment:
+      engine === 2
+        ? assessmentOf(value.assessment, { verdict, understood, expected })
+        : null,
+    checks:
+      engine === 2
+        ? (Array.isArray(value.checks) ? value.checks : [])
+            .map(parseCodeCheck)
+            .filter((item): item is CodeCheck => item !== null)
+            .slice(0, REVIEW_BOUNDS.checks)
+        : [],
+    // The server's own answer, nothing else: anything but true is not a contradiction.
+    contradicted: value.contradicted === true,
+    disposition: parseDisposition(value.disposition),
+    history: (Array.isArray(value.disposition_history)
+      ? value.disposition_history
+      : []
+    )
+      .map(parseEnded)
+      .filter((item): item is EndedDisposition => item !== null)
+      .filter(
+        (item, at, all) => all.findIndex((each) => each.id === item.id) === at,
+      )
+      .slice(0, DISPOSITION_BOUNDS.history),
+  };
+}
+
+function parseHeldFile(value: unknown): HeldFile | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const fileId = uuidOrNull(value.file_id);
+  return fileId === null
+    ? null
+    : { fileId, code: heldCode(value.code), reason: str(value.reason) };
+}
+
+const distinct = <T>(items: readonly T[], key: (item: T) => string): T[] => {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const at = key(item);
+    if (seen.has(at)) {
+      return false;
+    }
+    seen.add(at);
+    return true;
+  });
+};
+
+const roles = (value: unknown): View["role"][] =>
+  distinct(
+    (Array.isArray(value) ? value : []).filter(
+      (item): item is View["role"] =>
+        item === "ASSESSOR" || item === "REVIEWER",
+    ),
+    (item) => item,
+  );
+
+const uuids = (value: unknown, limit: number): string[] =>
+  distinct(
+    (Array.isArray(value) ? value : [])
+      .map(uuidOrNull)
+      .filter((id): id is string => id !== null),
+    (id) => id,
+  ).slice(0, limit);
+
+const codesOf = (value: unknown): string[] =>
+  distinct(texts(value, 12, 8), (item) => item);
+
+function parseReviewFile(value: unknown): ReviewFile | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const fileId = uuidOrNull(value.file_id);
+  if (fileId === null) {
+    return null;
+  }
+  return {
+    fileId,
+    // Not said, or not known to this page: its relevance and its source read as not
+    // known, never as relevant or as a system's own record. Its legibility and a
+    // report's basis then say nothing of the file (the check's completeness, decided
+    // on the server, is what says a file could not be read).
+    relevance:
+      RELEVANCES.find((item) => item === value.relevance) ?? "CANNOT_TELL",
+    source: SOURCES.find((item) => item === value.source) ?? "UNKNOWN",
+    legibility:
+      LEGIBILITIES.find((item) => item === value.legibility) ?? "CLEAR",
+    reportBasis:
+      REPORT_BASES.find((item) => item === value.report_basis) ??
+      "NOT_A_REPORT",
+    notes: texts(value.notes, 4, 300),
+  };
+}
+
+function parseFollowUp(value: unknown): FollowUp | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const request = str(value.request).slice(0, 600);
+  const missing = str(value.missing).slice(0, 400);
+  // Nothing to ask for and nothing named as missing: not a follow-up.
+  if (request === "" && missing === "") {
+    return null;
+  }
+  return {
+    key: str(value.key).slice(0, 160),
+    attributeIds: uuids(value.attribute_ids, 12),
+    codes: codesOf(value.codes),
+    elements: texts(value.elements, 12, 80),
+    missing,
+    why: str(value.why).slice(0, 400),
+    request,
+    alternatives: str(value.alternatives).slice(0, 400),
+    // A kind this page does not know is an ask for evidence, the stronger of the two.
+    kind: value.kind === "CLARIFICATION" ? "CLARIFICATION" : "EVIDENCE",
+    priority: PRIORITIES.find((item) => item === value.priority) ?? "MEDIUM",
+    raisedBy: roles(value.raised_by),
+    // Open unless the server says the new evidence resolved it.
+    status: value.status === "RESOLVED" ? "RESOLVED" : "OPEN",
+  };
+}
+
+/** One entry per key: a key listed twice keeps its first entry; entries without a key
+ * are all kept. */
+const byKey = <T extends { key: string }>(items: readonly T[]): T[] =>
+  items.filter(
+    (item, at) =>
+      item.key === "" ||
+      items.findIndex((each) => each.key === item.key) === at,
+  );
+
+/**
+ * The review as section 10.7 sends it; null where what came is not an object. Every
+ * part is read on its own: a part that is missing or not as documented falls back to
+ * the cautious reading (an outcome this page does not know is "unable to conclude", a
+ * completeness it does not know is not complete), and every list is bounded.
+ */
+function parseReview(value: unknown, only: string | null): Review | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const list = (items: unknown): unknown[] =>
+    Array.isArray(items) ? items : [];
+  const completeness = isRecord(value.completeness) ? value.completeness : null;
+  const followUps = byKey(
+    list(value.follow_ups)
+      .map(parseFollowUp)
+      .filter((item): item is FollowUp => item !== null),
+  );
+  const listed = followUps.slice(0, REVIEW_BOUNDS.followUps);
+  const open = (items: readonly FollowUp[]) =>
+    items.filter((item) => item.status === "OPEN").length;
+  return {
+    overall:
+      OUTCOMES.find((item) => item === value.overall) ?? "UNABLE_TO_CONCLUDE",
+    explanation: str(value.explanation).slice(0, 600),
+    completeness: {
+      state:
+        COMPLETENESS_STATES.find((item) => item === completeness?.state) ??
+        "INCOMPLETE",
+      reasons: texts(completeness?.reasons, 6, 300),
+    },
+    contextThin: value.context_thin === true,
+    files: distinct(
+      list(value.files)
+        .map(parseReviewFile)
+        .filter((item): item is ReviewFile => item !== null),
+      (item) => item.fileId,
+    ).slice(0, REVIEW_BOUNDS.files),
+    confirmations: distinct(
+      list(value.confirmations)
+        .map(parseHeldFile)
+        .filter((item): item is HeldFile => item !== null),
+      (item) => item.fileId,
+    ).slice(0, REVIEW_BOUNDS.files),
+    concerns: list(value.concerns)
+      .filter(isRecord)
+      .map((item) => ({
+        code: str(item.code).slice(0, 40),
+        sentence: str(item.sentence).slice(0, 400),
+        fileIds: uuids(item.file_ids, 12),
+      }))
+      .filter((item) => item.sentence !== "")
+      .slice(0, 12),
+    followUps: listed,
+    // What this page's bound cut is counted with what the server did not list.
+    followUpsMore:
+      (count(value.follow_ups_more) ?? 0) + (open(followUps) - open(listed)),
+    followUpsDropped: count(value.follow_ups_dropped) ?? 0,
+    resolved: byKey(
+      list(value.resolved)
+        .filter(isRecord)
+        .map((item) => ({
+          key: str(item.key).slice(0, 160),
+          request: str(item.request).slice(0, 600),
+          codes: codesOf(item.codes),
+        }))
+        .filter((item) => item.request !== ""),
+    ).slice(0, REVIEW_BOUNDS.followUps),
+    considerations: list(value.considerations)
+      .filter(isRecord)
+      .map((item) => ({
+        text: str(item.text).slice(0, 500),
+        passages: list(item.passages)
+          .map((each) => parsePassage(each, only))
+          .filter((each): each is Passage => each !== null)
+          .slice(0, 4),
+        raisedBy: roles(item.raised_by),
+      }))
+      .filter((item) => item.text !== "")
+      .slice(0, REVIEW_BOUNDS.considerations),
+  };
+}
+
+function parseRequest(value: unknown): AssuredRequest | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const requirementId = uuidOrNull(value.requirement_id);
+  if (requirementId === null) {
+    return null;
+  }
+  const outOfDate = strings(value.out_of_date, 6);
+  const said = STATUSES.find((item) => item === value.status) ?? null;
+  // A status this page does not know reads as still being checked: nothing of the run
+  // is shown. A finished run the server also marks out of date is out of date.
+  const status: CheckStatus =
+    said === null
+      ? "CHECKING"
+      : said === "REVIEWED" && outOfDate.length > 0
+        ? "OUT_OF_DATE"
+        : said;
+  const held = isRecord(value.held) ? value.held : null;
+  const fileIds = distinct(
+    (Array.isArray(value.file_ids) ? value.file_ids : [])
+      .map(uuidOrNull)
+      .filter((id): id is string => id !== null),
+    (id) => id,
+  );
+  const only = fileIds.length === 1 ? (fileIds[0] ?? null) : null;
+  // Forward only (section 10.1): a run is the first engine's unless the server says 2.
+  const engineVersion = value.engine_version === 2 ? 2 : 1;
+  const engine =
+    value.engine_version === undefined
+      ? 1
+      : typeof value.engine_version === "number" &&
+          Number.isInteger(value.engine_version)
+        ? value.engine_version
+        : null;
+  return {
+    requirementId,
+    runId: uuidOrNull(value.run_id),
+    status,
+    stage: STAGES.find((item) => item === value.stage) ?? null,
+    held:
+      status !== "HELD"
+        ? null
+        : { code: heldCode(held?.code), reason: str(held?.reason) },
+    heldFiles: distinct(
+      (Array.isArray(value.held_files) ? value.held_files : [])
+        .map(parseHeldFile)
+        .filter((item): item is HeldFile => item !== null),
+      (item) => item.fileId,
+    ),
+    fileIds,
+    lens:
+      value.lens === "DESIGN_DOCUMENT" || value.lens === "INSTANCE_RECORD"
+        ? value.lens
+        : null,
+    readInPart: value.read_in_part === true,
+    // Nothing of a run is shown before it finishes, or once it is out of date. One
+    // state per attribute: an attribute listed twice keeps its first answer.
+    attributes:
+      status === "REVIEWED"
+        ? distinct(
+            (Array.isArray(value.attributes) ? value.attributes : [])
+              .map((item) => parseAttribute(item, only, engineVersion))
+              .filter((item): item is AssuredAttribute => item !== null),
+            (item) => item.attributeId || `code:${item.code}`,
+          )
+        : [],
+    outOfDate,
+    note: status === "FAILED" ? str(value.note).slice(0, 300) : "",
+    ...(status === "FAILED" && failureNoteOf(value) !== ""
+      ? { failureNote: failureNoteOf(value) }
+      : {}),
+    finishedAt: str(value.finished_at) || null,
+    engineVersion,
+    engine,
+    // Like the attributes: nothing of a run is shown before it finishes, or once it is
+    // out of date. An engine 1 run has no review, whatever came with it.
+    review:
+      status === "REVIEWED" && engineVersion === 2
+        ? parseReview(value.review, only)
+        : null,
+    // Like the attributes: only of a finished, current check.
+    fileReliability:
+      status === "REVIEWED"
+        ? parseFileReliabilities(value.file_reliability)
+        : [],
+    tickmarksKept: count(value.tickmarks_kept) ?? 0,
+  };
+}
+
+function count(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0
+    ? value
+    : null;
+}
+
+function parseSummary(value: unknown): AssuranceSummary | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  return {
+    checking: count(value.checking),
+    held: count(value.held),
+    failed: count(value.failed),
+    outOfDate: count(value.out_of_date),
+    supported: count(value.supported),
+    issues: count(value.issues),
+    unsettled: count(value.unsettled),
+  };
+}
+
+/** The API's answer for a control (GET .../evidence-assurance); null when the body is
+ * not one. One entry per request: one listed twice keeps its first entry. */
+export function parseAssurance(value: unknown): EvidenceAssurance | null {
+  if (!isRecord(value) || !Array.isArray(value.requests)) {
+    return null;
+  }
+  return {
+    requests: distinct(
+      value.requests
+        .map(parseRequest)
+        .filter((item): item is AssuredRequest => item !== null),
+      (item) => item.requirementId,
+    ),
+    summary: parseSummary(value.summary),
+  };
+}
+
+/** An issue a person has disposed of: its finding is dismissed, resolved, its
+ * clarification accepted, or marked not applicable. It is no longer open. */
+export function issueDecided(item: AssuredAttribute): boolean {
+  return (
+    item.verdict === "ISSUE" &&
+    item.findingStatus !== null &&
+    CLOSED_STATUSES.includes(item.findingStatus)
+  );
+}
+
+// The step's line
+
+export type AssuranceCounts = {
+  /** Requests the chain has an entry for. */
+  requests: number;
+  /** Requests with files and no check yet. */
+  notChecked: number;
+  /** Requests whose check is queued or at work. */
+  checking: number;
+  /** Requests whose check is on hold. */
+  held: number;
+  /** Requests whose check failed or is out of date: to run again. */
+  again: number;
+  /** Open results both readings agree are an issue. */
+  issues: number;
+  /** Results that need the person's judgment. */
+  unsettled: number;
+};
+
+/**
+ * What the step's line counts, from the server's `summary` (its issues are the open
+ * ones), never below what the requests on the page themselves show (a result this page
+ * read cautiously as needing judgment is counted, though the server's summary could not
+ * know it). An issue a person has decided is not counted. Support is not counted here:
+ * the step's line never states it.
+ *
+ * A person's tickmarks (section 10.15, item 4): an attribute a closing tickmark stands on
+ * is left out, and a person's exception counts as an issue whatever the check found. The
+ * server's summary may not know them, so what the tickmarks close is taken off it first.
+ */
+export function assuranceCounts(
+  assurance: EvidenceAssurance | null,
+): AssuranceCounts {
+  const requests = assurance?.requests ?? [];
+  const attributes = requests.flatMap((item) => item.attributes);
+  const summary = assurance?.summary ?? null;
+  const has = (...statuses: CheckStatus[]) =>
+    requests.filter((item) => statuses.includes(item.status)).length;
+  const said = (value: number | null | undefined) => value ?? 0;
+  const closed = (item: AssuredAttribute) =>
+    item.disposition !== null && CLOSING_KINDS.includes(item.disposition.kind);
+  const excepted = (item: AssuredAttribute) =>
+    item.disposition?.kind === "EXCEPTION";
+  const openIssue = (item: AssuredAttribute) =>
+    item.verdict === "ISSUE" && !issueDecided(item);
+  const judged = (item: AssuredAttribute) => item.verdict === "UNSETTLED";
+  const tally = (pick: (item: AssuredAttribute) => boolean) =>
+    attributes.filter(pick).length;
+  return {
+    requests: requests.length,
+    notChecked: has("NOT_CHECKED"),
+    checking: Math.max(said(summary?.checking), has("QUEUED", "CHECKING")),
+    held: Math.max(said(summary?.held), has("HELD")),
+    again: Math.max(
+      said(summary?.failed) + said(summary?.outOfDate),
+      has("FAILED", "OUT_OF_DATE"),
+    ),
+    issues: Math.max(
+      said(summary?.issues) - tally((item) => closed(item) && openIssue(item)),
+      tally((item) => excepted(item) || (openIssue(item) && !closed(item))),
+    ),
+    unsettled: Math.max(
+      said(summary?.unsettled) -
+        tally((item) => judged(item) && (closed(item) || excepted(item))),
+      tally((item) => judged(item) && !closed(item) && !excepted(item)),
+    ),
+  };
+}
+
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/** What follows "N files to review" on the step's pill: what needs the person first,
+ * then what is on hold, then what is to run again or not run yet, then what is still
+ * being checked. "" when nothing does. */
+export function assurancePill(counts: AssuranceCounts): string {
+  const parts =
+    counts.issues + counts.unsettled > 0
+      ? [
+          counts.issues > 0 ? plural(counts.issues, "issue") : "",
+          counts.unsettled > 0 ? `${counts.unsettled} for your judgment` : "",
+        ]
+      : counts.held > 0
+        ? [`${counts.held} on hold`]
+        : counts.again > 0
+          ? [`${counts.again} to check again`]
+          : counts.notChecked > 0
+            ? [`${counts.notChecked} not checked yet`]
+            : counts.checking > 0
+              ? [`${counts.checking} being checked`]
+              : [];
+  return parts.filter((part) => part !== "").join(" · ");
+}
+
+/** The step's decision line on the checks, in one or two sentences; "" when the chain
+ * has no entry for the control's requests. */
+export function assuranceSentence(counts: AssuranceCounts): string {
+  if (counts.requests === 0) {
+    return "";
+  }
+  const found = [
+    counts.issues > 0 ? plural(counts.issues, "open issue") : "",
+    counts.unsettled > 0
+      ? `${plural(counts.unsettled, "result")} for your judgment`
+      : "",
+  ].filter((part) => part !== "");
+  const waiting = [
+    counts.held > 0
+      ? `${plural(counts.held, "request")} on hold until you act on ${counts.held === 1 ? "its" : "their"} row`
+      : "",
+    counts.again > 0 ? `${plural(counts.again, "check")} to run again` : "",
+    counts.notChecked > 0
+      ? `${plural(counts.notChecked, "request")} not checked yet`
+      : "",
+    counts.checking > 0
+      ? `${plural(counts.checking, "request")} still being checked`
+      : "",
+  ].filter((part) => part !== "");
+  const reviewed =
+    counts.requests -
+      counts.checking -
+      counts.held -
+      counts.again -
+      counts.notChecked >
+    0;
+  const lead =
+    found.length > 0
+      ? `Two independent readings checked the evidence against the attributes: ${found.join(", ")}. See each row.`
+      : reviewed
+        ? "Two independent readings checked the evidence against the attributes: no open issue, and nothing left for your judgment. What each row supports is on the row."
+        : "";
+  const rest =
+    waiting.length === 0
+      ? ""
+      : `${waiting.join(", ").replace(/^./, (first) => first.toUpperCase())}.`;
+  return [lead, rest].filter((part) => part !== "").join(" ");
+}
+
+// One attribute, as a row shows it
+
+export type AttributeState =
+  | "SUPPORTED"
+  | "PARTLY"
+  | "ISSUE"
+  | "DECIDED"
+  | "JUDGMENT"
+  | "WAITING"
+  | "NOT_ADDRESSED";
+
+export type Tone = "success" | "danger" | "warning" | "neutral";
+
+/** Each state in words with its mark: the colour repeats them and never replaces them. */
+export const STATE_WORDS: Record<
+  AttributeState,
+  { label: string; icon: IconName; tone: Tone }
+> = {
+  SUPPORTED: { label: "Supported", icon: "check", tone: "success" },
+  PARTLY: {
+    label: "Shown in part by this request",
+    icon: "layers",
+    tone: "neutral",
+  },
+  ISSUE: { label: "Issue", icon: "risk", tone: "danger" },
+  DECIDED: { label: "Issue decided", icon: "check", tone: "neutral" },
+  JUDGMENT: { label: "Your judgment needed", icon: "help", tone: "warning" },
+  // Not concluded only because a file of the request has not been read (14 November 2026):
+  // the readings agree, so nothing is asked of the person's judgment; the file is.
+  WAITING: { label: "Waiting on a file", icon: "clock", tone: "warning" },
+  NOT_ADDRESSED: { label: "Not addressed", icon: "minus", tone: "neutral" },
+};
+
+/** What supported evidence shows, in words. */
+const SHOWS_WORDS: Record<Shows, string> = {
+  DESIGN: "design",
+  IMPLEMENTATION: "implementation",
+};
+
+/** How a person decided an issue's finding, in words: "Issue: decided by dismissal". */
+const DECIDED_WORDS: Partial<Record<FindingStatus, string>> = {
+  DISMISSED: "dismissal",
+  RESOLVED: "resolution",
+  CLARIFICATION_ACCEPTED: "an accepted clarification",
+  NOT_APPLICABLE: "marking it not applicable",
+};
+
+/** What a reading found, in an auditor's words. A reading with no result this page
+ * knows could not tell. */
+const RESULT_WORDS: Record<Result, string> = {
+  MET: "Shown",
+  PARTLY_MET: "Shown in part",
+  NOT_MET: "Not shown",
+  CONTRADICTED: "Contradicted in the evidence",
+  CANNOT_TELL: "Could not tell",
+  NOT_ADDRESSED: "Not addressed by the evidence",
+  SHOWN_IN_PART: "Shown in part",
+};
+
+/** An issue's result in its label. NOT_MET is "not met", never "not shown": it also
+ * means an exception a record shows (a self-approval), which the summary names. */
+const ISSUE_WORDS: Partial<Record<Result, string>> = {
+  NOT_MET: "not met",
+  PARTLY_MET: "met in part",
+  CONTRADICTED: "contradicted in the evidence",
+  NOT_ADDRESSED: "not addressed by the evidence",
+};
+
+/** An element's result, in words; null where the two readings differ on it. */
+const ELEMENT_WORDS: Record<ElementResult, string> = {
+  MET: "Shown",
+  PARTLY_MET: "Shown in part",
+  NOT_MET: "Not shown",
+  CONTRADICTED: "Contradicted in the evidence",
+  CANNOT_TELL: "Could not tell",
+  NOT_ADDRESSED: "Not in these files",
+};
+
+export function elementWords(result: ElementResult | null): string {
+  return result === null ? "Your judgment needed" : ELEMENT_WORDS[result];
+}
+
+/** An element the records show an exception on: not met, never "not shown", which would
+ * read as a gap when the record is there and says otherwise. */
+export const ELEMENT_DEVIATION = "Not met";
+
+const ELEMENT_TONES: Record<ElementResult, Tone> = {
+  MET: "success",
+  PARTLY_MET: "warning",
+  NOT_MET: "danger",
+  CONTRADICTED: "danger",
+  CANNOT_TELL: "warning",
+  NOT_ADDRESSED: "neutral",
+};
+
+export function resultWords(result: Result | null): string {
+  return result === null ? "Could not tell" : RESULT_WORDS[result];
+}
+
+const ROLE_WORDS: Record<View["role"], string> = {
+  ASSESSOR: "First reading",
+  REVIEWER: "Second, independent reading",
+};
+
+/** Under an attribute the two readings do not agree on (section 3, stage 5). */
+export const READINGS_DISAGREE =
+  "The two readings do not agree. Your judgment is needed.";
+/** Under a result this page could not take as it stands: it does not claim two readings
+ * disagree, only that the person judges. */
+export const RESULT_UNREAD =
+  "This result could not be read as it was sent, so it is not shown as supported. Your judgment is needed.";
+
+function stateOf(item: AssuredAttribute): AttributeState {
+  if (item.verdict === "UNSETTLED") {
+    return item.pending === "FILE_NOT_READ" ? "WAITING" : "JUDGMENT";
+  }
+  if (item.verdict === "PARTLY_SUPPORTED") {
+    return "PARTLY";
+  }
+  return issueDecided(item) ? "DECIDED" : item.verdict;
+}
+
+/** A file of the request's row: its id and its name. */
+export type RowFile = { id: string; name: string };
+
+/** A passage as the row shows it: which file it is in where the request has more than
+ * one, and whether the viewer can open it there. */
+export type ShownPassage = Passage & {
+  /** The file's name, where the request has more than one file; "" otherwise. */
+  fileLabel: string;
+  /** The passage's file is one of the row's, so the viewer opens it there. */
+  opens: boolean;
+};
+
+/** An element as an opened attribute lists it: its text and its result in words, and
+ * the passages it rests on. */
+export type ElementLine = {
+  key: string;
+  text: string;
+  /** "Shown", "Not shown", "Not met" (an exception), "Not in these files", "Your
+   * judgment needed". */
+  result: string;
+  tone: Tone;
+  absent: string[];
+  /** Its own verified passages: what a row of the element quotes, never another
+   * element's. */
+  passages: ShownPassage[];
+  /** The records show an exception on it (AssuredElement.deviation). */
+  deviation: boolean;
+};
+
+/** A comparison made in code, as an opened attribute lists it: its sentence, and
+ * whether it passed, in words with a mark. */
+export type CheckLine = {
+  key: string;
+  sentence: string;
+  /** "Passed", "Failed", "Failed on one reading's values", "Not run". */
+  result: string;
+  icon: IconName;
+  tone: Tone;
+};
+
+/** Over an attribute's comparisons. */
+export const CHECKED_IN_CODE = "Checked in code:";
+
+/** A comparison's status in words with its mark. A comparison that passes supports
+ * nothing by itself, and one that fails is a fact of the records, not a conclusion. */
+export const CODE_CHECK_WORDS: Record<
+  CodeCheckStatus,
+  { label: string; icon: IconName; tone: Tone }
+> = {
+  PASSED: { label: "Passed", icon: "check", tone: "success" },
+  FAILED: { label: "Failed", icon: "x", tone: "danger" },
+  FAILED_ONE: {
+    label: "Failed on one reading's values",
+    icon: "help",
+    tone: "warning",
+  },
+  NOT_RUN: { label: "Not run", icon: "minus", tone: "neutral" },
+};
+
+/** Said of a comparison the server sent without its sentence. */
+const CHECK_UNSAID = "A comparison of the values the records state.";
+
+export type AttributeLine = {
+  /** The attribute's id, or its code where the server sent no id. */
+  key: string;
+  attributeId: string;
+  letter: string;
+  /** The attribute's wording; "" where it is no longer on the control. */
+  text: string;
+  /** The request asks for it. */
+  expected: boolean;
+  state: AttributeState;
+  /** What supported evidence shows; null otherwise. */
+  shows: Shows | null;
+  /** The attribute's elements, each with its result in words. */
+  elements: ElementLine[];
+  /** For an attribute shown in part: what this request shows, and what it leaves to
+   * other requests; null otherwise. */
+  inPart: { shows: string[]; leaves: string[] } | null;
+  /** "Supported (implementation)", "Issue: not shown", "Issue: decided by dismissal",
+   * "Your judgment needed", "Not addressed". */
+  label: string;
+  icon: IconName;
+  tone: Tone;
+  summary: string;
+  passages: ShownPassage[];
+  absent: string[];
+  /** The sentence over the two readings; null unless the person's judgment is needed. */
+  judgment: string | null;
+  /** Both readings: side by side where they do not agree, or on open where the request
+   * does not ask for the attribute. */
+  readings: Array<{ who: string; result: string; reason: string }>;
+  /** The evidence finding that records the issue; null where there is none. */
+  findingId: string | null;
+  /** It opens by itself: an open issue, or a judgment the person owes. */
+  open: boolean;
+  /** The comparisons made in code for the attribute (engine 2); empty otherwise. */
+  checks: CheckLine[];
+  /** Accepting the row marks it as evidenced: supported by the records of an instance,
+   * with every element shown under a verified passage of its own (or, sent without its
+   * elements, supported whole where no other request of the control sends them:
+   * assuranceRow). The one rule the accept note, the verdict's count and the first
+   * screen's calm line all read. */
+  evidenced: boolean;
+  /** The records contradict it on the current check: only an exception can be recorded
+   * (section 10.13). */
+  contradicted: boolean;
+  /** A person's disposition that stands on it for this request; null where none does.
+   * It changes nothing above: what the check found is said as it was. */
+  disposition: Disposition | null;
+  /** The dispositions that no longer stand, newest first. */
+  history: EndedDisposition[];
+};
+
+export type Lettered = { id: string; letter: string; text: string };
+
+/** Whether the records of an instance show the attribute whole, as this request's check
+ * alone can tell it (assuranceRow adds what the other requests send). */
+function evidencedBy(item: AssuredAttribute, state: AttributeState): boolean {
+  return (
+    state === "SUPPORTED" &&
+    item.shows === "IMPLEMENTATION" &&
+    item.elements.every(
+      (element) => element.result === "MET" && element.passages.length > 0,
+    )
+  );
+}
+
+function labelOf(item: AssuredAttribute, state: AttributeState): string {
+  const words = STATE_WORDS[state];
+  if (state === "SUPPORTED" || state === "PARTLY") {
+    return item.shows === null
+      ? words.label
+      : `${words.label} (${SHOWS_WORDS[item.shows]})`;
+  }
+  if (state === "DECIDED") {
+    const how =
+      item.findingStatus === null
+        ? undefined
+        : DECIDED_WORDS[item.findingStatus];
+    return how === undefined ? "Issue: decided" : `Issue: decided by ${how}`;
+  }
+  if (state === "ISSUE" && item.result !== null) {
+    const said = ISSUE_WORDS[item.result];
+    return said === undefined ? words.label : `${words.label}: ${said}`;
+  }
+  return words.label;
+}
+
+/** A passage as the row shows it: named by its file where the request has more than
+ * one, and opening in it where the file is one of the row's. */
+function shownPassage(
+  passage: Passage,
+  files: readonly RowFile[],
+  many: boolean,
+): ShownPassage {
+  const file = files.find((each) => each.id === passage.fileId);
+  return {
+    ...passage,
+    fileLabel: !many
+      ? ""
+      : (file?.name ??
+        (passage.fileId === null
+          ? "The file is not named"
+          : "A file no longer on this request")),
+    opens: file !== undefined,
+  };
+}
+
+function attributeLine(
+  item: AssuredAttribute,
+  attributes: readonly Lettered[],
+  files: readonly RowFile[],
+  many: boolean,
+): AttributeLine {
+  const known = attributes.find((each) => each.id === item.attributeId);
+  const state = stateOf(item);
+  const words = STATE_WORDS[state];
+  return {
+    key: item.attributeId !== "" ? item.attributeId : item.code,
+    attributeId: item.attributeId,
+    letter: known?.letter ?? item.code,
+    text: known?.text ?? "",
+    expected: item.expected,
+    state,
+    shows: state === "SUPPORTED" || state === "PARTLY" ? item.shows : null,
+    elements: item.elements.map((element) => ({
+      key: element.key,
+      text: element.text,
+      result: element.deviation
+        ? ELEMENT_DEVIATION
+        : elementWords(element.result),
+      tone: element.result === null ? "warning" : ELEMENT_TONES[element.result],
+      absent: element.absent,
+      passages: element.passages.map((passage) =>
+        shownPassage(passage, files, many),
+      ),
+      deviation: element.deviation,
+    })),
+    evidenced: evidencedBy(item, state),
+    inPart:
+      state !== "PARTLY"
+        ? null
+        : {
+            shows: item.elements
+              .filter((element) => element.result === "MET")
+              .map((element) => element.text),
+            leaves: item.elements
+              .filter((element) => element.result !== "MET")
+              .map((element) => element.text),
+          },
+    label: labelOf(item, state),
+    icon: words.icon,
+    tone: words.tone,
+    summary: item.summary,
+    passages: item.passages.map((passage) =>
+      shownPassage(passage, files, many),
+    ),
+    absent: item.absent,
+    // The server's own sentence heads the row (it says whether the readings disagree,
+    // neither could tell, or a reading did not finish), so it is not said again here: only
+    // where there is none, or the result could not be read as sent.
+    judgment:
+      state !== "JUDGMENT"
+        ? null
+        : !item.understood
+          ? RESULT_UNREAD
+          : item.summary === ""
+            ? READINGS_DISAGREE
+            : null,
+    readings: item.views.map((view) => ({
+      who: ROLE_WORDS[view.role],
+      result: resultWords(view.result),
+      reason: view.reason,
+    })),
+    findingId: item.findingId,
+    // A row that waits on a file says so on its line; it opens on request.
+    open: state === "ISSUE" || state === "JUDGMENT",
+    checks: item.checks.map((check, at) => ({
+      key: `${check.element}:${check.test}:${at}`,
+      sentence: sentence(check.sentence) || CHECK_UNSAID,
+      result: CODE_CHECK_WORDS[check.status].label,
+      icon: CODE_CHECK_WORDS[check.status].icon,
+      tone: CODE_CHECK_WORDS[check.status].tone,
+    })),
+    contradicted: item.contradicted,
+    disposition: item.disposition,
+    history: item.history,
+  };
+}
+
+// A request's check, as its row shows it
+
+export type CheckStanding =
+  | "NOT_CHECKED"
+  | "CHECKING"
+  | "HELD"
+  | "FAILED"
+  | "OUT_OF_DATE"
+  | "REVIEWED";
+
+export type CheckActionKind =
+  | "CONFIRM_TYPE"
+  | "REPLACE"
+  | "REREAD"
+  | "PICK_INSTANCE"
+  | "RERUN"
+  // A finished check an earlier engine made, checked again by the current one
+  // (docs/evidence-assurance.md, section 10.10).
+  | "UPGRADE";
+
+/** The row's action and menu item for a finished check an earlier engine made
+ * (section 10.10), the confirmation before it runs, and what is said once it started. */
+export const UPGRADE_LABEL = "Check again with the current engine";
+export const UPGRADE_TITLE = "Check this request again?";
+export const UPGRADE_BODY =
+  "The files on this request are read again by the model, as for the first check. The earlier result stays in the history and is no longer shown as current. Findings from it that nobody has decided yet are closed as out of date and raised again only if the new check finds them. A finding someone has already acted on keeps its status, and the new result is added to it for a person to decide. Nothing is sent to the organization.";
+export const UPGRADE_CONFIRM = "Check again";
+export const UPGRADE_DONE =
+  "The check was started again with the current engine.";
+/** Why it cannot be confirmed now: another check call of the list is on its way. */
+export const UPGRADE_WAIT =
+  "Another check is being started on this list. Confirm once it has started.";
+
+/** The engine new checks are made by, and the engines this page knows (section 10). */
+export const CURRENT_ENGINE = 2;
+const KNOWN_ENGINES: readonly number[] = [1, 2];
+
+/** A finished check is offered again only where a known engine earlier than the
+ * current one made it: a future engine, or one the page cannot read, is not. */
+export function earlierEngine(engine: number | null): boolean {
+  return (
+    engine !== null && KNOWN_ENGINES.includes(engine) && engine < CURRENT_ENGINE
+  );
+}
+
+/** The one action that clears a hold, or runs the check. A file's action names its
+ * file; running the check is the request's. */
+export type CheckAction = {
+  kind: CheckActionKind;
+  label: string;
+  fileId: string | null;
+};
+
+const FILE_ACTIONS: Partial<
+  Record<HeldCode, { kind: CheckActionKind; label: string }>
+> = {
+  // Cleared under the viewer's "About this file", where the file's type is confirmed.
+  KIND_UNSURE: { kind: "CONFIRM_TYPE", label: "Confirm the file's type" },
+  UNREADABLE: { kind: "REPLACE", label: "Replace the file" },
+  CUSTODY: { kind: "REPLACE", label: "Replace the file" },
+  // The reading itself failed: the file is read again (the reader's own re-read).
+  READ_FAILED: { kind: "REREAD", label: "Read the file again" },
+  // Picked under the viewer's "About this file", on the population's own rows.
+  POPULATION: { kind: "PICK_INSTANCE", label: "Pick the walkthrough instance" },
+};
+
+/** Why the whole request is held, where the gate sent no sentence of its own. */
+const HELD_REASONS: Record<HeldCode, string> = {
+  KIND_UNSURE:
+    "The file's type is not confirmed, so the evidence has not been checked against the attributes.",
+  UNREADABLE:
+    "Nothing readable could be taken from the evidence, so it has not been checked against the attributes.",
+  CUSTODY:
+    "The evidence did not pass its custody check, so it has not been checked against the attributes.",
+  READ_FAILED:
+    "Reading the file did not finish, so the evidence has not been checked against the attributes.",
+  POPULATION:
+    "The file is a population. The walkthrough instance is picked first, then its records are checked.",
+  NO_ATTRIBUTES:
+    "The control has no approved attribute, so there is nothing to check the evidence against.",
+  TOO_LARGE:
+    "The request's files are too large together to be read in one check, so they have not been checked against the attributes.",
+  OTHER: "The check is on hold.",
+};
+
+/** Why one file was left out, where the gate sent no sentence of its own. */
+const FILE_REASONS: Record<HeldCode, string> = {
+  KIND_UNSURE: "Its type is not confirmed.",
+  UNREADABLE: "Nothing readable could be taken from it.",
+  CUSTODY: "It did not pass its custody check.",
+  READ_FAILED: "Reading it did not finish.",
+  POPULATION: "It is a population: the walkthrough instance is picked first.",
+  NO_ATTRIBUTES: "It was not checked.",
+  TOO_LARGE: "It is too large to be read with the other files.",
+  OTHER: "It was not checked.",
+};
+
+/** Said of a file of the row the server lists neither as read nor as left out. */
+export const NOT_LISTED = "It is not part of this check.";
+
+const STAGE_WORDS: Partial<Record<Stage, string>> = {
+  ASSESS: "first reading",
+  VERIFY: "second, independent reading",
+  COMPARE: "comparing the two readings",
+};
+
+/** A file left out of the readings, with why and the action that clears it. */
+export type LeftOutLine = {
+  fileId: string;
+  /** "Checked without SAP_ticket.pdf: Its type is not confirmed." */
+  line: string;
+  action: CheckAction | null;
+};
+
+export type RequestCheck = {
+  standing: CheckStanding;
+  /** The one line: what the check is doing, why it is held, or what it was checked
+   * against. */
+  line: string;
+  /** Where a check at work has got to ("second, independent reading"); "" otherwise. */
+  stage: string;
+  /** The single action that clears a hold, or runs the check; null when a person can do
+   * nothing about it here. Offered only to a person who may act (offeredAction). */
+  action: CheckAction | null;
+  /** "The evidence was read in part.", where it was; null otherwise. */
+  readInPart: string | null;
+  /** Files of the request the readings did not include, each with why. */
+  leftOut: LeftOutLine[];
+  /** Open issues and judgments first, then what is supported, then decided issues, in
+   * the attributes' order. */
+  attributes: AttributeLine[];
+  /** Attributes the request asks for that the evidence does not bear on, folded. */
+  notAddressed: AttributeLine[];
+  /** Attributes the request does not ask for and the evidence does not bear on: one
+   * folded line, both readings on open. */
+  notAsked: AttributeLine[];
+  /** The review of a finished engine 2 check, read first; null for engine 1 and for a
+   * check that is not finished. */
+  review: ReviewView | null;
+  /** Files the check read as the type they appear to be (engine 2): each named, with
+   * the row's own action that confirms the type. Empty otherwise. */
+  confirm: LeftOutLine[];
+  /** A finished check's files whose reliability is not established, or that carry a
+   * person's decision (section 10.14), in the row's file order; empty otherwise. */
+  reliability: ReliabilityLine[];
+  /** "3 tickmarks kept. They apply again once the request is checked again.", on a
+   * check that is not current and has tickmarks a person recorded (section 10.15,
+   * item 8); "" otherwise. */
+  kept: string;
+};
+
+/** What a request whose check is not current says of the tickmarks a person recorded on
+ * it (section 10.15, item 8); "" where it has none. */
+export function tickmarksKeptLine(count: number): string {
+  if (!Number.isInteger(count) || count <= 0) {
+    return "";
+  }
+  return count === 1
+    ? "1 tickmark kept. It applies again once the request is checked again."
+    : `${count} tickmarks kept. They apply again once the request is checked again.`;
+}
+
+/** A file's reliability as the row shows it (section 10.14). */
+export type ReliabilityLine = FileReliability & {
+  /** The file's name; "A file no longer on this request" where it is not one of the
+   * row's in-force files. */
+  name: string;
+  /** Whether it is one of the row's in-force files: a decision is offered only then. */
+  inForce: boolean;
+};
+
+/** What a file the row no longer holds is called. */
+export const FILE_NOT_ON_REQUEST = "A file no longer on this request";
+
+/** A sentence as the server sent it, closed with a full stop. */
+function sentence(text: string): string {
+  return text === "" || /[.!?…]$/.test(text) ? text : `${text}.`;
+}
+
+/** The check's one sentence for a run that ended without a usable answer (it failed), or
+ * null: nothing of the run is shown, and the server's reason (its failure sentence, else
+ * the run's note). The next action is the check's own "Check again", beside it
+ * (requestCheck's action). */
+export function runFailureLine(
+  request: Pick<AssuredRequest, "status" | "note" | "failureNote">,
+  failureNote: string = request.failureNote ?? "",
+): string | null {
+  if (request.status !== "FAILED") {
+    return null;
+  }
+  return [
+    "The check did not finish, so nothing of it is shown.",
+    plainNote(failureNote) || plainNote(request.note),
+  ]
+    .filter((part) => part !== "")
+    .join(" ");
+}
+
+/** Letters as a person says them ("A to C", "A and C"), in the list's own way. */
+export type Span = (letters: readonly string[]) => string;
+
+/** "against attributes A to C", "against attribute A", "against the attributes". */
+function against(letters: readonly string[], span: Span): string {
+  return letters.length === 0
+    ? "against the attributes"
+    : `against attribute${letters.length === 1 ? "" : "s"} ${span(letters)}`;
+}
+
+export const READ_IN_PART = "The evidence was read in part.";
+export const NOT_CHECKED_LINE = "Not checked against the attributes yet";
+
+/** One request's check as its row shows it. `attributes` are the control's approved
+ * attributes with the list's letters: every one of them is checked. `files` are the
+ * row's in-force files. */
+export function requestCheck(
+  request: AssuredRequest,
+  attributes: readonly Lettered[],
+  files: readonly RowFile[],
+  span: Span,
+  /** Whether a file of the request is still waiting to be read. Said by the list only:
+   * where it is not said, a finished check is not offered again (section 10.10). */
+  options: { reading?: boolean } = {},
+): RequestCheck {
+  const all = attributes.map((item) => item.letter);
+  const nameOf = (fileId: string) =>
+    files.find((each) => each.id === fileId)?.name ?? "a file";
+  const fileAction = (code: HeldCode, fileId: string): CheckAction | null => {
+    const action = FILE_ACTIONS[code];
+    return action === undefined ? null : { ...action, fileId };
+  };
+  const reviewed = request.status === "REVIEWED";
+  const working = request.status === "QUEUED" || request.status === "CHECKING";
+  const lead = (name: string) =>
+    reviewed
+      ? `Checked without ${name}: `
+      : working
+        ? `Being checked without ${name}: `
+        : `Left out of the check, ${name}: `;
+  const leftOut: LeftOutLine[] = [
+    ...request.heldFiles.map((held) => ({
+      fileId: held.fileId,
+      line: `${lead(nameOf(held.fileId))}${sentence(held.reason) || FILE_REASONS[held.code]}`,
+      action: fileAction(held.code, held.fileId),
+    })),
+    // A file of the row the finished check lists neither as read nor as left out: said,
+    // never passed over (the third error of section 1).
+    ...(reviewed
+      ? files
+          .filter(
+            (file) =>
+              !request.fileIds.includes(file.id) &&
+              !request.heldFiles.some((held) => held.fileId === file.id),
+          )
+          .map((file) => ({
+            fileId: file.id,
+            line: `${lead(file.name)}${NOT_LISTED}`,
+            action: null,
+          }))
+      : []),
+  ];
+  const rerun = (label: string): CheckAction => ({
+    kind: "RERUN",
+    label,
+    fileId: null,
+  });
+  const base = {
+    stage: "",
+    action: null,
+    readInPart: null,
+    leftOut,
+    attributes: [],
+    notAddressed: [],
+    notAsked: [],
+    review: null,
+    confirm: [],
+    reliability: [],
+    // Said on every check that is not current; a finished, current one shows them.
+    kept: tickmarksKeptLine(request.tickmarksKept),
+  };
+  if (request.status === "NOT_CHECKED") {
+    return {
+      ...base,
+      leftOut: [],
+      standing: "NOT_CHECKED",
+      line: NOT_CHECKED_LINE,
+      action: rerun("Check now"),
+    };
+  }
+  if (working) {
+    return {
+      ...base,
+      standing: "CHECKING",
+      line: `${request.status === "QUEUED" ? "Waiting to check" : "Checking"} ${against(all, span)}`,
+      stage:
+        request.status === "CHECKING" && request.stage !== null
+          ? (STAGE_WORDS[request.stage] ?? "")
+          : "",
+    };
+  }
+  if (request.status === "HELD") {
+    const code = request.held?.code ?? "OTHER";
+    // The request is held for a file's reason: the file's action, where it is plain
+    // which file it is (the row's only file; a file left out carries its own).
+    const candidates =
+      request.heldFiles.length > 0
+        ? []
+        : files.length === 1
+          ? files.map((file) => file.id)
+          : [];
+    const [only] = candidates;
+    return {
+      ...base,
+      standing: "HELD",
+      // The gate's own sentence where it sent one; this page's otherwise.
+      line: sentence(request.held?.reason ?? "") || HELD_REASONS[code],
+      action: only === undefined ? null : fileAction(code, only),
+    };
+  }
+  if (request.status === "FAILED") {
+    return {
+      ...base,
+      standing: "FAILED",
+      line: runFailureLine(request) ?? "",
+      action: rerun("Check again"),
+    };
+  }
+  if (request.status === "OUT_OF_DATE") {
+    return {
+      ...base,
+      standing: "OUT_OF_DATE",
+      line: [
+        "The check is out of date, so its results are not shown.",
+        ...request.outOfDate.map(sentence),
+      ].join(" "),
+      action: rerun("Check again"),
+    };
+  }
+  const rank: Record<AttributeState, number> = {
+    ISSUE: 0,
+    JUDGMENT: 1,
+    WAITING: 2,
+    SUPPORTED: 3,
+    PARTLY: 4,
+    DECIDED: 5,
+    NOT_ADDRESSED: 6,
+  };
+  const place = (line: AttributeLine) => {
+    const at = attributes.findIndex((each) => each.id === line.attributeId);
+    return at < 0 ? attributes.length : at;
+  };
+  const inOrder = (a: AttributeLine, b: AttributeLine) =>
+    place(a) - place(b) || a.letter.localeCompare(b.letter);
+  const many =
+    new Set([...files.map((file) => file.id), ...request.fileIds]).size > 1;
+  const lines = request.attributes
+    .map((item) => attributeLine(item, attributes, files, many))
+    .sort((a, b) => rank[a.state] - rank[b.state] || inOrder(a, b));
+  const read = request.fileIds.length;
+  return {
+    ...base,
+    kept: "",
+    standing: "REVIEWED",
+    line:
+      lines.length === 0
+        ? "The check finished without a result for any attribute."
+        : `Checked ${against(
+            [...lines].sort(inOrder).map((line) => line.letter),
+            span,
+          )} by two independent readings${read > 1 ? `, reading ${read} files together` : ""}.`,
+    readInPart: request.readInPart ? READ_IN_PART : null,
+    attributes: lines.filter((line) => line.state !== "NOT_ADDRESSED"),
+    notAddressed: lines.filter(
+      (line) => line.state === "NOT_ADDRESSED" && line.expected,
+    ),
+    notAsked: lines.filter(
+      (line) => line.state === "NOT_ADDRESSED" && !line.expected,
+    ),
+    review: reviewView(request, attributes, files, span),
+    // Checked again by the current engine: only a finished check an earlier engine
+    // made, with no file of the request waiting to be read. The server guards it too.
+    action:
+      earlierEngine(request.engine) && options.reading === false
+        ? { kind: "UPGRADE", label: UPGRADE_LABEL, fileId: null }
+        : null,
+    // A file read with its type not confirmed: the row's own "Confirm the file's
+    // type", once per file (a file left out for the same reason already carries it).
+    confirm: (request.review?.confirmations ?? [])
+      .filter(
+        (item) =>
+          files.some((file) => file.id === item.fileId) &&
+          !request.heldFiles.some((held) => held.fileId === item.fileId) &&
+          (item.code === "KIND_UNSURE" || item.reason !== ""),
+      )
+      .map((item) => ({
+        fileId: item.fileId,
+        line: `${nameOf(item.fileId)}: ${sentence(item.reason) || TYPE_NOT_CONFIRMED}`,
+        action:
+          item.code === "KIND_UNSURE"
+            ? fileAction(item.code, item.fileId)
+            : null,
+      })),
+    // Each file's reliability as the server says it, in the row's file order; one the
+    // row no longer holds last, said as such, and never offered a decision.
+    reliability: request.fileReliability
+      .map((item) => {
+        const at = files.findIndex((file) => file.id === item.fileId);
+        return {
+          at,
+          line: {
+            ...item,
+            name: at < 0 ? FILE_NOT_ON_REQUEST : nameOf(item.fileId),
+            inForce: at >= 0,
+          },
+        };
+      })
+      .sort(
+        (a, b) =>
+          (a.at < 0 ? files.length : a.at) - (b.at < 0 ? files.length : b.at),
+      )
+      .map((item) => item.line),
+  };
+}
+
+// Closing a request with tickmarks (docs/evidence-assurance.md, section 10.15)
+
+type Settling = Pick<
+  RequestCheck,
+  "standing" | "attributes" | "notAddressed" | "notAsked"
+>;
+
+/** The attributes a request asks for, as its finished check lists them. */
+export function askedLines(
+  check: Pick<RequestCheck, "attributes" | "notAddressed">,
+): AttributeLine[] {
+  return [...check.attributes, ...check.notAddressed].filter(
+    (line) => line.expected,
+  );
+}
+
+/**
+ * The settled rule for closing a request (section 10.15, item 1): an attribute the
+ * request asks for is settled where the check supports it (its verdict is SUPPORTED:
+ * shown by the documented design or by the records of an instance), or a person's
+ * tickmark of any kind stands on it, an exception included, which is carried to the
+ * workpaper. It is the rule the server ends a tickmark by ("no longer needed" on any
+ * supported verdict), so a request never waits here for a tickmark the server would end.
+ * What kind of support it is (design only, an instance, whole or not) is said by the
+ * coverage and the accept note and does not hold the request open: `evidenced` stays the
+ * narrower rule accepting marks by. Shown in part, not met, a decided issue, a judgment,
+ * not addressed and waiting on a file are not settled without a tickmark.
+ */
+export const attributeSettled = (
+  line: Pick<AttributeLine, "state" | "disposition">,
+): boolean => line.state === "SUPPORTED" || line.disposition !== null;
+
+/** A request's attributes are settled when its check is finished and current and every
+ * attribute it asks for is settled. A request whose check lists none it asks for is not
+ * settled by that: nothing was shown and nothing was decided. */
+export function requestSettled(check: Settling): boolean {
+  const asked = askedLines(check);
+  return (
+    check.standing === "REVIEWED" &&
+    asked.length > 0 &&
+    asked.every(attributeSettled)
+  );
+}
+
+/** Whether recording a tickmark on this attribute would settle the last one: the request
+ * asks for it, it is not settled yet, and every other attribute the request asks for
+ * is. */
+export function settlesLast(
+  check: Settling,
+  line: Pick<AttributeLine, "key">,
+): boolean {
+  const asked = askedLines(check);
+  const own = asked.find((each) => each.key === line.key);
+  return (
+    check.standing === "REVIEWED" &&
+    own !== undefined &&
+    !attributeSettled(own) &&
+    asked.every((each) => each.key === line.key || attributeSettled(each))
+  );
+}
+
+/** How a tickmark ended where its attribute then waits on the person again: the person
+ * reopened it, a later check found the records contradict it, or the annotation it
+ * rested on is gone. Not one a check ended as no longer needed (the check supports the
+ * attribute), nor one another tickmark replaced. */
+const WAITS_AGAIN: readonly Ending[] = [
+  "REOPENED",
+  "OVERTAKEN_BY_CHECK",
+  "ANNOTATION_GONE",
+];
+
+/**
+ * The attributes a request asks for that wait on a person again (section 10.15, item 4):
+ * the attribute's own most recent tickmark ended as reopened, overtaken by a later check
+ * or with its annotation, no tickmark stands on it now, and the check does not support
+ * it. Only an attribute a person had settled and that no longer is: one that never
+ * carried a tickmark is not "again" (the accept note said what accepting did not
+ * settle), whatever happened to another attribute's tickmark, and one whose tickmark a
+ * check ended as no longer needed never waited at all. Empty for a check that is not
+ * finished and current.
+ */
+export function waitingAgain(check: Settling): AttributeLine[] {
+  if (check.standing !== "REVIEWED") {
+    return [];
+  }
+  return askedLines(check).filter((line) => {
+    // The last tickmark that ended: the latest by when it ended, and where the server
+    // gives no time to tell them apart, the first as sent (newest first).
+    const last = line.history.reduce<EndedDisposition | null>(
+      (latest, item) =>
+        latest === null || Date.parse(item.endedAt) > Date.parse(latest.endedAt)
+          ? item
+          : latest,
+      null,
+    );
+    return (
+      last !== null &&
+      WAITS_AGAIN.includes(last.endedAs) &&
+      !attributeSettled(line)
+    );
+  });
+}
+
+// The review of a request's evidence, as its row shows it (section 10)
+
+/** Over the review: it is the check's proposal. A person decides. */
+export const REVIEW_TITLE = "Proposed assessment";
+export const REVIEW_FOR = "for your review";
+export const FOLLOW_UP_TITLE = "Recommended follow-up";
+export const RESOLVED_TITLE = "Resolved by the new evidence";
+export const CONSIDERATIONS_TITLE = "Additional considerations";
+export const FILES_TITLE = "About the files";
+
+/** The outcome in words with its mark: the colour repeats them and never replaces
+ * them. Each is a proposal: none says the control works, or that it does not. */
+export const OUTCOME_WORDS: Record<
+  Outcome,
+  { label: string; icon: IconName; tone: Tone }
+> = {
+  SUFFICIENT: {
+    label: "Sufficient evidence",
+    icon: "checkCircle",
+    tone: "success",
+  },
+  ADDITIONAL_EVIDENCE: {
+    label: "Additional evidence needed",
+    icon: "plus",
+    tone: "warning",
+  },
+  CLARIFICATION: {
+    label: "Clarification needed",
+    icon: "message",
+    tone: "warning",
+  },
+  POTENTIAL_EXCEPTION: {
+    label: "Potential exception to investigate",
+    icon: "risk",
+    tone: "danger",
+  },
+  UNABLE_TO_CONCLUDE: {
+    label: "Unable to conclude yet",
+    icon: "help",
+    tone: "neutral",
+  },
+};
+
+/** Why, where the server sent no explanation of its own. */
+const OUTCOME_REASONS: Record<Outcome, string> = {
+  SUFFICIENT: "The evidence supports every attribute this request asks for.",
+  ADDITIONAL_EVIDENCE:
+    "The evidence does not yet support every attribute this request asks for.",
+  CLARIFICATION:
+    "A clarification is needed before every attribute this request asks for is supported.",
+  POTENTIAL_EXCEPTION:
+    "The records may show an exception. It is yours to investigate.",
+  UNABLE_TO_CONCLUDE: "The evidence does not yet allow a view either way.",
+};
+
+/** Under an outcome this page could not take as it stands: "sufficient" beside an
+ * attribute that is not satisfied, an open follow-up, or support that still needs
+ * corroboration. It is then not shown as sufficient. */
+export const REVIEW_UNREAD =
+  "This assessment could not be read as it was sent, so the evidence is not shown as sufficient. Your judgment is needed.";
+
+/** How complete the evidence is, where it is not complete. Passing custody is never
+ * called reliability. */
+export const COMPLETENESS_WORDS: Record<
+  Exclude<CompletenessState, "COMPLETE">,
+  string
+> = {
+  INCOMPLETE: "Evidence incomplete",
+  PARTLY_UNREADABLE: "Partly unreadable",
+  RELIABILITY_UNRESOLVED: "Reliability to resolve",
+};
+
+/** Why, where the server sent no sentence of its own. */
+const COMPLETENESS_REASONS: Record<
+  Exclude<CompletenessState, "COMPLETE">,
+  string
+> = {
+  INCOMPLETE: "The check does not say that every file was read in full.",
+  PARTLY_UNREADABLE: "Part of the evidence could not be read.",
+  RELIABILITY_UNRESOLVED:
+    "The support rests on a file whose source or basis is not shown.",
+};
+
+export type ReviewGroupKey = "SATISFIED" | "OPEN" | "EXCEPTION";
+
+/** The three groups the attributes a request asks for fall into. */
+export const REVIEW_GROUP_WORDS: Record<
+  ReviewGroupKey,
+  { label: string; icon: IconName; tone: Tone }
+> = {
+  SATISFIED: { label: "Satisfied", icon: "check", tone: "success" },
+  OPEN: { label: "Open", icon: "minusCircle", tone: "warning" },
+  EXCEPTION: { label: "Potential exception", icon: "risk", tone: "danger" },
+};
+
+const GROUP_OF: Record<Assessment, ReviewGroupKey> = {
+  SATISFIED: "SATISFIED",
+  PARTIALLY_SUPPORTED: "OPEN",
+  NOT_DEMONSTRATED: "OPEN",
+  INDETERMINATE: "OPEN",
+  CONTRADICTED: "EXCEPTION",
+};
+
+const FOLLOW_UP_KINDS: Record<FollowUp["kind"], string> = {
+  EVIDENCE: "Evidence",
+  CLARIFICATION: "Clarification",
+};
+
+const PRIORITY_WORDS: Record<FollowUpPriority, string> = {
+  HIGH: "High priority",
+  MEDIUM: "Medium priority",
+  LOW: "Low priority",
+};
+
+/** Said once where no fact of the control's understanding is confirmed. */
+export const CONTEXT_THIN =
+  "No fact of this control's understanding is confirmed yet, so the evidence was checked against the attributes' wording alone.";
+
+/** Said of a file the check read with its type not confirmed. */
+const TYPE_NOT_CONFIRMED =
+  "Its type is not confirmed, so it was read as the type it appears to be.";
+export const TYPE_TO_CONFIRM = "Its type is still to be confirmed.";
+
+const RELEVANCE_NOTES: Partial<Record<FileRelevance, string>> = {
+  NOT_RELEVANT: "It does not appear relevant to this request.",
+  CANNOT_TELL: "Whether it is relevant to this request could not be told.",
+};
+const LEGIBILITY_NOTES: Partial<Record<FileLegibility, string>> = {
+  PARTLY_UNREADABLE: "Part of it could not be read.",
+  UNREADABLE: "It could not be read.",
+};
+const SOURCE_NOTES: Partial<Record<FileSource, string>> = {
+  MANAGEMENT_PREPARED:
+    "It was prepared by a person, not taken from a system's own record.",
+  UNKNOWN: "Its source is not known.",
+};
+const BASIS_NOTES: Partial<Record<ReportBasis, string>> = {
+  NOT_SHOWN:
+    "It is a report that does not show its source, run date or parameters.",
+  PARTLY_SHOWN:
+    "It is a report that shows only part of its source, run date and parameters.",
+};
+
+/** One thing to ask for, as the review lists it. Whether one reading or both raised it
+ * is not shown: it is one ask. */
+export type FollowUpLine = {
+  key: string;
+  /** The main line, and what Copy copies. */
+  request: string;
+  /** "Evidence" or "Clarification". */
+  kind: string;
+  /** "High priority", "Medium priority", "Low priority". */
+  priority: string;
+  /** The attributes it serves, by the list's letters. */
+  letters: string[];
+  /** "For attribute C"; "" where it names none. */
+  serves: string;
+  /** On request: what is missing, why it matters, and what else would do. */
+  missing: string;
+  why: string;
+  alternatives: string;
+};
+
+/** The review of a finished engine 2 check, in the row's words. */
+export type ReviewView = {
+  /** The outcome as this page reads it. */
+  state: Outcome;
+  label: string;
+  icon: IconName;
+  tone: Tone;
+  /** Why the evidence is or is not sufficient, in at most three sentences. */
+  explanation: string;
+  /** The attributes the request asks for, each letter under one group. */
+  groups: Array<{
+    key: ReviewGroupKey;
+    label: string;
+    icon: IconName;
+    tone: Tone;
+    letters: string[];
+  }>;
+  /** "Satisfied A, B · Open C · Potential exception D"; "" where the request asks for
+   * none. */
+  countsLine: string;
+  /** Null where the evidence is complete. */
+  completeness: { label: string; reasons: string[] } | null;
+  /** Empty where the evidence is sufficient. */
+  followUps: FollowUpLine[];
+  /** "2 more follow-ups are not listed here."; "" where every one is listed. */
+  more: string;
+  /** Follow-ups of the earlier check that the new evidence resolved. */
+  resolved: Array<{ key: string; request: string; letters: string[] }>;
+  considerations: Array<{
+    key: string;
+    text: string;
+    passages: ShownPassage[];
+  }>;
+  /** What the check found on the facts the files state, each in one sentence, with
+   * the files it names. */
+  concerns: Array<{ key: string; text: string; files: string }>;
+  /** Only the files with something to say. */
+  files: Array<{ fileId: string; name: string; notes: string[] }>;
+  /** One quiet sentence where the control's understanding is thin; null otherwise. */
+  contextThin: string | null;
+};
+
+/**
+ * The review of a request's evidence as its row shows it; null where the check has
+ * none (engine 1, or not finished). It words what the server decided and decides
+ * nothing: the one thing it will not do is repeat "sufficient" where what came with it
+ * says otherwise.
+ */
+export function reviewView(
+  request: AssuredRequest,
+  attributes: readonly Lettered[],
+  files: readonly RowFile[],
+  span: Span,
+): ReviewView | null {
+  const review = request.review;
+  if (review === null || request.status !== "REVIEWED") {
+    return null;
+  }
+  const order = attributes.map((item) => item.letter);
+  const at = (letter: string) =>
+    order.indexOf(letter) < 0 ? order.length : order.indexOf(letter);
+  // In the attributes' order, as the row's letters are; a letter once.
+  const inOrder = (letters: readonly string[]) =>
+    distinct(
+      letters.filter((letter) => letter !== ""),
+      (letter) => letter,
+    ).sort((a, b) => at(a) - at(b) || a.localeCompare(b));
+  // An attribute's letter is the list's, by its id; its code where the list has none.
+  const letterOfId = (id: string): string =>
+    attributes.find((each) => each.id === id)?.letter ??
+    request.attributes.find((each) => each.attributeId === id)?.code ??
+    "";
+  const letterOfCode = (code: string): string => {
+    const item = request.attributes.find((each) => each.code === code);
+    return (
+      attributes.find(
+        (each) => item !== undefined && each.id === item.attributeId,
+      )?.letter ?? code
+    );
+  };
+  const lettersOf = (item: { attributeIds?: string[]; codes: string[] }) => {
+    const byId = inOrder((item.attributeIds ?? []).map(letterOfId));
+    return byId.length > 0 ? byId : inOrder(item.codes.map(letterOfCode));
+  };
+  const nameOf = (fileId: string) =>
+    files.find((each) => each.id === fileId)?.name ??
+    "A file no longer on this request";
+  const many =
+    new Set([...files.map((file) => file.id), ...request.fileIds]).size > 1;
+
+  const asked = request.attributes.filter((item) => item.assessment !== null);
+  const groupKeys: ReviewGroupKey[] = ["SATISFIED", "OPEN", "EXCEPTION"];
+  const groups = groupKeys
+    .map((key) => ({
+      key,
+      ...REVIEW_GROUP_WORDS[key],
+      letters: inOrder(
+        asked
+          .filter(
+            (item) =>
+              item.assessment !== null && GROUP_OF[item.assessment] === key,
+          )
+          .map((item) => letterOfId(item.attributeId) || item.code),
+      ),
+    }))
+    .filter((group) => group.letters.length > 0);
+
+  const open = review.followUps.filter((item) => item.status === "OPEN");
+  // "Sufficient" stands only as section 10.6 defines it: every attribute the request
+  // asks for satisfied, nothing left to ask, and no support still to corroborate.
+  const stands =
+    review.overall !== "SUFFICIENT" ||
+    (asked.length > 0 &&
+      asked.every((item) => item.assessment === "SATISFIED") &&
+      open.length === 0 &&
+      review.followUpsMore === 0 &&
+      review.completeness.state !== "RELIABILITY_UNRESOLVED");
+  const state: Outcome = stands ? review.overall : "UNABLE_TO_CONCLUDE";
+
+  const completeness =
+    review.completeness.state === "COMPLETE"
+      ? null
+      : {
+          label: COMPLETENESS_WORDS[review.completeness.state],
+          reasons:
+            review.completeness.reasons.length > 0
+              ? review.completeness.reasons.map(sentence)
+              : [COMPLETENESS_REASONS[review.completeness.state]],
+        };
+
+  const confirming = new Set(
+    review.confirmations
+      .filter((item) => item.code === "KIND_UNSURE")
+      .map((item) => item.fileId),
+  );
+  const notesOf = (file: ReviewFile | null, fileId: string): string[] => {
+    const flags = [
+      file === null ? undefined : RELEVANCE_NOTES[file.relevance],
+      file === null ? undefined : LEGIBILITY_NOTES[file.legibility],
+      file === null ? undefined : SOURCE_NOTES[file.source],
+      file === null ? undefined : BASIS_NOTES[file.reportBasis],
+      confirming.has(fileId) ? TYPE_TO_CONFIRM : undefined,
+    ].filter((note): note is string => note !== undefined);
+    // A file with nothing to say is not listed, whatever notes came with it.
+    return flags.length === 0
+      ? []
+      : distinct([...flags, ...(file?.notes ?? []).map(sentence)], (note) =>
+          note.toLowerCase(),
+        );
+  };
+
+  return {
+    state,
+    ...OUTCOME_WORDS[state],
+    explanation: !stands
+      ? REVIEW_UNREAD
+      : review.explanation !== ""
+        ? review.explanation
+        : OUTCOME_REASONS[state],
+    groups,
+    countsLine: groups
+      .map((group) => `${group.label} ${group.letters.join(", ")}`)
+      .join(" · "),
+    completeness,
+    followUps: open.map((item, index) => {
+      const letters = lettersOf(item);
+      return {
+        key: item.key !== "" ? item.key : `ask-${index}`,
+        // The ask is the main line; where the server named only what is missing, that.
+        request: item.request !== "" ? item.request : item.missing,
+        kind: FOLLOW_UP_KINDS[item.kind],
+        priority: PRIORITY_WORDS[item.priority],
+        letters,
+        serves:
+          letters.length === 0
+            ? ""
+            : `For attribute${letters.length === 1 ? "" : "s"} ${span(letters)}`,
+        missing: item.request !== "" ? item.missing : "",
+        why: item.why,
+        alternatives: item.alternatives,
+      };
+    }),
+    more:
+      review.followUpsMore > 0
+        ? `${review.followUpsMore} more follow-up${review.followUpsMore === 1 ? " is" : "s are"} not listed here.`
+        : "",
+    resolved: [
+      ...review.resolved.map((item) => ({ ...item, attributeIds: [] })),
+      ...review.followUps
+        .filter((item) => item.status === "RESOLVED" && item.request !== "")
+        .map((item) => ({
+          key: item.key,
+          request: item.request,
+          codes: item.codes,
+          attributeIds: item.attributeIds,
+        })),
+    ].map((item, index) => ({
+      key: item.key !== "" ? `done-${item.key}` : `done-${index}`,
+      request: item.request,
+      letters: lettersOf(item),
+    })),
+    considerations: review.considerations.map((item, index) => ({
+      key: `note-${index}`,
+      text: sentence(item.text),
+      passages: item.passages.map((passage) =>
+        shownPassage(passage, files, many),
+      ),
+    })),
+    concerns: review.concerns.map((item, index) => ({
+      key: `concern-${index}`,
+      text: sentence(item.sentence),
+      files: item.fileIds
+        .filter((id) => files.some((file) => file.id === id))
+        .map(nameOf)
+        .join(", "),
+    })),
+    files: [
+      ...review.files.map((file) => ({
+        fileId: file.fileId,
+        notes: notesOf(file, file.fileId),
+      })),
+      ...[...confirming]
+        .filter((id) => !review.files.some((file) => file.fileId === id))
+        .map((id) => ({ fileId: id, notes: notesOf(null, id) })),
+    ]
+      .filter((file) => file.notes.length > 0)
+      .map((file) => ({ ...file, name: nameOf(file.fileId) })),
+    contextThin: review.contextThin ? CONTEXT_THIN : null,
+  };
+}
+
+/** The action as the person is offered it: only to a person who may act; a replacement
+ * only where its file can be replaced now; a re-read only where its reading is known. */
+export function offeredAction(
+  action: CheckAction | null,
+  facts: {
+    canAct: boolean;
+    replaceable: (fileId: string) => boolean;
+    rereadable: (fileId: string) => boolean;
+  },
+): CheckAction | null {
+  if (action === null || !facts.canAct) {
+    return null;
+  }
+  if (action.kind === "REPLACE" || action.kind === "REREAD") {
+    const able =
+      action.kind === "REPLACE" ? facts.replaceable : facts.rereadable;
+    return action.fileId !== null && able(action.fileId) ? action : null;
+  }
+  return action;
+}
+
+// One request row
+
+/** How the row's own line groups its letters: each letter under one group. */
+export type StateGroupKey =
+  | "IMPLEMENTED"
+  | "DESIGN"
+  | "SUPPORTED"
+  | "PARTLY"
+  | "ISSUE"
+  | "JUDGMENT"
+  | "WAITING"
+  | "DECIDED";
+
+export type StateGroup = {
+  key: StateGroupKey;
+  letters: string[];
+  /** "A supported (implementation)", "B issue", "D your judgment needed". */
+  label: string;
+  icon: IconName;
+  tone: Tone;
+};
+
+const GROUP_WORDS: Record<
+  StateGroupKey,
+  { words: string; state: AttributeState }
+> = {
+  IMPLEMENTED: { words: "supported (implementation)", state: "SUPPORTED" },
+  DESIGN: { words: "supported (design)", state: "SUPPORTED" },
+  SUPPORTED: { words: "supported", state: "SUPPORTED" },
+  PARTLY: { words: "shown in part", state: "PARTLY" },
+  ISSUE: { words: "issue", state: "ISSUE" },
+  JUDGMENT: { words: "your judgment needed", state: "JUDGMENT" },
+  WAITING: { words: "waiting on a file", state: "WAITING" },
+  DECIDED: { words: "issue decided", state: "DECIDED" },
+};
+
+const groupOf = (line: AttributeLine): StateGroupKey | null =>
+  line.state === "SUPPORTED"
+    ? line.shows === "IMPLEMENTATION"
+      ? "IMPLEMENTED"
+      : line.shows === "DESIGN"
+        ? "DESIGN"
+        : "SUPPORTED"
+    : line.state === "NOT_ADDRESSED"
+      ? null
+      : line.state;
+
+/** What one request's check shows of one attribute's elements: every element it read,
+ * and the ones it shows, by what they show. An attribute sent without its elements is
+ * one element, the whole attribute (key ""). */
+export type AttributeElements = {
+  attributeId: string;
+  all: Array<{ key: string; text: string }>;
+  implementation: string[];
+  design: string[];
+};
+
+export type AssuranceRow = {
+  standing: CheckStanding;
+  /** The row's quiet line: "Checking against attributes A to C…", "Check on hold". */
+  fact: string;
+  check: RequestCheck;
+  /** Beside the row's letters once the check is finished: each letter under its one
+   * state. */
+  states: StateGroup[];
+  /** The same for a screen reader and the step's notes. */
+  spoken: string;
+  /** The attributes the check supports with records of an instance: accepting the row
+   * marks these as evidenced, and no other. */
+  implementedIds: string[];
+  /** The attributes the check supports with the documented design only: accepting
+   * marks them "design documented, implementation not yet shown". */
+  designIds: string[];
+  /** Each attribute's elements as this request's check shows them: the coverage
+   * combines them across the control's requests (attributeCoverage). */
+  elementFacts: AttributeElements[];
+  /** Beside Accept: what accepting marks as evidenced, and what it does not settle. */
+  acceptNote: string;
+  /** The check is queued or at work: the list is read again until it ends. */
+  working: boolean;
+  /** Every attribute the request asks for is supported by the check or carries a
+   * standing tickmark (requestSettled, section 10.15). */
+  settled: boolean;
+  /** The letters of the attributes that wait on a person again (waitingAgain). */
+  again: string[];
+  /** The tickmarks that stand on the check's attributes, for the coverage: a state of
+   * its own, never "evidenced". */
+  tickmarks: Array<{ attributeId: string; kind: DispositionKind }>;
+};
+
+/** An element is shown where both readings agree it is met and a verified passage of
+ * the files rests under it, on an attribute whose support stands. */
+function elementFacts(request: AssuredRequest): AttributeElements[] {
+  return request.attributes
+    .filter((item) => item.attributeId !== "")
+    .map((item) => {
+      const supports =
+        item.verdict === "SUPPORTED" || item.verdict === "PARTLY_SUPPORTED";
+      const shown = !supports
+        ? []
+        : item.elements.length > 0
+          ? item.elements
+              .filter(
+                (element) =>
+                  element.result === "MET" && element.passages.length > 0,
+              )
+              .map((element) => element.key)
+          : // Without its elements, only whole support shows the whole attribute.
+            item.verdict === "SUPPORTED"
+            ? [""]
+            : [];
+      return {
+        attributeId: item.attributeId,
+        all:
+          item.elements.length > 0
+            ? item.elements.map((element) => ({
+                key: element.key,
+                text: element.text,
+              }))
+            : [{ key: "", text: "" }],
+        implementation: item.shows === "IMPLEMENTATION" ? shown : [],
+        design: item.shows === "DESIGN" ? shown : [],
+      };
+    });
+}
+
+/** A request with files the server sent no entry for: it has not been checked against
+ * the attributes (the server always sends at least NOT_CHECKED; where it does not, the
+ * row says so and offers Check now, and nothing of it evidences). */
+export function notChecked(requirementId: string): AssuredRequest {
+  return {
+    requirementId,
+    runId: null,
+    status: "NOT_CHECKED",
+    stage: null,
+    held: null,
+    heldFiles: [],
+    fileIds: [],
+    lens: null,
+    readInPart: false,
+    attributes: [],
+    outOfDate: [],
+    note: "",
+    finishedAt: null,
+    engineVersion: 1,
+    engine: 1,
+    review: null,
+    fileReliability: [],
+    tickmarksKept: 0,
+  };
+}
+
+/** The read, with a not-checked entry for each request with files it does not list. */
+export function withNotChecked(
+  assurance: EvidenceAssurance,
+  requirementIds: readonly string[],
+): EvidenceAssurance {
+  const listed = new Set(assurance.requests.map((item) => item.requirementId));
+  return {
+    ...assurance,
+    requests: [
+      ...assurance.requests,
+      ...requirementIds
+        .filter((id) => !listed.has(id))
+        .map((id) => notChecked(id)),
+    ],
+  };
+}
+
+/** The attributes some request of the control sends with their elements. */
+export function keyedOf(assurance: EvidenceAssurance | null): Set<string> {
+  return new Set(
+    (assurance?.requests ?? []).flatMap((request) =>
+      request.attributes
+        .filter((item) => item.attributeId !== "" && item.elements.length > 0)
+        .map((item) => item.attributeId),
+    ),
+  );
+}
+
+/** Beside Accept, where accepting the request evidences an attribute only together
+ * with other requests. */
+export const SAME_INSTANCE =
+  "Check that these requests show the same instance.";
+
+export type AttributeCoverage = {
+  /** EVIDENCED: every element shown by the records of an instance in an accepted
+   * request. DESIGN_ONLY: every element the instances do not show is documented in an
+   * accepted request's design. PARTLY: accepted requests show some elements, not all.
+   * NONE: no accepted request's check shows any. UNKNOWN: no check read the attribute. */
+  state: "EVIDENCED" | "DESIGN_ONLY" | "PARTLY" | "NONE" | "UNKNOWN";
+  /** The elements no accepted request shows from the records of an instance, by their
+   * text. Empty where the elements were not sent. */
+  missing: string[];
+  /** For an evidenced attribute, how many accepted requests its elements are shown
+   * across: 1 where one request shows them all; 2 or more where they are combined (the
+   * person checks that those requests show the same instance). 0 otherwise. */
+  across: number;
+};
+
+/**
+ * Whether an attribute is evidenced at D&I, combining its elements across the control's
+ * requests by key: only when every element is shown with `shows: IMPLEMENTATION` by
+ * some accepted request (docs/evidence-assurance.md, section 3). A request's check whose
+ * attribute came without its elements counts as one element, the whole attribute; it
+ * covers the attribute only where no request sends the attribute's elements. Where one
+ * does, a check without them covers nothing (no wildcard): which elements it showed is
+ * not known.
+ */
+export function attributeCoverage(
+  attributeId: string,
+  entries: ReadonlyArray<{ accepted: boolean; facts: AttributeElements[] }>,
+): AttributeCoverage {
+  const facts = entries.flatMap((entry) =>
+    entry.facts
+      .filter((fact) => fact.attributeId === attributeId)
+      .map((fact) => ({ accepted: entry.accepted, fact })),
+  );
+  if (facts.length === 0) {
+    return { state: "UNKNOWN", missing: [], across: 0 };
+  }
+  const texts = new Map<string, string>();
+  for (const { fact } of facts) {
+    for (const element of fact.all) {
+      if (!texts.has(element.key)) {
+        texts.set(element.key, element.text);
+      }
+    }
+  }
+  const keyed = [...texts.keys()].some((key) => key !== "");
+  const universe = [...texts.keys()].filter((key) => !keyed || key !== "");
+  const accepted = facts
+    .filter((item) => item.accepted)
+    .map((item) => item.fact);
+  // The elements of the universe one fact shows: none from a check without its
+  // elements where others sent them.
+  const shownBy = (
+    fact: AttributeElements,
+    pick: (each: AttributeElements) => string[],
+  ) => universe.filter((key) => pick(fact).includes(key));
+  const by = (pick: (fact: AttributeElements) => string[]) => {
+    const keys = new Set(accepted.flatMap((fact) => shownBy(fact, pick)));
+    return (key: string) => keys.has(key);
+  };
+  const implementation = (fact: AttributeElements) => fact.implementation;
+  const implemented = by(implementation);
+  const designed = by((fact) => fact.design);
+  const missing = universe.filter((key) => !implemented(key));
+  const words = missing
+    .map((key) => texts.get(key) ?? "")
+    .filter((text) => text !== "");
+  if (missing.length === 0) {
+    const alone = accepted.some(
+      (fact) => shownBy(fact, implementation).length === universe.length,
+    );
+    return {
+      state: "EVIDENCED",
+      missing: [],
+      across: alone
+        ? 1
+        : accepted.filter((fact) => shownBy(fact, implementation).length > 0)
+            .length,
+    };
+  }
+  const anyShown = universe.some((key) => implemented(key) || designed(key));
+  return {
+    state: !anyShown
+      ? "NONE"
+      : missing.every((key) => designed(key))
+        ? "DESIGN_ONLY"
+        : "PARTLY",
+    missing: words,
+    across: 0,
+  };
+}
+
+const STANDING_FACTS: Record<Exclude<CheckStanding, "CHECKING">, string> = {
+  NOT_CHECKED: "Not checked yet",
+  HELD: "Check on hold",
+  FAILED: "Check did not finish",
+  OUT_OF_DATE: "Check out of date",
+  REVIEWED: "Checked by two readings",
+};
+
+/** Said of an attribute whose support is the documented design alone. */
+export const DESIGN_ONLY = "design documented, implementation not yet shown";
+
+/**
+ * What a request row shows of its check; null when the chain has no entry for the
+ * request (the row then reads as it did before the chain).
+ */
+export function assuranceRow(input: {
+  /** The request the row is. */
+  requirementId: string;
+  /** The row's in-force files. */
+  files: readonly RowFile[];
+  assurance: EvidenceAssurance | null;
+  /** The control's approved attributes, with the list's letters, in order. */
+  attributes: readonly Lettered[];
+  span: Span;
+  /** Attributes some request of the control sends with their elements (keyedOf): a
+   * check of one without them does not show it whole. */
+  keyed?: ReadonlySet<string>;
+  /** A file of the request is still waiting to be read (requestCheck). */
+  reading?: boolean;
+}): AssuranceRow | null {
+  const request =
+    input.assurance?.requests.find(
+      (item) => item.requirementId === input.requirementId,
+    ) ?? null;
+  if (request === null) {
+    return null;
+  }
+  const own = requestCheck(
+    request,
+    input.attributes,
+    input.files,
+    input.span,
+    input.reading === undefined ? {} : { reading: input.reading },
+  );
+  // An attribute this request sends without its elements, where another request of the
+  // control sends them, is not shown whole by this one.
+  const facts = elementFacts(request);
+  const unkeyed = (line: AttributeLine) =>
+    input.keyed?.has(line.attributeId) === true &&
+    (
+      facts.find((each) => each.attributeId === line.attributeId)?.all ?? []
+    ).every((element) => element.key === "");
+  const check: RequestCheck = {
+    ...own,
+    attributes: own.attributes.map((line) =>
+      line.evidenced && unkeyed(line) ? { ...line, evidenced: false } : line,
+    ),
+  };
+  const order = input.attributes.map((item) => item.letter);
+  const at = (letter: string) =>
+    order.indexOf(letter) < 0 ? order.length : order.indexOf(letter);
+  const inOrder = (a: string, b: string) => at(a) - at(b) || a.localeCompare(b);
+  // In the attributes' order, as the row's letters are.
+  const lettersOf = (key: StateGroupKey) =>
+    check.attributes
+      .filter((line) => groupOf(line) === key)
+      .map((line) => line.letter)
+      .sort(inOrder);
+  const every = [...check.attributes, ...check.notAddressed, ...check.notAsked];
+  // Beside the row's letters, a person's tickmarks are read too (section 10.15, item
+  // 4): an attribute a closing tickmark stands on, which the check itself does not
+  // evidence, is left out; a person's exception is an issue, whatever the check found.
+  const shownAs = (line: AttributeLine): StateGroupKey | null =>
+    line.disposition?.kind === "EXCEPTION"
+      ? "ISSUE"
+      : line.disposition !== null && !line.evidenced
+        ? null
+        : groupOf(line);
+  const shownLetters = (key: StateGroupKey) =>
+    every
+      .filter((line) => shownAs(line) === key && line.letter !== "")
+      .map((line) => line.letter)
+      .filter((letter, index, all) => all.indexOf(letter) === index)
+      .sort(inOrder);
+  const keys: StateGroupKey[] = [
+    "IMPLEMENTED",
+    "DESIGN",
+    "SUPPORTED",
+    "PARTLY",
+    "ISSUE",
+    "JUDGMENT",
+    "WAITING",
+    "DECIDED",
+  ];
+  const states: StateGroup[] = keys
+    .map((key) => ({ key, letters: shownLetters(key) }))
+    .filter((group) => group.letters.length > 0)
+    .map(({ key, letters }) => ({
+      key,
+      letters,
+      label: `${input.span(letters)} ${GROUP_WORDS[key].words}`,
+      icon: STATE_WORDS[GROUP_WORDS[key].state].icon,
+      tone: STATE_WORDS[GROUP_WORDS[key].state].tone,
+    }));
+  const idsOf = (key: StateGroupKey) =>
+    check.attributes
+      .filter((line) => groupOf(line) === key && line.attributeId !== "")
+      .map((line) => line.attributeId);
+  const left = check.leftOut.length;
+  // Supported from an instance's records, with every element shown under a verified
+  // passage: accepting marks it evidenced (AttributeLine.evidenced). Support whose
+  // elements are not all shown so reads as shown in part.
+  const whole = (letter: string) =>
+    check.attributes.find((each) => each.letter === letter)?.evidenced === true;
+  const implemented = lettersOf("IMPLEMENTED");
+  // A person's tickmarks (section 10.13), on any attribute of the check: an exception,
+  // which accepting does not settle, and a closing one on an attribute the records do not
+  // show whole, which accepting never marks as evidenced.
+  const tickmarked = (pick: (kind: DispositionKind) => boolean) =>
+    every
+      .filter(
+        (line) =>
+          line.disposition !== null &&
+          pick(line.disposition.kind) &&
+          line.letter !== "",
+      )
+      .map((line) => line.letter)
+      .filter((letter, index, all) => all.indexOf(letter) === index)
+      .sort((a, b) => at(a) - at(b) || a.localeCompare(b));
+  const closing = tickmarked((kind) => CLOSING_KINDS.includes(kind)).filter(
+    (letter) => !whole(letter),
+  );
+  return {
+    standing: check.standing,
+    fact:
+      check.standing === "CHECKING"
+        ? `Checking ${against(order, input.span)}…`
+        : check.standing === "REVIEWED" && left > 0
+          ? `${STANDING_FACTS.REVIEWED}, ${plural(left, "file")} left out`
+          : STANDING_FACTS[check.standing],
+    check,
+    states,
+    spoken: states.map((group) => group.label).join(", "),
+    implementedIds: idsOf("IMPLEMENTED"),
+    designIds: idsOf("DESIGN"),
+    elementFacts: facts,
+    acceptNote: acceptNote({
+      standing: check.standing,
+      implemented: implemented.filter(whole),
+      design: lettersOf("DESIGN"),
+      unstated: lettersOf("SUPPORTED"),
+      partly: [
+        ...lettersOf("PARTLY"),
+        ...implemented.filter((letter) => !whole(letter)),
+      ].sort((a, b) => at(a) - at(b) || a.localeCompare(b)),
+      issues: lettersOf("ISSUE"),
+      judged: lettersOf("JUDGMENT"),
+      waiting: lettersOf("WAITING"),
+      decided: lettersOf("DECIDED"),
+      excepted: tickmarked((kind) => kind === "EXCEPTION"),
+      tickmarked: closing,
+      leftOut: left,
+      span: input.span,
+    }),
+    working: check.standing === "CHECKING",
+    settled: requestSettled(check),
+    again: waitingAgain(check)
+      .map((line) => line.letter)
+      .filter((letter, index, all) => all.indexOf(letter) === index)
+      .sort(inOrder),
+    tickmarks: every.flatMap((line) =>
+      line.disposition === null || line.attributeId === ""
+        ? []
+        : [{ attributeId: line.attributeId, kind: line.disposition.kind }],
+    ),
+  };
+}
+
+/**
+ * Beside Accept: what accepting the row's evidence marks as evidenced (the attributes
+ * the records of an instance show, and no other), and what it leaves open. It informs
+ * and never blocks: Accept stays the person's.
+ */
+export function acceptNote(facts: {
+  standing: CheckStanding;
+  /** Supported by the records of an instance. */
+  implemented: readonly string[];
+  /** Supported by the documented design alone. */
+  design: readonly string[];
+  /** Supported, without the server saying by which. */
+  unstated: readonly string[];
+  /** Shown in part by this request, the rest left to other requests. */
+  partly?: readonly string[];
+  /** Open issues. */
+  issues: readonly string[];
+  judged: readonly string[];
+  /** Not concluded only because a file of the request has not been read. */
+  waiting?: readonly string[];
+  /** Issues a person has decided. */
+  decided: readonly string[];
+  /** Where a person's exception stands (section 10.13): accepting does not settle it. */
+  excepted?: readonly string[];
+  /** Where a person's closing tickmark stands on an attribute the records do not show
+   * whole: it carries the person's tickmark, never counted as evidenced, and no judgment
+   * is said to be needed there. */
+  tickmarked?: readonly string[];
+  /** Files of the request the readings did not include. */
+  leftOut: number;
+  span: Span;
+}): string {
+  const { span } = facts;
+  if (facts.standing === "CHECKING") {
+    return "The check is still running, so what accepting marks as evidenced is not known yet.";
+  }
+  if (facts.standing !== "REVIEWED") {
+    return "This evidence has not been checked against the attributes, so accepting marks no attribute as evidenced.";
+  }
+  const waiting = facts.waiting ?? [];
+  const excepted = facts.excepted ?? [];
+  const tickmarked = facts.tickmarked ?? [];
+  // A judgment the person has already made with a closing tickmark is not asked again.
+  const judged = facts.judged.filter((letter) => !tickmarked.includes(letter));
+  const open = facts.issues.length + judged.length + waiting.length > 0;
+  const many = (letters: readonly string[]) => letters.length !== 1;
+  return [
+    facts.implemented.length > 0
+      ? `Accepting marks attribute${many(facts.implemented) ? "s" : ""} ${span(facts.implemented)} as evidenced.`
+      : "Accepting marks no attribute as evidenced: the two readings find no record of an instance that shows one.",
+    facts.design.length > 0 ? `${span(facts.design)}: ${DESIGN_ONLY}.` : "",
+    facts.unstated.length > 0
+      ? `${span(facts.unstated)} ${many(facts.unstated) ? "are" : "is"} supported, but the check does not say whether by the design or its implementation, so ${many(facts.unstated) ? "they are" : "it is"} not marked as evidenced.`
+      : "",
+    (facts.partly ?? []).length > 0
+      ? `${span(facts.partly ?? [])} ${many(facts.partly ?? []) ? "are" : "is"} shown in part by this request; the rest is left to other requests, so ${many(facts.partly ?? []) ? "they are" : "it is"} evidenced only once they show it.`
+      : "",
+    facts.issues.length > 0
+      ? `Both readings found an issue on ${span(facts.issues)}.`
+      : "",
+    judged.length > 0 ? `Your judgment is needed on ${span(judged)}.` : "",
+    tickmarked.length > 0
+      ? `${span(tickmarked)} ${many(tickmarked) ? "carry" : "carries"} your tickmark, so ${many(tickmarked) ? "they are" : "it is"} not marked as evidenced.`
+      : "",
+    excepted.length > 0
+      ? `${many(excepted) ? "Exceptions are" : "An exception is"} recorded on ${span(excepted)}; accepting does not settle ${many(excepted) ? "them" : "it"}.`
+      : "",
+    waiting.length > 0
+      ? `${span(waiting)} ${many(waiting) ? "are" : "is"} not concluded: a file of this request has not been read yet.`
+      : "",
+    open ? "You can still accept; accepting does not settle these." : "",
+    facts.decided.length > 0
+      ? `The issue on ${span(facts.decided)} is decided, and ${many(facts.decided) ? "they are" : "it is"} not marked as evidenced.`
+      : "",
+    facts.leftOut > 0
+      ? `${plural(facts.leftOut, "file")} ${facts.leftOut === 1 ? "was" : "were"} not part of the check.`
+      : "",
+  ]
+    .filter((part) => part !== "")
+    .join(" ");
+}
+
+/**
+ * The note beside Accept, apart: the one sentence in its favour ("Accepting marks
+ * attributes A and B as evidenced."), and everything that cautions (what is shown only in
+ * design or in part, issues, judgments, what waits on a file, files left out). A screen
+ * that shows less than the whole note shows the caution, never the favour alone. Where
+ * the note does not open with that sentence, or holds nothing else, all of it is the
+ * caution: it is then shown whole.
+ */
+export function acceptNoteParts(note: string): {
+  favour: string;
+  caution: string;
+} {
+  const said = note.replace(/\s+/g, " ").trim();
+  const lead =
+    /^Accepting marks attributes? [^.:;]+ as evidenced\.(?= |$)/.exec(said);
+  const rest = lead === null ? "" : said.slice(lead[0].length).trim();
+  return lead === null || rest === ""
+    ? { favour: "", caution: said }
+    : { favour: lead[0], caution: rest };
+}
+
+// Polling while a check works
+
+/** How long until the list is read again while a check works, by how long it has been
+ * reading: every 5 seconds for the first minute, then every 15, and no more after 20
+ * minutes (null), when the row says so instead. */
+export function checkPollDelay(elapsedMs: number): number | null {
+  if (elapsedMs < 60_000) {
+    return 5_000;
+  }
+  return elapsedMs < 20 * 60_000 ? 15_000 : null;
+}
+
+export const STILL_CHECKING = "Still checking. Refresh to see the result.";
+
+// Running a check, and reading a file again
+
+type Fields = Record<string, unknown>;
+/** The API call to make: its path, and the JSON body a tickmark sends (a check sends
+ * none). */
+type AssuranceWrite =
+  | { path: string; body?: Record<string, unknown> }
+  | { error: "invalid" };
+
+/** The intents the /workspace/evidence-assurance route takes: running a check
+ * ("rerun", "upgrade"), a person's disposition of an attribute (section 10.13):
+ * "disposition" records one, "reopen-disposition" reopens the one that stands; and a
+ * person's decision on a file's reliability (section 10.14): "file-reliability" records
+ * one, "reopen-file-reliability" reopens the one that stands. */
+export const ASSURANCE_INTENTS = [
+  "rerun",
+  "upgrade",
+  "disposition",
+  "reopen-disposition",
+  "file-reliability",
+  "reopen-file-reliability",
+] as const;
+
+/** A person's text as it is sent: one line, its length within the contract's bounds. */
+const personText = (value: unknown): string | null =>
+  typeof value === "string" ? value.replace(/\s+/g, " ").trim() : null;
+
+/** The reason a tickmark carries, or null where it is not one the server takes. */
+function reasonOf(value: unknown): string | null {
+  const reason = personText(value);
+  return reason !== null &&
+    reason.length >= DISPOSITION_BOUNDS.reasonMin &&
+    reason.length <= DISPOSITION_BOUNDS.reasonMax
+    ? reason
+    : null;
+}
+
+/** The id of the disposition the person saw standing, as a recording names it
+ * (`replaces`): a UUID, or null where they saw none. Undefined where the fields do not
+ * say it, or say something that is neither: the write is then not sent, so that a
+ * recording never replaces a tickmark its person did not see. */
+function replacesOf(fields: Fields): string | null | undefined {
+  if (fields.replaces === null) {
+    return null;
+  }
+  return typeof fields.replaces === "string" && UUID.test(fields.replaces)
+    ? fields.replaces
+    : undefined;
+}
+
+/** The body of a disposition, checked as the contract shapes it; null where it is not
+ * one: a kind of the four, a reason of 10 to 1000 characters, what was relied on (600)
+ * only with "Evidence not available, accepted", an annotation with "Shown, on my
+ * review" only, which needs one, and `replaces`, always said (the id seen standing, or
+ * null for none). */
+function dispositionBody(fields: Fields): Record<string, unknown> | null {
+  const kind = DISPOSITION_KINDS.find((item) => item === fields.kind) ?? null;
+  const reason = reasonOf(fields.reason);
+  const reliedOn =
+    fields.relied_on === undefined || fields.relied_on === null
+      ? ""
+      : personText(fields.relied_on);
+  const annotation =
+    fields.annotation_id === undefined || fields.annotation_id === null
+      ? ""
+      : str(fields.annotation_id);
+  const replaces = replacesOf(fields);
+  if (
+    replaces === undefined ||
+    kind === null ||
+    reason === null ||
+    reliedOn === null ||
+    reliedOn.length > DISPOSITION_BOUNDS.reliedOnMax ||
+    (reliedOn !== "" && kind !== "NOT_AVAILABLE") ||
+    (annotation !== "" && !UUID.test(annotation)) ||
+    (kind === "SHOWN_ON_REVIEW") !== (annotation !== "")
+  ) {
+    return null;
+  }
+  return {
+    kind,
+    reason,
+    ...(reliedOn !== "" ? { relied_on: reliedOn } : {}),
+    ...(annotation !== "" ? { annotation_id: annotation } : {}),
+    replaces,
+  };
+}
+
+/** The reason a decision on a file's reliability carries, or null where it is not one
+ * the server takes (10 to 1000 characters). */
+function reliabilityReason(value: unknown): string | null {
+  const reason = personText(value);
+  return reason !== null &&
+    reason.length >= RELIABILITY_BOUNDS.reasonMin &&
+    reason.length <= RELIABILITY_BOUNDS.reasonMax
+    ? reason
+    : null;
+}
+
+/** The body of a decision on a file's reliability, checked as section 10.14 shapes it;
+ * null where it is not one: a kind of the two, a reason of 10 to 1000 characters, what
+ * was relied on (10 to 600) with "Reliability established on my review", which needs
+ * it, and never with "Not relied on", and `replaces`, always said (the id of the
+ * decision seen standing, or null for none). */
+function reliabilityBody(fields: Fields): Record<string, unknown> | null {
+  const kind = RELIABILITY_KINDS.find((item) => item === fields.kind) ?? null;
+  const reason = reliabilityReason(fields.reason);
+  const reliedOn =
+    fields.relied_on === undefined || fields.relied_on === null
+      ? ""
+      : personText(fields.relied_on);
+  const replaces = replacesOf(fields);
+  if (
+    replaces === undefined ||
+    kind === null ||
+    reason === null ||
+    reliedOn === null ||
+    reliedOn.length > RELIABILITY_BOUNDS.reliedOnMax ||
+    (kind === "ESTABLISHED_ON_REVIEW") !==
+      reliedOn.length >= RELIABILITY_BOUNDS.reliedOnMin ||
+    (kind === "NOT_RELIED_ON" && reliedOn !== "")
+  ) {
+    return null;
+  }
+  return {
+    kind,
+    reason,
+    ...(kind === "ESTABLISHED_ON_REVIEW" ? { relied_on: reliedOn } : {}),
+    replaces,
+  };
+}
+
+/** The API call behind "Check again", "Check now" and "Check again with the current
+ * engine" (the /workspace/evidence-assurance route): POST
+ * .../evidence-assurance/{requirement_id}/rerun, or /upgrade, with no body; and behind a
+ * tickmark: POST .../{requirement_id}/attributes/{attribute_id}/disposition with
+ * {kind, reason, relied_on?, annotation_id?, replaces} (`replaces`: the id of the
+ * disposition the person saw standing, or null), or .../disposition/reopen with
+ * {id, reason} (`id`: the disposition the person saw standing and reopens); and behind a
+ * decision on a file's reliability (section 10.14): POST
+ * .../{requirement_id}/files/{file_id}/reliability with {kind, reason, relied_on?,
+ * replaces}, or .../reliability/reopen with {id, reason}. Each act names what the person
+ * saw, so that the server refuses it, in its own sentence, where the page is stale.
+ * Anything else is not sent. */
+export function assuranceWrite(fields: Fields): AssuranceWrite {
+  const [organizationId, projectId, controlId, requirementId] = [
+    "organization_id",
+    "project_id",
+    "control_id",
+    "requirement_id",
+  ].map((key) => str(fields[key]));
+  const intent = ASSURANCE_INTENTS.find((item) => item === fields.intent);
+  if (
+    intent === undefined ||
+    ![organizationId, projectId, controlId, requirementId].every((id) =>
+      UUID.test(id ?? ""),
+    )
+  ) {
+    return { error: "invalid" };
+  }
+  const base = `/organizations/${organizationId}/projects/${projectId}/controls/${controlId}/evidence-assurance/${requirementId}`;
+  if (intent === "rerun" || intent === "upgrade") {
+    return { path: `${base}/${intent}` };
+  }
+  if (intent === "file-reliability" || intent === "reopen-file-reliability") {
+    const fileId = str(fields.file_id);
+    if (!UUID.test(fileId)) {
+      return { error: "invalid" };
+    }
+    const path = `${base}/files/${fileId}/reliability`;
+    if (intent === "file-reliability") {
+      const body = reliabilityBody(fields);
+      return body === null ? { error: "invalid" } : { path, body };
+    }
+    const reason = reliabilityReason(fields.reason);
+    const id = fields.id;
+    return reason === null || typeof id !== "string" || !UUID.test(id)
+      ? { error: "invalid" }
+      : { path: `${path}/reopen`, body: { id, reason } };
+  }
+  const attributeId = str(fields.attribute_id);
+  if (!UUID.test(attributeId)) {
+    return { error: "invalid" };
+  }
+  const path = `${base}/attributes/${attributeId}/disposition`;
+  if (intent === "disposition") {
+    const body = dispositionBody(fields);
+    return body === null ? { error: "invalid" } : { path, body };
+  }
+  // The one the person saw, by its id: a standing disposition's version cannot tell it
+  // from the one that replaced it, so the version is never sent.
+  const reason = reasonOf(fields.reason);
+  const id = fields.id;
+  return reason === null || typeof id !== "string" || !UUID.test(id)
+    ? { error: "invalid" }
+    : { path: `${path}/reopen`, body: { id, reason } };
+}
+
+/** What a person reads when a tickmark, or reopening one, did not go through; null when
+ * the server confirmed it. A refusal is the server's own sentence. */
+export function dispositionProblem(status: number, detail = ""): string | null {
+  if (status === 200) {
+    return null;
+  }
+  if (status === 409) {
+    return detail.trim() !== ""
+      ? sentence(detail.trim())
+      : "The tickmark could not be recorded as the request stands. The list is read again.";
+  }
+  if (status === 403) {
+    return "Your role cannot record a tickmark.";
+  }
+  if (status === 404) {
+    return "This request or attribute is no longer here. Refresh the page.";
+  }
+  if (status === 422) {
+    return "The tickmark was not in a form the server takes. Check the reason and try again.";
+  }
+  return "The tickmark could not be recorded. Try again in a moment.";
+}
+
+/** What a person reads when a decision on a file's reliability, or reopening one, did
+ * not go through; null when the server confirmed it. A refusal is the server's own
+ * sentence. */
+export function reliabilityProblem(status: number, detail = ""): string | null {
+  if (status === 200) {
+    return null;
+  }
+  if (status === 409) {
+    return detail.trim() !== ""
+      ? sentence(detail.trim())
+      : "The decision could not be recorded as the request stands. The list is read again.";
+  }
+  if (status === 403) {
+    return "Your role cannot decide a file's reliability.";
+  }
+  if (status === 404) {
+    return "This request or file is no longer here. Refresh the page.";
+  }
+  if (status === 422) {
+    return "The decision was not in a form the server takes. Check the reason and try again.";
+  }
+  return "The decision could not be recorded. Try again in a moment.";
+}
+
+/** What a person reads when running the check did not go through; null when the
+ * server confirmed it. */
+export function assuranceProblem(status: number, detail = ""): string | null {
+  if (status === 200) {
+    return null;
+  }
+  if (status === 409) {
+    // The server says why in one plain sentence: shown as it is.
+    return detail.trim() !== ""
+      ? sentence(detail.trim())
+      : "The check cannot be run now. The row is refreshed.";
+  }
+  if (status === 403) {
+    return "Your role cannot run the check.";
+  }
+  if (status === 404) {
+    return "This request is no longer here to check. Refresh the page.";
+  }
+  if (status === 422) {
+    return "The check could not be started for this request. Refresh the page and try again.";
+  }
+  return "The check could not be started. Try again in a moment.";
+}
+
+/** What a person reads when reading a file again did not go through; null when the
+ * server confirmed it. */
+export function rereadProblem(status: number): string | null {
+  if (status === 200) {
+    return null;
+  }
+  if (status === 409) {
+    return "The file's reading changed meanwhile. The row is refreshed: check it and try again.";
+  }
+  if (status === 403 || status === 404) {
+    return "Your role cannot read this file again.";
+  }
+  if (status === 422) {
+    return "The file could not be read again. Refresh the page and try again.";
+  }
+  return "Reading the file again could not be started. Try again in a moment.";
+}

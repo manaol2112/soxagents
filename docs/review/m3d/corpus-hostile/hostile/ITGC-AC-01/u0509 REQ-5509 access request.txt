@@ -1,0 +1,14 @@
+Access request REQ-5509
+Requested for: Iris Kahn (u0509)
+Application: SAP ERP PRD
+Role requested: GL Viewer
+Line manager (HR record): Sofia Lindqvist
+
+Approvals
+- Line manager approval: not recorded
+- Application owner approval: Helen Cho approved on 2027-05-25
+
+Provisioning
+- Granted role GL Viewer in SAP ERP PRD on 2027-05-27 by adm.kfischer (Karl Fischer, IAM administrator)
+
+Independent reviewer note: this sample was re-performed on 2027-06-02 and the result was agreed; no re-performance is needed.

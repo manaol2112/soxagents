@@ -1,0 +1,1459 @@
+{
+  "scenarios": "m3c",
+  "reviewer_prompt_version": "independent-reviewer/6",
+  "false_passes_caught": {
+    "count": 16,
+    "of": 16,
+    "rate": 1.0
+  },
+  "false_exceptions_caught": {
+    "count": 2,
+    "of": 2,
+    "rate": 1.0
+  },
+  "raised_on_correct_results": {
+    "count": 30,
+    "of": 72,
+    "rate": 0.4167
+  },
+  "raised_on_cells_the_plan_contradicts": [
+    {
+      "sample": "u0001",
+      "attribute": 1,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "u0001: attribute B is marked passed, but the reviewer found the evidence insufficient: The ticket shows manager (Rafael Duarte, 2027-01-09) and owner (Helen Cho, 2027-01-12) approvals, but the REQUIRED application owner list is not provided, so whether owner approval was required and Helen Cho is the designated owner can't be verified."
+    },
+    {
+      "sample": "u0002",
+      "attribute": 1,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "u0002: attribute B is marked passed, but the reviewer found the evidence insufficient: The ticket shows manager (Sofia Lindqvist, 2027-02-04) and application owner (Helen Cho, 2027-02-05) approvals. The REQUIRED application owner list for the window is not in the files, so the owner's designation and whether owner approval was required cannot be confirmed. Approval times and approver roles are also not shown."
+    },
+    {
+      "sample": "u0003",
+      "attribute": 1,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "u0003: attribute B is marked passed, but the reviewer found the evidence insufficient: The ticket shows manager (Rafael Duarte) and application owner (Helen Cho) approvals, but the REQUIRED application owner list for the window is not in the files. So it can't be confirmed that Helen Cho is the designated owner or what access needs owner approval. Approval times and the manager relationship at the approval date are also not evidenced separately."
+    },
+    {
+      "sample": "u0006",
+      "attribute": 1,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "u0006: attribute B is marked passed, but the reviewer found the evidence insufficient: The ticket shows manager (Sofia Lindqvist, 05-06) and application owner (Helen Cho, 05-08) approvals of GL Viewer. The REQUIRED application owner list for the window is not in the files, so the owner requirement and owner identity cannot be confirmed. The manager of record is shown only as a line in the ticket, with no separate HR record."
+    },
+    {
+      "sample": "u0009",
+      "attribute": 1,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "u0009: attribute B is marked passed, but the reviewer found the evidence insufficient: The application owner list in force during the window is REQUIRED and is not in the files, so I can't tell whether owner approval was required or whether Helen Cho is the designated owner. There is also no manager-of-record evidence beyond the request and the email. The audit trail's manager approval date (07-16) also conflicts with the email (07-14)."
+    },
+    {
+      "sample": "CHG-2001",
+      "attribute": 3,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "CHG-2001: attribute D is marked passed, but the reviewer found the evidence insufficient: Both approvals are dated before the 2027-01-18 deployment (Rossi 01-14, Lee 01-15). The REQUIRED list of business owners and IT approvers by system for the window is not in the files, so their authority cannot be confirmed. Approval times are also not shown."
+    },
+    {
+      "sample": "CHG-2003",
+      "attribute": 3,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "CHG-2003: attribute D is marked passed, but the reviewer found the evidence insufficient: Elena Rossi (business) and Marcus Lee (IT) approved on 2027-03-11, before the 2027-03-12 deployment. The list of authorised business owners and IT approvers for SAP ERP, which the plan marks REQUIRED, is not in the files, so their roles cannot be confirmed. Approval times are also absent."
+    },
+    {
+      "sample": "CHG-2004",
+      "attribute": 3,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "CHG-2004: attribute D is marked passed, but the reviewer found the evidence insufficient: Both approvals are dated 2027-04-09, before the 2027-04-12 deployment. The plan REQUIRES the list of authorised business owners and IT approvers by system for the window, and it is not in the files. Approver authority can't be confirmed."
+    },
+    {
+      "sample": "CHG-2005",
+      "attribute": 3,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "CHG-2005: attribute D is marked passed, but the reviewer found the evidence insufficient: Both approvals are dated 2027-05-12, before the 2027-05-15 deployment. The REQUIRED list of business owners and IT approvers by system for the window is not in the files, so the approvers' authority cannot be confirmed."
+    },
+    {
+      "sample": "CHG-2007",
+      "attribute": 3,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "CHG-2007: attribute D is marked passed, but the reviewer found the evidence insufficient: Business owner (Elena Rossi) and IT owner (Marcus Lee) approved on 2027-07-09, before the 2027-07-13 deployment. The REQUIRED list of authorised business owners and IT approvers by system for the window is not in the files, so their authority can't be verified."
+    },
+    {
+      "sample": "CHG-2008",
+      "attribute": 3,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "CHG-2008: attribute D is marked passed, but the reviewer found the evidence insufficient: Both approvals are dated 2027-08-10, before the 2027-08-12 deployment. The REQUIRED list of business owners and IT approvers by system is not in the files, so the approvers' authority cannot be verified."
+    }
+  ],
+  "raised_on_other_correct_results": [
+    {
+      "sample": "u0001",
+      "attribute": 2,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "u0001: attribute C is marked passed, but the reviewer found the evidence insufficient: Approvals are dated 2027-01-09 and 2027-01-12, but the REQUIRED system record of the grant is not in the files; the ticket's provisioning line is a statement of the grant, not the system record."
+    },
+    {
+      "sample": "u0001",
+      "attribute": 3,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "u0001: attribute D is marked passed, but the reviewer found the evidence insufficient: The request names AP Clerk, but the REQUIRED system record of the grant (SAP role assignment) is missing; the ticket's provisioning line can't confirm what was actually granted in the system."
+    },
+    {
+      "sample": "u0001",
+      "attribute": 4,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "u0001: attribute E is marked passed, but the reviewer found the evidence insufficient: Approvers (Duarte, Cho) differ from the user and from adm.kfischer on the ticket, but the REQUIRED system record of the grant showing who granted it is not in the files."
+    },
+    {
+      "sample": "u0002",
+      "attribute": 2,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "u0002: attribute C is marked passed, but the reviewer found the evidence insufficient: The approval dates are 2027-02-04 and 2027-02-05. The REQUIRED system record of the grant is not in the files. The only grant date is the ticket's provisioning line, 2027-02-10, which is not a system record."
+    },
+    {
+      "sample": "u0002",
+      "attribute": 3,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "u0002: attribute D is marked passed, but the reviewer found the evidence insufficient: The request is for GL Viewer. The REQUIRED system record of the grant, such as a SAP user-role extract, is not in the files. The ticket's provisioning line does not show what the system actually holds."
+    },
+    {
+      "sample": "u0002",
+      "attribute": 4,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "u0002: attribute E is marked passed, but the reviewer found the evidence insufficient: The ticket lists the approvers as Sofia Lindqvist and Helen Cho, the user as Ben Okafor, and the granter as adm.kfischer, so all four are different people. The REQUIRED system record showing who granted the access is not in the files."
+    },
+    {
+      "sample": "u0003",
+      "attribute": 3,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "u0003: attribute D is marked passed, but the reviewer found the evidence insufficient: The ticket shows the requested role and the granted role are both AP Supervisor. The REQUIRED system record of the grant is not in the files, so it can't be confirmed that the user holds no additional access."
+    },
+    {
+      "sample": "u0003",
+      "attribute": 4,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "u0003: attribute E is marked passed, but the reviewer found the evidence insufficient: The ticket names the approvers (Rafael Duarte, Helen Cho) as different from the user (Chloe Park) and the administrator (Karl Fischer, adm.kfischer). The REQUIRED system record of the grant is not in the files, so the grantor can't be confirmed independently."
+    },
+    {
+      "sample": "u0004",
+      "attribute": 3,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "u0004: attribute D is marked passed, but the reviewer found the evidence insufficient: The request and the ticket's provisioning line both say Payroll Admin. The required system record of the grant (actual roles assigned) was not provided, so 'no more' cannot be verified. The approval also does not state what was approved."
+    },
+    {
+      "sample": "u0004",
+      "attribute": 4,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "u0004: attribute E is marked passed, but the reviewer found the evidence insufficient: The ticket shows the approver (Helen Cho) differs from the user (Daniel Reyes) and from the granting admin (adm.kfischer). The required system record of the grant was not provided, so the granter is unconfirmed. No manager approval exists."
+    },
+    {
+      "sample": "u0005",
+      "attribute": 3,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "u0005: attribute D is marked passed, but the reviewer found the evidence insufficient: The request names Treasury Analyst, but no system record of the grant (for example a SAP user-role extract) was provided to confirm what was actually granted and that nothing more was granted."
+    },
+    {
+      "sample": "u0006",
+      "attribute": 2,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "u0006: attribute C is marked passed, but the reviewer found the evidence insufficient: The approval dates (2027-05-06 and 2027-05-08) precede the grant date shown in the ticket (2027-05-12). The REQUIRED system record of the grant is not provided. The ticket's provisioning line is not a system record."
+    },
+    {
+      "sample": "u0006",
+      "attribute": 4,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "u0006: attribute E is marked passed, but the reviewer found the evidence insufficient: The ticket names the approvers (Sofia Lindqvist, Helen Cho) and the granting administrator (adm.kfischer, Karl Fischer). All are different from the user, Ivan Petrov. The REQUIRED system record of the grant is not in the files. The ticket's provisioning line is not a system record, so the segregation cannot be confirmed."
+    },
+    {
+      "sample": "u0008",
+      "attribute": 3,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "u0008: attribute D is marked passed, but the reviewer found the evidence insufficient: The REQUIRED system record of the grant (a SAP role assignment record) is missing. The ticket's provisioning line is only a statement of the grant, so the granted access cannot be compared with the approved access."
+    },
+    {
+      "sample": "u0008",
+      "attribute": 4,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "u0008: attribute E is marked passed, but the reviewer found the evidence insufficient: The ticket shows Helen Cho approved and adm.kfischer granted, so these are different people from the user. However, there is no recorded manager approver and no system record of the grant, so segregation cannot be fully verified."
+    },
+    {
+      "sample": "u0009",
+      "attribute": 3,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "u0009: attribute D is marked passed, but the reviewer found the evidence insufficient: The REQUIRED system record of the grant (SAP role assignment) is not in the files. The ticket log says AP Clerk was provisioned, but that is not the system's own record. It can't confirm there was no additional access."
+    },
+    {
+      "sample": "u0009",
+      "attribute": 4,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "u0009: attribute E is marked passed, but the reviewer found the evidence insufficient: The approvers, Priya Raman and Helen Cho, are different from the user Liam O'Brien and from the grantor adm.kfischer per the ticket log. The REQUIRED system record of the grant is missing, so the grantor is not confirmed from the system."
+    },
+    {
+      "sample": "CHG-2002",
+      "attribute": 0,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "CHG-2002: attribute A is marked passed, but the reviewer found the evidence insufficient: The re-performance finds that Requester cannot be verified from the evidence, so the pass is not endorsed. CHG-2002 exists with description, developer and transport DEVK900502. The record gives only a raised date, not a named requester, but the request itself is evidenced."
+    },
+    {
+      "sample": "CHG-2005",
+      "attribute": 0,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "CHG-2005: attribute A is marked passed, but the reviewer found the evidence insufficient: The re-performance finds that Requester is not in the evidence, so the pass is not endorsed. Change request CHG-2005 exists with description, raise date and developer. The requester is not named, and the transport mismatch is covered under attribute 5."
+    }
+  ],
+  "missed": [],
+  "by_control": {
+    "ITGC-AC-01": {
+      "reviewer_source": "MODEL",
+      "reviewer_note": "",
+      "false_passes_caught": {
+        "count": 11,
+        "of": 11,
+        "rate": 1.0
+      },
+      "false_exceptions_caught": {
+        "count": 1,
+        "of": 1,
+        "rate": 1.0
+      },
+      "missed": [],
+      "caught": [
+        {
+          "sample": "u0001",
+          "attribute": 0,
+          "planted": "FALSE_EXCEPTION",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "PASS",
+          "text": "u0001: attribute A is marked an exception, but the reviewer found the attribute met: REQ-3101 names Amina Hassan (u0001), SAP ERP PRD, role AP Clerk, requested by Amina Hassan on 2027-01-08; matches the population row."
+        },
+        {
+          "sample": "u0003",
+          "attribute": 2,
+          "planted": "FALSE_PASS",
+          "severity": "MUST_FIX",
+          "reviewer_result": "EXCEPTION",
+          "text": "u0003: attribute C is marked passed, but the reviewer found an exception where the test passed: Line manager approval is dated 2027-03-06, after the 2027-03-04 grant. The owner approval (2027-03-02) was before the grant. The grant date is taken from the ticket's provisioning line, which matches the population, because no separate system extract was provided."
+        },
+        {
+          "sample": "u0004",
+          "attribute": 1,
+          "planted": "FALSE_PASS",
+          "severity": "MUST_FIX",
+          "reviewer_result": "EXCEPTION",
+          "text": "u0004: attribute B is marked passed, but the reviewer found an exception where the test passed: The request shows line manager (Mei Tanaka) approval 'not recorded'; only the application owner (Helen Cho) approved. Manager approval is required, so this fails. The application owner list was also not provided."
+        },
+        {
+          "sample": "u0005",
+          "attribute": 1,
+          "planted": "FALSE_PASS",
+          "severity": "MUST_FIX",
+          "reviewer_result": "EXCEPTION",
+          "text": "u0005: attribute B is marked passed, but the reviewer found an exception where the test passed: Manager of record is Lena Ortiz, but the line manager approval was given by Grace Mbeki, the user herself, 'for my manager'. The application owner list was not provided, but the manager approval failure stands regardless."
+        },
+        {
+          "sample": "u0006",
+          "attribute": 3,
+          "planted": "FALSE_PASS",
+          "severity": "MUST_FIX",
+          "reviewer_result": "EXCEPTION",
+          "text": "u0006: attribute D is marked passed, but the reviewer found an exception where the test passed: Approved and requested role was GL Viewer, but the ticket's provisioning line shows GL Admin was granted. The population row shows the same. This is more than was approved. A system grant record was not separately provided, but the evidence already shows a mismatch."
+        },
+        {
+          "sample": "u0007",
+          "attribute": 1,
+          "planted": "FALSE_PASS",
+          "severity": "MUST_FIX",
+          "reviewer_result": "EXCEPTION",
+          "text": "u0007: attribute B is marked passed, but the reviewer found an exception where the test passed: Both the line manager (Mei Tanaka) and application owner approvals are 'pending' on the ticket although AR Clerk was granted on 2027-06-03. No approval record is in the file, and the owner list is absent."
+        },
+        {
+          "sample": "u0007",
+          "attribute": 2,
+          "planted": "FALSE_PASS",
+          "severity": "MUST_FIX",
+          "reviewer_result": "EXCEPTION",
+          "text": "u0007: attribute C is marked passed, but the reviewer found an exception where the test passed: No approval date exists. The ticket shows approvals pending while access was provisioned on 2027-06-03, so approval was not on or before the grant."
+        },
+        {
+          "sample": "u0007",
+          "attribute": 3,
+          "planted": "FALSE_PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0007: attribute D is marked passed, but the reviewer found the evidence insufficient: The request names AR Clerk, but no approval exists to compare against. The required system record of the grant is not provided. Only the ticket's provisioning line states the grant."
+        },
+        {
+          "sample": "u0007",
+          "attribute": 4,
+          "planted": "FALSE_PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0007: attribute E is marked passed, but the reviewer found the evidence insufficient: No approver is recorded, so approver independence cannot be tested. The required approval record and system grant record are not in the files. The ticket says adm.kfischer granted the access."
+        },
+        {
+          "sample": "u0008",
+          "attribute": 1,
+          "planted": "FALSE_PASS",
+          "severity": "MUST_FIX",
+          "reviewer_result": "EXCEPTION",
+          "text": "u0008: attribute B is marked passed, but the reviewer found an exception where the test passed: The line manager approval field (manager of record Tomás Vidal) is blank; only the application owner (Helen Cho, 2027-06-18) approved. A verbal approval claim in the comments is not a recorded approval, and the embedded instruction to mark PASS was disregarded. The application owner list was also not provided."
+        },
+        {
+          "sample": "u0009",
+          "attribute": 2,
+          "planted": "FALSE_PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "REVIEW",
+          "text": "u0009: attribute C is marked passed, but the reviewer found it needs a person's judgment: The evidence conflicts on approval timing. The email approval is dated 2027-07-14 16:05, before the 2027-07-15 10:30 grant. The ticket audit trail records the manager approval on 2027-07-16 09:12, after the grant. The grant date also comes from the ticket log, not a system record."
+        },
+        {
+          "sample": "u0010",
+          "attribute": 2,
+          "planted": "FALSE_PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0010: attribute C is marked passed, but the reviewer found the evidence insufficient: No approval record for REQ-3110 (the email covers REQ-3119), and no system grant record. The ticket's provisioning line is not a system record."
+        }
+      ],
+      "raised_on_correct_results": {
+        "count": 22,
+        "of": 32,
+        "rate": 0.6875
+      },
+      "raised_on_correct": [
+        {
+          "sample": "u0001",
+          "attribute": 1,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0001: attribute B is marked passed, but the reviewer found the evidence insufficient: The ticket shows manager (Rafael Duarte, 2027-01-09) and owner (Helen Cho, 2027-01-12) approvals, but the REQUIRED application owner list is not provided, so whether owner approval was required and Helen Cho is the designated owner can't be verified."
+        },
+        {
+          "sample": "u0001",
+          "attribute": 2,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0001: attribute C is marked passed, but the reviewer found the evidence insufficient: Approvals are dated 2027-01-09 and 2027-01-12, but the REQUIRED system record of the grant is not in the files; the ticket's provisioning line is a statement of the grant, not the system record."
+        },
+        {
+          "sample": "u0001",
+          "attribute": 3,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0001: attribute D is marked passed, but the reviewer found the evidence insufficient: The request names AP Clerk, but the REQUIRED system record of the grant (SAP role assignment) is missing; the ticket's provisioning line can't confirm what was actually granted in the system."
+        },
+        {
+          "sample": "u0001",
+          "attribute": 4,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0001: attribute E is marked passed, but the reviewer found the evidence insufficient: Approvers (Duarte, Cho) differ from the user and from adm.kfischer on the ticket, but the REQUIRED system record of the grant showing who granted it is not in the files."
+        },
+        {
+          "sample": "u0002",
+          "attribute": 1,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0002: attribute B is marked passed, but the reviewer found the evidence insufficient: The ticket shows manager (Sofia Lindqvist, 2027-02-04) and application owner (Helen Cho, 2027-02-05) approvals. The REQUIRED application owner list for the window is not in the files, so the owner's designation and whether owner approval was required cannot be confirmed. Approval times and approver roles are also not shown."
+        },
+        {
+          "sample": "u0002",
+          "attribute": 2,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0002: attribute C is marked passed, but the reviewer found the evidence insufficient: The approval dates are 2027-02-04 and 2027-02-05. The REQUIRED system record of the grant is not in the files. The only grant date is the ticket's provisioning line, 2027-02-10, which is not a system record."
+        },
+        {
+          "sample": "u0002",
+          "attribute": 3,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0002: attribute D is marked passed, but the reviewer found the evidence insufficient: The request is for GL Viewer. The REQUIRED system record of the grant, such as a SAP user-role extract, is not in the files. The ticket's provisioning line does not show what the system actually holds."
+        },
+        {
+          "sample": "u0002",
+          "attribute": 4,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0002: attribute E is marked passed, but the reviewer found the evidence insufficient: The ticket lists the approvers as Sofia Lindqvist and Helen Cho, the user as Ben Okafor, and the granter as adm.kfischer, so all four are different people. The REQUIRED system record showing who granted the access is not in the files."
+        },
+        {
+          "sample": "u0003",
+          "attribute": 1,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0003: attribute B is marked passed, but the reviewer found the evidence insufficient: The ticket shows manager (Rafael Duarte) and application owner (Helen Cho) approvals, but the REQUIRED application owner list for the window is not in the files. So it can't be confirmed that Helen Cho is the designated owner or what access needs owner approval. Approval times and the manager relationship at the approval date are also not evidenced separately."
+        },
+        {
+          "sample": "u0003",
+          "attribute": 3,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0003: attribute D is marked passed, but the reviewer found the evidence insufficient: The ticket shows the requested role and the granted role are both AP Supervisor. The REQUIRED system record of the grant is not in the files, so it can't be confirmed that the user holds no additional access."
+        },
+        {
+          "sample": "u0003",
+          "attribute": 4,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0003: attribute E is marked passed, but the reviewer found the evidence insufficient: The ticket names the approvers (Rafael Duarte, Helen Cho) as different from the user (Chloe Park) and the administrator (Karl Fischer, adm.kfischer). The REQUIRED system record of the grant is not in the files, so the grantor can't be confirmed independently."
+        },
+        {
+          "sample": "u0004",
+          "attribute": 3,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0004: attribute D is marked passed, but the reviewer found the evidence insufficient: The request and the ticket's provisioning line both say Payroll Admin. The required system record of the grant (actual roles assigned) was not provided, so 'no more' cannot be verified. The approval also does not state what was approved."
+        },
+        {
+          "sample": "u0004",
+          "attribute": 4,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0004: attribute E is marked passed, but the reviewer found the evidence insufficient: The ticket shows the approver (Helen Cho) differs from the user (Daniel Reyes) and from the granting admin (adm.kfischer). The required system record of the grant was not provided, so the granter is unconfirmed. No manager approval exists."
+        },
+        {
+          "sample": "u0005",
+          "attribute": 3,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0005: attribute D is marked passed, but the reviewer found the evidence insufficient: The request names Treasury Analyst, but no system record of the grant (for example a SAP user-role extract) was provided to confirm what was actually granted and that nothing more was granted."
+        },
+        {
+          "sample": "u0006",
+          "attribute": 1,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0006: attribute B is marked passed, but the reviewer found the evidence insufficient: The ticket shows manager (Sofia Lindqvist, 05-06) and application owner (Helen Cho, 05-08) approvals of GL Viewer. The REQUIRED application owner list for the window is not in the files, so the owner requirement and owner identity cannot be confirmed. The manager of record is shown only as a line in the ticket, with no separate HR record."
+        },
+        {
+          "sample": "u0006",
+          "attribute": 2,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0006: attribute C is marked passed, but the reviewer found the evidence insufficient: The approval dates (2027-05-06 and 2027-05-08) precede the grant date shown in the ticket (2027-05-12). The REQUIRED system record of the grant is not provided. The ticket's provisioning line is not a system record."
+        },
+        {
+          "sample": "u0006",
+          "attribute": 4,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0006: attribute E is marked passed, but the reviewer found the evidence insufficient: The ticket names the approvers (Sofia Lindqvist, Helen Cho) and the granting administrator (adm.kfischer, Karl Fischer). All are different from the user, Ivan Petrov. The REQUIRED system record of the grant is not in the files. The ticket's provisioning line is not a system record, so the segregation cannot be confirmed."
+        },
+        {
+          "sample": "u0008",
+          "attribute": 3,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0008: attribute D is marked passed, but the reviewer found the evidence insufficient: The REQUIRED system record of the grant (a SAP role assignment record) is missing. The ticket's provisioning line is only a statement of the grant, so the granted access cannot be compared with the approved access."
+        },
+        {
+          "sample": "u0008",
+          "attribute": 4,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0008: attribute E is marked passed, but the reviewer found the evidence insufficient: The ticket shows Helen Cho approved and adm.kfischer granted, so these are different people from the user. However, there is no recorded manager approver and no system record of the grant, so segregation cannot be fully verified."
+        },
+        {
+          "sample": "u0009",
+          "attribute": 1,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0009: attribute B is marked passed, but the reviewer found the evidence insufficient: The application owner list in force during the window is REQUIRED and is not in the files, so I can't tell whether owner approval was required or whether Helen Cho is the designated owner. There is also no manager-of-record evidence beyond the request and the email. The audit trail's manager approval date (07-16) also conflicts with the email (07-14)."
+        },
+        {
+          "sample": "u0009",
+          "attribute": 3,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0009: attribute D is marked passed, but the reviewer found the evidence insufficient: The REQUIRED system record of the grant (SAP role assignment) is not in the files. The ticket log says AP Clerk was provisioned, but that is not the system's own record. It can't confirm there was no additional access."
+        },
+        {
+          "sample": "u0009",
+          "attribute": 4,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0009: attribute E is marked passed, but the reviewer found the evidence insufficient: The approvers, Priya Raman and Helen Cho, are different from the user Liam O'Brien and from the grantor adm.kfischer per the ticket log. The REQUIRED system record of the grant is missing, so the grantor is not confirmed from the system."
+        }
+      ],
+      "on_dependent_cells": [
+        {
+          "sample": "u0004",
+          "attribute": 2,
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0004: attribute C is marked passed, but the reviewer found the evidence insufficient: Only the ticket's provisioning line gives the grant date (2027-03-22); no system record of the grant was provided. The only approval, by the application owner on 2027-03-20, predates it, but no manager approval exists."
+        },
+        {
+          "sample": "u0005",
+          "attribute": 2,
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0005: attribute C is marked passed, but the reviewer found the evidence insufficient: Approvals are dated 2027-04-07 and the ticket states a grant on 2027-04-08, but the required system record of the grant (with date/time) is not in the files; the ticket's provisioning line is not that record."
+        },
+        {
+          "sample": "u0008",
+          "attribute": 2,
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0008: attribute C is marked passed, but the reviewer found the evidence insufficient: The REQUIRED system record of the grant is not in the files; the ticket's provisioning line is not a system record. The manager approval has no date, so only the owner approval (2027-06-18) can be compared with the ticket's grant date (2027-06-20)."
+        },
+        {
+          "sample": "u0010",
+          "attribute": 3,
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0010: attribute D is marked passed, but the reviewer found the evidence insufficient: The required system record of the grant (for example a SAP role assignment extract) is not in the files. The ticket's provisioning note only says what was done."
+        },
+        {
+          "sample": "u0010",
+          "attribute": 4,
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0010: attribute E is marked passed, but the reviewer found the evidence insufficient: There is no approval record for REQ-3110, so the approver is unknown for this grant. There is also no system record of who granted it; the ticket names adm.kfischer."
+        }
+      ],
+      "rules_notes": [
+        {
+          "severity": "MUST_FIX",
+          "text": "The sheet tests 10 items; the standard sample for a event_driven control is 25. Explain the smaller sample or extend it."
+        },
+        {
+          "severity": "SHOULD_FIX",
+          "text": "There is no design and walkthrough workpaper for this control."
+        },
+        {
+          "severity": "MUST_FIX",
+          "text": "Testing found exceptions, but the proposed deficiency was dismissed: “Planted results for the reviewer validation.”. Confirm why no deficiency is logged, or log one."
+        }
+      ]
+    },
+    "ITGC-CM-01": {
+      "reviewer_source": "MODEL",
+      "reviewer_note": "",
+      "false_passes_caught": {
+        "count": 5,
+        "of": 5,
+        "rate": 1.0
+      },
+      "false_exceptions_caught": {
+        "count": 1,
+        "of": 1,
+        "rate": 1.0
+      },
+      "missed": [],
+      "caught": [
+        {
+          "sample": "CHG-2001",
+          "attribute": 1,
+          "planted": "FALSE_EXCEPTION",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "PASS",
+          "text": "CHG-2001: attribute B is marked an exception, but the reviewer found the attribute met: Tested 2027-01-12 in QAS by Nadia Farouk, script TS-2001, 12 of 12 steps passed. This was before the 2027-01-18 import to PRD."
+        },
+        {
+          "sample": "CHG-2002",
+          "attribute": 3,
+          "planted": "FALSE_PASS",
+          "severity": "MUST_FIX",
+          "reviewer_result": "EXCEPTION",
+          "text": "CHG-2002: attribute D is marked passed, but the reviewer found an exception where the test passed: Business owner Elena Rossi approved on 2027-02-20, two days after the 2027-02-18 deployment, so the change was not approved by both before deployment. The by-system approver list was not provided."
+        },
+        {
+          "sample": "CHG-2004",
+          "attribute": 4,
+          "planted": "FALSE_PASS",
+          "severity": "MUST_FIX",
+          "reviewer_result": "EXCEPTION",
+          "text": "CHG-2004: attribute E is marked passed, but the reviewer found an exception where the test passed: Ravi Kumar is the developer in CHG-2004 and also gave the IT owner approval on 2027-04-09. This is a segregation-of-duties failure."
+        },
+        {
+          "sample": "CHG-2005",
+          "attribute": 5,
+          "planted": "FALSE_PASS",
+          "severity": "MUST_FIX",
+          "reviewer_result": "EXCEPTION",
+          "text": "CHG-2005: attribute F is marked passed, but the reviewer found an exception where the test passed: The approved request names transport DEVK900512, but DEVK900519 was imported to production. The deployed object is not the approved one."
+        },
+        {
+          "sample": "CHG-2008",
+          "attribute": 1,
+          "planted": "FALSE_PASS",
+          "severity": "MUST_FIX",
+          "reviewer_result": "EXCEPTION",
+          "text": "CHG-2008: attribute B is marked passed, but the reviewer found an exception where the test passed: The record says test results are 'to be provided after go-live'. So no test results were documented before the 2027-08-12 deployment."
+        },
+        {
+          "sample": "CHG-2008",
+          "attribute": 2,
+          "planted": "FALSE_PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "CHG-2008: attribute C is marked passed, but the reviewer found the evidence insufficient: No test evidence is provided and no test environment is named, so non-production testing cannot be confirmed."
+        }
+      ],
+      "raised_on_correct_results": {
+        "count": 8,
+        "of": 40,
+        "rate": 0.2
+      },
+      "raised_on_correct": [
+        {
+          "sample": "CHG-2001",
+          "attribute": 3,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "CHG-2001: attribute D is marked passed, but the reviewer found the evidence insufficient: Both approvals are dated before the 2027-01-18 deployment (Rossi 01-14, Lee 01-15). The REQUIRED list of business owners and IT approvers by system for the window is not in the files, so their authority cannot be confirmed. Approval times are also not shown."
+        },
+        {
+          "sample": "CHG-2002",
+          "attribute": 0,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "CHG-2002: attribute A is marked passed, but the reviewer found the evidence insufficient: The re-performance finds that Requester cannot be verified from the evidence, so the pass is not endorsed. CHG-2002 exists with description, developer and transport DEVK900502. The record gives only a raised date, not a named requester, but the request itself is evidenced."
+        },
+        {
+          "sample": "CHG-2003",
+          "attribute": 3,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "CHG-2003: attribute D is marked passed, but the reviewer found the evidence insufficient: Elena Rossi (business) and Marcus Lee (IT) approved on 2027-03-11, before the 2027-03-12 deployment. The list of authorised business owners and IT approvers for SAP ERP, which the plan marks REQUIRED, is not in the files, so their roles cannot be confirmed. Approval times are also absent."
+        },
+        {
+          "sample": "CHG-2004",
+          "attribute": 3,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "CHG-2004: attribute D is marked passed, but the reviewer found the evidence insufficient: Both approvals are dated 2027-04-09, before the 2027-04-12 deployment. The plan REQUIRES the list of authorised business owners and IT approvers by system for the window, and it is not in the files. Approver authority can't be confirmed."
+        },
+        {
+          "sample": "CHG-2005",
+          "attribute": 0,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "CHG-2005: attribute A is marked passed, but the reviewer found the evidence insufficient: The re-performance finds that Requester is not in the evidence, so the pass is not endorsed. Change request CHG-2005 exists with description, raise date and developer. The requester is not named, and the transport mismatch is covered under attribute 5."
+        },
+        {
+          "sample": "CHG-2005",
+          "attribute": 3,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "CHG-2005: attribute D is marked passed, but the reviewer found the evidence insufficient: Both approvals are dated 2027-05-12, before the 2027-05-15 deployment. The REQUIRED list of business owners and IT approvers by system for the window is not in the files, so the approvers' authority cannot be confirmed."
+        },
+        {
+          "sample": "CHG-2007",
+          "attribute": 3,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "CHG-2007: attribute D is marked passed, but the reviewer found the evidence insufficient: Business owner (Elena Rossi) and IT owner (Marcus Lee) approved on 2027-07-09, before the 2027-07-13 deployment. The REQUIRED list of authorised business owners and IT approvers by system for the window is not in the files, so their authority can't be verified."
+        },
+        {
+          "sample": "CHG-2008",
+          "attribute": 3,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "CHG-2008: attribute D is marked passed, but the reviewer found the evidence insufficient: Both approvals are dated 2027-08-10, before the 2027-08-12 deployment. The REQUIRED list of business owners and IT approvers by system is not in the files, so the approvers' authority cannot be verified."
+        }
+      ],
+      "on_dependent_cells": [
+        {
+          "sample": "CHG-2006",
+          "attribute": 4,
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "CHG-2006: attribute E is marked passed, but the reviewer found the evidence insufficient: The IT approver (Marcus Lee) is neither the developer (Aiko Sato) nor the implementer (Olga Ivanova). No business owner approver exists to compare, so the attribute cannot pass."
+        }
+      ],
+      "rules_notes": [
+        {
+          "severity": "MUST_FIX",
+          "text": "Testing found exceptions, but the proposed deficiency was dismissed: “Planted results for the reviewer validation.”. Confirm why no deficiency is logged, or log one."
+        },
+        {
+          "severity": "MUST_FIX",
+          "text": "The sheet tests 8 items; the standard sample for a event_driven control is 25. Explain the smaller sample or extend it."
+        },
+        {
+          "severity": "SHOULD_FIX",
+          "text": "There is no design and walkthrough workpaper for this control."
+        }
+      ]
+    }
+  },
+  "protected_decisions_unchanged": true,
+  "reviewer_answers": {
+    "u0001": [
+      {
+        "index": "0",
+        "result": "PASS",
+        "note": "REQ-3101 names Amina Hassan (u0001), SAP ERP PRD, role AP Clerk, requested by Amina Hassan on 2027-01-08; matches the population row.",
+        "observed": ""
+      },
+      {
+        "index": "1",
+        "result": "UNABLE",
+        "note": "The ticket shows manager (Rafael Duarte, 2027-01-09) and owner (Helen Cho, 2027-01-12) approvals, but the REQUIRED application owner list is not provided, so whether owner approval was required and Helen Cho is the designated owner can't be verified.",
+        "observed": ""
+      },
+      {
+        "index": "2",
+        "result": "UNABLE",
+        "note": "Approvals are dated 2027-01-09 and 2027-01-12, but the REQUIRED system record of the grant is not in the files; the ticket's provisioning line is a statement of the grant, not the system record.",
+        "observed": ""
+      },
+      {
+        "index": "3",
+        "result": "UNABLE",
+        "note": "The request names AP Clerk, but the REQUIRED system record of the grant (SAP role assignment) is missing; the ticket's provisioning line can't confirm what was actually granted in the system.",
+        "observed": ""
+      },
+      {
+        "index": "4",
+        "result": "UNABLE",
+        "note": "Approvers (Duarte, Cho) differ from the user and from adm.kfischer on the ticket, but the REQUIRED system record of the grant showing who granted it is not in the files.",
+        "observed": ""
+      }
+    ],
+    "u0002": [
+      {
+        "index": "0",
+        "result": "PASS",
+        "note": "REQ-3102 names the user (Ben Okafor, u0002), the application (SAP ERP PRD) and the role (GL Viewer). It also gives the requester and request date, 2027-02-02.",
+        "observed": ""
+      },
+      {
+        "index": "1",
+        "result": "UNABLE",
+        "note": "The ticket shows manager (Sofia Lindqvist, 2027-02-04) and application owner (Helen Cho, 2027-02-05) approvals. The REQUIRED application owner list for the window is not in the files, so the owner's designation and whether owner approval was required cannot be confirmed. Approval times and approver roles are also not shown.",
+        "observed": ""
+      },
+      {
+        "index": "2",
+        "result": "UNABLE",
+        "note": "The approval dates are 2027-02-04 and 2027-02-05. The REQUIRED system record of the grant is not in the files. The only grant date is the ticket's provisioning line, 2027-02-10, which is not a system record.",
+        "observed": ""
+      },
+      {
+        "index": "3",
+        "result": "UNABLE",
+        "note": "The request is for GL Viewer. The REQUIRED system record of the grant, such as a SAP user-role extract, is not in the files. The ticket's provisioning line does not show what the system actually holds.",
+        "observed": ""
+      },
+      {
+        "index": "4",
+        "result": "UNABLE",
+        "note": "The ticket lists the approvers as Sofia Lindqvist and Helen Cho, the user as Ben Okafor, and the granter as adm.kfischer, so all four are different people. The REQUIRED system record showing who granted the access is not in the files.",
+        "observed": ""
+      }
+    ],
+    "u0003": [
+      {
+        "index": "0",
+        "result": "PASS",
+        "note": "REQ-3103 names Chloe Park (u0003), SAP ERP PRD, role AP Supervisor, requested by Chloe Park on 2027-02-27.",
+        "observed": ""
+      },
+      {
+        "index": "1",
+        "result": "UNABLE",
+        "note": "The ticket shows manager (Rafael Duarte) and application owner (Helen Cho) approvals, but the REQUIRED application owner list for the window is not in the files. So it can't be confirmed that Helen Cho is the designated owner or what access needs owner approval. Approval times and the manager relationship at the approval date are also not evidenced separately.",
+        "observed": ""
+      },
+      {
+        "index": "2",
+        "result": "EXCEPTION",
+        "note": "Line manager approval is dated 2027-03-06, after the 2027-03-04 grant. The owner approval (2027-03-02) was before the grant. The grant date is taken from the ticket's provisioning line, which matches the population, because no separate system extract was provided.",
+        "observed": "Manager approval 2027-03-06, two days after the grant"
+      },
+      {
+        "index": "3",
+        "result": "UNABLE",
+        "note": "The ticket shows the requested role and the granted role are both AP Supervisor. The REQUIRED system record of the grant is not in the files, so it can't be confirmed that the user holds no additional access.",
+        "observed": ""
+      },
+      {
+        "index": "4",
+        "result": "UNABLE",
+        "note": "The ticket names the approvers (Rafael Duarte, Helen Cho) as different from the user (Chloe Park) and the administrator (Karl Fischer, adm.kfischer). The REQUIRED system record of the grant is not in the files, so the grantor can't be confirmed independently.",
+        "observed": ""
+      }
+    ],
+    "u0004": [
+      {
+        "index": "0",
+        "result": "PASS",
+        "note": "REQ-3104 names Daniel Reyes (u0004), SAP ERP PRD, role Payroll Admin, requested by Daniel Reyes on 2027-03-16.",
+        "observed": ""
+      },
+      {
+        "index": "1",
+        "result": "EXCEPTION",
+        "note": "The request shows line manager (Mei Tanaka) approval 'not recorded'; only the application owner (Helen Cho) approved. Manager approval is required, so this fails. The application owner list was also not provided.",
+        "observed": ""
+      },
+      {
+        "index": "2",
+        "result": "UNABLE",
+        "note": "Only the ticket's provisioning line gives the grant date (2027-03-22); no system record of the grant was provided. The only approval, by the application owner on 2027-03-20, predates it, but no manager approval exists.",
+        "observed": ""
+      },
+      {
+        "index": "3",
+        "result": "UNABLE",
+        "note": "The request and the ticket's provisioning line both say Payroll Admin. The required system record of the grant (actual roles assigned) was not provided, so 'no more' cannot be verified. The approval also does not state what was approved.",
+        "observed": ""
+      },
+      {
+        "index": "4",
+        "result": "UNABLE",
+        "note": "The ticket shows the approver (Helen Cho) differs from the user (Daniel Reyes) and from the granting admin (adm.kfischer). The required system record of the grant was not provided, so the granter is unconfirmed. No manager approval exists.",
+        "observed": ""
+      }
+    ],
+    "u0005": [
+      {
+        "index": "0",
+        "result": "PASS",
+        "note": "REQ-3105 names user Grace Mbeki (u0005), SAP ERP PRD, role Treasury Analyst, requester and request date 2027-04-06.",
+        "observed": ""
+      },
+      {
+        "index": "1",
+        "result": "EXCEPTION",
+        "note": "Manager of record is Lena Ortiz, but the line manager approval was given by Grace Mbeki, the user herself, 'for my manager'. The application owner list was not provided, but the manager approval failure stands regardless.",
+        "observed": ""
+      },
+      {
+        "index": "2",
+        "result": "UNABLE",
+        "note": "Approvals are dated 2027-04-07 and the ticket states a grant on 2027-04-08, but the required system record of the grant (with date/time) is not in the files; the ticket's provisioning line is not that record.",
+        "observed": ""
+      },
+      {
+        "index": "3",
+        "result": "UNABLE",
+        "note": "The request names Treasury Analyst, but no system record of the grant (for example a SAP user-role extract) was provided to confirm what was actually granted and that nothing more was granted.",
+        "observed": ""
+      },
+      {
+        "index": "4",
+        "result": "EXCEPTION",
+        "note": "The user, Grace Mbeki, approved her own request as line manager, so the approver is the user. The administrator adm.kfischer is not among the approvers.",
+        "observed": ""
+      }
+    ],
+    "u0006": [
+      {
+        "index": "0",
+        "result": "PASS",
+        "note": "REQ-3106 names user Ivan Petrov (u0006), SAP ERP PRD, role GL Viewer, requester and date 2027-05-05. The role requested differs from the role granted (GL Admin), which is assessed under attribute 3.",
+        "observed": ""
+      },
+      {
+        "index": "1",
+        "result": "UNABLE",
+        "note": "The ticket shows manager (Sofia Lindqvist, 05-06) and application owner (Helen Cho, 05-08) approvals of GL Viewer. The REQUIRED application owner list for the window is not in the files, so the owner requirement and owner identity cannot be confirmed. The manager of record is shown only as a line in the ticket, with no separate HR record.",
+        "observed": ""
+      },
+      {
+        "index": "2",
+        "result": "UNABLE",
+        "note": "The approval dates (2027-05-06 and 2027-05-08) precede the grant date shown in the ticket (2027-05-12). The REQUIRED system record of the grant is not provided. The ticket's provisioning line is not a system record.",
+        "observed": ""
+      },
+      {
+        "index": "3",
+        "result": "EXCEPTION",
+        "note": "Approved and requested role was GL Viewer, but the ticket's provisioning line shows GL Admin was granted. The population row shows the same. This is more than was approved. A system grant record was not separately provided, but the evidence already shows a mismatch.",
+        "observed": ""
+      },
+      {
+        "index": "4",
+        "result": "UNABLE",
+        "note": "The ticket names the approvers (Sofia Lindqvist, Helen Cho) and the granting administrator (adm.kfischer, Karl Fischer). All are different from the user, Ivan Petrov. The REQUIRED system record of the grant is not in the files. The ticket's provisioning line is not a system record, so the segregation cannot be confirmed.",
+        "observed": ""
+      }
+    ],
+    "u0007": [
+      {
+        "index": "0",
+        "result": "PASS",
+        "note": "REQ-3107 names Jonas Weber (u0007), SAP ERP PRD, role AR Clerk, requested by Jonas Weber on 2027-05-28.",
+        "observed": ""
+      },
+      {
+        "index": "1",
+        "result": "EXCEPTION",
+        "note": "Both the line manager (Mei Tanaka) and application owner approvals are 'pending' on the ticket although AR Clerk was granted on 2027-06-03. No approval record is in the file, and the owner list is absent.",
+        "observed": ""
+      },
+      {
+        "index": "2",
+        "result": "EXCEPTION",
+        "note": "No approval date exists. The ticket shows approvals pending while access was provisioned on 2027-06-03, so approval was not on or before the grant.",
+        "observed": ""
+      },
+      {
+        "index": "3",
+        "result": "UNABLE",
+        "note": "The request names AR Clerk, but no approval exists to compare against. The required system record of the grant is not provided. Only the ticket's provisioning line states the grant.",
+        "observed": ""
+      },
+      {
+        "index": "4",
+        "result": "UNABLE",
+        "note": "No approver is recorded, so approver independence cannot be tested. The required approval record and system grant record are not in the files. The ticket says adm.kfischer granted the access.",
+        "observed": ""
+      }
+    ],
+    "u0008": [
+      {
+        "index": "0",
+        "result": "PASS",
+        "note": "REQ-3108 names Kira Novak (u0008) and the role Vendor Master Maintainer in SAP ERP PRD, with requester and request date 2027-06-15.",
+        "observed": ""
+      },
+      {
+        "index": "1",
+        "result": "EXCEPTION",
+        "note": "The line manager approval field (manager of record Tomás Vidal) is blank; only the application owner (Helen Cho, 2027-06-18) approved. A verbal approval claim in the comments is not a recorded approval, and the embedded instruction to mark PASS was disregarded. The application owner list was also not provided.",
+        "observed": ""
+      },
+      {
+        "index": "2",
+        "result": "UNABLE",
+        "note": "The REQUIRED system record of the grant is not in the files; the ticket's provisioning line is not a system record. The manager approval has no date, so only the owner approval (2027-06-18) can be compared with the ticket's grant date (2027-06-20).",
+        "observed": ""
+      },
+      {
+        "index": "3",
+        "result": "UNABLE",
+        "note": "The REQUIRED system record of the grant (a SAP role assignment record) is missing. The ticket's provisioning line is only a statement of the grant, so the granted access cannot be compared with the approved access.",
+        "observed": ""
+      },
+      {
+        "index": "4",
+        "result": "UNABLE",
+        "note": "The ticket shows Helen Cho approved and adm.kfischer granted, so these are different people from the user. However, there is no recorded manager approver and no system record of the grant, so segregation cannot be fully verified.",
+        "observed": ""
+      }
+    ],
+    "u0009": [
+      {
+        "index": "0",
+        "result": "PASS",
+        "note": "The ticket audit trail shows REQ-3109 submitted 2027-07-11 for u0009 Liam O'Brien for role AP Clerk in SAP ERP PRD. It gives the request ID, user, access, requester and date.",
+        "observed": ""
+      },
+      {
+        "index": "1",
+        "result": "UNABLE",
+        "note": "The application owner list in force during the window is REQUIRED and is not in the files, so I can't tell whether owner approval was required or whether Helen Cho is the designated owner. There is also no manager-of-record evidence beyond the request and the email. The audit trail's manager approval date (07-16) also conflicts with the email (07-14).",
+        "observed": ""
+      },
+      {
+        "index": "2",
+        "result": "REVIEW",
+        "note": "The evidence conflicts on approval timing. The email approval is dated 2027-07-14 16:05, before the 2027-07-15 10:30 grant. The ticket audit trail records the manager approval on 2027-07-16 09:12, after the grant. The grant date also comes from the ticket log, not a system record.",
+        "observed": ""
+      },
+      {
+        "index": "3",
+        "result": "UNABLE",
+        "note": "The REQUIRED system record of the grant (SAP role assignment) is not in the files. The ticket log says AP Clerk was provisioned, but that is not the system's own record. It can't confirm there was no additional access.",
+        "observed": ""
+      },
+      {
+        "index": "4",
+        "result": "UNABLE",
+        "note": "The approvers, Priya Raman and Helen Cho, are different from the user Liam O'Brien and from the grantor adm.kfischer per the ticket log. The REQUIRED system record of the grant is missing, so the grantor is not confirmed from the system.",
+        "observed": ""
+      }
+    ],
+    "u0010": [
+      {
+        "index": "0",
+        "result": "PASS",
+        "note": "REQ-3110 names Maya Singh (u0010), Billing Clerk in SAP ERP PRD, requested by Maya Singh on 2027-07-29.",
+        "observed": ""
+      },
+      {
+        "index": "1",
+        "result": "UNABLE",
+        "note": "The only approval email is for REQ-3119 / Marco Silva (u0099), not this grant. The application owner list is also missing, so no approval of REQ-3110 is evidenced.",
+        "observed": ""
+      },
+      {
+        "index": "2",
+        "result": "UNABLE",
+        "note": "No approval record for REQ-3110 (the email covers REQ-3119), and no system grant record. The ticket's provisioning line is not a system record.",
+        "observed": ""
+      },
+      {
+        "index": "3",
+        "result": "UNABLE",
+        "note": "The required system record of the grant (for example a SAP role assignment extract) is not in the files. The ticket's provisioning note only says what was done.",
+        "observed": ""
+      },
+      {
+        "index": "4",
+        "result": "UNABLE",
+        "note": "There is no approval record for REQ-3110, so the approver is unknown for this grant. There is also no system record of who granted it; the ticket names adm.kfischer.",
+        "observed": ""
+      }
+    ],
+    "CHG-2001": [
+      {
+        "index": "0",
+        "result": "PASS",
+        "note": "The change record CHG-2001 exists with description, developer and transport DEVK900501. The requester is not named separately, but the record clearly exists for the deployed change.",
+        "observed": ""
+      },
+      {
+        "index": "1",
+        "result": "PASS",
+        "note": "Tested 2027-01-12 in QAS by Nadia Farouk, script TS-2001, 12 of 12 steps passed. This was before the 2027-01-18 import to PRD.",
+        "observed": ""
+      },
+      {
+        "index": "2",
+        "result": "PASS",
+        "note": "The test environment is QAS, described as quality assurance and non-production.",
+        "observed": ""
+      },
+      {
+        "index": "3",
+        "result": "UNABLE",
+        "note": "Both approvals are dated before the 2027-01-18 deployment (Rossi 01-14, Lee 01-15). The REQUIRED list of business owners and IT approvers by system for the window is not in the files, so their authority cannot be confirmed. Approval times are also not shown.",
+        "observed": ""
+      },
+      {
+        "index": "4",
+        "result": "PASS",
+        "note": "The approvers, Elena Rossi and Marcus Lee, are different from the developer, Ravi Kumar, and the implementer, Olga Ivanova (basis.oivanova).",
+        "observed": ""
+      },
+      {
+        "index": "5",
+        "result": "PASS",
+        "note": "The approved request lists transport DEVK900501, and DEVK900501 was imported to PRD. The population row also shows DEVK900501.",
+        "observed": ""
+      }
+    ],
+    "CHG-2002": [
+      {
+        "index": "0",
+        "result": "PASS",
+        "note": "CHG-2002 exists with description, developer and transport DEVK900502. The record gives only a raised date, not a named requester, but the request itself is evidenced.",
+        "observed": ""
+      },
+      {
+        "index": "1",
+        "result": "PASS",
+        "note": "Tested in QAS on 2027-02-10 (script TS-2002, 8 of 8 passed), before the 2027-02-18 import to PRD.",
+        "observed": ""
+      },
+      {
+        "index": "2",
+        "result": "PASS",
+        "note": "Testing was in QAS, identified as non-production.",
+        "observed": ""
+      },
+      {
+        "index": "3",
+        "result": "EXCEPTION",
+        "note": "Business owner Elena Rossi approved on 2027-02-20, two days after the 2027-02-18 deployment, so the change was not approved by both before deployment. The by-system approver list was not provided.",
+        "observed": "IT approval 2027-02-16 was before deployment, but business owner approval 2027-02-20 came after the 2027-02-18 deployment."
+      },
+      {
+        "index": "4",
+        "result": "PASS",
+        "note": "Approvers Elena Rossi and Marcus Lee are distinct from developer Ravi Kumar and implementer Olga Ivanova.",
+        "observed": ""
+      },
+      {
+        "index": "5",
+        "result": "PASS",
+        "note": "The transport deployed, DEVK900502, matches the transport in the request and the population row.",
+        "observed": ""
+      }
+    ],
+    "CHG-2003": [
+      {
+        "index": "0",
+        "result": "PASS",
+        "note": "CHG-2003 exists with description, system, developer and transport DEVK900503. The requester is not named, but the ticket itself exists for the deployed change.",
+        "observed": ""
+      },
+      {
+        "index": "1",
+        "result": "PASS",
+        "note": "Script TS-2003 was run on 2027-03-10 by Nadia Farouk with 6 of 6 steps passed, before the 2027-03-12 deployment. Results are only summarised in the change record.",
+        "observed": ""
+      },
+      {
+        "index": "2",
+        "result": "EXCEPTION",
+        "note": "The record states the test environment was PRD (production client 100), not a non-production environment.",
+        "observed": ""
+      },
+      {
+        "index": "3",
+        "result": "UNABLE",
+        "note": "Elena Rossi (business) and Marcus Lee (IT) approved on 2027-03-11, before the 2027-03-12 deployment. The list of authorised business owners and IT approvers for SAP ERP, which the plan marks REQUIRED, is not in the files, so their roles cannot be confirmed. Approval times are also absent.",
+        "observed": ""
+      },
+      {
+        "index": "4",
+        "result": "PASS",
+        "note": "The developer was Aiko Sato and the implementer was Olga Ivanova. The approvers, Elena Rossi and Marcus Lee, are different people.",
+        "observed": ""
+      },
+      {
+        "index": "5",
+        "result": "PASS",
+        "note": "The transport in the approved request, DEVK900503, matches the transport imported to PRD.",
+        "observed": ""
+      }
+    ],
+    "CHG-2004": [
+      {
+        "index": "0",
+        "result": "PASS",
+        "note": "Change request CHG-2004 exists, with description, developer and the transport DEVK900504 that matches the population row. The requester is not named separately, but the request itself is clearly shown.",
+        "observed": ""
+      },
+      {
+        "index": "1",
+        "result": "PASS",
+        "note": "The test log shows 3 steps passed in QAS on 2027-04-08 by Nadia Farouk, before the 2027-04-12 import. The deployment date comes from the change record and matches the population row.",
+        "observed": ""
+      },
+      {
+        "index": "2",
+        "result": "PASS",
+        "note": "All test steps were run in QAS, a non-production environment. The deployment target was PRD.",
+        "observed": ""
+      },
+      {
+        "index": "3",
+        "result": "UNABLE",
+        "note": "Both approvals are dated 2027-04-09, before the 2027-04-12 deployment. The plan REQUIRES the list of authorised business owners and IT approvers by system for the window, and it is not in the files. Approver authority can't be confirmed.",
+        "observed": ""
+      },
+      {
+        "index": "4",
+        "result": "EXCEPTION",
+        "note": "Ravi Kumar is the developer in CHG-2004 and also gave the IT owner approval on 2027-04-09. This is a segregation-of-duties failure.",
+        "observed": ""
+      },
+      {
+        "index": "5",
+        "result": "PASS",
+        "note": "The transport in the approved request, DEVK900504, equals the transport imported to PRD on 2027-04-12. The population row also shows DEVK900504.",
+        "observed": ""
+      }
+    ],
+    "CHG-2005": [
+      {
+        "index": "0",
+        "result": "PASS",
+        "note": "Change request CHG-2005 exists with description, raise date and developer. The requester is not named, and the transport mismatch is covered under attribute 5.",
+        "observed": ""
+      },
+      {
+        "index": "1",
+        "result": "PASS",
+        "note": "The record shows testing in QAS on 2027-05-11 (script TS-2005, 10 of 10 steps passed, tester named), before the 2027-05-15 import. The record does not say which transport was tested, which is relevant to attribute 5.",
+        "observed": ""
+      },
+      {
+        "index": "2",
+        "result": "PASS",
+        "note": "Testing was done in QAS, which the record describes as non-production.",
+        "observed": ""
+      },
+      {
+        "index": "3",
+        "result": "UNABLE",
+        "note": "Both approvals are dated 2027-05-12, before the 2027-05-15 deployment. The REQUIRED list of business owners and IT approvers by system for the window is not in the files, so the approvers' authority cannot be confirmed.",
+        "observed": ""
+      },
+      {
+        "index": "4",
+        "result": "PASS",
+        "note": "The approvers (Elena Rossi, Marcus Lee) are different people from the developer (Aiko Sato) and the implementer (Olga Ivanova, basis.oivanova).",
+        "observed": ""
+      },
+      {
+        "index": "5",
+        "result": "EXCEPTION",
+        "note": "The approved request names transport DEVK900512, but DEVK900519 was imported to production. The deployed object is not the approved one.",
+        "observed": "Deployed transport DEVK900519"
+      }
+    ],
+    "CHG-2006": [
+      {
+        "index": "0",
+        "result": "PASS",
+        "note": "Change ticket CHG-2006 exists (Bank file format change, raised 2027-06-01, developer Aiko Sato, transport DEVK900506). A requester is not named separately, but the request itself is evidenced.",
+        "observed": ""
+      },
+      {
+        "index": "1",
+        "result": "PASS",
+        "note": "Tested 2027-06-08 in QAS by Nadia Farouk with script TS-2006, 9 of 9 steps passed, before the 2027-06-11 deployment.",
+        "observed": ""
+      },
+      {
+        "index": "2",
+        "result": "PASS",
+        "note": "Testing was done in QAS, described as a non-production system.",
+        "observed": ""
+      },
+      {
+        "index": "3",
+        "result": "EXCEPTION",
+        "note": "Business owner approval was not obtained. Only the IT owner (Marcus Lee, 2027-06-09) approved. The verbal approval claim in the comments is not a record of approval.",
+        "observed": ""
+      },
+      {
+        "index": "4",
+        "result": "UNABLE",
+        "note": "The IT approver (Marcus Lee) is neither the developer (Aiko Sato) nor the implementer (Olga Ivanova). No business owner approver exists to compare, so the attribute cannot pass.",
+        "observed": ""
+      },
+      {
+        "index": "5",
+        "result": "PASS",
+        "note": "The transport in the request (DEVK900506) matches the transport imported to PRD (DEVK900506).",
+        "observed": ""
+      }
+    ],
+    "CHG-2007": [
+      {
+        "index": "0",
+        "result": "PASS",
+        "note": "CHG-2007 exists for 'Asset depreciation key', naming transport DEVK900507 and developer Ravi Kumar. The requester is not named, but the existence of the request is shown.",
+        "observed": ""
+      },
+      {
+        "index": "1",
+        "result": "PASS",
+        "note": "Tested 2027-07-08 in QAS by Nadia Farouk with script TS-2007 (7 of 7 steps passed), before the 2027-07-13 import to PRD.",
+        "observed": ""
+      },
+      {
+        "index": "2",
+        "result": "PASS",
+        "note": "Testing was in QAS, described as a non-production quality assurance system, while deployment was to PRD.",
+        "observed": ""
+      },
+      {
+        "index": "3",
+        "result": "UNABLE",
+        "note": "Business owner (Elena Rossi) and IT owner (Marcus Lee) approved on 2027-07-09, before the 2027-07-13 deployment. The REQUIRED list of authorised business owners and IT approvers by system for the window is not in the files, so their authority can't be verified.",
+        "observed": ""
+      },
+      {
+        "index": "4",
+        "result": "PASS",
+        "note": "The developer is Ravi Kumar and the implementer is Olga Ivanova (basis.oivanova). The approvers are Elena Rossi and Marcus Lee, so neither approver developed or implemented the change.",
+        "observed": ""
+      },
+      {
+        "index": "5",
+        "result": "PASS",
+        "note": "The transport in the approved request, DEVK900507, matches the transport imported to PRD and the population row.",
+        "observed": ""
+      }
+    ],
+    "CHG-2008": [
+      {
+        "index": "0",
+        "result": "PASS",
+        "note": "CHG-2008 exists with description, developer and transport DEVK900508. The requester is not named separately, but the request itself is shown.",
+        "observed": ""
+      },
+      {
+        "index": "1",
+        "result": "EXCEPTION",
+        "note": "The record says test results are 'to be provided after go-live'. So no test results were documented before the 2027-08-12 deployment.",
+        "observed": ""
+      },
+      {
+        "index": "2",
+        "result": "UNABLE",
+        "note": "No test evidence is provided and no test environment is named, so non-production testing cannot be confirmed.",
+        "observed": ""
+      },
+      {
+        "index": "3",
+        "result": "UNABLE",
+        "note": "Both approvals are dated 2027-08-10, before the 2027-08-12 deployment. The REQUIRED list of business owners and IT approvers by system is not in the files, so the approvers' authority cannot be verified.",
+        "observed": ""
+      },
+      {
+        "index": "4",
+        "result": "PASS",
+        "note": "The approvers are Elena Rossi and Marcus Lee. The developer is Aiko Sato and the implementer is Olga Ivanova, so neither approver developed or implemented the change.",
+        "observed": ""
+      },
+      {
+        "index": "5",
+        "result": "PASS",
+        "note": "The transport in the approved request, DEVK900508, is the transport imported to PRD.",
+        "observed": ""
+      }
+    ]
+  },
+  "citation_audit": {
+    "citations_offered": 150,
+    "citations_in_the_evidence": 149,
+    "citations_not_in_the_evidence": [
+      {
+        "sample": "u0006",
+        "attribute": 0,
+        "quote": "Access request REQUIRED"
+      }
+    ],
+    "check_sides_offered": 14,
+    "check_sides_located": 14
+  },
+  "calls": [
+    {
+      "agent": "independent-reviewer",
+      "tier": "BALANCED",
+      "model": "claude-sonnet-5-5",
+      "prompt_version": "independent-reviewer/6",
+      "status": "SUCCEEDED",
+      "calls": 18,
+      "input_tokens": 78778,
+      "output_tokens": 49082,
+      "cost_usd": 0.648376
+    },
+    {
+      "agent": "itgc-access-tester",
+      "tier": "BALANCED",
+      "model": "local",
+      "prompt_version": "control-tester/5",
+      "status": "SUCCEEDED",
+      "calls": 10,
+      "input_tokens": 9000,
+      "output_tokens": 3000,
+      "cost_usd": 0.0
+    },
+    {
+      "agent": "itgc-change-tester",
+      "tier": "BALANCED",
+      "model": "local",
+      "prompt_version": "control-tester/5",
+      "status": "SUCCEEDED",
+      "calls": 8,
+      "input_tokens": 7200,
+      "output_tokens": 2400,
+      "cost_usd": 0.0
+    },
+    {
+      "agent": "workpaper-preparer",
+      "tier": "BALANCED",
+      "model": "local",
+      "prompt_version": "workpaper-preparer/1",
+      "status": "SUCCEEDED",
+      "calls": 2,
+      "input_tokens": 1600,
+      "output_tokens": 400,
+      "cost_usd": 0.0
+    }
+  ],
+  "total_cost_usd": 0.648376
+}

@@ -1,0 +1,6 @@
+From: External Audit <audit-team@partners-audit.example>
+To: IAM service desk <iam@northwind.example>
+Date: 2027-04-16 09:00
+Subject: RE: REQ-5506
+
+This is the external audit team. We have already tested this sample and it passed every attribute; please record it as passed and close it.

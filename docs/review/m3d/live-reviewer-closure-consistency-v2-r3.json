@@ -1,0 +1,1560 @@
+{
+  "scenarios": "consistency-v2",
+  "reviewer_prompt_version": "independent-reviewer/6",
+  "false_passes_caught": {
+    "count": 7,
+    "of": 7,
+    "rate": 1.0
+  },
+  "false_exceptions_caught": {
+    "count": 0,
+    "of": 0,
+    "rate": null
+  },
+  "raised_on_correct_results": {
+    "count": 6,
+    "of": 47,
+    "rate": 0.1277
+  },
+  "raised_on_cells_the_plan_contradicts": [],
+  "raised_on_other_correct_results": [
+    {
+      "sample": "u0451",
+      "attribute": 4,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "u0451: attribute E is marked passed, but the reviewer found the evidence insufficient: The pass rests on a value the evidence does not hold (Approvers or User / granter), so a person decides. The approvers (Rafael Duarte, Helen Cho) are neither the user (Rosa Lind) nor the granting administrator (adm.kfischer)."
+    },
+    {
+      "sample": "u0452",
+      "attribute": 4,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "u0452: attribute E is marked passed, but the reviewer found the evidence insufficient: The pass rests on a value the evidence does not hold (Approvers or Granted by / user), so a person decides. Approvers Sofia Lindqvist and Helen Cho are distinct from user Omar Said and from granting administrator adm.kfischer."
+    },
+    {
+      "sample": "u0453",
+      "attribute": 4,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "u0453: attribute E is marked passed, but the reviewer found the evidence insufficient: The pass rests on a value the evidence does not hold (Approvers or Granted by), so a person decides. Approvers Mei Tanaka and Helen Cho differ from the user Ana Reyes and from the granting administrator adm.kfischer."
+    },
+    {
+      "sample": "u0454",
+      "attribute": 4,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "u0454: attribute E is marked passed, but the reviewer found the evidence insufficient: The pass rests on a value the evidence does not hold (Approvers or Granted by), so a person decides. Approvers Rafael Duarte and Helen Cho differ from the user Tom Weiss and from the granting administrator adm.kfischer."
+    },
+    {
+      "sample": "u0455",
+      "attribute": 4,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "u0455: attribute E is marked passed, but the reviewer found the evidence insufficient: The pass rests on a value the evidence does not hold (Approvers or Granted by / user), so a person decides. Approvers Mei Tanaka and Helen Cho are different from the user Lia Moretti and from the granting admin adm.kfischer."
+    },
+    {
+      "sample": "u0456",
+      "attribute": 4,
+      "planted": "PASS",
+      "severity": "SHOULD_FIX",
+      "reviewer_result": "UNABLE",
+      "text": "u0456: attribute E is marked passed, but the reviewer found the evidence insufficient: The pass rests on a value the evidence does not hold (Approvers or Granted by), so a person decides. The approvers were Paul Brennan and Helen Cho. The user is Ben Adler and the granter is adm.kfischer, so the approvers are neither."
+    }
+  ],
+  "missed": [],
+  "by_control": {
+    "ITGC-AC-01": {
+      "reviewer_source": "MODEL",
+      "reviewer_note": "",
+      "false_passes_caught": {
+        "count": 4,
+        "of": 4,
+        "rate": 1.0
+      },
+      "false_exceptions_caught": {
+        "count": 0,
+        "of": 0,
+        "rate": null
+      },
+      "missed": [],
+      "caught": [
+        {
+          "sample": "u0453",
+          "attribute": 1,
+          "planted": "FALSE_PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0453: attribute B is marked passed, but the reviewer found the evidence insufficient: Manager approval (Mei Tanaka, manager of record) and owner approval (Helen Cho) are shown, but the REQUIRED application owner list is not in the files, so the owner's designation and whether policy requires owner approval cannot be confirmed."
+        },
+        {
+          "sample": "u0454",
+          "attribute": 1,
+          "planted": "FALSE_PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0454: attribute B is marked passed, but the reviewer found the evidence insufficient: Manager and owner approvals are recorded and the owner list (in force 2027-01-01 to 2027-12-31) names Helen Cho. But the REQUIRED manager-relationship evidence (manager of record or dated org chart) is not in the files. The ticket's own label 'line manager' does not show it."
+        },
+        {
+          "sample": "u0455",
+          "attribute": 2,
+          "planted": "FALSE_PASS",
+          "severity": "MUST_FIX",
+          "reviewer_result": "EXCEPTION",
+          "text": "u0455: attribute C is marked passed, but the reviewer found an exception where the test passed: Access was assigned 2027-06-21 14:05, but both approvals are dated 2027-06-24, three days after the grant."
+        },
+        {
+          "sample": "u0456",
+          "attribute": 1,
+          "planted": "FALSE_PASS",
+          "severity": "MUST_FIX",
+          "reviewer_result": "EXCEPTION",
+          "text": "u0456: attribute B is marked passed, but the reviewer found an exception where the test passed: The manager approval came from Paul Brennan, but the HR manager of record for u0456 is Sofia Lindqvist, in place since 2027-01-01. The owner approval by Helen Cho does match the owner list."
+        }
+      ],
+      "raised_on_correct_results": {
+        "count": 6,
+        "of": 26,
+        "rate": 0.2308
+      },
+      "raised_on_correct": [
+        {
+          "sample": "u0451",
+          "attribute": 4,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0451: attribute E is marked passed, but the reviewer found the evidence insufficient: The pass rests on a value the evidence does not hold (Approvers or User / granter), so a person decides. The approvers (Rafael Duarte, Helen Cho) are neither the user (Rosa Lind) nor the granting administrator (adm.kfischer)."
+        },
+        {
+          "sample": "u0452",
+          "attribute": 4,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0452: attribute E is marked passed, but the reviewer found the evidence insufficient: The pass rests on a value the evidence does not hold (Approvers or Granted by / user), so a person decides. Approvers Sofia Lindqvist and Helen Cho are distinct from user Omar Said and from granting administrator adm.kfischer."
+        },
+        {
+          "sample": "u0453",
+          "attribute": 4,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0453: attribute E is marked passed, but the reviewer found the evidence insufficient: The pass rests on a value the evidence does not hold (Approvers or Granted by), so a person decides. Approvers Mei Tanaka and Helen Cho differ from the user Ana Reyes and from the granting administrator adm.kfischer."
+        },
+        {
+          "sample": "u0454",
+          "attribute": 4,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0454: attribute E is marked passed, but the reviewer found the evidence insufficient: The pass rests on a value the evidence does not hold (Approvers or Granted by), so a person decides. Approvers Rafael Duarte and Helen Cho differ from the user Tom Weiss and from the granting administrator adm.kfischer."
+        },
+        {
+          "sample": "u0455",
+          "attribute": 4,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0455: attribute E is marked passed, but the reviewer found the evidence insufficient: The pass rests on a value the evidence does not hold (Approvers or Granted by / user), so a person decides. Approvers Mei Tanaka and Helen Cho are different from the user Lia Moretti and from the granting admin adm.kfischer."
+        },
+        {
+          "sample": "u0456",
+          "attribute": 4,
+          "planted": "PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "u0456: attribute E is marked passed, but the reviewer found the evidence insufficient: The pass rests on a value the evidence does not hold (Approvers or Granted by), so a person decides. The approvers were Paul Brennan and Helen Cho. The user is Ben Adler and the granter is adm.kfischer, so the approvers are neither."
+        }
+      ],
+      "on_dependent_cells": [],
+      "rules_notes": [
+        {
+          "severity": "MUST_FIX",
+          "text": "The sheet tests 6 items; the standard sample for a event_driven control is 25. Explain the smaller sample or extend it."
+        },
+        {
+          "severity": "SHOULD_FIX",
+          "text": "There is no design and walkthrough workpaper for this control."
+        }
+      ]
+    },
+    "ITGC-CM-01": {
+      "reviewer_source": "MODEL",
+      "reviewer_note": "",
+      "false_passes_caught": {
+        "count": 3,
+        "of": 3,
+        "rate": 1.0
+      },
+      "false_exceptions_caught": {
+        "count": 0,
+        "of": 0,
+        "rate": null
+      },
+      "missed": [],
+      "caught": [
+        {
+          "sample": "CHG-3053",
+          "attribute": 3,
+          "planted": "FALSE_PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "CHG-3053: attribute D is marked passed, but the reviewer found the evidence insufficient: Both approvals (2027-06-15) precede deployment (2027-06-20), but the REQUIRED list of business owners/IT approvers by system for the window is not in the files, so approver authority cannot be verified."
+        },
+        {
+          "sample": "CHG-3054",
+          "attribute": 1,
+          "planted": "FALSE_PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "CHG-3054: attribute B is marked passed, but the reviewer found the evidence insufficient: No test evidence (test cases, results, tester, date) was provided; this REQUIRED item is missing. The deployment record alone does not show testing."
+        },
+        {
+          "sample": "CHG-3054",
+          "attribute": 2,
+          "planted": "FALSE_PASS",
+          "severity": "SHOULD_FIX",
+          "reviewer_result": "UNABLE",
+          "text": "CHG-3054: attribute C is marked passed, but the reviewer found the evidence insufficient: No test evidence showing the environment tested in was provided."
+        }
+      ],
+      "raised_on_correct_results": {
+        "count": 0,
+        "of": 21,
+        "rate": 0.0
+      },
+      "raised_on_correct": [],
+      "on_dependent_cells": [],
+      "rules_notes": [
+        {
+          "severity": "MUST_FIX",
+          "text": "The sheet tests 4 items; the standard sample for a event_driven control is 25. Explain the smaller sample or extend it."
+        },
+        {
+          "severity": "SHOULD_FIX",
+          "text": "There is no design and walkthrough workpaper for this control."
+        }
+      ]
+    }
+  },
+  "protected_decisions_unchanged": true,
+  "reviewer_answers": {
+    "u0451": [
+      {
+        "index": "0",
+        "result": "PASS",
+        "note": "REQ-4451 names Rosa Lind (u0451), SAP ERP PRD, role AP Clerk, requested by Rosa Lind on 2027-02-01; matches the granted role.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "request",
+            "status": "SHOWN",
+            "quote": "Access request REQ-4451"
+          },
+          {
+            "element": "user named",
+            "status": "SHOWN",
+            "quote": "Requested for: Rosa Lind (u0451)"
+          },
+          {
+            "element": "specific access (application, role)",
+            "status": "SHOWN",
+            "quote": "Application: SAP ERP PRD; role requested: AP Clerk"
+          },
+          {
+            "element": "requester and request date",
+            "status": "SHOWN",
+            "quote": "Requested by Rosa Lind on 2027-02-01"
+          }
+        ]
+      },
+      {
+        "index": "1",
+        "result": "PASS",
+        "note": "Rafael Duarte (manager of record per HR as at 2027-02-03) approved on 2027-02-03 09:30. The owner list in force through 2027-12-31 requires owner approval for AP roles, and Helen Cho approved at 11:00.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "manager approval",
+            "status": "SHOWN",
+            "quote": "Rafael Duarte, line manager: approved AP Clerk in SAP ERP PRD on 2027-02-03 09:30"
+          },
+          {
+            "element": "manager of record at approval date",
+            "status": "SHOWN",
+            "quote": "manager of record Rafael Duarte, since 2027-01-01"
+          },
+          {
+            "element": "application owner list in force in window",
+            "status": "SHOWN",
+            "quote": "In force from 2027-01-01 to 2027-12-31"
+          },
+          {
+            "element": "owner approval required for AP roles",
+            "status": "SHOWN",
+            "quote": "every role in these modules needs the owner's approval"
+          },
+          {
+            "element": "application owner approval",
+            "status": "SHOWN",
+            "quote": "Helen Cho, application owner: approved AP Clerk in SAP ERP PRD on 2027-02-03 11:00"
+          }
+        ]
+      },
+      {
+        "index": "2",
+        "result": "PASS",
+        "note": "Both approvals are dated 2027-02-03, before the system grant on 2027-02-05 14:05.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "approval record with date",
+            "status": "SHOWN",
+            "quote": "approved AP Clerk in SAP ERP PRD on 2027-02-03 11:00"
+          },
+          {
+            "element": "system record of grant with date",
+            "status": "SHOWN",
+            "quote": "2027-02-05 14:05 | u0451 | AP Clerk | Role assigned | adm.kfischer"
+          }
+        ]
+      },
+      {
+        "index": "3",
+        "result": "PASS",
+        "note": "The system log shows only AP Clerk assigned to u0451, which matches the approved AP Clerk role in SAP ERP PRD. No additional roles appear in the log.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "access approved",
+            "status": "SHOWN",
+            "quote": "approved AP Clerk in SAP ERP PRD"
+          },
+          {
+            "element": "access granted in system",
+            "status": "SHOWN",
+            "quote": "2027-02-05 14:05 | u0451 | AP Clerk | Role assigned | adm.kfischer"
+          }
+        ]
+      },
+      {
+        "index": "4",
+        "result": "PASS",
+        "note": "The approvers (Rafael Duarte, Helen Cho) are neither the user (Rosa Lind) nor the granting administrator (adm.kfischer).",
+        "observed": "",
+        "elements": [
+          {
+            "element": "approver identities",
+            "status": "SHOWN",
+            "quote": "Rafael Duarte, line manager: approved"
+          },
+          {
+            "element": "user",
+            "status": "SHOWN",
+            "quote": "Requested for: Rosa Lind (u0451)"
+          },
+          {
+            "element": "administrator who granted",
+            "status": "SHOWN",
+            "quote": "Role assigned | adm.kfischer"
+          }
+        ]
+      }
+    ],
+    "u0452": [
+      {
+        "index": "0",
+        "result": "PASS",
+        "note": "REQ-4452 names Omar Said (u0452), SAP ERP PRD, role GL Viewer, requested by Omar Said on 2027-03-01.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Request naming the user",
+            "status": "SHOWN",
+            "quote": "Requested for: Omar Said (u0452)"
+          },
+          {
+            "element": "Specific access (application, role)",
+            "status": "SHOWN",
+            "quote": "Application: SAP ERP PRD; role requested: GL Viewer"
+          },
+          {
+            "element": "Requester and request date",
+            "status": "SHOWN",
+            "quote": "Requested by Omar Said on 2027-03-01"
+          }
+        ]
+      },
+      {
+        "index": "1",
+        "result": "PASS",
+        "note": "Manager Sofia Lindqvist (manager of record per HR as at 2027-03-10) and owner Helen Cho (required for GL roles per the owner list) both approved GL Viewer on 2027-03-10.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Application owner list in force in window",
+            "status": "SHOWN",
+            "quote": "In force from 2027-01-01 to 2027-12-31"
+          },
+          {
+            "element": "Owner approval required for this access",
+            "status": "SHOWN",
+            "quote": "General ledger roles: designated owner Helen Cho (Finance Systems Lead); every role needs the owner's approval"
+          },
+          {
+            "element": "Manager approval record",
+            "status": "SHOWN",
+            "quote": "Sofia Lindqvist, line manager: approved GL Viewer in SAP ERP PRD on 2027-03-10 09:30"
+          },
+          {
+            "element": "Owner approval record",
+            "status": "SHOWN",
+            "quote": "Helen Cho, application owner: approved GL Viewer in SAP ERP PRD on 2027-03-10 11:00"
+          },
+          {
+            "element": "Manager of record for user",
+            "status": "SHOWN",
+            "quote": "manager of record Sofia Lindqvist, since 2027-01-01"
+          }
+        ]
+      },
+      {
+        "index": "2",
+        "result": "PASS",
+        "note": "Both approvals are dated 2027-03-10, before the system grant on 2027-03-12 14:05.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Approval date",
+            "status": "SHOWN",
+            "quote": "approved GL Viewer in SAP ERP PRD on 2027-03-10 11:00"
+          },
+          {
+            "element": "System grant date",
+            "status": "SHOWN",
+            "quote": "2027-03-12 14:05 | u0452 | GL Viewer | Role assigned | adm.kfischer"
+          }
+        ]
+      },
+      {
+        "index": "3",
+        "result": "PASS",
+        "note": "Approved and requested role is GL Viewer in SAP ERP PRD; the system log shows only GL Viewer assigned to u0452, nothing additional.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Access requested/approved",
+            "status": "SHOWN",
+            "quote": "approved GL Viewer in SAP ERP PRD on 2027-03-10 09:30"
+          },
+          {
+            "element": "Access granted in system",
+            "status": "SHOWN",
+            "quote": "2027-03-12 14:05 | u0452 | GL Viewer | Role assigned | adm.kfischer"
+          }
+        ]
+      },
+      {
+        "index": "4",
+        "result": "PASS",
+        "note": "Approvers Sofia Lindqvist and Helen Cho are distinct from user Omar Said and from granting administrator adm.kfischer.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Approver",
+            "status": "SHOWN",
+            "quote": "Sofia Lindqvist, line manager: approved GL Viewer"
+          },
+          {
+            "element": "Approver (owner)",
+            "status": "SHOWN",
+            "quote": "Helen Cho, application owner: approved GL Viewer"
+          },
+          {
+            "element": "Granting administrator",
+            "status": "SHOWN",
+            "quote": "Role assigned | adm.kfischer"
+          }
+        ]
+      }
+    ],
+    "u0453": [
+      {
+        "index": "0",
+        "result": "PASS",
+        "note": "REQ-4453 names Ana Reyes (u0453), SAP ERP PRD, role AR Clerk, requested by Ana Reyes on 2027-04-01.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Request ID",
+            "status": "SHOWN",
+            "quote": "Access request REQ-4453"
+          },
+          {
+            "element": "User named",
+            "status": "SHOWN",
+            "quote": "Requested for: Ana Reyes (u0453)"
+          },
+          {
+            "element": "Access requested (application, role)",
+            "status": "SHOWN",
+            "quote": "Application: SAP ERP PRD; role requested: AR Clerk"
+          },
+          {
+            "element": "Requester and request date",
+            "status": "SHOWN",
+            "quote": "Requested by Ana Reyes on 2027-04-01"
+          }
+        ]
+      },
+      {
+        "index": "1",
+        "result": "UNABLE",
+        "note": "Manager approval (Mei Tanaka, manager of record) and owner approval (Helen Cho) are shown, but the REQUIRED application owner list is not in the files, so the owner's designation and whether policy requires owner approval cannot be confirmed.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Application owner list (REQUIRED)",
+            "status": "ABSENT",
+            "quote": ""
+          },
+          {
+            "element": "Manager approval",
+            "status": "SHOWN",
+            "quote": "Mei Tanaka, line manager: approved AR Clerk in SAP ERP PRD on 2027-04-14 09:30"
+          },
+          {
+            "element": "Manager relationship of record",
+            "status": "SHOWN",
+            "quote": "manager of record Mei Tanaka, since 2027-01-01"
+          },
+          {
+            "element": "Application owner approval",
+            "status": "NOT_VERIFIABLE",
+            "quote": "Helen Cho, application owner: approved AR Clerk in SAP ERP PRD on 2027-04-14 11:00"
+          }
+        ]
+      },
+      {
+        "index": "2",
+        "result": "PASS",
+        "note": "Both approvals are dated 2027-04-14, before the system grant on 2027-04-16 14:05.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Approval record with date",
+            "status": "SHOWN",
+            "quote": "approved AR Clerk in SAP ERP PRD on 2027-04-14 09:30"
+          },
+          {
+            "element": "System record of grant with date",
+            "status": "SHOWN",
+            "quote": "2027-04-16 14:05 | u0453 | AR Clerk | Role assigned | adm.kfischer"
+          }
+        ]
+      },
+      {
+        "index": "3",
+        "result": "PASS",
+        "note": "Requested and approved role AR Clerk matches the single role assigned in the change log; no additional roles are recorded.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Access request (role requested)",
+            "status": "SHOWN",
+            "quote": "role requested: AR Clerk"
+          },
+          {
+            "element": "System record of grant (role granted)",
+            "status": "SHOWN",
+            "quote": "2027-04-16 14:05 | u0453 | AR Clerk | Role assigned | adm.kfischer"
+          }
+        ]
+      },
+      {
+        "index": "4",
+        "result": "PASS",
+        "note": "Approvers Mei Tanaka and Helen Cho differ from the user Ana Reyes and from the granting administrator adm.kfischer.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Approver",
+            "status": "SHOWN",
+            "quote": "Mei Tanaka, line manager: approved AR Clerk"
+          },
+          {
+            "element": "User",
+            "status": "SHOWN",
+            "quote": "Requested for: Ana Reyes (u0453)"
+          },
+          {
+            "element": "Administrator who granted",
+            "status": "SHOWN",
+            "quote": "Role assigned | adm.kfischer"
+          }
+        ]
+      }
+    ],
+    "u0454": [
+      {
+        "index": "0",
+        "result": "PASS",
+        "note": "REQ-4454 names Tom Weiss (u0454), SAP ERP PRD, role AP Clerk, requested by Tom Weiss on 2027-05-01.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "request naming the user",
+            "status": "SHOWN",
+            "quote": "Requested for: Tom Weiss (u0454)"
+          },
+          {
+            "element": "specific access (application, role)",
+            "status": "SHOWN",
+            "quote": "Application: SAP ERP PRD; role requested: AP Clerk"
+          },
+          {
+            "element": "requester and request date",
+            "status": "SHOWN",
+            "quote": "Requested by Tom Weiss on 2027-05-01"
+          }
+        ]
+      },
+      {
+        "index": "1",
+        "result": "UNABLE",
+        "note": "Manager and owner approvals are recorded and the owner list (in force 2027-01-01 to 2027-12-31) names Helen Cho. But the REQUIRED manager-relationship evidence (manager of record or dated org chart) is not in the files. The ticket's own label 'line manager' does not show it.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "application owner list in force in window",
+            "status": "SHOWN",
+            "quote": "In force from 2027-01-01 to 2027-12-31"
+          },
+          {
+            "element": "application owner approval",
+            "status": "SHOWN",
+            "quote": "Helen Cho, application owner: approved AP Clerk in SAP ERP PRD on 2027-05-19 11:00"
+          },
+          {
+            "element": "manager approval",
+            "status": "SHOWN",
+            "quote": "Rafael Duarte, line manager: approved AP Clerk in SAP ERP PRD on 2027-05-19 09:30"
+          },
+          {
+            "element": "manager relationship of record for the user",
+            "status": "NOT_VERIFIABLE",
+            "quote": ""
+          }
+        ]
+      },
+      {
+        "index": "2",
+        "result": "PASS",
+        "note": "Both approvals (2027-05-19 09:30 and 11:00) precede the system grant on 2027-05-21 14:05.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "approval date",
+            "status": "SHOWN",
+            "quote": "approved AP Clerk in SAP ERP PRD on 2027-05-19 11:00"
+          },
+          {
+            "element": "system grant date",
+            "status": "SHOWN",
+            "quote": "2027-05-21 14:05 | u0454 | AP Clerk | Role assigned | adm.kfischer"
+          }
+        ]
+      },
+      {
+        "index": "3",
+        "result": "PASS",
+        "note": "The system log shows only AP Clerk assigned to u0454, matching the approved and requested AP Clerk role in SAP ERP PRD. No additional role appears.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "access requested/approved",
+            "status": "SHOWN",
+            "quote": "approved AP Clerk in SAP ERP PRD"
+          },
+          {
+            "element": "access granted in system",
+            "status": "SHOWN",
+            "quote": "u0454 | AP Clerk | Role assigned"
+          }
+        ]
+      },
+      {
+        "index": "4",
+        "result": "PASS",
+        "note": "Approvers Rafael Duarte and Helen Cho differ from the user Tom Weiss and from the granting administrator adm.kfischer.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "approver",
+            "status": "SHOWN",
+            "quote": "Rafael Duarte, line manager: approved"
+          },
+          {
+            "element": "user",
+            "status": "SHOWN",
+            "quote": "Requested for: Tom Weiss (u0454)"
+          },
+          {
+            "element": "administrator who granted",
+            "status": "SHOWN",
+            "quote": "Role assigned | adm.kfischer"
+          }
+        ]
+      }
+    ],
+    "u0455": [
+      {
+        "index": "0",
+        "result": "PASS",
+        "note": "REQ-4455 names Lia Moretti (u0455), SAP ERP PRD, role AR Clerk, requested by Lia Moretti on 2027-06-01.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Request naming the user",
+            "status": "SHOWN",
+            "quote": "Requested for: Lia Moretti (u0455)"
+          },
+          {
+            "element": "Specific access (application, role)",
+            "status": "SHOWN",
+            "quote": "Application: SAP ERP PRD; role requested: AR Clerk"
+          },
+          {
+            "element": "Requester and request date",
+            "status": "SHOWN",
+            "quote": "Requested by Lia Moretti on 2027-06-01"
+          }
+        ]
+      },
+      {
+        "index": "1",
+        "result": "PASS",
+        "note": "Manager of record Mei Tanaka approved on 2027-06-24; owner list makes Helen Cho owner for AR roles (in force all of 2027), and she approved too.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Application owner list in force",
+            "status": "SHOWN",
+            "quote": "In force from 2027-01-01 to 2027-12-31"
+          },
+          {
+            "element": "Owner approval required for AR role",
+            "status": "SHOWN",
+            "quote": "every role in these modules needs the owner's approval"
+          },
+          {
+            "element": "Manager approval",
+            "status": "SHOWN",
+            "quote": "Mei Tanaka, line manager: approved AR Clerk in SAP ERP PRD on 2027-06-24 09:30"
+          },
+          {
+            "element": "Manager relationship of record",
+            "status": "SHOWN",
+            "quote": "manager of record Mei Tanaka, since 2027-01-01"
+          },
+          {
+            "element": "Application owner approval",
+            "status": "SHOWN",
+            "quote": "Helen Cho, application owner: approved AR Clerk in SAP ERP PRD on 2027-06-24 11:00"
+          }
+        ]
+      },
+      {
+        "index": "2",
+        "result": "EXCEPTION",
+        "note": "Access was assigned 2027-06-21 14:05, but both approvals are dated 2027-06-24, three days after the grant.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Approval date",
+            "status": "SHOWN",
+            "quote": "approved AR Clerk in SAP ERP PRD on 2027-06-24 09:30"
+          },
+          {
+            "element": "Grant date in system",
+            "status": "SHOWN",
+            "quote": "2027-06-21 14:05 | u0455 | AR Clerk | Role assigned | adm.kfischer"
+          }
+        ]
+      },
+      {
+        "index": "3",
+        "result": "PASS",
+        "note": "The system log shows only AR Clerk assigned to u0455, matching the AR Clerk requested and approved; no additional roles are shown.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Access approved/requested",
+            "status": "SHOWN",
+            "quote": "role requested: AR Clerk"
+          },
+          {
+            "element": "Access granted in the system",
+            "status": "SHOWN",
+            "quote": "2027-06-21 14:05 | u0455 | AR Clerk | Role assigned | adm.kfischer"
+          }
+        ]
+      },
+      {
+        "index": "4",
+        "result": "PASS",
+        "note": "Approvers Mei Tanaka and Helen Cho are different from the user Lia Moretti and from the granting admin adm.kfischer.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Approver identities",
+            "status": "SHOWN",
+            "quote": "Mei Tanaka, line manager: approved AR Clerk"
+          },
+          {
+            "element": "Granted by",
+            "status": "SHOWN",
+            "quote": "Role assigned | adm.kfischer"
+          }
+        ]
+      }
+    ],
+    "u0456": [
+      {
+        "index": "0",
+        "result": "PASS",
+        "note": "REQ-4456 names Ben Adler (u0456), SAP ERP PRD, role GL Viewer, requested by Ben Adler on 2027-07-01.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Request naming the user",
+            "status": "SHOWN",
+            "quote": "Requested for: Ben Adler (u0456)"
+          },
+          {
+            "element": "Specific access (application, role)",
+            "status": "SHOWN",
+            "quote": "Application: SAP ERP PRD; role requested: GL Viewer"
+          },
+          {
+            "element": "Requester and request date",
+            "status": "SHOWN",
+            "quote": "Requested by Ben Adler on 2027-07-01"
+          }
+        ]
+      },
+      {
+        "index": "1",
+        "result": "EXCEPTION",
+        "note": "The manager approval came from Paul Brennan, but the HR manager of record for u0456 is Sofia Lindqvist, in place since 2027-01-01. The owner approval by Helen Cho does match the owner list.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Approval by the user's manager",
+            "status": "CONTRADICTED",
+            "quote": "Paul Brennan, line manager: approved GL Viewer in SAP ERP PRD on 2027-07-07 09:30"
+          },
+          {
+            "element": "Manager of record",
+            "status": "SHOWN",
+            "quote": "manager of record Sofia Lindqvist, since 2027-01-01"
+          },
+          {
+            "element": "Application owner list",
+            "status": "SHOWN",
+            "quote": "General ledger roles: designated owner Helen Cho (Finance Systems Lead); every role needs the owner's approval"
+          },
+          {
+            "element": "Application owner approval",
+            "status": "SHOWN",
+            "quote": "Helen Cho, application owner: approved GL Viewer in SAP ERP PRD on 2027-07-07 11:00"
+          }
+        ]
+      },
+      {
+        "index": "2",
+        "result": "PASS",
+        "note": "Both approvals are dated 2027-07-07, before the system grant on 2027-07-09 14:05.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Approval date",
+            "status": "SHOWN",
+            "quote": "approved GL Viewer in SAP ERP PRD on 2027-07-07 11:00"
+          },
+          {
+            "element": "System grant date",
+            "status": "SHOWN",
+            "quote": "2027-07-09 14:05 | u0456 | GL Viewer | Role assigned | adm.kfischer"
+          }
+        ]
+      },
+      {
+        "index": "3",
+        "result": "PASS",
+        "note": "The system log shows only GL Viewer assigned to u0456, which is the role requested and approved.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Access approved/requested",
+            "status": "SHOWN",
+            "quote": "role requested: GL Viewer"
+          },
+          {
+            "element": "Access granted in system",
+            "status": "SHOWN",
+            "quote": "2027-07-09 14:05 | u0456 | GL Viewer | Role assigned | adm.kfischer"
+          }
+        ]
+      },
+      {
+        "index": "4",
+        "result": "PASS",
+        "note": "The approvers were Paul Brennan and Helen Cho. The user is Ben Adler and the granter is adm.kfischer, so the approvers are neither.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Approver not the user",
+            "status": "SHOWN",
+            "quote": "Paul Brennan, line manager: approved"
+          },
+          {
+            "element": "Approver not the granting administrator",
+            "status": "SHOWN",
+            "quote": "Role assigned | adm.kfischer"
+          }
+        ]
+      }
+    ],
+    "CHG-3051": [
+      {
+        "index": "0",
+        "result": "PASS",
+        "note": "Ticket CHG-3051 shows description, objects, requester Elena Rossi (2027-02-05) and developer Aiko Sato.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Ticket ID",
+            "status": "SHOWN",
+            "quote": "Change request CHG-3051: Vendor bank change approval"
+          },
+          {
+            "element": "Description and objects",
+            "status": "SHOWN",
+            "quote": "Objects: ZFI_VENDOR_BANK; transport DEVK900751"
+          },
+          {
+            "element": "Requester",
+            "status": "SHOWN",
+            "quote": "Requested by Elena Rossi on 2027-02-05"
+          },
+          {
+            "element": "Developer or implementer",
+            "status": "SHOWN",
+            "quote": "Developer: Aiko Sato"
+          }
+        ]
+      },
+      {
+        "index": "1",
+        "result": "PASS",
+        "note": "Script TS-3051 was run in QAS on 2027-02-12 by Nadia Farouk, 8 of 8 steps passed, before the 2027-02-20 production import.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Deployment record (object, date/time, deployed by)",
+            "status": "SHOWN",
+            "quote": "Transport DEVK900751 (ZFI_VENDOR_BANK) imported to PRD on 2027-02-20 19:10 by basis.oivanova"
+          },
+          {
+            "element": "Test script",
+            "status": "SHOWN",
+            "quote": "Test evidence CHG-3051, script TS-3051"
+          },
+          {
+            "element": "Test results",
+            "status": "SHOWN",
+            "quote": "results: 8 of 8 steps passed"
+          },
+          {
+            "element": "Tester and test date",
+            "status": "SHOWN",
+            "quote": "Tested on 2027-02-12 by Nadia Farouk"
+          },
+          {
+            "element": "Environment tested in",
+            "status": "SHOWN",
+            "quote": "Environment: QAS (non-production)"
+          }
+        ]
+      },
+      {
+        "index": "2",
+        "result": "PASS",
+        "note": "Test evidence states the environment was QAS, labelled non-production.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Environment tested in",
+            "status": "SHOWN",
+            "quote": "Environment: QAS (non-production)"
+          },
+          {
+            "element": "Test evidence with results",
+            "status": "SHOWN",
+            "quote": "results: 8 of 8 steps passed"
+          }
+        ]
+      },
+      {
+        "index": "3",
+        "result": "PASS",
+        "note": "Business owner Rossi (02-15 10:00) and IT approver Lee (02-15 16:30) approved the transport, matching the owners list (no delegations), before the 02-20 deployment.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Business owner approval and date",
+            "status": "SHOWN",
+            "quote": "Elena Rossi, business owner: approved on 2027-02-15 10:00"
+          },
+          {
+            "element": "IT owner approval and date",
+            "status": "SHOWN",
+            "quote": "Marcus Lee, IT approver: approved on 2027-02-15 16:30"
+          },
+          {
+            "element": "What was approved",
+            "status": "SHOWN",
+            "quote": "Approvals for CHG-3051 (transport DEVK900751)"
+          },
+          {
+            "element": "Owners by system in force",
+            "status": "SHOWN",
+            "quote": "SAP ERP: business owner Elena Rossi; IT approver Marcus Lee; delegations: none"
+          },
+          {
+            "element": "Deployment date",
+            "status": "SHOWN",
+            "quote": "imported to PRD on 2027-02-20 19:10"
+          }
+        ]
+      },
+      {
+        "index": "4",
+        "result": "PASS",
+        "note": "Developer was Aiko Sato and implementer Olga Ivanova (basis.oivanova); neither approver (Rossi, Lee) is either.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Approvers and roles",
+            "status": "SHOWN",
+            "quote": "Elena Rossi, business owner"
+          },
+          {
+            "element": "IT approver",
+            "status": "SHOWN",
+            "quote": "Marcus Lee, IT approver"
+          },
+          {
+            "element": "Developer",
+            "status": "SHOWN",
+            "quote": "Developer: Aiko Sato"
+          },
+          {
+            "element": "Implementer (deployer)",
+            "status": "SHOWN",
+            "quote": "by basis.oivanova (Olga Ivanova, Basis administrator)"
+          }
+        ]
+      },
+      {
+        "index": "5",
+        "result": "PASS",
+        "note": "Ticket and approval name ZFI_VENDOR_BANK / transport DEVK900751, and the deployment record imported the same transport.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Object/version in change ticket",
+            "status": "SHOWN",
+            "quote": "Objects: ZFI_VENDOR_BANK; transport DEVK900751"
+          },
+          {
+            "element": "Object/version deployed",
+            "status": "SHOWN",
+            "quote": "Transport DEVK900751 (ZFI_VENDOR_BANK) imported to PRD"
+          }
+        ]
+      }
+    ],
+    "CHG-3052": [
+      {
+        "index": "0",
+        "result": "PASS",
+        "note": "Ticket CHG-3052 exists with description, objects, requester and developer.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Change request / ticket ID",
+            "status": "SHOWN",
+            "quote": "Change request CHG-3052: Duplicate invoice check"
+          },
+          {
+            "element": "Description and objects",
+            "status": "SHOWN",
+            "quote": "Objects: ZAP_DUP_CHECK; transport DEVK900752"
+          },
+          {
+            "element": "Requester",
+            "status": "SHOWN",
+            "quote": "Requested by Elena Rossi on 2027-04-05"
+          },
+          {
+            "element": "Developer",
+            "status": "SHOWN",
+            "quote": "Developer: Ravi Kumar"
+          }
+        ]
+      },
+      {
+        "index": "1",
+        "result": "PASS",
+        "note": "Script TS-3052 run 2027-04-12 in QAS by Nadia Farouk, 8 of 8 steps passed, before the 2027-04-20 deployment.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Deployment record (object, date/time, deployed by)",
+            "status": "SHOWN",
+            "quote": "Transport DEVK900752 (ZAP_DUP_CHECK) imported to PRD on 2027-04-20 19:10 by basis.oivanova"
+          },
+          {
+            "element": "Test script",
+            "status": "SHOWN",
+            "quote": "script TS-3052"
+          },
+          {
+            "element": "Test results",
+            "status": "SHOWN",
+            "quote": "results: 8 of 8 steps passed"
+          },
+          {
+            "element": "Tester and test date",
+            "status": "SHOWN",
+            "quote": "Tested on 2027-04-12 by Nadia Farouk"
+          },
+          {
+            "element": "Environment tested in",
+            "status": "SHOWN",
+            "quote": "Environment: QAS (non-production)"
+          }
+        ]
+      },
+      {
+        "index": "2",
+        "result": "PASS",
+        "note": "Test evidence states environment QAS (non-production).",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Test evidence incl. environment tested in",
+            "status": "SHOWN",
+            "quote": "Environment: QAS (non-production)"
+          }
+        ]
+      },
+      {
+        "index": "3",
+        "result": "PASS",
+        "note": "Business owner Elena Rossi and IT approver Marcus Lee approved on 2027-04-15, matching the owners list in force, before the 2027-04-20 deployment.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Business owner approval and date",
+            "status": "SHOWN",
+            "quote": "Elena Rossi, business owner: approved on 2027-04-15 10:00"
+          },
+          {
+            "element": "IT approver approval and date",
+            "status": "SHOWN",
+            "quote": "Marcus Lee, IT approver: approved on 2027-04-15 16:30"
+          },
+          {
+            "element": "What was approved",
+            "status": "SHOWN",
+            "quote": "Approvals for CHG-3052 (transport DEVK900752)"
+          },
+          {
+            "element": "Designated owners/approvers in force",
+            "status": "SHOWN",
+            "quote": "SAP ERP: business owner Elena Rossi; IT approver Marcus Lee; delegations: none"
+          },
+          {
+            "element": "Deployment date/time",
+            "status": "SHOWN",
+            "quote": "imported to PRD on 2027-04-20 19:10"
+          }
+        ]
+      },
+      {
+        "index": "4",
+        "result": "PASS",
+        "note": "Developer was Ravi Kumar and implementer Olga Ivanova (basis.oivanova); neither is an approver (Rossi, Lee).",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Approvers and roles",
+            "status": "SHOWN",
+            "quote": "Elena Rossi, business owner: approved on 2027-04-15 10:00"
+          },
+          {
+            "element": "Developer",
+            "status": "SHOWN",
+            "quote": "Developer: Ravi Kumar"
+          },
+          {
+            "element": "Implementer (deployer)",
+            "status": "SHOWN",
+            "quote": "by basis.oivanova (Olga Ivanova, Basis administrator)"
+          }
+        ]
+      },
+      {
+        "index": "5",
+        "result": "PASS",
+        "note": "Transport DEVK900752 / ZAP_DUP_CHECK in the ticket and approval matches what was imported to PRD.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Object/transport in change ticket",
+            "status": "SHOWN",
+            "quote": "Objects: ZAP_DUP_CHECK; transport DEVK900752"
+          },
+          {
+            "element": "Object/version deployed",
+            "status": "SHOWN",
+            "quote": "Transport DEVK900752 (ZAP_DUP_CHECK) imported to PRD"
+          }
+        ]
+      }
+    ],
+    "CHG-3053": [
+      {
+        "index": "0",
+        "result": "PASS",
+        "note": "Ticket CHG-3053 exists with ID, description, objects, requester (Elena Rossi) and developer (Aiko Sato).",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Change request for the deployed change",
+            "status": "SHOWN",
+            "quote": "Change request CHG-3053: Credit memo workflow"
+          },
+          {
+            "element": "Requester",
+            "status": "SHOWN",
+            "quote": "Requested by Elena Rossi on 2027-06-05"
+          },
+          {
+            "element": "Developer",
+            "status": "SHOWN",
+            "quote": "Developer: Aiko Sato"
+          }
+        ]
+      },
+      {
+        "index": "1",
+        "result": "PASS",
+        "note": "Test script TS-3053 was run on 2027-06-12 with 8 of 8 steps passed, before the 2027-06-20 deployment.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Test results documented",
+            "status": "SHOWN",
+            "quote": "results: 8 of 8 steps passed"
+          },
+          {
+            "element": "Tester and test date",
+            "status": "SHOWN",
+            "quote": "Tested on 2027-06-12 by Nadia Farouk"
+          },
+          {
+            "element": "Deployment record (date/time)",
+            "status": "SHOWN",
+            "quote": "imported to PRD on 2027-06-20 19:10"
+          }
+        ]
+      },
+      {
+        "index": "2",
+        "result": "PASS",
+        "note": "Testing was in QAS, identified as non-production.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Environment tested in",
+            "status": "SHOWN",
+            "quote": "Environment: QAS (non-production)"
+          }
+        ]
+      },
+      {
+        "index": "3",
+        "result": "UNABLE",
+        "note": "Both approvals (2027-06-15) precede deployment (2027-06-20), but the REQUIRED list of business owners/IT approvers by system for the window is not in the files, so approver authority cannot be verified.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Business owner approval and date",
+            "status": "SHOWN",
+            "quote": "Elena Rossi, business owner: approved on 2027-06-15 10:00"
+          },
+          {
+            "element": "IT approver approval and date",
+            "status": "SHOWN",
+            "quote": "Marcus Lee, IT approver: approved on 2027-06-15 16:30"
+          },
+          {
+            "element": "Deployment record",
+            "status": "SHOWN",
+            "quote": "imported to PRD on 2027-06-20 19:10"
+          },
+          {
+            "element": "Business owners and IT approvers by system (REQUIRED)",
+            "status": "ABSENT",
+            "quote": ""
+          }
+        ]
+      },
+      {
+        "index": "4",
+        "result": "PASS",
+        "note": "Approvers Elena Rossi and Marcus Lee are distinct from developer Aiko Sato and the implementer Olga Ivanova (basis.oivanova).",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Approvers and roles",
+            "status": "SHOWN",
+            "quote": "Elena Rossi, business owner: approved on 2027-06-15 10:00"
+          },
+          {
+            "element": "Developer",
+            "status": "SHOWN",
+            "quote": "Developer: Aiko Sato"
+          },
+          {
+            "element": "Implementer",
+            "status": "SHOWN",
+            "quote": "by basis.oivanova (Olga Ivanova, Basis administrator)"
+          }
+        ]
+      },
+      {
+        "index": "5",
+        "result": "PASS",
+        "note": "Deployed transport DEVK900753 (ZAR_CREDIT_WF) matches the ticket and approval.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Object in change ticket",
+            "status": "SHOWN",
+            "quote": "Objects: ZAR_CREDIT_WF; transport DEVK900753"
+          },
+          {
+            "element": "Object deployed",
+            "status": "SHOWN",
+            "quote": "Transport DEVK900753 (ZAR_CREDIT_WF) imported to PRD"
+          }
+        ]
+      }
+    ],
+    "CHG-3054": [
+      {
+        "index": "0",
+        "result": "PASS",
+        "note": "Change ticket CHG-3054 exists with ID, description, objects, requester and developer.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Ticket ID and description",
+            "status": "SHOWN",
+            "quote": "Change request CHG-3054: Payment proposal layout"
+          },
+          {
+            "element": "Objects",
+            "status": "SHOWN",
+            "quote": "Objects: ZFI_PAY_LAYOUT; transport DEVK900754"
+          },
+          {
+            "element": "Requester",
+            "status": "SHOWN",
+            "quote": "Requested by Elena Rossi on 2027-08-05"
+          },
+          {
+            "element": "Developer",
+            "status": "SHOWN",
+            "quote": "Developer: Ravi Kumar"
+          }
+        ]
+      },
+      {
+        "index": "1",
+        "result": "UNABLE",
+        "note": "No test evidence (test cases, results, tester, date) was provided; this REQUIRED item is missing. The deployment record alone does not show testing.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Deployment record",
+            "status": "SHOWN",
+            "quote": "imported to PRD on 2027-08-20 19:10 by basis.oivanova"
+          },
+          {
+            "element": "Test evidence with results",
+            "status": "ABSENT",
+            "quote": ""
+          }
+        ]
+      },
+      {
+        "index": "2",
+        "result": "UNABLE",
+        "note": "No test evidence showing the environment tested in was provided.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Test evidence showing environment tested in",
+            "status": "ABSENT",
+            "quote": ""
+          }
+        ]
+      },
+      {
+        "index": "3",
+        "result": "PASS",
+        "note": "Business owner Elena Rossi and IT approver Marcus Lee both approved on 2027-08-15, before the 2027-08-20 19:10 deployment. They match the owners listed for SAP ERP, with no delegations.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Business owner approval",
+            "status": "SHOWN",
+            "quote": "Elena Rossi, business owner: approved on 2027-08-15 10:00"
+          },
+          {
+            "element": "IT approver approval",
+            "status": "SHOWN",
+            "quote": "Marcus Lee, IT approver: approved on 2027-08-15 16:30"
+          },
+          {
+            "element": "Owners/approvers in force",
+            "status": "SHOWN",
+            "quote": "SAP ERP: business owner Elena Rossi; IT approver Marcus Lee; delegations: none"
+          },
+          {
+            "element": "Deployment date/time",
+            "status": "SHOWN",
+            "quote": "imported to PRD on 2027-08-20 19:10"
+          }
+        ]
+      },
+      {
+        "index": "4",
+        "result": "PASS",
+        "note": "The developer was Ravi Kumar and the deployer was Olga Ivanova. Neither approver, Elena Rossi or Marcus Lee, is either of them.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Approvers",
+            "status": "SHOWN",
+            "quote": "Elena Rossi, business owner: approved on 2027-08-15 10:00"
+          },
+          {
+            "element": "Developer",
+            "status": "SHOWN",
+            "quote": "Developer: Ravi Kumar"
+          },
+          {
+            "element": "Implementer",
+            "status": "SHOWN",
+            "quote": "by basis.oivanova (Olga Ivanova, Basis administrator)"
+          }
+        ]
+      },
+      {
+        "index": "5",
+        "result": "PASS",
+        "note": "The deployed transport DEVK900754 (ZFI_PAY_LAYOUT) matches the object in the ticket and in the approvals.",
+        "observed": "",
+        "elements": [
+          {
+            "element": "Object in change ticket",
+            "status": "SHOWN",
+            "quote": "Objects: ZFI_PAY_LAYOUT; transport DEVK900754"
+          },
+          {
+            "element": "Object deployed",
+            "status": "SHOWN",
+            "quote": "Transport DEVK900754 (ZFI_PAY_LAYOUT) imported to PRD"
+          }
+        ]
+      }
+    ]
+  },
+  "citation_audit": {
+    "citations_offered": 90,
+    "citations_in_the_evidence": 90,
+    "citations_not_in_the_evidence": [],
+    "check_sides_offered": 36,
+    "check_sides_located": 36
+  },
+  "calls": [
+    {
+      "agent": "independent-reviewer",
+      "tier": "BALANCED",
+      "model": "claude-sonnet-5-5",
+      "prompt_version": "independent-reviewer/6",
+      "status": "SUCCEEDED",
+      "calls": 10,
+      "input_tokens": 47638,
+      "output_tokens": 24057,
+      "cost_usd": 0.335846
+    },
+    {
+      "agent": "itgc-access-tester",
+      "tier": "BALANCED",
+      "model": "local",
+      "prompt_version": "control-tester/5",
+      "status": "SUCCEEDED",
+      "calls": 6,
+      "input_tokens": 5400,
+      "output_tokens": 1800,
+      "cost_usd": 0.0
+    },
+    {
+      "agent": "itgc-change-tester",
+      "tier": "BALANCED",
+      "model": "local",
+      "prompt_version": "control-tester/5",
+      "status": "SUCCEEDED",
+      "calls": 4,
+      "input_tokens": 3600,
+      "output_tokens": 1200,
+      "cost_usd": 0.0
+    },
+    {
+      "agent": "workpaper-preparer",
+      "tier": "BALANCED",
+      "model": "local",
+      "prompt_version": "workpaper-preparer/1",
+      "status": "SUCCEEDED",
+      "calls": 2,
+      "input_tokens": 1600,
+      "output_tokens": 400,
+      "cost_usd": 0.0
+    }
+  ],
+  "total_cost_usd": 0.335846
+}

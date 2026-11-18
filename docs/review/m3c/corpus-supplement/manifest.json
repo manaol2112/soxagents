@@ -1,0 +1,347 @@
+{
+  "period_year": 2027,
+  "controls": [
+    {
+      "control_ref": "ITGC-AC-01",
+      "attributes": [
+        "A request exists that names the user and the specific access (application, role, or permission) that was granted",
+        "The request was approved by the user's manager and, where the access management policy requires it, by the application owner",
+        "The approval is dated on or before the date the access was granted in the system",
+        "The access granted in the system is the access that was approved, and no more",
+        "The approver is not the user, and the administrator who granted the access did not approve it"
+      ],
+      "population": {
+        "path": "supplement/ITGC-AC-01/new user population listing.csv",
+        "content_type": "text/csv",
+        "sha256": "08095e7b57c325499c7a989573ab688dd71d7423af5a8e60d405b72796a57325",
+        "size": 290
+      },
+      "population_rows": 3,
+      "samples": [
+        {
+          "key": "u0101",
+          "scenario": "clean",
+          "summary": "Manager approval only, for a role the policy does not make privileged.",
+          "files": [
+            {
+              "path": "supplement/ITGC-AC-01/u0101 REQ-3201 access request.txt",
+              "content_type": "text/plain",
+              "sha256": "4969424c08effd6738a7832eea8ff7472cf4936c2bb9e0b4e574005d19526de9",
+              "size": 416
+            },
+            {
+              "path": "supplement/ITGC-AC-01/u0101 access policy AM-2 extract.txt",
+              "content_type": "text/plain",
+              "sha256": "9109e345b57d8352e5145b7bdc4c271b8bf862904aed4dc742b95140d6ea2c56",
+              "size": 264
+            }
+          ],
+          "cells": [
+            {
+              "attribute": 0,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 1,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 2,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 3,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 4,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            }
+          ]
+        },
+        {
+          "key": "u0102",
+          "scenario": "exception",
+          "summary": "Manager approval only, for a privileged role the policy says the owner must also approve.",
+          "files": [
+            {
+              "path": "supplement/ITGC-AC-01/u0102 REQ-3202 access request.txt",
+              "content_type": "text/plain",
+              "sha256": "2faaea79a493f4a2d2c4537fce6f74fb68f2154a2e91fe5114102fca6c5a850d",
+              "size": 418
+            },
+            {
+              "path": "supplement/ITGC-AC-01/u0102 access policy AM-2 extract.txt",
+              "content_type": "text/plain",
+              "sha256": "9109e345b57d8352e5145b7bdc4c271b8bf862904aed4dc742b95140d6ea2c56",
+              "size": 264
+            }
+          ],
+          "cells": [
+            {
+              "attribute": 0,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 1,
+              "category": "negative",
+              "expected": "EXCEPTION",
+              "acceptable": [
+                "EXCEPTION",
+                "REVIEW"
+              ],
+              "why": "AM-2 §4 requires the application owner's approval for a role ending in Admin; there is none.",
+              "plausible_quote": "Line manager approval: Mei Tanaka approved on 2027-09-09"
+            },
+            {
+              "attribute": 2,
+              "category": "dependent",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS",
+                "EXCEPTION",
+                "UNABLE",
+                "REVIEW"
+              ],
+              "why": "The manager's approval predates the grant; the owner's required approval does not exist.",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 3,
+              "category": "dependent",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS",
+                "EXCEPTION",
+                "UNABLE",
+                "REVIEW"
+              ],
+              "why": "The role granted is the one requested, but it was not fully approved.",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 4,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            }
+          ]
+        },
+        {
+          "key": "u0103",
+          "scenario": "exception",
+          "summary": "The system's role listing shows AR Supervisor granted with the approved AR Clerk role.",
+          "files": [
+            {
+              "path": "supplement/ITGC-AC-01/u0103 REQ-3203 access request.txt",
+              "content_type": "text/plain",
+              "sha256": "d9edd86e4b5ddf30657e160cbdb5784b95a5eaa1d482382e6cb7095a6330e923",
+              "size": 434
+            },
+            {
+              "path": "supplement/ITGC-AC-01/u0103 SAP ERP user role listing.csv",
+              "content_type": "text/csv",
+              "sha256": "44c79f96a893eff1fa607ea7f5fed9a4659c7bfe1cb64ec65ebc8124a0733f46",
+              "size": 146
+            }
+          ],
+          "cells": [
+            {
+              "attribute": 0,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 1,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 2,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 3,
+              "category": "negative",
+              "expected": "EXCEPTION",
+              "acceptable": [
+                "EXCEPTION",
+                "REVIEW"
+              ],
+              "why": "AR Clerk was approved; the system shows AR Clerk and AR Supervisor assigned on the grant date.",
+              "plausible_quote": "Granted role AR Clerk in SAP ERP PRD on 2027-09-17"
+            },
+            {
+              "attribute": 4,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "control_ref": "ITGC-CM-01",
+      "attributes": [
+        "A change request exists for the deployed change",
+        "The change was tested before deployment, with the test results documented",
+        "The testing was performed in a non-production environment",
+        "The business owner and the IT owner approved the change before it was deployed to production",
+        "Neither approver developed or implemented the change they approved",
+        "The object or version deployed is the one in the approved change request"
+      ],
+      "population": {
+        "path": "supplement/ITGC-CM-01/production change population listing.csv",
+        "content_type": "text/csv",
+        "sha256": "e8f8608db24837577813a928706bbe1464630db636153840a0ffdde426c0a893",
+        "size": 165
+      },
+      "population_rows": 1,
+      "samples": [
+        {
+          "key": "CHG-2101",
+          "scenario": "exception",
+          "summary": "The business approval is by a person the owner register says is not the owner.",
+          "files": [
+            {
+              "path": "supplement/ITGC-CM-01/CHG-2101 change record.txt",
+              "content_type": "text/plain",
+              "sha256": "43d9637e4aa1e3c32635a4e47e6b042ab2f09766ffa58c8f357604320e91e82a",
+              "size": 599
+            },
+            {
+              "path": "supplement/ITGC-CM-01/CHG-2101 SAP ERP owner register.txt",
+              "content_type": "text/plain",
+              "sha256": "017cdc0650abc654d4f879a64c6a0bb6eda8a44715c1c53b160cf26614172055",
+              "size": 218
+            }
+          ],
+          "cells": [
+            {
+              "attribute": 0,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 1,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 2,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 3,
+              "category": "negative",
+              "expected": "EXCEPTION",
+              "acceptable": [
+                "EXCEPTION",
+                "REVIEW"
+              ],
+              "why": "Jonas Brandt approved as business owner; the register names Elena Rossi as the business owner.",
+              "plausible_quote": "Business owner approval: Jonas Brandt approved on 2027-09-09"
+            },
+            {
+              "attribute": 4,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 5,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

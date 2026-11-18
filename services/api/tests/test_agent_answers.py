@@ -1,0 +1,950 @@
+"""Every agent's answer is read as its schema declares it, and none fails silently (13
+November 2026; docs/control-workflow-plan.md, B1i).
+
+After "Run again" on the Attributes step of ITGC-AC-01, the reviewer of the drafts sent a
+row's optional object as null, the planner's first answer had its `phases` inside the text
+of `understanding`, its second quoted words the control's records do not hold, and the
+screen said nothing. This file holds the class shut:
+
+- every agent that calls a model is enumerated from the code (each `ModelRequest(`), so a
+  new agent is in these tests the day it is written: none turns the shared reading off, each
+  reaches the model only through the reading (models.outcome), and each one's own schema is
+  fed the shapes seen in the wild (JSON text at the top level and deep, the rows of a list
+  included; a wrapper around the whole answer; a missing required part; prose where an
+  object belongs): the answer is read exactly, or the call fails with the place recorded,
+  never with a value guessed;
+- the Attributes step's agents run end to end: what can be read is used, a quote the
+  records do not hold is never kept, a part that fails is corrected once, and an agent whose
+  answer still cannot be used says so in plain words on the record the step reads
+  (`attributes_agent_notes`), until a later answer is used.
+"""
+
+import ast
+import importlib
+import json
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+from uuid import UUID
+
+import pytest
+from support import Database, approve_control_plan, run_plan_through
+from test_attributes_follow_understanding import (
+    ADDED,
+    _answer_required,
+    _criteria,
+    _path,
+    _plan_run,
+    _ready,
+)
+from test_outbound import migrated
+from test_planning_gate import _rows
+
+from ai_workforce_api import attribute_review, control_attributes, models, understanding_review
+from ai_workforce_api import process_narrative as narrative_module
+from ai_workforce_api.agent_answers import notes_for
+from ai_workforce_api.context_routes import attributes_failure_note
+from ai_workforce_api.db import connect
+from ai_workforce_api.evidence_planning import SYSTEM_PROMPT as PLANNER_SYSTEM
+from ai_workforce_api.evidence_planning import quote_held, quote_text, rules_plan
+from ai_workforce_api.evidence_plans import (
+    KEPT_NOTE,
+    PLAN_AGAIN,
+    generate,
+    latest_plan_failure_note,
+    load_facts,
+    request_attributes_run,
+)
+from ai_workforce_api.models import (
+    OUTPUT_TOOL,
+    ModelConfig,
+    ModelRaw,
+    ModelRequest,
+    _mismatch,
+    outcome,
+    unnested,
+)
+
+__all__ = ["migrated"]
+
+PACKAGE = Path(models.__file__).parent
+CONFIG = ModelConfig("local", "local", "local", 0, 0)
+# A call that needs the provider's raw text may turn the reading off only with its reason
+# here (none does: no agent reads JSON text itself, and the reading changes nothing a
+# schema-valid answer has).
+RAW_TEXT: dict[str, str] = {}
+# The schemas a call site builds rather than names: where each comes from, so each is fed
+# the shapes too. A new site of this kind fails test_every_agent_is_found_with_its_schema
+# until it is listed.
+BUILT: dict[tuple[str, str], Callable[[], list[dict[str, Any]]]] = {
+    ("policy_evidence", "_schema()"): lambda: [importlib.import_module(
+        "ai_workforce_api.policy_evidence")._schema()],
+    ("prior_year", "_analysis_schema()"): lambda: [importlib.import_module(
+        "ai_workforce_api.prior_year")._analysis_schema()],
+    # process_narrative._call: the narrative's drafter and its reviewer.
+    ("process_narrative", "schema"): lambda: [
+        narrative_module.DRAFT_SCHEMA, narrative_module.REVIEW_SCHEMA,
+    ],
+    # The generic model-calls route (models._create): the schema is the caller's.
+    ("models", "body.output_schema"): lambda: [],
+}  # fmt: skip
+
+
+# The agents, from the code
+
+
+def _sites() -> list[tuple[str, int, ast.Call]]:
+    found = []
+    for path in sorted(PACKAGE.glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "ModelRequest":
+                found.append((path.stem, node.lineno, node))
+    return found
+
+
+def _keyword(node: ast.Call, name: str) -> ast.expr | None:
+    return next((item.value for item in node.keywords if item.arg == name), None)
+
+
+def _generating() -> list[tuple[str, int, ast.Call]]:
+    return [
+        site for site in _sites()
+        if not (isinstance(op := _keyword(site[2], "operation"), ast.Constant)
+                and op.value == "propose_tools")
+    ]  # fmt: skip
+
+
+def _schemas() -> list[tuple[str, dict[str, Any]]]:
+    """Every generating agent's output schema, by where it is asked for."""
+    found: list[tuple[str, dict[str, Any]]] = []
+    for module, line, node in _generating():
+        expression = _keyword(node, "output_schema")
+        assert expression is not None, f"{module}:{line} asks for no output schema"
+        built = BUILT.get((module, ast.unparse(expression)))
+        if built is not None:
+            found += [(f"{module}:{line}#{i}", s) for i, s in enumerate(built())]
+            continue
+        assert isinstance(expression, ast.Name), f"{module}:{line}: list its schema in BUILT"
+        schema = getattr(importlib.import_module(f"ai_workforce_api.{module}"), expression.id)
+        assert isinstance(schema, dict), f"{module}:{line}"
+        found.append((f"{module}:{line}", schema))
+    return found
+
+
+def test_every_agent_reads_its_answer_through_the_shared_layer() -> None:
+    sites = _generating()
+    # Every agent of the platform at the time of writing: a site removed is a test to
+    # revisit, a site added is covered below by itself.
+    modules = {module for module, _line, _node in sites}
+    assert len(sites) >= 30 and {
+        "attribute_review", "control_attributes", "evidence_plans", "evidence_assurance",
+        "control_reviews", "testing_engine", "process_narrative", "pbc_drafting",
+    } <= modules  # fmt: skip
+    # The reading is on unless a call turns it off, and none does without its reason.
+    assert ModelRequest.__dataclass_fields__["unnest"].default is True
+    for module, line, node in sites:
+        flag = _keyword(node, "unnest")
+        if flag is not None and not (isinstance(flag, ast.Constant) and flag.value is True):
+            assert f"{module}:{line}" in RAW_TEXT, f"{module}:{line} turns the reading off"
+    # Each module reaches the model only through the reading: AgentCaller.generate or
+    # models.complete/outcome, never a provider's own complete().
+    for module in modules - {"models", "provenance"}:
+        tree = ast.parse((PACKAGE / f"{module}.py").read_text(encoding="utf-8"))
+        direct = [
+            node.lineno for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "complete"
+        ]  # fmt: skip
+        assert direct == [], f"{module} calls a provider directly at {direct}"
+
+
+def test_every_agent_is_found_with_its_schema() -> None:
+    schemas = _schemas()
+    assert len(schemas) >= 31
+    for where, schema in schemas:
+        assert schema.get("type") == "object", where
+
+
+# The shapes, against every agent's own schema
+
+
+def _example(schema: dict[str, Any], depth: int = 0) -> Any:
+    """A complete answer of the schema's shape: every property, one row in every list."""
+    kind = schema.get("type")
+    if isinstance(kind, list):
+        kind = next(one for one in kind if one != "null")
+        schema = {**schema, "type": kind}
+    if kind == "object":
+        properties = schema.get("properties") or {}
+        return {key: _example(item, depth + 1) for key, item in properties.items()}
+    if kind == "array":
+        items = schema.get("items")
+        return [_example(items, depth + 1)] if isinstance(items, dict) and depth < 12 else []
+    if "enum" in schema:
+        return schema["enum"][0]
+    return {"string": "x", "integer": 1, "number": 1, "boolean": False}.get(str(kind), "x")
+
+
+def _places(
+    schema: dict[str, Any], value: Any, path: tuple[Any, ...] = ()
+) -> list[tuple[Any, ...]]:
+    """Where the answer holds an object or a list, below the top level."""
+    found: list[tuple[Any, ...]] = []
+    if schema.get("type") == "object" and isinstance(value, dict):
+        for key, item in value.items():
+            declared = (schema.get("properties") or {}).get(key, {})
+            if declared.get("type") in ("object", "array"):
+                found.append((*path, key))
+            found += _places(declared, item, (*path, key))
+    elif schema.get("type") == "array" and isinstance(value, list):
+        for index, item in enumerate(value):
+            items = schema.get("items") or {}
+            if items.get("type") in ("object", "array"):
+                found.append((*path, index))
+            found += _places(items, item, (*path, index))
+    return found
+
+
+def _as_text(value: Any, place: tuple[Any, ...]) -> Any:
+    copy = json.loads(json.dumps(value))
+    holder = copy
+    for part in place[:-1]:
+        holder = holder[part]
+    holder[place[-1]] = json.dumps(holder[place[-1]])
+    return copy
+
+
+def _named(place: tuple[Any, ...]) -> str:
+    return "".join(f"[{p}]" if isinstance(p, int) else f".{p}" for p in place).lstrip(".")
+
+
+class _Fixed:
+    def __init__(self, output: Any) -> None:
+        self.output = output
+
+    def complete(self, request: ModelRequest, config: ModelConfig) -> ModelRaw:
+        del request, config
+        return ModelRaw(self.output, (), 10, 10)
+
+
+def _read(schema: dict[str, Any], answer: Any) -> models.Outcome:
+    request = ModelRequest(
+        operation="generate", prompt="Answer.", output_schema=schema, allowed_tool_ids=(),
+        timeout_seconds=5, cancelled=False,
+    )  # fmt: skip
+    return outcome(_Fixed(answer), request, CONFIG)
+
+
+@pytest.mark.parametrize(("where", "schema"), _schemas(), ids=lambda item: str(item)[:40])
+def test_every_agent_reads_the_shapes_seen_in_the_wild(where: str, schema: dict[str, Any]) -> None:
+    answer = _example(schema)
+    assert _mismatch(schema, answer) is None, where
+    plain = _read(schema, answer)
+    assert (plain.status, plain.raw.output, plain.raw.unnested) == ("SUCCEEDED", answer, ())
+    places = _places(schema, answer)
+    top = [place for place in places if len(place) == 1]
+    deep = [place for place in places if len(place) > 1]
+    # An object or a list sent as the text of its JSON, at the top level and as deep as the
+    # schema goes (inside the rows of a list too): read as what it is, and said where.
+    for place in [*top[:1], *(deep[-1:] if deep else [])]:
+        found = _read(schema, _as_text(answer, place))
+        assert (found.status, found.raw.output) == ("SUCCEEDED", answer), (where, place)
+        assert _named(place) in found.raw.unnested, (where, place)
+        assert found.raw.returned == _as_text(answer, place)
+    # A wrapper around the whole answer, as an object or as its text (a name the schema
+    # does not declare: one it declares is a property, never a wrapper).
+    other = next(n for n in ("output", "result", "response") if n not in schema["properties"])
+    for wrapped in ({OUTPUT_TOOL: answer}, {other: json.dumps(answer)}):
+        found = _read(schema, wrapped)
+        assert (found.status, found.raw.output) == ("SUCCEEDED", answer), where
+        assert found.raw.unnested[0].startswith("wrapper:")
+    # A missing required part: never filled in, the call fails, and its record names the
+    # place (the schema's own name, nothing of the answer).
+    for key in schema.get("required", [])[:2]:
+        missing = {k: v for k, v in answer.items() if k != key}
+        found = _read(schema, missing)
+        assert found.status == "MALFORMED", (where, key)
+        assert found.error == f"answer did not match the schema (answer.{key}: required, missing)"
+        assert found.raw.output == missing and found.raw.returned is None
+    # Prose where an object or a list belongs is not JSON: left as it came, and named.
+    if top:
+        key = top[0][0]
+        kind = schema["properties"][key]["type"]
+        prose = {**answer, key: "The control is reviewed each quarter."}
+        found = _read(schema, prose)
+        assert found.status == "MALFORMED" and found.raw.output == prose, where
+        assert f"answer.{key}: expected {kind}, got string" in found.error
+
+
+def test_the_reading_never_guesses_a_value() -> None:
+    schema = attribute_review.SCHEMA
+    answer = _example(schema)
+    # A wrapper whose content does not fit is not unwrapped, and a property of the schema is
+    # never taken for a wrapper.
+    wrappers: list[dict[str, Any]] = [
+        {OUTPUT_TOOL: {"attributes": []}},
+        {"note": answer},
+        {"attributes": answer},
+    ]
+    for wrapped in wrappers:
+        assert unnested(schema, wrapped) == (wrapped, ())
+    # Null is left out only for an optional object; a required part, a list or a value stays
+    # null and fails.
+    row = _example(control_attributes.REVIEW_SCHEMA["properties"]["attributes"]["items"])
+    nulled = {"attributes": [{**row, "follows": None}], "fixes": []}
+    read, names = unnested(control_attributes.REVIEW_SCHEMA, nulled)
+    assert (
+        names == ("attributes[0].follows: null left out",)
+        and "follows" not in read["attributes"][0]
+    )
+    assert nulled["attributes"][0]["follows"] is None  # what arrived is untouched
+    nulls: list[dict[str, Any]] = [
+        {"attributes": None, "fixes": []},
+        {"attributes": [row], "fixes": None},
+        {"attributes": [{**row, "judgment_required": None}], "fixes": []},
+    ]
+    for value in nulls:
+        assert _read(control_attributes.REVIEW_SCHEMA, value).status == "MALFORMED"
+    # Text inside a row is read as one value of the declared kind, never with what follows.
+    carried = {"attributes": [{**row, "follows": json.dumps(row["follows"]) + ',"text":"lifted"'}],
+               "fixes": []}  # fmt: skip
+    assert unnested(control_attributes.REVIEW_SCHEMA, carried) == (carried, ())
+    # The model-calls route reads as every agent's call does.
+    deep = {"attributes": json.dumps([row]), "fixes": []}
+    request = ModelRequest(
+        operation="generate", prompt="Answer.", output_schema=control_attributes.REVIEW_SCHEMA,
+        allowed_tool_ids=(), timeout_seconds=5, cancelled=False,
+    )  # fmt: skip
+    status, raw = models._complete(_Fixed(deep), request, CONFIG)
+    assert status == "SUCCEEDED" and raw.output is not None
+    assert raw.output["attributes"] == [row]
+
+
+def test_a_quote_is_held_only_when_the_records_say_it_word_for_word() -> None:
+    held_in = quote_text(
+        'The user\'s manager approves the request in "ServiceNow" - before the grant.'
+    )
+    # Typographic quotes and dashes, case, spacing, a closing full stop and the JSON escapes
+    # of the records as the planner saw them: the same words.
+    for quote in (
+        "“The user’s Manager approves the request.”",
+        "– before the grant.",
+        'the request in \\"ServiceNow\\"',
+        "approves the\\nrequest",
+    ):
+        assert quote_held(quote, held_in), quote
+    # Other words, words out of order, a word missing, too short: not held.
+    for quote in (
+        "The manager approves the request",
+        "before the grant in ServiceNow",
+        "The user's approves",
+        "th",
+        "",
+    ):
+        assert not quote_held(quote, held_in), quote
+
+
+# The Attributes step's agents, end to end
+
+DOCUMENTED = "The access request ticket records the requester's cost centre for the role"
+
+
+def _proposal(text: str = ADDED, basis: str = "INFERRED", quote: str = "") -> dict[str, Any]:
+    return {
+        "action": "ADD", "replaces": "", "text": text, "basis": basis,
+        "source": "control" if quote else "", "quote": quote,
+        "note": "The walkthrough says each request states its justification.",
+        "condition": "The ServiceNow request has a business justification entered.",
+        "pass_criteria": "The justification field of the ServiceNow request is filled in.",
+        "fail_criteria": "The justification field of the ServiceNow request is empty.",
+        "judgment_required": False,
+    }  # fmt: skip
+
+
+class _Script:
+    """A scripted model for the run's agents, told apart by their system prompt. Each agent
+    answers from its own list in turn, the last answer again after that; an answer may be a
+    function of the prompt. Without a list: the drafter proposes nothing, the reviewer of
+    the drafts returns them, the planner returns the rules' plan with tailored criteria, and
+    the reviewer of the set finds nothing."""
+
+    WHO = {
+        control_attributes.SYSTEM_PROMPT: "attributes",
+        control_attributes.REVIEW_PROMPT: "draft-review",
+        PLANNER_SYSTEM: "planner",
+        attribute_review.SYSTEM_PROMPT: "set-review",
+    }
+
+    def __init__(self, database: Database, team: dict[str, Any], control: str) -> None:
+        self.database, self.team, self.control = database, team, control
+        self.answers: dict[str, list[Any]] = {}
+        self.calls: list[str] = []
+        self.prompts: dict[str, list[str]] = {}
+
+    def plan(self) -> dict[str, Any]:
+        with connect(self.database.url) as connection:
+            facts = load_facts(connection, self.team["project"], UUID(self.control))
+        output = rules_plan(facts).model_dump(mode="json", exclude_none=True)
+        output["criteria"] = [_criteria(text) for text in facts.criteria_writable]
+        return output
+
+    def complete(self, request: ModelRequest, config: ModelConfig) -> ModelRaw:
+        del config
+        if request.system == understanding_review.SYSTEM_PROMPT:
+            # B1k (16 November 2026): the IT audit specialist reviews the questions asked
+            # before the attributes; here it finds every attribute established, so the run
+            # goes on to the agents these tests are about, whose calls are listed alone.
+            given = understanding_review.inputs_of(request.prompt)
+            return ModelRaw(understanding_review.established(given), (), 100, 100)
+        who = self.WHO.get(request.system, "other")
+        self.calls.append(who)
+        self.prompts.setdefault(who, []).append(request.prompt)
+        if who == "other":
+            return ModelRaw({}, (), 10, 10)
+        queue = self.answers.get(who)
+        if queue:
+            answer = queue[min(len(self.prompts[who]), len(queue)) - 1]
+            answer = answer(request.prompt) if callable(answer) else answer
+        elif who == "attributes":
+            answer = {"attributes": [], "issues": []}
+        elif who == "draft-review":
+            answer = {"attributes": _drafted(request.prompt), "fixes": []}
+        elif who == "planner":
+            answer = self.plan()
+        else:
+            answer = {"attributes": [], "findings": []}
+        return ModelRaw(answer, (), 100, 100)
+
+
+def _drafted(prompt: str) -> list[dict[str, Any]]:
+    found: list[dict[str, Any]] = json.loads(
+        prompt.split("<drafted_attributes>\n", 1)[1].split("\n</drafted_attributes>", 1)[0]
+    )
+    return found
+
+
+def _calls(migrated: Database, control: str) -> list[tuple[Any, ...]]:
+    return _rows(
+        migrated,
+        "SELECT split_part(m.prompt_version, '/', 1), m.status, m.error, m.inputs, o.outcome "
+        "FROM model_calls m LEFT JOIN model_call_outcomes o ON o.model_call_id = m.id "
+        "WHERE m.target_id = %s AND split_part(m.prompt_version, '/', 1) = ANY(%s) "
+        "ORDER BY m.created_at, m.id",
+        UUID(control), ["attributes", "attribute-review", "engagement-planner",
+                        "attribute-set-review"],
+    )  # fmt: skip
+
+
+def _context(team: dict[str, Any], control: str) -> dict[str, Any]:
+    read = team["owner"].get(f"{_path(team, control)}/context")
+    assert read.status_code == 200, read.text
+    body: dict[str, Any] = read.json()
+    return body
+
+
+def _notes(team: dict[str, Any], control: str) -> list[dict[str, Any]]:
+    notes: list[dict[str, Any]] = _context(team, control)["attributes_agent_notes"]
+    return notes
+
+
+def test_the_shapes_of_itgc_ac_01_are_read_and_a_quote_the_records_lack_is_never_kept(
+    migrated: Database,
+) -> None:
+    team, control, _scheduler, client = _ready(migrated, "aa-shapes")
+    _answer_required(migrated, team, control, client)
+    plan_id = _plan_run(migrated, control)[0]
+    script = _Script(migrated, team, control)
+    misquoted = _proposal(DOCUMENTED, "DOCUMENTED", "words nobody at the client wrote")
+    # The drafter: its list and its issues as the text of their JSON.
+    script.answers["attributes"] = [
+        {"attributes": json.dumps([_proposal(), misquoted]), "issues": "[]"}
+    ]
+    # The reviewer of the drafts, as on 13 November 2026: each row's optional `follows` as
+    # null.
+    script.answers["draft-review"] = [
+        lambda prompt: {"attributes": [{**row, "follows": None} for row in _drafted(prompt)],
+                        "fixes": []}
+    ]  # fmt: skip
+    with connect(migrated.url) as connection:
+        title = load_facts(connection, team["project"], UUID(control)).title
+
+    def planned(misquoted: bool) -> Callable[[str], dict[str, Any]]:
+        def answer(_prompt: str) -> dict[str, Any]:
+            # The planner, as on 12 and 13 November 2026: `phases` inside the text of
+            # `understanding`; a fact the records hold in other typography; and, the
+            # first time, a fact whose quote the records do not hold.
+            output = script.plan()
+            held = {
+                "field": "DESCRIPTION",
+                "value": "The control as named.",
+                "basis": "SOURCE",
+                "quote": f"\u201c{title.upper()}.\u201d",
+            }
+            unheld = {
+                "field": "PERFORMER",
+                "value": "The IT service desk",
+                "basis": "SOURCE",
+                "quote": "The IT service desk grants all access.",
+            }
+            output["understanding"]["facts"] = [unheld, held] if misquoted else [held]
+            text = json.dumps(output["understanding"]) + ',"phases":' + json.dumps(output["phases"])
+            rest = {k: v for k, v in output.items() if k not in ("understanding", "phases")}
+            return {"understanding": text, **rest}
+
+        return answer
+
+    script.answers["planner"] = [planned(True), planned(False)]
+    # The reviewer of the set, its answer inside a wrapper.
+    script.answers["set-review"] = [{OUTPUT_TOOL: {"attributes": [], "findings": []}}]
+    with connect(migrated.url) as connection:
+        assert run_plan_through(connection, script, plan_id) == "DONE"
+    # Every shape was read; only the planner's misquote needed a correction (a quote the
+    # records do not hold is corrected on every answer but the last: the reviewer's
+    # decision on B1i, 13 November 2026).
+    assert [who for who in script.calls if who != "other"] == [
+        "attributes", "draft-review", "planner", "planner", "set-review",
+    ]  # fmt: skip
+    assert "understanding.facts[0].quote" in script.prompts["planner"][1]
+    calls = _calls(migrated, control)
+    assert [(row[0], row[1], row[2]) for row in calls] == [
+        ("attributes", "SUCCEEDED", ""), ("attribute-review", "SUCCEEDED", ""),
+        ("engagement-planner", "SUCCEEDED", ""), ("engagement-planner", "SUCCEEDED", ""),
+        ("attribute-set-review", "SUCCEEDED", ""),
+    ]  # fmt: skip
+    read = {row[0]: row[3].get("unnested") for row in calls}
+    assert read["attributes"] == ["attributes", "issues"]
+    assert read["attribute-review"] == [
+        "attributes[0].follows: null left out", "attributes[1].follows: null left out",
+    ]  # fmt: skip
+    assert read["engagement-planner"] == ["understanding", "phases"]
+    assert read["attribute-set-review"] == ["wrapper:record_output"]
+    first_plan = calls[2]
+    assert first_plan[4] is None  # the planner's own correction, recorded on the next call
+    assert "understanding.facts[0].quote" in calls[3][3]["rejected"]
+    assert all(row[4]["validation"] == "ACCEPTED" for row in calls if row is not first_plan)
+    # The drafter's misquote: its quote is not kept, and the proposal says so.
+    proposed = {
+        str(row[0]): row[1:]
+        for row in _rows(
+            migrated,
+            "SELECT text, basis, source_quote, note FROM control_attributes "
+            "WHERE engagement_control_id = %s AND status = 'PROPOSED'",
+            UUID(control),
+        )
+    }
+    assert set(proposed) == {ADDED, DOCUMENTED}
+    assert proposed[DOCUMENTED][:2] == ("INFERRED", "")
+    assert proposed[DOCUMENTED][2].startswith("The quoted words were not found in the source.")
+    # The corrected plan is used: the misquoted fact is gone, nothing put in its place.
+    plan = _rows(
+        migrated,
+        "SELECT source, understanding, note FROM evidence_plans WHERE id = %s",
+        plan_id,
+    )[0]
+    assert plan[0] == "MODEL"
+    facts = plan[1].get("facts", [])
+    assert [fact["field"] for fact in facts] == ["DESCRIPTION"]
+    assert plan[2] == "" and calls[3][4] == {"validation": "ACCEPTED"}
+    # Nothing failed, so the step has nothing to say.
+    context = _context(team, control)
+    assert context["attributes_agent_notes"] == [] and context["attributes_failure_note"] == ""
+    # The planner is asked again and none of its answers can be used: the agent's plan
+    # stands, and the step says so. The note is read from the records alone, never from
+    # whether a rerun would do anything (the step said nothing when it would not, 13
+    # November 2026).
+    unusable = _Script(migrated, team, control)
+    unusable.answers["planner"] = [{"understanding": "Prose.", "phases": []}]
+    with connect(migrated.url) as connection:
+        generate(
+            connection,
+            unusable,
+            UUID(str(team["org"])),
+            UUID(str(team["project"])),
+            UUID(control),
+            team["owner_id"],
+        )
+        connection.commit()
+        kept = latest_plan_failure_note(connection, UUID(control))
+        said = attributes_failure_note(
+            connection, UUID(control), notes_for(connection, UUID(control)), "", ""
+        )
+    context = _context(team, control)
+    assert [note["step"] for note in context["attributes_agent_notes"]] == ["engagement-planner"]
+    assert context["attributes_failure_note"] == said
+    assert "kept as it was" in said and "Run again" in said
+    # Fixed plain words for the person; the schema's paths stay on the call's record.
+    assert kept == (
+        "The planner could not finish: the answer did not have the required shape. The plan "
+        "was kept as it was. " + PLAN_AGAIN
+    )
+    plan_body = team["owner"].get(f"{_path(team, control)}/evidence-plan").json()
+    assert plan_body["failure_note"] == kept
+    assert "understanding" not in said and "schema" not in said
+
+
+def test_a_part_that_fails_is_corrected_once_then_said_in_plain_words_until_an_answer_is_used(
+    migrated: Database,
+) -> None:
+    team, control, _scheduler, client = _ready(migrated, "aa-notes")
+    _answer_required(migrated, team, control, client)
+    plan_id = _plan_run(migrated, control)[0]
+    script = _Script(migrated, team, control)
+    # Each answer misses a required part or has prose where the plan's object belongs,
+    # twice over.
+    script.answers["attributes"] = [{"attributes": [{"text": ADDED}], "issues": []}]
+    script.answers["planner"] = [{"understanding": "The control is reviewed.", "phases": []}]
+    script.answers["set-review"] = [{"attributes": [{"id": "x", "verdict": "FINE"}],
+                                     "findings": []}]  # fmt: skip
+    with connect(migrated.url) as connection:
+        assert run_plan_through(connection, script, plan_id) == "DONE"
+    # One correction each (the planner keeps its own two), and no drafts to review.
+    assert [who for who in script.calls if who != "other"] == [
+        "attributes", "attributes", "planner", "planner", "planner", "set-review", "set-review",
+    ]  # fmt: skip
+    # The correction names the place and the reason, and carries the previous answer.
+    again = script.prompts["attributes"][1]
+    assert "could not be used" in again and "attributes[0].action: Field required" in again
+    assert "<your_previous_answer>" in again
+    assert "attributes[0].verdict" in script.prompts["set-review"][1]
+    # Nothing of either answer was used: no proposal was written.
+    assert _rows(
+        migrated,
+        "SELECT count(*) FROM control_attributes WHERE engagement_control_id = %s "
+        "AND status = 'PROPOSED'",
+        UUID(control),
+    ) == [(0,)]
+    calls = _calls(migrated, control)
+    drafter = [row for row in calls if row[0] == "attributes"]
+    assert drafter[0][4]["validation"] == "REJECTED" and drafter[0][4]["corrected"] is True
+    assert drafter[1][3]["correction"] == 1 and "attributes[0].action" in drafter[1][3]["rejected"]
+    assert "note" in drafter[1][4] and drafter[1][4]["validation"] == "REJECTED"
+    # Where the planner's text broke the schema is recorded with its call.
+    planner = [row for row in calls if row[0] == "engagement-planner"]
+    assert planner[0][1:3] == (
+        "MALFORMED", "answer did not match the schema (answer.understanding: expected object, "
+        "got string)",
+    )  # fmt: skip
+    # The step reads what failed, what was kept and what to do, from the records.
+    notes = _notes(team, control)
+    assert [note["step"] for note in notes] == [
+        "attributes", "engagement-planner", "attribute-set-review",
+    ]  # fmt: skip
+    for note in notes:
+        assert note["failed"] and note["kept"] and "Run again" in note["next_step"]
+        assert note["sentence"] == f"{note['failed']} {note['kept']} {note['next_step']}"
+        assert note["agent"].startswith("The ") and UUID(note["model_call_id"])
+    # Rewritten on 13 November 2026 after the independent review of B1i. Old: the person's
+    # sentence carried the check's words ("attributes[0].action: Field required"). New:
+    # fixed plain words for the person, the place and the validator's message only on the
+    # call's outcome (`reason`). Why: a person reads what failed, not a schema path.
+    assert notes[0]["failed"] == (
+        "The attribute agent could not finish: the answer did not have the required shape."
+    )
+    assert "attributes[0].action: Field required" in drafter[1][4]["reason"]
+    assert all("[0]" not in note["sentence"] for note in notes)
+    assert "write their criteria" in notes[0]["next_step"]
+    assert "no criteria were tailored" in notes[1]["kept"]
+    assert "not reviewed" in notes[2]["kept"]
+    assert _context(team, control)["attributes_failure_note"] == " ".join(
+        note["sentence"] for note in notes
+    )
+    # A person runs the agents again; their answers are used, and the notes are gone.
+    with connect(migrated.url) as connection:
+        again_id = request_attributes_run(connection, team["project"], UUID(control), True)
+        connection.commit()
+        assert again_id == plan_id
+        assert run_plan_through(connection, _Script(migrated, team, control), plan_id) == "DONE"
+    context = _context(team, control)
+    assert context["attributes_agent_notes"] == [] and context["attributes_failure_note"] == ""
+
+
+# The person's sentence on every run record the screens read (`failure_note`)
+
+# Every run record an agent's work is read through, by its body: each carries
+# `failure_note` (one plain sentence, "" when none), which the screens show.
+RUN_RECORDS = (
+    ("process_understanding", "RunBody"),  # the context's narrative run
+    ("evidence_plans", "EvidencePlanBody"),
+    ("master_plans", "MasterPlanBody"),
+    ("evidence_assurance", "RequestBody"),  # a D&I check request entry
+    ("evidence_wizard", "ReadBody"),  # a wizard file's `read`
+    ("pbc_drafting", "DraftBody"),
+    ("test_sheets", "SheetBody"),
+    ("workpaper_service", "WorkpaperBody"),
+    ("control_reviews", "ReviewBody"),
+    ("console", "MessageBody"),
+    ("evidence_analysis", "AnalysisBody"),
+    ("rcm_uploads", "SystemsBody"),
+    ("rcm_uploads", "TermsBody"),
+    ("system_applicability", "SocReportBody"),
+    ("prior_year", "ReferenceBody"),
+    ("understanding_chat", "NotesResult"),  # the walkthrough notes
+    ("policy_evidence", "PolicyEvidenceBody"),  # the policy reading
+    ("context_routes", "ContextBody"),  # attributes_failure_note, below
+)
+
+
+def test_every_run_record_carries_a_failure_note() -> None:
+    for module, name in RUN_RECORDS:
+        body = getattr(importlib.import_module(f"ai_workforce_api.{module}"), name)
+        field = "attributes_failure_note" if name == "ContextBody" else "failure_note"
+        assert field in body.model_fields, (module, name)
+        assert body.model_fields[field].annotation is str and body.model_fields[field].default == ""
+
+
+def _plain(sentence: str) -> None:
+    """One plain note: what failed, then what was kept and what to do, in full sentences."""
+    assert sentence and sentence[0].isupper() and sentence.endswith("."), sentence
+    assert "None" not in sentence and "{" not in sentence, sentence
+
+
+def test_each_record_says_what_failed_what_was_kept_and_what_to_do() -> None:
+    from ai_workforce_api import (
+        console,
+        control_reviews,
+        evidence_analysis,
+        evidence_assurance,
+        evidence_plans,
+        evidence_wizard,
+        pbc_drafting,
+        rcm_uploads,
+        system_applicability,
+        workpaper_service,
+    )
+
+    # A run that gave no usable answer is said; one that did, or still runs, is not.
+    said = [
+        evidence_plans.plan_failure_note("FALLBACK", evidence_plans.KEPT_NOTE),
+        evidence_analysis.analysis_failure_note("FAILED", None, "The file could not be read."),
+        evidence_analysis.analysis_failure_note(
+            "READY", "FALLBACK", "The model was rate limited. The rules classified it."
+        ),
+        rcm_uploads.run_failure_note("FAILED", None, "Mapping the terms did not finish.", "terms"),
+        rcm_uploads.run_failure_note("READY", "FALLBACK", "Model answer rejected.", "systems"),
+        system_applicability.report_failure_note("FAILED", "The agent could not read it."),
+        evidence_assurance.check_failure_note("The check stopped before it finished."),
+        evidence_wizard.read_failure_note("FAILED", "The file could not be read."),
+        pbc_drafting.draft_failure_note("FAILED", None, ""),
+        workpaper_service.draft_failure_note("IDLE", workpaper_service.DRAFT_FAILED, None),
+        control_reviews.reperform_failure_note("IDLE", None, control_reviews.REPERFORM_FAILED),
+        console.failure_note("AGENT", "FAILED", "The model did not answer in time.", False, True),
+    ]
+    for sentence in said:
+        _plain(sentence)
+    assert "Plan the evidence again" in said[0] and "Read the file again" in said[1]
+    quiet = [
+        evidence_plans.plan_failure_note("MODEL", ""),
+        evidence_analysis.analysis_failure_note("READY", "MODEL", ""),
+        rcm_uploads.run_failure_note("READY", "MODEL", "", "terms"),
+        system_applicability.report_failure_note("READ", ""),
+        evidence_wizard.read_failure_note("READY", "Read."),
+        pbc_drafting.draft_failure_note("DRAFTED", "MODEL", ""),
+        console.failure_note("AGENT", "DONE", "", False, True),
+        console.failure_note("AGENT", "WORKING", "x", False, False),
+        console.failure_note("USER", "DONE", "x", False, False),
+    ]
+    assert quiet == [""] * len(quiet)
+
+
+def test_criteria_waiting_in_the_approved_plans_revision_are_named_on_the_attributes_step(
+    migrated: Database,
+) -> None:
+    """ITGC-AC-01, 13 November 2026: the plan was approved by a person, so the planner's
+    tailored criteria waited in the plan's pending revision and the step read "Needs
+    criteria" with nothing said. The context names the attributes, and accepting the
+    revision applies them."""
+    team, control, _scheduler, client = _ready(migrated, "aa-pending")
+    approve_control_plan(migrated, control)
+    _answer_required(migrated, team, control, client)
+    plan_id = _plan_run(migrated, control)[0]
+    with connect(migrated.url) as connection:
+        assert run_plan_through(connection, _Script(migrated, team, control), plan_id) == "DONE"
+    writable = _rows(
+        migrated,
+        "SELECT id, coalesce(code, '') FROM control_attributes WHERE engagement_control_id = %s "
+        "AND status = 'APPROVED' AND coalesce(criteria_origin, '') NOT IN ('PERSON', 'SEEDED') "
+        "AND criteria_accepted_at IS NULL ORDER BY position, created_at",
+        UUID(control),
+    )
+    assert writable
+    ids = [row[0] for row in writable]
+    context = _context(team, control)
+    assert context["plan_revision_pending"] is True
+    assert context["attributes_pending_criteria"] == [
+        {"attribute_id": str(row[0]), "code": row[1]} for row in writable
+    ]
+    # Nothing is written on the attributes until a person accepts the revision.
+    conditions = "SELECT condition FROM control_attributes WHERE id = ANY(%s)"
+    assert all(row[0] == "" for row in _rows(migrated, conditions, ids))
+    version = team["owner"].get(f"{_path(team, control)}/evidence-plan").json()["version"]
+    accepted = team["owner"].post(
+        f"{_path(team, control)}/evidence-plan/pending-revision",
+        json={"version": version, "decision": "ACCEPT"},
+    )
+    assert accepted.status_code == 200, accepted.text
+    context = _context(team, control)
+    assert context["plan_revision_pending"] is False
+    assert context["attributes_pending_criteria"] == []
+    assert all(row[0] != "" for row in _rows(migrated, conditions, ids))
+
+
+# The independent review of B1i (13 November 2026)
+
+
+def test_an_answer_with_a_fabricated_quote_is_never_used(migrated: Database) -> None:
+    """Rewritten on 13 November 2026 after the confirmation pass of B1i. Old expectation:
+    on the planner's last answer, a fact whose quote the records do not hold was left out
+    and the rest of the plan used, unless the answer repeated the fact's value elsewhere.
+    New: such an answer is never used, on any attempt: each but the last is corrected, the
+    last is rejected and the plan kept, with the plain sentence. Why: a literal search
+    cannot catch a claim repeated in other words, or repeated word for word in a quote the
+    check does not see (the review's probes: a made-up quote kept in the summary, a short
+    value such as "IT" matching everywhere), so a fabricated quote must never pass."""
+    from test_planner_reliability import AC01, _agent_plan, _Answers
+    from test_planning_gate import _control, _launched
+
+    team = _launched(migrated, "aa-cfo")
+    control = UUID(str(_control(team, AC01)["id"]))
+    org, project = UUID(str(team["org"])), UUID(str(team["project"]))
+    with connect(migrated.url) as connection:
+        good = _agent_plan(connection, project, control, "The agent's reading of the control.")
+        # The plan the agent made before: the one a rejected answer must leave as it is.
+        generate(connection, _Answers(good), org, project, control, team["owner_id"])
+        connection.commit()
+    claim = "The CFO approves every access grant before it is provisioned"
+    for value, summary in (
+        ("Somebody unnamed", good["understanding"]["summary"]),  # nothing repeats it
+        ("The CFO", f"{claim}. {good['understanding']['summary']}"),  # the summary does
+        ("IT", good["understanding"]["summary"]),  # a short value found everywhere
+    ):
+        answer = json.loads(json.dumps(good))
+        answer["understanding"]["summary"] = summary
+        answer["understanding"]["facts"] = [
+            {"field": "REVIEWER", "value": value, "basis": "SOURCE", "quote": f"{claim}."}
+        ]
+        planner = _Answers(answer)
+        with connect(migrated.url) as connection:
+            _changes, _drafts, note = generate(connection, planner, org, project, control,
+                                               team["owner_id"])  # fmt: skip
+            connection.commit()
+        # Corrected on every answer but the last, each correction naming the place.
+        assert len(planner.requests) == 3, value
+        assert all("understanding.facts[0].quote" in r.prompt for r in planner.requests[1:])
+        # Never used: the plan is the one made before, with no word of the answer.
+        plan = _rows(
+            migrated,
+            "SELECT understanding FROM evidence_plans WHERE engagement_control_id = %s",
+            control,
+        )[0][0]
+        assert plan["summary"] == good["understanding"]["summary"], value
+        assert value not in [fact.get("value") for fact in plan.get("facts", [])]
+        assert note.startswith(KEPT_NOTE), value
+        last = _rows(
+            migrated,
+            "SELECT o.outcome FROM model_calls m JOIN model_call_outcomes o "
+            "ON o.model_call_id = m.id WHERE m.target_id = %s "
+            "AND m.prompt_version LIKE 'engagement-planner/%%' ORDER BY m.created_at DESC "
+            "LIMIT 1",
+            control,
+        )[0][0]
+        assert last["validation"] == "REJECTED"
+        assert "understanding.facts[0].quote" in last["reason"]
+        assert last["note"]["failed"] == (
+            "The planner could not finish: the answer quoted the records for something they "
+            "do not say."
+        )
+
+
+def test_a_property_inside_another_is_lifted_only_for_the_planner_and_the_readings() -> None:
+    """Decision 7: lifting a property out of another's text (shape 2) only for the agents
+    that had it before B1i. For every other agent the shape is a rejection (and one
+    correction, below); a wrapper, a property's own text and a null optional object stay
+    read for all."""
+    from ai_workforce_api.evidence_assurance import OPINION_SCHEMA
+    from ai_workforce_api.evidence_planning import PLAN_SCHEMA
+
+    lifting = {id(PLAN_SCHEMA), id(OPINION_SCHEMA)}
+    checked = 0
+    for where, schema in _schemas():
+        props, required = schema["properties"], schema.get("required", [])
+        example = _example(schema)
+        for host in [k for k in props if props[k].get("type") in ("object", "array")]:
+            for carried in required:
+                if carried == host or props[carried].get("type") in ("object", "array"):
+                    continue
+                answer = {k: v for k, v in example.items() if k not in (host, carried)}
+                answer[host] = (
+                    json.dumps(example[host]) + f',"{carried}":' + json.dumps(example[carried])
+                )
+                found = outcome(
+                    _Fixed(answer),
+                    ModelRequest(
+                        operation="generate", prompt="Answer.", output_schema=schema,
+                        allowed_tool_ids=(), timeout_seconds=5, cancelled=False,
+                        lift=id(schema) in lifting,
+                    ),
+                    CONFIG,
+                )  # fmt: skip
+                if id(schema) in lifting:
+                    assert found.status == "SUCCEEDED", where
+                else:
+                    assert found.status == "MALFORMED" and found.raw.output == answer, where
+                    assert models.misplaced(schema, answer) == (f"{carried} inside {host}",)
+                    # Inside a recognised wrapper too, as an object or as its text.
+                    for wrapped in ({OUTPUT_TOOL: answer}, {"output": json.dumps(answer)}):
+                        if "output" not in props:
+                            assert models.misplaced(schema, wrapped) == (
+                                f"{carried} inside {host}",
+                            )
+                checked += 1
+    assert checked > 0
+
+
+def test_an_agent_that_does_not_lift_is_corrected_once_for_a_property_inside_another(
+    migrated: Database,
+) -> None:
+    team, control, _scheduler, client = _ready(migrated, "aa-lift")
+    _answer_required(migrated, team, control, client)
+    plan_id = _plan_run(migrated, control)[0]
+    script = _Script(migrated, team, control)
+    # The drafter writes `issues` inside the text of `attributes`, twice.
+    script.answers["attributes"] = [{"attributes": json.dumps([_proposal()]) + ',"issues":[]'}]
+    with connect(migrated.url) as connection:
+        assert run_plan_through(connection, script, plan_id) == "DONE"
+    # One correction in all (AgentCaller's), never a second from the caller's own check.
+    assert script.calls.count("attributes") == 2
+    assert "inside the text of another property" in script.prompts["attributes"][1]
+    drafter = [row for row in _calls(migrated, control) if row[0] == "attributes"]
+    assert drafter[0][4] == {
+        "validation": "REJECTED", "corrected": True,
+        "reason": "the answer wrote a property inside another property's text: "
+        "issues inside attributes",
+    }  # fmt: skip
+    assert drafter[1][3]["correction"] == 1
+    assert drafter[1][4]["note"]["failed"] == (
+        "The attribute agent could not finish: the answer did not have the required shape."
+    )
+    # Nothing was lifted into a proposal.
+    assert _rows(
+        migrated,
+        "SELECT count(*) FROM control_attributes WHERE engagement_control_id = %s "
+        "AND status = 'PROPOSED'",
+        UUID(control),
+    ) == [(0,)]
+    # The master plan reads the same note as the evidence plan, from its one query.
+    master = team["owner"].get(f"{_path(team, control)}/master-plan").json()
+    plan = team["owner"].get(f"{_path(team, control)}/evidence-plan").json()
+    assert master["failure_note"] == plan["failure_note"]
+
+
+def test_a_run_counts_every_reading_whose_answer_could_not_be_used() -> None:
+    from ai_workforce_api.agent_answers import run_failure_note, unusable_sentence
+
+    assert unusable_sentence(0) == ""
+    note = f"3 policies proposed as evidence. {unusable_sentence(2)}"
+    assert run_failure_note(note, "Kept.", "Run again.") == (
+        "The agent could not finish 2 of its readings: the answers could not be used. Kept. "
+        "Run again."
+    )
+    assert run_failure_note("3 policies proposed as evidence.", "Kept.", "Run again.") == ""

@@ -1,0 +1,316 @@
+{
+  "name": "assigner_team_not_designated",
+  "title": "A walkthrough whose role was assigned by someone no record designates as a member of SAP Security",
+  "synthetic": true,
+  "company": "Northwind Fabrics",
+  "system": "SAP S/4HANA",
+  "period": "2026-01-01/2026-12-31",
+  "control": {
+    "ref": "ITGC-AC-01",
+    "title": "New and changed SAP S/4HANA access is approved before it is granted",
+    "activity": "New and changed user access to SAP S/4HANA production (PRD, client 100) is requested through a ServiceNow catalog item that names the user and each role. The user's line manager and the owner of each role approve the request in ServiceNow before SAP Security assigns the role. SAP Security, who neither request nor approve the access, assign only the roles approved.",
+    "domain": "ACCESS"
+  },
+  "categories": [
+    "CONTROL_EXECUTION"
+  ],
+  "lens": "INSTANCE_RECORD",
+  "read_in_part": false,
+  "attributes": [
+    {
+      "code": "A",
+      "text": "The access was requested through a ServiceNow ticket that names the user and the SAP S/4HANA role.",
+      "criteria": {
+        "condition": "A ServiceNow request exists for the user's new or changed SAP S/4HANA access.",
+        "pass_when": "The ticket identifies the requester, the user who receives the access and the exact SAP role requested.",
+        "exception_when": "No ticket exists, or the ticket does not name the user or the role."
+      },
+      "expected": true
+    },
+    {
+      "code": "B",
+      "text": "The access was approved by the user's line manager and the role owner before it was granted.",
+      "criteria": {
+        "condition": "Approval of the request by the user's line manager and by the role owner is recorded.",
+        "pass_when": "Both approvals are timestamped before the SAP change document shows the role assigned.",
+        "exception_when": "An approval is missing, is given by someone other than the named approver, or is dated after the role was assigned."
+      },
+      "expected": true
+    },
+    {
+      "code": "C",
+      "text": "The requester, the approvers and the person who granted the access are different people.",
+      "criteria": {
+        "condition": "The requester, each approver and the SAP user who assigned the role are different people.",
+        "pass_when": "Neither approver is the requester or the user who receives the access, and the role was assigned by a member of SAP Security who did not approve the request.",
+        "exception_when": "A person approves their own request, or an approver also assigns the role."
+      },
+      "expected": true
+    },
+    {
+      "code": "D",
+      "text": "The access granted in SAP S/4HANA is the access approved, and was granted within the audit period.",
+      "criteria": {
+        "condition": "The SAP S/4HANA change document shows the role approved in the ticket assigned to the same user.",
+        "pass_when": "The assignment is dated within the audit period, 1 January 2026 to 31 December 2026.",
+        "exception_when": "A different role or user is changed, or the assignment falls outside the audit period."
+      },
+      "expected": true
+    }
+  ],
+  "files": [
+    {
+      "name": "RITM0048213 ServiceNow export.txt",
+      "kind": "walkthrough",
+      "lines": [
+        "ServiceNow - Requested Item (export to text)",
+        "Instance: northwindfabrics.service-now.example",
+        "Exported: 2026-07-02 09:15:03 by Sofia Morales",
+        "All times are UTC.",
+        "",
+        "Number: RITM0048213",
+        "Request: REQ0039127",
+        "Catalog item: SAP S/4HANA Access Request",
+        "Requested for: Daniel Okafor (DOKAFOR), Accounts Payable Clerk, Finance",
+        "Opened by: Daniel Okafor (DOKAFOR)",
+        "Opened: 2026-03-02 08:41:17",
+        "Manager (HR record): Grace Whitfield (GWHITFIELD), Finance Manager",
+        "System: SAP S/4HANA production (PRD, client 100)",
+        "Request type: New access",
+        "Role requested: Z_FI_AP_CLERK - Accounts Payable Clerk (vendor invoice entry)",
+        "Business justification: Joined the Accounts Payable team on 2 March 2026; needs to post vendor invoices.",
+        "Assignment group: SAP Security",
+        "State: Closed Complete",
+        "Closed: 2026-03-03 11:05:52",
+        "",
+        "Approvals",
+        "Approver | Approval step | State | Updated",
+        "Grace Whitfield (GWHITFIELD) | Line manager approval | Approved | 2026-03-02 09:03:44",
+        "Marcus Hale (MHALE) | Role owner approval - Z_FI_AP_CLERK | Approved | 2026-03-02 15:27:10",
+        "",
+        "Activity",
+        "2026-03-02 08:41:17 Daniel Okafor: Request submitted.",
+        "2026-03-02 09:03:44 Grace Whitfield: Approved.",
+        "2026-03-02 15:27:10 Marcus Hale: Approved. Role is appropriate for AP invoice entry.",
+        "2026-03-03 10:58:02 Tomas Nguyen: Work note - role assigned in PRD client 100. See SAP change documents.",
+        "2026-03-03 11:05:52 Tomas Nguyen: Closed Complete."
+      ]
+    },
+    {
+      "name": "RSUSR100N change documents DOKAFOR.txt",
+      "kind": "change_history",
+      "lines": [
+        "SAP S/4HANA - System PRD, Client 100",
+        "Report RSUSR100N - Change Documents for Users",
+        "Executed by: TNGUYEN (Tomas Nguyen)    Executed on: 02.07.2026 09:31:07",
+        "Times are shown in the system time zone, UTC.",
+        "Selection: User = DOKAFOR; Change date from 01.01.2026 to 31.12.2026; Roles: X; Profiles: X",
+        "",
+        "Date | Time | Changed by | Name of changer | User | Change | Role or profile | Valid from | Valid to | Change reason",
+        "03.03.2026 | 10:57:36 | TNGUYEN | Tomas Nguyen | DOKAFOR | Role assigned | Z_FI_AP_CLERK | 03.03.2026 | 31.12.9999 | RITM0048213",
+        "03.03.2026 | 10:57:36 | TNGUYEN | Tomas Nguyen | DOKAFOR | Profile added | T-PA650012 (generated for Z_FI_AP_CLERK) | 03.03.2026 | 31.12.9999 | RITM0048213",
+        "",
+        "Number of change documents displayed: 2"
+      ]
+    }
+  ],
+  "expected": {
+    "A": {
+      "verdict": "SUPPORTED",
+      "unsettled_acceptable": false,
+      "reason": "The ServiceNow ticket names the requester, the user and the Z_FI_AP_CLERK role.",
+      "answer": {
+        "reason": "The ticket is an SAP S/4HANA access request naming the user, the requester and the role.",
+        "elements": {
+          "condition": {
+            "result": "MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "Catalog item: SAP S/4HANA Access Request",
+                "basis": "RECORD"
+              },
+              {
+                "file": 0,
+                "quote": "Requested for: Daniel Okafor (DOKAFOR), Accounts Payable Clerk, Finance",
+                "basis": "RECORD"
+              }
+            ],
+            "absent": "",
+            "reason": "A ServiceNow SAP S/4HANA access request exists for the user."
+          },
+          "pass": {
+            "result": "MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "Opened by: Daniel Okafor (DOKAFOR)",
+                "basis": "RECORD"
+              },
+              {
+                "file": 0,
+                "quote": "Requested for: Daniel Okafor (DOKAFOR), Accounts Payable Clerk, Finance",
+                "basis": "RECORD"
+              },
+              {
+                "file": 0,
+                "quote": "Role requested: Z_FI_AP_CLERK - Accounts Payable Clerk (vendor invoice entry)",
+                "basis": "RECORD"
+              }
+            ],
+            "absent": "",
+            "reason": "Requester, user and role are named."
+          }
+        }
+      },
+      "shows": "IMPLEMENTATION"
+    },
+    "B": {
+      "verdict": "SUPPORTED",
+      "unsettled_acceptable": false,
+      "reason": "Both approvals are recorded and both precede the SAP role assignment.",
+      "answer": {
+        "reason": "Line manager and role owner approvals are recorded before the role was assigned.",
+        "elements": {
+          "condition": {
+            "result": "MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "Grace Whitfield (GWHITFIELD) | Line manager approval | Approved | 2026-03-02 09:03:44",
+                "basis": "RECORD"
+              },
+              {
+                "file": 0,
+                "quote": "Marcus Hale (MHALE) | Role owner approval - Z_FI_AP_CLERK | Approved | 2026-03-02 15:27:10",
+                "basis": "RECORD"
+              }
+            ],
+            "absent": "",
+            "reason": "Both approvals are in the ticket's approval record."
+          },
+          "pass": {
+            "result": "MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "Marcus Hale (MHALE) | Role owner approval - Z_FI_AP_CLERK | Approved | 2026-03-02 15:27:10",
+                "basis": "RECORD"
+              },
+              {
+                "file": 1,
+                "quote": "03.03.2026 | 10:57:36 | TNGUYEN | Tomas Nguyen | DOKAFOR | Role assigned | Z_FI_AP_CLERK | 03.03.2026 | 31.12.9999 | RITM0048213",
+                "basis": "RECORD"
+              }
+            ],
+            "absent": "",
+            "reason": "The later approval precedes the SAP assignment."
+          }
+        }
+      },
+      "shows": "IMPLEMENTATION"
+    },
+    "C": {
+      "verdict": "ISSUE",
+      "results": [
+        "PARTLY_MET"
+      ],
+      "unsettled_acceptable": false,
+      "reason": "Four different people, but no record designates Tomas Nguyen as a member of SAP Security: the ticket is only in the SAP Security queue, and his work note and closing it show his work, not his team.",
+      "answer": {
+        "reason": "Requester, both approvers and the person who assigned the role are different people; no record designates that person as a member of SAP Security.",
+        "elements": {
+          "condition": {
+            "result": "MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "Opened by: Daniel Okafor (DOKAFOR)",
+                "basis": "RECORD"
+              },
+              {
+                "file": 0,
+                "quote": "Grace Whitfield (GWHITFIELD) | Line manager approval | Approved | 2026-03-02 09:03:44",
+                "basis": "RECORD"
+              },
+              {
+                "file": 0,
+                "quote": "Marcus Hale (MHALE) | Role owner approval - Z_FI_AP_CLERK | Approved | 2026-03-02 15:27:10",
+                "basis": "RECORD"
+              },
+              {
+                "file": 1,
+                "quote": "03.03.2026 | 10:57:36 | TNGUYEN | Tomas Nguyen | DOKAFOR | Role assigned | Z_FI_AP_CLERK | 03.03.2026 | 31.12.9999 | RITM0048213",
+                "basis": "RECORD"
+              }
+            ],
+            "absent": "",
+            "reason": "Four different people are recorded."
+          },
+          "pass": {
+            "result": "PARTLY_MET",
+            "quotes": [
+              {
+                "file": 1,
+                "quote": "03.03.2026 | 10:57:36 | TNGUYEN | Tomas Nguyen | DOKAFOR | Role assigned | Z_FI_AP_CLERK | 03.03.2026 | 31.12.9999 | RITM0048213",
+                "basis": "RECORD"
+              },
+              {
+                "file": 0,
+                "quote": "Grace Whitfield (GWHITFIELD) | Line manager approval | Approved | 2026-03-02 09:03:44",
+                "basis": "RECORD"
+              },
+              {
+                "file": 0,
+                "quote": "Marcus Hale (MHALE) | Role owner approval - Z_FI_AP_CLERK | Approved | 2026-03-02 15:27:10",
+                "basis": "RECORD"
+              }
+            ],
+            "absent": "A record designating Tomas Nguyen (TNGUYEN) as a member of SAP Security: the ticket's assignee, a title beside his name, or his SAP user group.",
+            "reason": "Neither approver is the requester or the user, and TNGUYEN, who approved nothing, assigned the role; no record designates him as a member of SAP Security."
+          }
+        }
+      }
+    },
+    "D": {
+      "verdict": "SUPPORTED",
+      "unsettled_acceptable": false,
+      "reason": "SAP shows Z_FI_AP_CLERK assigned to the same user on a date in 2026.",
+      "answer": {
+        "reason": "The SAP change document shows the approved role assigned to the user within the period.",
+        "elements": {
+          "condition": {
+            "result": "MET",
+            "quotes": [
+              {
+                "file": 0,
+                "quote": "Role requested: Z_FI_AP_CLERK - Accounts Payable Clerk (vendor invoice entry)",
+                "basis": "RECORD"
+              },
+              {
+                "file": 1,
+                "quote": "03.03.2026 | 10:57:36 | TNGUYEN | Tomas Nguyen | DOKAFOR | Role assigned | Z_FI_AP_CLERK | 03.03.2026 | 31.12.9999 | RITM0048213",
+                "basis": "RECORD"
+              }
+            ],
+            "absent": "",
+            "reason": "The role approved is the role assigned, to the same user."
+          },
+          "pass": {
+            "result": "MET",
+            "quotes": [
+              {
+                "file": 1,
+                "quote": "03.03.2026 | 10:57:36 | TNGUYEN | Tomas Nguyen | DOKAFOR | Role assigned | Z_FI_AP_CLERK | 03.03.2026 | 31.12.9999 | RITM0048213",
+                "basis": "RECORD"
+              }
+            ],
+            "absent": "",
+            "reason": "The assignment is dated within 2026."
+          }
+        }
+      },
+      "shows": "IMPLEMENTATION"
+    }
+  }
+}

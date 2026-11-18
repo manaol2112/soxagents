@@ -1,3 +1,10 @@
+import {
+  failureNoteOf,
+  failureSentence,
+  plainNote,
+  withNext,
+} from "./run-failure.ts";
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type DraftItem = {
@@ -16,12 +23,16 @@ export type RequestDraft = {
   id: string;
   requestId: string;
   status: "PENDING" | "DRAFTING" | "DRAFTED" | "FAILED" | "SKIPPED";
-  source: "MODEL" | "RULES" | null;
+  /** FALLBACK: the model failed and the rules drafted the request instead. */
+  source: "MODEL" | "RULES" | "FALLBACK" | "SEEDED" | null;
   summary: string;
   items: DraftItem[];
   questions: string[];
   assumptions: string[];
   note: string;
+  /** The server's failure sentence for a drafting that ended without a usable answer
+   * (run-failure.ts); absent otherwise. */
+  failureNote?: string;
 };
 
 const STATUSES: ReadonlyArray<RequestDraft["status"]> = [
@@ -69,7 +80,12 @@ export function parseDrafts(value: unknown): Map<string, RequestDraft> {
       requestId: item.pbc_request_id,
       status,
       source:
-        item.source === "MODEL" || item.source === "RULES" ? item.source : null,
+        item.source === "MODEL" ||
+        item.source === "RULES" ||
+        item.source === "FALLBACK" ||
+        item.source === "SEEDED"
+          ? item.source
+          : null,
       summary: str(content?.summary),
       items: (Array.isArray(content?.items) ? content.items : [])
         .filter(isRecord)
@@ -86,9 +102,47 @@ export function parseDrafts(value: unknown): Map<string, RequestDraft> {
       questions: strings(content?.questions),
       assumptions: strings(content?.assumptions),
       note: str(item.note),
+      ...(failureNoteOf(item) !== ""
+        ? { failureNote: failureNoteOf(item) }
+        : {}),
     });
   }
   return drafts;
+}
+
+/** A draft's one sentence when the drafting ended without a usable answer, or null: it
+ * failed (the request's wording stands as it was), or the model did not answer and the
+ * rules drafted it from the RCM. The server's failure sentence leads, then its note. */
+export function runFailureLine(
+  draft: Pick<RequestDraft, "status" | "source" | "note" | "failureNote">,
+  failureNote: string = draft.failureNote ?? "",
+): string | null {
+  if (draft.status === "PENDING" || draft.status === "DRAFTING") {
+    return null;
+  }
+  const said = plainNote(failureNote);
+  if (said !== "") {
+    return said;
+  }
+  if (draft.status === "FAILED") {
+    const note = plainNote(draft.note);
+    return failureSentence(
+      note !== ""
+        ? withNext(
+            note,
+            "The request's wording is kept as it was. Draft it again, or edit the request yourself.",
+          )
+        : "The request could not be drafted, so its wording is kept as it was. Draft it again, or edit the request yourself.",
+      failureNote,
+    );
+  }
+  if (draft.status === "DRAFTED" && draft.source === "FALLBACK") {
+    return failureSentence(
+      "The model did not answer, so the request was drafted from the RCM. Draft it again, or edit the request yourself.",
+      failureNote,
+    );
+  }
+  return null;
 }
 
 /** A short status for the request row. */
@@ -104,8 +158,17 @@ export function draftLabel(
   if (draft.status === "FAILED") {
     return { label: "Drafting did not finish", tone: "warning" };
   }
+  if (draft.source === "SEEDED") {
+    return { label: "Prepared with the demo", tone: "neutral" };
+  }
+  if (draft.source === "FALLBACK") {
+    return {
+      label: "Drafted from the RCM; the model did not answer",
+      tone: "warning",
+    };
+  }
   return draft.source === "MODEL"
-    ? { label: "Drafted with Claude", tone: "success" }
+    ? { label: "Drafted by an agent", tone: "success" }
     : { label: "Drafted from the RCM", tone: "neutral" };
 }
 

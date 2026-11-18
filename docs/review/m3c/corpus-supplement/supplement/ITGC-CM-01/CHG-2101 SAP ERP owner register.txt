@@ -1,0 +1,4 @@
+SAP ERP system owner register (extract)
+Business owner, finance changes: Elena Rossi (Finance Director)
+IT owner: Marcus Lee (Head of ERP Applications)
+Jonas Brandt: Accounts Payable team lead (not a designated owner)

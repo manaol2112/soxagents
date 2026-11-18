@@ -1,0 +1,227 @@
+/* The loading state, centred in the content area while the sidebar and top bar stay.
+   It fades in after a short delay, so a quick navigation does not flash it. */
+
+.boot {
+  display: grid;
+  min-height: min(70vh, 640px);
+  place-items: center;
+  opacity: 0;
+  animation: boot-in 360ms ease-out 180ms forwards;
+}
+
+.boot-center {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 1rem;
+}
+
+.boot-mark {
+  position: relative;
+  display: grid;
+  width: 104px;
+  height: 104px;
+  place-items: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
+}
+
+.boot-hex,
+.boot-check {
+  fill: none;
+  stroke: var(--text-strong);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+}
+
+.boot-hex {
+  stroke-width: 2.6;
+  animation: boot-draw 2.4s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+}
+
+.boot-check {
+  stroke-width: 3;
+  animation: boot-draw-check 2.4s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+}
+
+.boot-orbit {
+  position: absolute;
+  inset: -14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 50%;
+  animation: boot-spin 6s linear infinite;
+}
+
+.boot-dot {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 9px;
+  height: 9px;
+  margin: -4.5px;
+  background: var(--text-tertiary);
+  border: 2px solid var(--surface);
+  border-radius: 50%;
+}
+
+.boot-dot:nth-child(1) {
+  transform: rotate(0deg) translateX(66px);
+}
+
+.boot-dot:nth-child(2) {
+  transform: rotate(120deg) translateX(66px);
+}
+
+.boot-dot:nth-child(3) {
+  transform: rotate(240deg) translateX(66px);
+}
+
+.boot-name {
+  margin: 0.75rem 0 0;
+  color: var(--text-strong);
+  font-size: var(--fs-title);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.boot-steps {
+  position: relative;
+  width: 22rem;
+  height: 20px;
+  overflow: hidden;
+  text-align: center;
+}
+
+.boot-steps span {
+  position: absolute;
+  inset: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
+  opacity: 0;
+  animation: boot-step 8s ease-in-out infinite;
+}
+
+.boot-steps span:nth-child(2) {
+  animation-delay: 2s;
+}
+
+.boot-steps span:nth-child(3) {
+  animation-delay: 4s;
+}
+
+.boot-steps span:nth-child(4) {
+  animation-delay: 6s;
+}
+
+.boot-bar {
+  position: relative;
+  width: 180px;
+  height: 3px;
+  margin-top: 0.25rem;
+  overflow: hidden;
+  background: var(--surface-sunken);
+  border-radius: 999px;
+}
+
+.boot-bar span {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 40%;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  animation: boot-sweep 1.4s ease-in-out infinite;
+}
+
+@keyframes boot-in {
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes boot-draw {
+  0% {
+    stroke-dashoffset: 1;
+  }
+  45%,
+  75% {
+    stroke-dashoffset: 0;
+  }
+  100% {
+    stroke-dashoffset: -1;
+  }
+}
+
+@keyframes boot-draw-check {
+  0%,
+  30% {
+    stroke-dashoffset: 1;
+  }
+  55%,
+  80% {
+    stroke-dashoffset: 0;
+  }
+  100% {
+    stroke-dashoffset: -1;
+  }
+}
+
+@keyframes boot-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes boot-step {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  6%,
+  22% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  28%,
+  100% {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+}
+
+@keyframes boot-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .boot,
+  .boot-orbit,
+  .boot-bar span,
+  .boot-steps span {
+    animation: none;
+  }
+
+  .boot {
+    opacity: 1;
+  }
+
+  .boot-hex,
+  .boot-check {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+
+  .boot-steps span:first-child {
+    opacity: 1;
+  }
+}

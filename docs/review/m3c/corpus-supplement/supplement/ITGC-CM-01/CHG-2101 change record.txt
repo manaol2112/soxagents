@@ -1,0 +1,16 @@
+Change request CHG-2101: Supplier bank detail approval step
+System: SAP ERP
+Raised on 2027-09-01
+Developer: Aiko Sato
+Transport in the approved request: DEVK900601
+
+Testing
+- Test environment: QAS (quality assurance system, non-production)
+- Tested on 2027-09-08 by Nadia Farouk (business tester); result: passed (script TS-2101, 7 of 7 steps passed)
+
+Approvals
+- Business owner approval: Jonas Brandt approved on 2027-09-09
+- IT owner approval: Marcus Lee approved on 2027-09-09
+
+Deployment
+- Transport DEVK900601 imported to PRD on 2027-09-12 by basis.oivanova (Olga Ivanova, Basis administrator)

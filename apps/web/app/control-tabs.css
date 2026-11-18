@@ -1,0 +1,353 @@
+/* ==========================================================================
+   The control workspace as one row of tabs (product owner's reference, 2 November
+   2026): the header with the type and system above the ID, title and status; the steps
+   as progress; one tab row; and the Overview's cards. Tokens only, so both themes follow.
+   ========================================================================== */
+
+/* The header: type and system above, the status beside the title. */
+.cw-hero .cw-crumbs {
+  gap: 0.5rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.cw-hero .cw-crumbs > span[aria-hidden="true"] {
+  color: var(--border-strong, var(--border));
+}
+
+.cw-hero h1 .cr-status {
+  align-self: center;
+  padding: 0.2rem 0.65rem;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+}
+
+.cw-needs-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 36px;
+  padding: 0 0.85rem;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  text-decoration: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: background-color 120ms ease;
+}
+
+.cw-needs-badge:hover {
+  background: var(--surface-hover);
+}
+
+/* Two columns where a tab keeps its side column; one elsewhere. */
+.cw-layout.is-tabbed {
+  grid-template-columns: minmax(0, 1fr) 320px;
+}
+
+.cw-layout.is-tabbed.is-wide {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* The header: the breadcrumb with its chevrons. */
+.cw-hero .cw-crumbs > svg {
+  color: var(--text-tertiary);
+}
+
+/* --- Risk & Scoping and Approvals -------------------------------------------------- */
+
+.ws-section h2 {
+  margin: 0 0 0.75rem;
+}
+
+.ws-approvals {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ws-approvals li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.7rem 0;
+  border-top: 1px solid var(--border-subtle, var(--border));
+}
+
+.ws-approvals li:first-child {
+  border-top: 0;
+}
+
+.ws-approval-mark {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border-radius: 999px;
+}
+
+.ws-approvals .is-done .ws-approval-mark {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.ws-approvals .is-waiting .ws-approval-mark {
+  color: var(--warning);
+  background: var(--warning-soft);
+}
+
+.ws-approvals .is-todo .ws-approval-mark {
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+}
+
+.ws-approval-text {
+  display: grid;
+  gap: 0.1rem;
+  min-width: 0;
+}
+
+.ws-approval-text strong {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+}
+
+.ws-approval-text small {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.ws-approvals a {
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.ws-subhead {
+  margin: 1rem 0 0.4rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.ws-receipts {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  list-style: none;
+}
+
+.ws-receipts small {
+  display: block;
+  color: var(--text-secondary);
+}
+
+/* --- Risk & Scoping (product owner's reference, 2 November 2026) ------------------- */
+
+.cw-context .cw-card-head h2 {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.cw-context .cw-card-head h2 > svg {
+  color: var(--text-secondary);
+}
+
+.rs-card {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+  padding: 1.15rem 1.35rem;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle, var(--border));
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
+}
+
+.rs-card h2 {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-xl);
+  font-weight: 600;
+}
+
+.rs-card h2 > svg {
+  color: var(--text-secondary);
+}
+
+/* Risk and objective: each label a pill beside its text. */
+.rs-rows {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.rs-rows > div {
+  display: grid;
+  grid-template-columns: 10rem minmax(0, 1fr);
+  align-items: start;
+  gap: 1rem;
+}
+
+.rs-rows dt {
+  justify-self: start;
+  padding: 0.4rem 0.9rem;
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  background: var(--accent-soft);
+  border-radius: var(--radius-lg);
+}
+
+.rs-rows dd {
+  margin: 0.35rem 0 0;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+}
+
+/* Scope: columns of facts with a rule between them. */
+.rs-scope {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.rs-scope > dl {
+  display: grid;
+  align-content: start;
+  gap: 0.85rem;
+  margin: 0;
+  padding: 0 1.1rem;
+  border-left: 1px solid var(--border);
+}
+
+.rs-scope > dl:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.rs-scope dt {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+.rs-scope dd {
+  margin: 0.15rem 0 0;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+}
+
+/* Why each phase applies: the phase as a pill, a rule, then why. */
+.rs-why {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rs-why li {
+  display: grid;
+  grid-template-columns: 17rem minmax(0, 1fr);
+  align-items: center;
+  gap: 1.1rem;
+  padding: 0.65rem 0;
+  border-top: 1px solid var(--border-subtle, var(--border));
+}
+
+.rs-why li:first-child {
+  border-top: 0;
+}
+
+.rs-phase {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 0.55rem;
+  padding: 0.45rem 0.9rem;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  background: var(--accent-soft);
+  border-radius: var(--radius-lg);
+}
+
+.rs-phase > svg {
+  color: var(--accent-text);
+}
+
+.rs-reason {
+  padding-left: 1.1rem;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  border-left: 1px solid var(--border);
+}
+
+@media (max-width: 720px) {
+  
+
+  
+
+  
+
+  .rs-rows > div,
+  .rs-why li {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.4rem;
+  }
+
+  .rs-rows dd {
+    margin-top: 0;
+  }
+
+  .rs-reason {
+    padding-left: 0;
+    border-left: 0;
+  }
+
+  .rs-scope {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    row-gap: 0.85rem;
+  }
+
+  .rs-scope > dl,
+  .rs-scope > dl:first-child {
+    padding: 0;
+    border-left: 0;
+  }
+}
+
+@media (max-width: 1280px) {
+  .cw-layout.is-tabbed {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cw-tabs a,
+  .ov-phases button,
+  .ov-insight-row,
+  .ov-insight-row > svg,
+  .ov-actions a,
+  .cw-needs-badge {
+    transition: none;
+  }
+}

@@ -1,0 +1,4 @@
+Change request CHG-3003: Credit memo workflow
+Raised on 2027-10-15
+Developer: Aiko Sato
+Transport in the approved request: DEVK900703

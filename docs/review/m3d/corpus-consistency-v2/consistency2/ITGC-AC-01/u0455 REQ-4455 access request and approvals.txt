@@ -1,0 +1,8 @@
+Access request REQ-4455
+Requested for: Lia Moretti (u0455)
+Application: SAP ERP PRD; role requested: AR Clerk
+Requested by Lia Moretti on 2027-06-01
+
+Approval record
+- Mei Tanaka, line manager: approved AR Clerk in SAP ERP PRD on 2027-06-24 09:30
+- Helen Cho, application owner: approved AR Clerk in SAP ERP PRD on 2027-06-24 11:00

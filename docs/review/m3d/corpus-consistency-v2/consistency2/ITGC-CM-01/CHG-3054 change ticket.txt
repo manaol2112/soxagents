@@ -1,0 +1,4 @@
+Change request CHG-3054: Payment proposal layout
+Objects: ZFI_PAY_LAYOUT; transport DEVK900754
+Requested by Elena Rossi on 2027-08-05
+Developer: Ravi Kumar

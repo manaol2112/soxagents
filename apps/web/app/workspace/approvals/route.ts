@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-
+import { browserUrl } from "../../../src/browser-url";
 import { apiBaseUrl, sessionToken } from "../../../src/load-workspace";
 import { decisionNoticeFor, decisionWrite } from "../../../src/workflow-model";
 
@@ -29,7 +29,7 @@ export async function POST(request: Request) {
       headers,
       body: JSON.stringify(write.body),
       cache: "no-store",
-      signal: AbortSignal.timeout(3000),
+      signal: AbortSignal.timeout(15000),
     });
     status = response.status;
     if (status !== 200) {
@@ -51,7 +51,7 @@ function redirectNotice(
   fields: Record<string, string>,
   notice: string,
 ) {
-  const destination = new URL("/", request.url);
+  const destination = browserUrl("/", request);
   destination.searchParams.set("section", "approvals");
   const organizationId = fields.organization_id ?? "";
   const projectId = fields.project_id ?? "";

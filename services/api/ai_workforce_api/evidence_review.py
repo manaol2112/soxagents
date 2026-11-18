@@ -37,6 +37,7 @@ from ai_workforce_api.db import transaction
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.model_providers import CLAUDE_CONFIG, call_note
 from ai_workforce_api.models import ModelImage, ModelProvider, ModelRaw, ModelRequest, complete
+from ai_workforce_api.prompt_data import neutral
 from ai_workforce_api.settings import Settings
 
 CHECK_LABELS = {
@@ -207,9 +208,10 @@ def review_prompt(context: ReviewContext) -> str:
         f"{index}. {attribute}" for index, attribute in enumerate(context.attributes)
     )
     requested = "\n".join(f"- {item}" for item in context.requested) or "- (not itemised)"
-    return (
-        "Review these screenshots for the control below.\n\n"
-        "<control>\n"
+    # The control's record (a client's RCM may have written it), the file's name and the
+    # text read from its images are untrusted: none of the prompt's tags in them can close
+    # a block (prompt_data; security review, 17 November 2026).
+    control = neutral(
         f"Reference: {context.control_ref}\n"
         f"Title: {context.control_title}\n"
         f"Description: {context.control_activity[:1500]}\n"
@@ -217,9 +219,13 @@ def review_prompt(context: ReviewContext) -> str:
         f"Audit period: {context.period}\n"
         f"Test attributes:\n{attributes or '(none recorded)'}\n"
         f"Evidence requested:\n{requested}\n"
-        "</control>\n\n"
-        f"<file_name>{context.file_name[:200]}</file_name>\n"
-        f"<text_read_from_the_images>\n{context.ocr_text[:6000]}\n</text_read_from_the_images>"
+    )
+    return (
+        "Review these screenshots for the control below.\n\n"
+        f"<control>\n{control}</control>\n\n"
+        f"<file_name>{neutral(context.file_name[:200])}</file_name>\n"
+        f"<text_read_from_the_images>\n{neutral(context.ocr_text[:6000])}\n"
+        "</text_read_from_the_images>"
     )
 
 
@@ -248,7 +254,7 @@ def run_review(
             return check_review(raw.output, context), call_id, ""
         except ValueError as error:
             return None, call_id, f"The agent's review was rejected: {error}."
-    return None, call_id, call_note(status).replace("the rules were used", "a person reviews it")
+    return None, call_id, f"{call_note(status)} A person reviews the screenshot."
 
 
 def check_review(output: dict[str, Any], context: ReviewContext) -> Review:
@@ -508,7 +514,7 @@ def _draft_follow_up(
     """One draft per file. It is rewritten while still a draft, and sent only on approval."""
     original = cursor.execute(
         """
-        SELECT owner_user_id, recipient, follow_up_after_days, max_follow_ups
+        SELECT owner_user_id, recipient, follow_up_after_days, max_follow_ups, testing_phase
         FROM pbc_requests WHERE id = %s AND project_id = %s
         """,
         (request[0], project_id),
@@ -522,9 +528,9 @@ def _draft_follow_up(
         INSERT INTO pbc_requests (
             organization_id, project_id, operation_key, control_ref, owner_user_id,
             recipient, due_at, evidence_description, follow_up_after_days, max_follow_ups,
-            engagement_control_id
+            engagement_control_id, testing_phase, drafted_by
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'AGENT')
         ON CONFLICT (project_id, operation_key) DO UPDATE
         SET evidence_description = EXCLUDED.evidence_description,
             version = pbc_requests.version + 1, updated_at = clock_timestamp()
@@ -543,6 +549,8 @@ def _draft_follow_up(
             original[2],
             original[3],
             request[3],
+            # A follow-up serves the phase of the request it follows up.
+            original[4],
         ),
     ).fetchone()
     if row is None:

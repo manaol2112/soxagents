@@ -4,7 +4,6 @@ import { describe, it } from "node:test";
 import {
   approvalRequestId,
   approvalState,
-  attentionQueue,
   auditPhase,
   awaitingDecision,
   canDecide,
@@ -135,27 +134,6 @@ describe("workflow model", () => {
       [false, true, false, true],
     );
     assert.equal(parseEvidence([evidence({ attachment_refs: "x" })]), null);
-  });
-
-  it("puts decisions first in the queue, then blocked, late evidence, and review", () => {
-    const approvals = parseApprovals([approval()]) ?? [];
-    const late =
-      parseEvidence([evidence({ due_at: "2026-10-01T00:00:00Z" })]) ?? [];
-    const queue = attentionQueue({
-      tasks: [
-        { id: "r", title: "Review sample", status: "REVIEW" },
-        { id: "b", title: "Get listing", status: "BLOCKED" },
-        { id: "d", title: "Done", status: "SUCCEEDED" },
-      ],
-      evidence: late,
-      approvals,
-      now,
-    });
-    assert.deepEqual(
-      queue.map((item) => item.kind),
-      ["approval", "blocked", "evidence", "review"],
-    );
-    assert.equal(queue[0]?.title, "Send an evidence request");
   });
 
   it("maps work, evidence, and decisions onto the audit lifecycle", () => {
@@ -494,41 +472,6 @@ describe("inbound replies", () => {
     assert.equal(parseInbound([reply({ match_status: "AUTO" })]), null);
     assert.equal(parseInbound([reply({ attachments: [{}] })]), null);
     assert.equal(parseInbound({}), null);
-  });
-
-  it("puts unmatched mail and replies to review in the queue", () => {
-    const items =
-      parseInbound([
-        reply(),
-        reply({
-          id: "66666666-6666-7666-8666-666666666666",
-          pbc_request_id: null,
-          request_reference: null,
-          match_status: "UNMATCHED",
-          match_method: "none",
-          unmatched_reason: "sender_mismatch",
-          review_state: "NOT_APPLICABLE",
-        }),
-        reply({
-          id: "77777777-7777-7777-8777-777777777777",
-          review_state: "REVIEWED",
-        }),
-      ]) ?? [];
-    const queue = attentionQueue({
-      tasks: [],
-      evidence: [],
-      approvals: [],
-      now,
-      inbound: items,
-    });
-    assert.deepEqual(
-      queue.map((item) => item.kind),
-      ["triage", "reply"],
-    );
-    assert.match(
-      queue[0]?.detail ?? "",
-      /sender is not the request's recipient/,
-    );
   });
 
   it("builds triage and review writes from form fields", () => {

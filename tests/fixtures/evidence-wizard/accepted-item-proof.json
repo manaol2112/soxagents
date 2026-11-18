@@ -1,0 +1,23 @@
+{
+ "agent_placements": {
+  "2e9369de-daed-4b9f-bef1-5fb68472fef3": [
+   "NEEDS_PERSON",
+   "AGENT",
+   []
+  ],
+  "6f39f3d4-083d-41f8-b76e-c8e43c3e2db0": [
+   "NEEDS_PERSON",
+   "AGENT",
+   []
+  ]
+ },
+ "files_now": [
+  "c16655cf-5f7f-4edc-8a49-a90ec5ad9877"
+ ],
+ "held_when_accepted": [
+  "c16655cf-5f7f-4edc-8a49-a90ec5ad9877"
+ ],
+ "sufficiency_after": "ACCEPTED",
+ "sufficiency_by": "de-accepted-583e-002274d9@example.com",
+ "supported_passages": []
+}

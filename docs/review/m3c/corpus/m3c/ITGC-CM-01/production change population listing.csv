@@ -1,0 +1,9 @@
+Change ID,Description,System,Transport deployed,Deployed on,Deployed by
+CHG-2001,Vendor payment terms validation,SAP ERP PRD,DEVK900501,2027-01-18,basis.oivanova
+CHG-2002,GL account mapping update,SAP ERP PRD,DEVK900502,2027-02-18,basis.oivanova
+CHG-2003,Invoice tolerance check,SAP ERP PRD,DEVK900503,2027-03-12,basis.oivanova
+CHG-2004,Credit limit workflow,SAP ERP PRD,DEVK900504,2027-04-12,basis.oivanova
+CHG-2005,Payment run report fields,SAP ERP PRD,DEVK900519,2027-05-15,basis.oivanova
+CHG-2006,Bank file format change,SAP ERP PRD,DEVK900506,2027-06-11,basis.oivanova
+CHG-2007,Asset depreciation key,SAP ERP PRD,DEVK900507,2027-07-13,basis.oivanova
+CHG-2008,Customer master duplicate check,SAP ERP PRD,DEVK900508,2027-08-12,basis.oivanova

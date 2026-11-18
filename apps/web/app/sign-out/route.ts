@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-
+import { browserUrl } from "../../src/browser-url";
 import { apiBaseUrl, sessionToken } from "../../src/load-workspace";
 
 export async function POST(request: Request) {
@@ -24,7 +24,7 @@ export async function POST(request: Request) {
       });
     }
   }
-  const redirect = NextResponse.redirect(new URL("/", request.url), 303);
+  const redirect = NextResponse.redirect(browserUrl("/", request), 303);
   redirect.cookies.set("aw_session", "", {
     httpOnly: true,
     sameSite: "lax",

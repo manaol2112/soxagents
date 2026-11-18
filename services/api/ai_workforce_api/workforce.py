@@ -275,11 +275,6 @@ def register_workforce(app: FastAPI, settings: Settings) -> None:
         )
 
 
-def is_reserved_key(agent_key: str) -> bool:
-    """Standard worker keys belong to the platform. A custom agent cannot take one."""
-    return agent_key in STANDARD_KEYS
-
-
 def sync_standard_workforce(connection: psycopg.Connection[Any]) -> SyncResult:
     """Make the database match the reviewed roster. Safe to run on every deploy."""
     problems = roster_problems()
@@ -403,7 +398,8 @@ _STAFF_OPEN_ENGAGEMENTS = """
         SELECT p.organization_id, p.id, d.id, d.revision
         FROM projects AS p
         JOIN agent_definitions AS d ON d.organization_id = p.organization_id
-        WHERE p.status <> 'ARCHIVED' AND d.source = 'standard' AND d.status = 'ACTIVE'
+        WHERE p.status <> 'ARCHIVED' AND p.deleted_at IS NULL
+          AND d.source = 'standard' AND d.status = 'ACTIVE'
         ORDER BY p.id, d.agent_key
         ON CONFLICT (project_id, agent_definition_id) DO NOTHING
         RETURNING id, organization_id, project_id, agent_definition_id

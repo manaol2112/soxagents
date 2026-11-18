@@ -1,0 +1,8 @@
+Access request REQ-4401
+Requested for: Hana Kobayashi (u0401)
+Application: SAP ERP PRD
+Role requested: AP Clerk
+
+Approvals
+- Approved by Rafael Duarte (line manager) on 2027-10-02
+- Approved by Helen Cho (application owner) on 2027-10-02

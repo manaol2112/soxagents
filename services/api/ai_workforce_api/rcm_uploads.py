@@ -18,6 +18,7 @@ import psycopg
 from fastapi import FastAPI, HTTPException, Request
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 
 from ai_workforce_api.authorization import (
     Action,
@@ -26,7 +27,7 @@ from ai_workforce_api.authorization import (
     _session_principal,
     authorize,
 )
-from ai_workforce_api.controls import DOMAIN_AGENTS, default_templates
+from ai_workforce_api.controls import DOMAIN_AGENTS, runs_on_a_system
 from ai_workforce_api.db import transaction
 from ai_workforce_api.model_providers import live_model
 from ai_workforce_api.onboarding import (
@@ -38,6 +39,8 @@ from ai_workforce_api.onboarding import (
     _reset_templates,
     _run,
     _snapshot,
+    authorize_controls_setup,
+    pending_reviews,
 )
 from ai_workforce_api.rcm_import import (
     FIELDS,
@@ -51,6 +54,7 @@ from ai_workforce_api.rcm_import import (
     build,
     check_fields,
     check_values,
+    column_values,
     data_rows,
     detect_header,
     headers,
@@ -67,7 +71,14 @@ from ai_workforce_api.rcm_systems import (
     basis,
 )
 from ai_workforce_api.rcm_terms import reset_terms
+from ai_workforce_api.scope_changes import reconcile_scope
 from ai_workforce_api.settings import Settings
+from ai_workforce_api.system_review_queue import (
+    schedule_system_reviews,
+    track_reviews_for_project,
+)
+from ai_workforce_api.upload_body import read_body
+from ai_workforce_api.workpapers import default_template
 
 logger = logging.getLogger(__name__)
 _UNSAFE = re.compile(r"(?i)\b(?:https?://|www\.)|[<>]")
@@ -118,6 +129,9 @@ class TermsBody(BaseModel):
     source: str | None
     note: str
     model_available: bool
+    # One plain sentence for the person when the agent's last mapping gave no usable answer
+    # (B1i): it did not finish, or the reviewed rules mapped in its place; "" otherwise.
+    failure_note: str = ""
 
 
 class ControlPreview(BaseModel):
@@ -165,6 +179,22 @@ class SystemsBody(BaseModel):
     note: str
     version: int
     proposals: list[SystemView]
+    # One plain sentence for the person when the agent's last scan gave no usable answer
+    # (B1i): it did not finish, or the reviewed rules scanned in its place; "" otherwise.
+    failure_note: str = ""
+
+
+def run_failure_note(status: str, source: str | None, note: str, what: str) -> str:
+    """TermsBody.failure_note and SystemsBody.failure_note, from the run's own status,
+    source and note: a run that did not finish, or one the reviewed rules stood in for."""
+    if status == "FAILED":
+        return (
+            f"{note.strip() or 'The agent did not finish.'} Nothing of this run is kept. "
+            f"Run it again, or set the {what} yourself."
+        )
+    if source == "FALLBACK" and note.strip():
+        return f"{note.strip()} Check the {what} before you import, or run it again."
+    return ""
 
 
 class SystemChoice(BaseModel):
@@ -222,6 +252,9 @@ class MappingUpdate(BaseModel):
 
 class ImportConfirm(BaseModel):
     version: int = Field(ge=1)
+    # REPLACE: the engagement's controls become this sheet's. ADD: this sheet joins the
+    # controls already imported (a control with the same ID is replaced by its new row).
+    mode: Literal["REPLACE", "ADD"] = "REPLACE"
 
 
 class OwnerEmail(BaseModel):
@@ -254,15 +287,18 @@ def register_rcm_uploads(
     async def upload(
         organization_id: UUID, project_id: UUID, file_name: str, request: Request
     ) -> ImportBody:
-        content = await request.body()
-        if len(content) > MAX_BYTES:
-            raise HTTPException(status_code=413, detail="file is too large")
-        body = run(
-            request,
-            lambda c, p: _upload(c, p, organization_id, project_id, file_name, content),
-        )
-        _scan(scans, body)
-        return body
+        content = await read_body(request, MAX_BYTES, "file is too large")
+
+        def stored() -> ImportBody:
+            body = run(
+                request,
+                lambda c, p: _upload(c, p, organization_id, project_id, file_name, content),
+            )
+            _scan(scans, body)
+            return body
+
+        # Reading the workbook and storing it run off the event loop (upload_body).
+        return await run_in_threadpool(stored)
 
     @app.get(f"{base}/rcm/uploads/{{import_id}}")
     def read(
@@ -337,10 +373,12 @@ def register_rcm_uploads(
         body: ImportConfirm,
         request: Request,
     ) -> OnboardingBody:
-        return run(
+        result = run(
             request,
             lambda c, p: _import(c, p, organization_id, project_id, import_id, body),
         )
+        schedule_system_reviews(scans, pending_reviews(result))
+        return result
 
     @app.post(f"{base}/rcm/uploads/{{import_id}}/discard")
     def discard(
@@ -474,7 +512,7 @@ def _upload(
     file_name: str,
     content: bytes,
 ) -> ImportBody:
-    _authorize_setup(connection, principal, organization_id, project_id)
+    authorize_controls_setup(connection, principal, organization_id, project_id)
     # The name is a label only: no path, nothing that could be read as one.
     label = re.split(r"[\\/]", file_name)[-1].strip()[:200]
     label = re.sub(r"[\x00-\x1f\x7f]", "", label)
@@ -485,7 +523,9 @@ def _upload(
     header_row = detect_header(sheets[index].rows)
     names = headers(sheets[index].rows, header_row)
     remembered_columns, remembered_values = _remembered(connection, project_id)
-    fields = suggest_fields(names, remembered_columns)
+    fields = suggest_fields(
+        names, remembered_columns, column_values(sheets[index].rows, header_row)
+    )
     values = _suggested_values(sheets[index].rows, header_row, fields, remembered_values)
     with transaction(connection) as cursor:
         cursor.execute(
@@ -560,7 +600,7 @@ def _layout(
     import_id: UUID,
     body: LayoutUpdate,
 ) -> ImportBody:
-    _authorize_setup(connection, principal, organization_id, project_id)
+    authorize_controls_setup(connection, principal, organization_id, project_id)
     remembered_columns, remembered_values = _remembered(connection, project_id)
     with transaction(connection) as cursor:
         stored = _open(cursor, project_id, import_id, body.version)
@@ -570,7 +610,7 @@ def _layout(
         if body.header_row > max(len(rows), 1):
             raise ValueError("header row is outside the sheet")
         names = headers(rows, body.header_row)
-        fields = suggest_fields(names, remembered_columns)
+        fields = suggest_fields(names, remembered_columns, column_values(rows, body.header_row))
         values = _suggested_values(rows, body.header_row, fields, remembered_values)
         cursor.execute(
             """
@@ -594,7 +634,7 @@ def _mapping(
     import_id: UUID,
     body: MappingUpdate,
 ) -> ImportBody:
-    _authorize_setup(connection, principal, organization_id, project_id)
+    authorize_controls_setup(connection, principal, organization_id, project_id)
     with transaction(connection) as cursor:
         stored = _open(cursor, project_id, import_id, body.version)
         names = headers(stored.rows, stored.header_row)
@@ -627,8 +667,9 @@ def _import(
     import_id: UUID,
     body: ImportConfirm,
 ) -> OnboardingBody:
-    """Replace the engagement's controls with the mapped rows, all at once or not at all."""
-    _authorize_setup(connection, principal, organization_id, project_id)
+    """Import the mapped rows, all at once or not at all: replacing the engagement's
+    controls, or adding to the ones an earlier sheet imported."""
+    authorize_controls_setup(connection, principal, organization_id, project_id)
     existing = {app.name.lower(): app.id for app in _applications(connection, project_id)}
     with transaction(connection) as cursor:
         stored = _open(cursor, project_id, import_id, body.version)
@@ -654,66 +695,98 @@ def _import(
                     organization_id,
                     project_id,
                     name,
-                    "Identified from the client RCM." if confirmed is not None else "",
+                    "Identified from the organization's RCM." if confirmed is not None else "",
                     layers.get(name.lower(), "APPLICATION"),
                 ),
             ).fetchone()
             if created is not None:
                 existing[name.lower()] = created[0]
         every_app = list(dict.fromkeys(existing.values()))
-        cursor.execute("DELETE FROM engagement_controls WHERE project_id = %s", (project_id,))
+        # A control replaced here takes the matches to the standards proposed for it.
+        if body.mode == "ADD":
+            # Library controls still give way to the upload; same control IDs are replaced.
+            replaced_refs = [control.control_ref.upper() for control in result.controls]
+            cursor.execute(
+                """
+                DELETE FROM library_match_runs WHERE project_id = %s AND engagement_control_id IN (
+                    SELECT id FROM engagement_controls
+                    WHERE project_id = %s AND (source <> 'UPLOAD' OR upper(control_ref) = ANY(%s)))
+                """,
+                (project_id, project_id, replaced_refs),
+            )
+            cursor.execute(
+                """
+                DELETE FROM engagement_controls
+                WHERE project_id = %s AND (source <> 'UPLOAD' OR upper(control_ref) = ANY(%s))
+                """,
+                (project_id, replaced_refs),
+            )
+        else:
+            cursor.execute("DELETE FROM library_match_runs WHERE project_id = %s", (project_id,))
+            cursor.execute("DELETE FROM engagement_controls WHERE project_id = %s", (project_id,))
         for control in result.controls:
-            design, effectiveness = default_templates(control.nature)
             apps = [
                 existing[name.lower()]
                 for name in _control_systems(control.control_ref, control.applications, confirmed)
                 if name.lower() in existing
             ]
-            cursor.execute(
-                """
-                INSERT INTO engagement_controls (
-                    organization_id, project_id, library_key, library_version, control_ref,
-                    domain, title, risk, activity, frequency, nature, key_control,
-                    owner_name, owner_email, application_ids, test_attributes, pbc_items,
-                    design_template_key, effectiveness_template_key, agent_key, source,
-                    rcm_import_id, source_row, domain_label, frequency_label, nature_label,
-                    custom_fields
-                )
-                VALUES (
-                    %s, %s, %s, 0, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, 'UPLOAD', %s, %s, %s, %s, %s, %s
-                )
-                """,
-                (
-                    organization_id,
-                    project_id,
-                    f"upload:{import_id.hex[:12]}:{control.row}",
-                    control.control_ref,
-                    control.domain,
-                    control.title,
-                    control.risk,
-                    control.activity,
-                    control.frequency,
-                    control.nature,
-                    control.key_control,
-                    control.owner_name,
-                    control.owner_email,
-                    list(dict.fromkeys(apps)) or every_app,
-                    Json(control.test_attributes),
-                    Json(control.pbc_items),
-                    design,
-                    effectiveness,
-                    DOMAIN_AGENTS[control.domain],
-                    import_id,
-                    control.row,
-                    control.domain_label,
-                    control.frequency_label,
-                    control.nature_label,
-                    Json(
-                        [{"label": label, "value": value} for label, value in control.custom_fields]
-                    ),
-                ),
+            # One instance per system the control relies on (Milestone 8.5); a control
+            # that names none covers every in-scope system. A business process control
+            # belongs to its process: one row, no system.
+            targets: list[UUID | None] = (
+                list(dict.fromkeys(apps)) or list(every_app) or [None]
+                if runs_on_a_system(control.domain)
+                else [None]
             )
+            for app in targets:
+                cursor.execute(
+                    """
+                    INSERT INTO engagement_controls (
+                        organization_id, project_id, library_key, library_version,
+                        control_ref, domain, title, risk, activity, frequency, nature,
+                        key_control, owner_name, owner_email, application_ids,
+                        test_attributes, pbc_items, template_key, agent_key, source,
+                        rcm_import_id, source_row, domain_label, frequency_label,
+                        nature_label, custom_fields, engagement_application_id
+                    )
+                    VALUES (
+                        %s, %s, %s, 0, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, 'UPLOAD', %s, %s, %s, %s, %s, %s, %s
+                    )
+                    """,
+                    (
+                        organization_id,
+                        project_id,
+                        f"upload:{import_id.hex[:12]}:{control.row}",
+                        control.control_ref,
+                        control.domain,
+                        control.title,
+                        control.risk,
+                        control.activity,
+                        control.frequency,
+                        control.nature,
+                        control.key_control,
+                        control.owner_name,
+                        control.owner_email,
+                        [] if app is None else [app],
+                        Json(control.test_attributes),
+                        Json(control.pbc_items),
+                        default_template(control.domain),
+                        DOMAIN_AGENTS[control.domain],
+                        import_id,
+                        control.row,
+                        control.domain_label,
+                        control.frequency_label,
+                        control.nature_label,
+                        Json(
+                            [
+                                {"label": label, "value": value}
+                                for label, value in control.custom_fields
+                            ]
+                        ),
+                        app,
+                    ),
+                )
         cursor.execute(
             """
             UPDATE rcm_imports
@@ -724,6 +797,8 @@ def _import(
             (principal.id, len(result.controls), import_id),
         )
         _reset_templates(cursor, project_id)
+        # Every system, new or not, is scoped again against the imported controls.
+        track_reviews_for_project(cursor, organization_id, project_id, principal.id)
         _audit(
             cursor,
             organization_id,
@@ -732,11 +807,19 @@ def _import(
             "onboarding.rcm_imported",
             {
                 "controls": len(result.controls),
+                "mode": body.mode,
                 "skipped_rows": len(result.skipped),
                 "new_applications": len(new_names),
                 "systems_source": stored.systems_source if confirmed is not None else None,
             },
         )
+    # The imported controls are matched to the firm's standards at once, for a person to
+    # confirm the strong matches together (standard_adoption.py).
+    from ai_workforce_api.standard_adoption import match_after_import
+
+    match_after_import(connection, project_id, principal.id)
+    # After launch, each control imported gets its work, as any control added then does.
+    reconcile_scope(connection, organization_id, project_id, principal.id)
     return _snapshot(connection, organization_id, project_id)
 
 
@@ -747,7 +830,7 @@ def _discard(
     project_id: UUID,
     import_id: UUID,
 ) -> OnboardingBody:
-    _authorize_setup(connection, principal, organization_id, project_id)
+    authorize_controls_setup(connection, principal, organization_id, project_id)
     with transaction(connection) as cursor:
         done = cursor.execute(
             """
@@ -770,7 +853,8 @@ def _owner_emails(
     body: OwnerEmails,
 ) -> OnboardingBody:
     """Client RCMs name owners without emails. Fill the email once per owner name."""
-    _authorize_setup(connection, principal, organization_id, project_id)
+    # Owners are filled on the controls themselves, which stay editable after launch.
+    _authorize_setup(connection, principal, organization_id, project_id, after_start=True)
     entries = [
         (" ".join(item.owner_name.split()), item.owner_email.strip().lower())
         for item in body.entries
@@ -810,7 +894,7 @@ def _systems(
     body: SystemsUpdate,
 ) -> ImportBody:
     """A person confirms the systems: renames, sets the layer, or leaves one out."""
-    _authorize_setup(connection, principal, organization_id, project_id)
+    authorize_controls_setup(connection, principal, organization_id, project_id)
     with transaction(connection) as cursor:
         stored = _load(cursor, project_id, import_id, lock=True)
         if stored.status != "MAPPING":
@@ -862,7 +946,7 @@ def _rescan(
     project_id: UUID,
     import_id: UUID,
 ) -> ImportBody:
-    _authorize_setup(connection, principal, organization_id, project_id)
+    authorize_controls_setup(connection, principal, organization_id, project_id)
     with transaction(connection) as cursor:
         stored = _load(cursor, project_id, import_id, lock=True)
         if stored.status != "MAPPING":
@@ -879,7 +963,7 @@ def _remap(
     import_id: UUID,
 ) -> ImportBody:
     """A person asks the agent to map every term again, replacing the current choices."""
-    _authorize_setup(connection, principal, organization_id, project_id)
+    authorize_controls_setup(connection, principal, organization_id, project_id)
     with transaction(connection) as cursor:
         stored = _load(cursor, project_id, import_id, lock=True)
         if stored.status != "MAPPING":
@@ -990,9 +1074,10 @@ def _body(connection: psycopg.Connection[Any], project_id: UUID, stored: _Stored
     names = headers(rows, stored.header_row)
     body_rows = data_rows(rows, stored.header_row)
     fields = stored.column_fields
+    samples = column_values(rows, stored.header_row)
     if len(fields) != len(names):
-        fields = suggest_fields(names)
-    suggested = suggest_fields(names)
+        fields = suggest_fields(names, samples=samples)
+    suggested = suggest_fields(names, samples=samples)
     columns = [
         ImportColumn(
             index=index,
@@ -1081,11 +1166,17 @@ def _body(connection: psycopg.Connection[Any], project_id: UUID, stored: _Stored
             source=stored.terms_source,
             note=stored.terms_note,
             model_available=False,
+            failure_note=run_failure_note(
+                stored.terms_status, stored.terms_source, stored.terms_note, "terms"
+            ),
         ),
         systems=SystemsBody(
             status=stored.systems_status,
             source=stored.systems_source,
             note=stored.systems_note,
+            failure_note=run_failure_note(
+                stored.systems_status, stored.systems_source, stored.systems_note, "systems"
+            ),
             version=stored.systems_version,
             proposals=[
                 SystemView(**system.model_dump(), controls=len(system.control_refs))

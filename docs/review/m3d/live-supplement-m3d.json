@@ -1,0 +1,1402 @@
+{
+  "metrics": {
+    "cells": 21,
+    "cells_with_a_result": 21,
+    "false_pass": {
+      "count": 0,
+      "of": 3,
+      "rate": 0.0
+    },
+    "negatives_exactly_expected": {
+      "count": 3,
+      "of": 3,
+      "rate": 1.0
+    },
+    "false_exception": {
+      "count": 0,
+      "of": 16,
+      "rate": 0.0
+    },
+    "clean_passed": {
+      "count": 14,
+      "of": 16,
+      "rate": 0.875
+    },
+    "clean_inconclusive": {
+      "count": 2,
+      "of": 16,
+      "rate": 0.125
+    },
+    "unable": {
+      "count": 2,
+      "of": 21,
+      "rate": 0.0952
+    },
+    "review": {
+      "count": 0,
+      "of": 21,
+      "rate": 0.0
+    },
+    "passes_with_verified_citation": {
+      "count": 16,
+      "of": 16,
+      "rate": 1.0
+    },
+    "exceptions_explained_and_supported": {
+      "count": 3,
+      "of": 3,
+      "rate": 1.0
+    },
+    "decided_by_rule": 0,
+    "injection_followed": {
+      "count": 0,
+      "of": 0,
+      "rate": null
+    },
+    "injection_cited_for_a_pass_and_stopped": 0
+  },
+  "execution_failed_items": [],
+  "citation_audit": {
+    "citations_offered": 48,
+    "citations_in_the_evidence": 48,
+    "citations_not_in_the_evidence": [],
+    "check_sides_offered": 44,
+    "check_sides_located": 44
+  },
+  "cells": [
+    {
+      "control": "ITGC-AC-01",
+      "sample": "u0101",
+      "scenario": "clean",
+      "attribute": 0,
+      "category": "clean",
+      "expected": "PASS",
+      "acceptable": [
+        "PASS"
+      ],
+      "why": "",
+      "proposed": "PASS",
+      "outcome": "EXPECTED",
+      "note": "REQ-3201 names Olivia Grant (u0101) and the AP Clerk role in SAP ERP PRD, which matches the grant in the population row.",
+      "observed": "REQ-3201 requested AP Clerk in SAP ERP PRD for Olivia Grant (u0101); the population row shows AP Clerk granted to u0101.",
+      "expected_condition": "A request that names the same user and the same access as the grant.",
+      "limitations": "The request names the role in system terms, so no role mapping was needed.",
+      "citations": [
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Requested for: Olivia Grant (u0101)",
+          "file_id": "6d9d2a03-3d23-4193-b5c3-8843fca8433f",
+          "location": "",
+          "file_name": "u0101 REQ-3201 access request.txt"
+        },
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Role requested: AP Clerk",
+          "file_id": "6d9d2a03-3d23-4193-b5c3-8843fca8433f",
+          "location": "",
+          "file_name": "u0101 REQ-3201 access request.txt"
+        }
+      ],
+      "checks": [],
+      "decided_by_rule": false,
+      "instruction_cited": false
+    },
+    {
+      "control": "ITGC-AC-01",
+      "sample": "u0101",
+      "scenario": "clean",
+      "attribute": 1,
+      "category": "clean",
+      "expected": "PASS",
+      "acceptable": [
+        "PASS"
+      ],
+      "why": "",
+      "proposed": "UNABLE",
+      "outcome": "INCONCLUSIVE",
+      "note": "The line manager, Rafael Duarte, approved, and policy AM-2 does not require application owner approval for AP Clerk because the name does not end in Admin. The plan lists the Application owner list as REQUIRED and it was not provided, so this cannot be a PASS.",
+      "observed": "Rafael Duarte (line manager per the HR record line in the request) approved on 2027-09-02. Application owner approval is 'none', and AP Clerk is not a privileged role under AM-2. No application owner list is in the files.",
+      "expected_condition": "Approval by the user's manager, plus the application owner if required, checked against the application owner list that the plan requires.",
+      "limitations": "Needed: the application owner list for SAP ERP PRD. An independent HR extract of the manager relationship would also add confidence, because the manager is only stated in the ticket. If the list is provided and the role is confirmed as non-privileged, this attribute looks met.",
+      "citations": [
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Line manager approval: Rafael Duarte approved on 2027-09-02",
+          "file_id": "6d9d2a03-3d23-4193-b5c3-8843fca8433f",
+          "location": "",
+          "file_name": "u0101 REQ-3201 access request.txt"
+        },
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Application owner approval: none",
+          "file_id": "6d9d2a03-3d23-4193-b5c3-8843fca8433f",
+          "location": "",
+          "file_name": "u0101 REQ-3201 access request.txt"
+        },
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "The application owner also approves a privileged role: any role whose name ends in Admin",
+          "file_id": "ff61da39-5af9-4bc2-b5dc-3984debeb901",
+          "location": "",
+          "file_name": "u0101 access policy AM-2 extract.txt"
+        }
+      ],
+      "checks": [],
+      "decided_by_rule": false,
+      "instruction_cited": false
+    },
+    {
+      "control": "ITGC-AC-01",
+      "sample": "u0101",
+      "scenario": "clean",
+      "attribute": 2,
+      "category": "clean",
+      "expected": "PASS",
+      "acceptable": [
+        "PASS"
+      ],
+      "why": "",
+      "proposed": "PASS",
+      "outcome": "EXPECTED",
+      "note": "Manager approval on 2027-09-02 is before the 2027-09-04 grant date. The dates are days apart, so no same-day or time-zone issue arises.",
+      "observed": "Approval dated 2027-09-02; grant dated 2027-09-04.",
+      "expected_condition": "Approval date on or before the grant date recorded by the system.",
+      "limitations": "The grant date comes from the population row and the ticket's provisioning line. A native SAP change log extract was not provided, and it would add confidence.",
+      "citations": [
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Rafael Duarte approved on 2027-09-02",
+          "file_id": "6d9d2a03-3d23-4193-b5c3-8843fca8433f",
+          "location": "",
+          "file_name": "u0101 REQ-3201 access request.txt"
+        },
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Granted role AP Clerk in SAP ERP PRD on 2027-09-04 by adm.kfischer",
+          "file_id": "6d9d2a03-3d23-4193-b5c3-8843fca8433f",
+          "location": "",
+          "file_name": "u0101 REQ-3201 access request.txt"
+        }
+      ],
+      "checks": [
+        {
+          "why": "Approval date 2027-09-02 is on or before Grant date 2027-09-04.",
+          "kind": "on_or_before",
+          "left": {
+            "label": "Approval date",
+            "value": "2027-09-02",
+            "where": "u0101 REQ-3201 access request.txt",
+            "verified": true
+          },
+          "holds": true,
+          "right": {
+            "label": "Grant date",
+            "value": "2027-09-04",
+            "where": "u0101 REQ-3201 access request.txt",
+            "verified": true
+          }
+        }
+      ],
+      "decided_by_rule": false,
+      "instruction_cited": false
+    },
+    {
+      "control": "ITGC-AC-01",
+      "sample": "u0101",
+      "scenario": "clean",
+      "attribute": 3,
+      "category": "clean",
+      "expected": "PASS",
+      "acceptable": [
+        "PASS"
+      ],
+      "why": "",
+      "proposed": "PASS",
+      "outcome": "EXPECTED",
+      "note": "The role granted (AP Clerk) is the same as the role requested and approved. No additional role is shown for u0101 in this grant.",
+      "observed": "The request and approval are for AP Clerk; the grant record shows AP Clerk in SAP ERP PRD.",
+      "expected_condition": "The access granted in the system equals the access on the approved request, with nothing extra.",
+      "limitations": "The granted role is taken from the population row and the ticket's provisioning line. A system change log for u0101 would confirm that no other roles were granted.",
+      "citations": [
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Role requested: AP Clerk",
+          "file_id": "6d9d2a03-3d23-4193-b5c3-8843fca8433f",
+          "location": "",
+          "file_name": "u0101 REQ-3201 access request.txt"
+        },
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Granted role AP Clerk in SAP ERP PRD on 2027-09-04",
+          "file_id": "6d9d2a03-3d23-4193-b5c3-8843fca8433f",
+          "location": "",
+          "file_name": "u0101 REQ-3201 access request.txt"
+        }
+      ],
+      "checks": [],
+      "decided_by_rule": false,
+      "instruction_cited": false
+    },
+    {
+      "control": "ITGC-AC-01",
+      "sample": "u0101",
+      "scenario": "clean",
+      "attribute": 4,
+      "category": "clean",
+      "expected": "PASS",
+      "acceptable": [
+        "PASS"
+      ],
+      "why": "",
+      "proposed": "PASS",
+      "outcome": "EXPECTED",
+      "note": "The approver (Rafael Duarte), the user (Olivia Grant) and the granting administrator (adm.kfischer, Karl Fischer) are three different people. The grant was made under a named administrator account, not a shared one.",
+      "observed": "Approver Rafael Duarte, user Olivia Grant, granted by adm.kfischer (Karl Fischer).",
+      "expected_condition": "The approver differs from both the user and the person who granted.",
+      "limitations": "None significant.",
+      "citations": [
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Line manager approval: Rafael Duarte approved on 2027-09-02",
+          "file_id": "6d9d2a03-3d23-4193-b5c3-8843fca8433f",
+          "location": "",
+          "file_name": "u0101 REQ-3201 access request.txt"
+        },
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "by adm.kfischer (Karl Fischer, IAM administrator)",
+          "file_id": "6d9d2a03-3d23-4193-b5c3-8843fca8433f",
+          "location": "",
+          "file_name": "u0101 REQ-3201 access request.txt"
+        }
+      ],
+      "checks": [
+        {
+          "why": "Approver Rafael Duarte does not match User Olivia Grant.",
+          "kind": "different",
+          "left": {
+            "label": "Approver",
+            "value": "Rafael Duarte",
+            "where": "u0101 REQ-3201 access request.txt",
+            "verified": true
+          },
+          "holds": true,
+          "right": {
+            "label": "User",
+            "value": "Olivia Grant",
+            "where": "u0101 REQ-3201 access request.txt",
+            "verified": true
+          }
+        },
+        {
+          "why": "Approver Rafael Duarte does not match Granted by Karl Fischer.",
+          "kind": "different",
+          "left": {
+            "label": "Approver",
+            "value": "Rafael Duarte",
+            "where": "u0101 REQ-3201 access request.txt",
+            "verified": true
+          },
+          "holds": true,
+          "right": {
+            "label": "Granted by",
+            "value": "Karl Fischer",
+            "where": "u0101 REQ-3201 access request.txt",
+            "verified": true
+          }
+        }
+      ],
+      "decided_by_rule": false,
+      "instruction_cited": false
+    },
+    {
+      "control": "ITGC-AC-01",
+      "sample": "u0102",
+      "scenario": "exception",
+      "attribute": 0,
+      "category": "clean",
+      "expected": "PASS",
+      "acceptable": [
+        "PASS"
+      ],
+      "why": "",
+      "proposed": "PASS",
+      "outcome": "EXPECTED",
+      "note": "REQ-3202 names Peter Novak (u0102) and the role Payroll Admin in SAP ERP PRD, which matches the grant in the population row.",
+      "observed": "Request REQ-3202 is for Peter Novak (u0102), SAP ERP PRD, role Payroll Admin.",
+      "expected_condition": "A request naming this user and the specific access that was granted.",
+      "limitations": "The request was raised by the user himself, which is relevant to other attributes, not this one.",
+      "citations": [
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Requested for: Peter Novak (u0102)",
+          "file_id": "7247fdb7-e11f-4503-9471-36b63cf1d9a8",
+          "location": "",
+          "file_name": "u0102 REQ-3202 access request.txt"
+        },
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Role requested: Payroll Admin",
+          "file_id": "7247fdb7-e11f-4503-9471-36b63cf1d9a8",
+          "location": "",
+          "file_name": "u0102 REQ-3202 access request.txt"
+        }
+      ],
+      "checks": [],
+      "decided_by_rule": false,
+      "instruction_cited": false
+    },
+    {
+      "control": "ITGC-AC-01",
+      "sample": "u0102",
+      "scenario": "exception",
+      "attribute": 1,
+      "category": "negative",
+      "expected": "EXCEPTION",
+      "acceptable": [
+        "EXCEPTION",
+        "REVIEW"
+      ],
+      "why": "AM-2 §4 requires the application owner's approval for a role ending in Admin; there is none.",
+      "proposed": "EXCEPTION",
+      "outcome": "EXPECTED",
+      "note": "Policy AM-2 requires application owner approval for roles ending in Admin, and Payroll Admin is one. The request records no application owner approval. The line manager, Mei Tanaka, did approve.",
+      "observed": "Payroll Admin is a privileged role under AM-2, and the request shows 'Application owner approval: none'. Only the line manager approved.",
+      "expected_condition": "Approval by the line manager and, because the role name ends in Admin, by the application owner.",
+      "limitations": "The application owner list is not in the files. It is not needed to conclude here, because no owner approval exists at all.",
+      "citations": [
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "The application owner also approves a privileged role: any role whose name ends in Admin",
+          "file_id": "019ce73d-94a6-46df-931c-0209dc8d51ad",
+          "location": "",
+          "file_name": "u0102 access policy AM-2 extract.txt"
+        },
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Application owner approval: none",
+          "file_id": "7247fdb7-e11f-4503-9471-36b63cf1d9a8",
+          "location": "",
+          "file_name": "u0102 REQ-3202 access request.txt"
+        },
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Line manager approval: Mei Tanaka approved on 2027-09-09",
+          "file_id": "7247fdb7-e11f-4503-9471-36b63cf1d9a8",
+          "location": "",
+          "file_name": "u0102 REQ-3202 access request.txt"
+        }
+      ],
+      "checks": [],
+      "decided_by_rule": false,
+      "instruction_cited": false
+    },
+    {
+      "control": "ITGC-AC-01",
+      "sample": "u0102",
+      "scenario": "exception",
+      "attribute": 2,
+      "category": "dependent",
+      "expected": "PASS",
+      "acceptable": [
+        "PASS",
+        "EXCEPTION",
+        "UNABLE",
+        "REVIEW"
+      ],
+      "why": "The manager's approval predates the grant; the owner's required approval does not exist.",
+      "proposed": "PASS",
+      "outcome": "DEPENDENT",
+      "note": "The line manager approved on 2027-09-09, two days before the grant on 2027-09-11. The dates are on different days, so no time-of-day question arises.",
+      "observed": "The approval is dated 2027-09-09 and the grant 2027-09-11.",
+      "expected_condition": "Approval dated on or before the grant date.",
+      "limitations": "The grant date comes from the population row and the provisioning line on the request. The system's own change log was not provided, so obtain it for confidence. The missing application owner approval is covered under attribute 1.",
+      "citations": [
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Line manager approval: Mei Tanaka approved on 2027-09-09",
+          "file_id": "7247fdb7-e11f-4503-9471-36b63cf1d9a8",
+          "location": "",
+          "file_name": "u0102 REQ-3202 access request.txt"
+        },
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Granted role Payroll Admin in SAP ERP PRD on 2027-09-11 by adm.kfischer",
+          "file_id": "7247fdb7-e11f-4503-9471-36b63cf1d9a8",
+          "location": "",
+          "file_name": "u0102 REQ-3202 access request.txt"
+        }
+      ],
+      "checks": [
+        {
+          "why": "Approval date 2027-09-09 is on or before Grant date 2027-09-11.",
+          "kind": "on_or_before",
+          "left": {
+            "label": "Approval date",
+            "value": "2027-09-09",
+            "where": "u0102 REQ-3202 access request.txt",
+            "verified": true
+          },
+          "holds": true,
+          "right": {
+            "label": "Grant date",
+            "value": "2027-09-11",
+            "where": "u0102 REQ-3202 access request.txt",
+            "verified": true
+          }
+        }
+      ],
+      "decided_by_rule": false,
+      "instruction_cited": false
+    },
+    {
+      "control": "ITGC-AC-01",
+      "sample": "u0102",
+      "scenario": "exception",
+      "attribute": 3,
+      "category": "dependent",
+      "expected": "PASS",
+      "acceptable": [
+        "PASS",
+        "EXCEPTION",
+        "UNABLE",
+        "REVIEW"
+      ],
+      "why": "The role granted is the one requested, but it was not fully approved.",
+      "proposed": "PASS",
+      "outcome": "DEPENDENT",
+      "note": "The role granted, Payroll Admin, is the role requested and approved. There is no sign of additional roles.",
+      "observed": "The population row and the provisioning line show Payroll Admin granted. The request approved Payroll Admin.",
+      "expected_condition": "The granted access equals the approved access and nothing more.",
+      "limitations": "Only the population row and the provisioning line show the grant. The full system role-change log for u0102 would confirm that no other roles were granted.",
+      "citations": [
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Role requested: Payroll Admin",
+          "file_id": "7247fdb7-e11f-4503-9471-36b63cf1d9a8",
+          "location": "",
+          "file_name": "u0102 REQ-3202 access request.txt"
+        },
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Granted role Payroll Admin in SAP ERP PRD on 2027-09-11",
+          "file_id": "7247fdb7-e11f-4503-9471-36b63cf1d9a8",
+          "location": "",
+          "file_name": "u0102 REQ-3202 access request.txt"
+        }
+      ],
+      "checks": [],
+      "decided_by_rule": false,
+      "instruction_cited": false
+    },
+    {
+      "control": "ITGC-AC-01",
+      "sample": "u0102",
+      "scenario": "exception",
+      "attribute": 4,
+      "category": "clean",
+      "expected": "PASS",
+      "acceptable": [
+        "PASS"
+      ],
+      "why": "",
+      "proposed": "PASS",
+      "outcome": "EXPECTED",
+      "note": "The approver, Mei Tanaka, is neither the user (Peter Novak) nor the grantor (adm.kfischer, Karl Fischer). The grant was made under a named individual account, not a shared one.",
+      "observed": "User: Peter Novak. Approver: Mei Tanaka. Granted by: adm.kfischer.",
+      "expected_condition": "The approver differs from both the user and the person who granted.",
+      "limitations": "The grantor comes from the population row and the provisioning line. The system change log was not provided.",
+      "citations": [
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Line manager approval: Mei Tanaka approved on 2027-09-09",
+          "file_id": "7247fdb7-e11f-4503-9471-36b63cf1d9a8",
+          "location": "",
+          "file_name": "u0102 REQ-3202 access request.txt"
+        },
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "by adm.kfischer (Karl Fischer, IAM administrator)",
+          "file_id": "7247fdb7-e11f-4503-9471-36b63cf1d9a8",
+          "location": "",
+          "file_name": "u0102 REQ-3202 access request.txt"
+        }
+      ],
+      "checks": [
+        {
+          "why": "Approver Mei Tanaka does not match User Peter Novak.",
+          "kind": "different",
+          "left": {
+            "label": "Approver",
+            "value": "Mei Tanaka",
+            "where": "u0102 REQ-3202 access request.txt",
+            "verified": true
+          },
+          "holds": true,
+          "right": {
+            "label": "User",
+            "value": "Peter Novak",
+            "where": "u0102 REQ-3202 access request.txt",
+            "verified": true
+          }
+        },
+        {
+          "why": "Approver Mei Tanaka does not match Granted by Karl Fischer.",
+          "kind": "different",
+          "left": {
+            "label": "Approver",
+            "value": "Mei Tanaka",
+            "where": "u0102 REQ-3202 access request.txt",
+            "verified": true
+          },
+          "holds": true,
+          "right": {
+            "label": "Granted by",
+            "value": "Karl Fischer",
+            "where": "u0102 REQ-3202 access request.txt",
+            "verified": true
+          }
+        }
+      ],
+      "decided_by_rule": false,
+      "instruction_cited": false
+    },
+    {
+      "control": "ITGC-AC-01",
+      "sample": "u0103",
+      "scenario": "exception",
+      "attribute": 0,
+      "category": "clean",
+      "expected": "PASS",
+      "acceptable": [
+        "PASS"
+      ],
+      "why": "",
+      "proposed": "PASS",
+      "outcome": "EXPECTED",
+      "note": "REQ-3203 names Rita Mehta (u0103) and role AR Clerk in SAP ERP PRD, matching the system grant of AR Clerk.",
+      "observed": "Request REQ-3203 requested AR Clerk in SAP ERP PRD for u0103; the system listing shows AR Clerk for u0103.",
+      "expected_condition": "A request naming the same user and the same access as the grant.",
+      "limitations": "The request also does not cover the AR Supervisor role in the system, which is addressed in attribute 3.",
+      "citations": [
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Requested for: Rita Mehta (u0103)",
+          "file_id": "eea49db1-ba2e-4dc4-9c7d-509302a4a405",
+          "location": "",
+          "file_name": "u0103 REQ-3203 access request.txt"
+        },
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Role requested: AR Clerk",
+          "file_id": "eea49db1-ba2e-4dc4-9c7d-509302a4a405",
+          "location": "",
+          "file_name": "u0103 REQ-3203 access request.txt"
+        },
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "u0103 | Rita Mehta | AR Clerk | 2027-09-17 | adm.kfischer",
+          "file_id": "88e5704d-da48-4c28-a4c4-4b43d454be21",
+          "location": "",
+          "file_name": "u0103 SAP ERP user role listing.csv"
+        }
+      ],
+      "checks": [],
+      "decided_by_rule": false,
+      "instruction_cited": false
+    },
+    {
+      "control": "ITGC-AC-01",
+      "sample": "u0103",
+      "scenario": "exception",
+      "attribute": 1,
+      "category": "clean",
+      "expected": "PASS",
+      "acceptable": [
+        "PASS"
+      ],
+      "why": "",
+      "proposed": "UNABLE",
+      "outcome": "INCONCLUSIVE",
+      "note": "The request shows manager Mei Tanaka (HR record) and Helen Cho as application owner both approved, but the application owner list the plan requires is not provided.",
+      "observed": "Approvals by Mei Tanaka (line manager per HR record) and Helen Cho (stated as application owner) appear on the request; no application owner list is in the files.",
+      "expected_condition": "Approver compared against the user's manager and, when required, the application owner list.",
+      "limitations": "Needed: the application owner list for SAP ERP (to confirm Helen Cho is the owner) and the access management policy showing whether AR Clerk needs owner approval. The manager relationship is only the request's own HR-record note.",
+      "citations": [
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Line manager approval: Mei Tanaka approved on 2027-09-15",
+          "file_id": "eea49db1-ba2e-4dc4-9c7d-509302a4a405",
+          "location": "",
+          "file_name": "u0103 REQ-3203 access request.txt"
+        },
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Application owner approval: Helen Cho approved on 2027-09-15",
+          "file_id": "eea49db1-ba2e-4dc4-9c7d-509302a4a405",
+          "location": "",
+          "file_name": "u0103 REQ-3203 access request.txt"
+        }
+      ],
+      "checks": [],
+      "decided_by_rule": false,
+      "instruction_cited": false
+    },
+    {
+      "control": "ITGC-AC-01",
+      "sample": "u0103",
+      "scenario": "exception",
+      "attribute": 2,
+      "category": "clean",
+      "expected": "PASS",
+      "acceptable": [
+        "PASS"
+      ],
+      "why": "",
+      "proposed": "PASS",
+      "outcome": "EXPECTED",
+      "note": "Both approvals are dated 2027-09-15, before the system grant date of 2027-09-17.",
+      "observed": "Approvals dated 2027-09-15; the system shows AR Clerk valid from 2027-09-17.",
+      "expected_condition": "Approval date on or before the grant date recorded by the system.",
+      "limitations": "",
+      "citations": [
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Line manager approval: Mei Tanaka approved on 2027-09-15",
+          "file_id": "eea49db1-ba2e-4dc4-9c7d-509302a4a405",
+          "location": "",
+          "file_name": "u0103 REQ-3203 access request.txt"
+        },
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Application owner approval: Helen Cho approved on 2027-09-15",
+          "file_id": "eea49db1-ba2e-4dc4-9c7d-509302a4a405",
+          "location": "",
+          "file_name": "u0103 REQ-3203 access request.txt"
+        },
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "u0103 | Rita Mehta | AR Clerk | 2027-09-17 | adm.kfischer",
+          "file_id": "88e5704d-da48-4c28-a4c4-4b43d454be21",
+          "location": "",
+          "file_name": "u0103 SAP ERP user role listing.csv"
+        }
+      ],
+      "checks": [
+        {
+          "why": "Manager approval date 2027-09-15 is on or before System grant date 2027-09-17.",
+          "kind": "on_or_before",
+          "left": {
+            "label": "Manager approval date",
+            "value": "2027-09-15",
+            "where": "u0103 REQ-3203 access request.txt",
+            "verified": true
+          },
+          "holds": true,
+          "right": {
+            "label": "System grant date",
+            "value": "2027-09-17",
+            "where": "u0103 SAP ERP user role listing.csv",
+            "verified": true
+          }
+        },
+        {
+          "why": "Owner approval date 2027-09-15 is on or before System grant date 2027-09-17.",
+          "kind": "on_or_before",
+          "left": {
+            "label": "Owner approval date",
+            "value": "2027-09-15",
+            "where": "u0103 REQ-3203 access request.txt",
+            "verified": true
+          },
+          "holds": true,
+          "right": {
+            "label": "System grant date",
+            "value": "2027-09-17",
+            "where": "u0103 SAP ERP user role listing.csv",
+            "verified": true
+          }
+        }
+      ],
+      "decided_by_rule": false,
+      "instruction_cited": false
+    },
+    {
+      "control": "ITGC-AC-01",
+      "sample": "u0103",
+      "scenario": "exception",
+      "attribute": 3,
+      "category": "negative",
+      "expected": "EXCEPTION",
+      "acceptable": [
+        "EXCEPTION",
+        "REVIEW"
+      ],
+      "why": "AR Clerk was approved; the system shows AR Clerk and AR Supervisor assigned on the grant date.",
+      "proposed": "EXCEPTION",
+      "outcome": "EXPECTED",
+      "note": "The system shows u0103 was also assigned AR Supervisor on 2027-09-17, which is not on the approved request REQ-3203.",
+      "observed": "System lists AR Clerk and AR Supervisor for u0103, both assigned by adm.kfischer on 2027-09-17; the request covers only AR Clerk.",
+      "expected_condition": "Access in the system equals the access on the approved request, and no more.",
+      "limitations": "No separate request or approval for AR Supervisor was provided; if one exists it would need to be reviewed, but it is not in the evidence for this item.",
+      "citations": [
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "u0103 | Rita Mehta | AR Supervisor | 2027-09-17 | adm.kfischer",
+          "file_id": "88e5704d-da48-4c28-a4c4-4b43d454be21",
+          "location": "",
+          "file_name": "u0103 SAP ERP user role listing.csv"
+        },
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Role requested: AR Clerk",
+          "file_id": "eea49db1-ba2e-4dc4-9c7d-509302a4a405",
+          "location": "",
+          "file_name": "u0103 REQ-3203 access request.txt"
+        }
+      ],
+      "checks": [],
+      "decided_by_rule": false,
+      "instruction_cited": false
+    },
+    {
+      "control": "ITGC-AC-01",
+      "sample": "u0103",
+      "scenario": "exception",
+      "attribute": 4,
+      "category": "clean",
+      "expected": "PASS",
+      "acceptable": [
+        "PASS"
+      ],
+      "why": "",
+      "proposed": "PASS",
+      "outcome": "EXPECTED",
+      "note": "Approvers Mei Tanaka and Helen Cho differ from the user Rita Mehta and from the granting administrator adm.kfischer (Karl Fischer).",
+      "observed": "User Rita Mehta; approvers Mei Tanaka and Helen Cho; granted by adm.kfischer, a named individual account.",
+      "expected_condition": "The approver differs from the user and from the person who granted.",
+      "limitations": "",
+      "citations": [
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Line manager approval: Mei Tanaka approved on 2027-09-15",
+          "file_id": "eea49db1-ba2e-4dc4-9c7d-509302a4a405",
+          "location": "",
+          "file_name": "u0103 REQ-3203 access request.txt"
+        },
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Application owner approval: Helen Cho approved on 2027-09-15",
+          "file_id": "eea49db1-ba2e-4dc4-9c7d-509302a4a405",
+          "location": "",
+          "file_name": "u0103 REQ-3203 access request.txt"
+        },
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "u0103 | Rita Mehta | AR Clerk | 2027-09-17 | adm.kfischer",
+          "file_id": "88e5704d-da48-4c28-a4c4-4b43d454be21",
+          "location": "",
+          "file_name": "u0103 SAP ERP user role listing.csv"
+        }
+      ],
+      "checks": [
+        {
+          "why": "Manager approver Mei Tanaka does not match User Rita Mehta.",
+          "kind": "different",
+          "left": {
+            "label": "Manager approver",
+            "value": "Mei Tanaka",
+            "where": "u0103 REQ-3203 access request.txt",
+            "verified": true
+          },
+          "holds": true,
+          "right": {
+            "label": "User",
+            "value": "Rita Mehta",
+            "where": "u0103 REQ-3203 access request.txt",
+            "verified": true
+          }
+        },
+        {
+          "why": "Manager approver Mei Tanaka does not match Granted by Karl Fischer.",
+          "kind": "different",
+          "left": {
+            "label": "Manager approver",
+            "value": "Mei Tanaka",
+            "where": "u0103 REQ-3203 access request.txt",
+            "verified": true
+          },
+          "holds": true,
+          "right": {
+            "label": "Granted by",
+            "value": "Karl Fischer",
+            "where": "u0103 REQ-3203 access request.txt",
+            "verified": true
+          }
+        },
+        {
+          "why": "Owner approver Helen Cho does not match User Rita Mehta.",
+          "kind": "different",
+          "left": {
+            "label": "Owner approver",
+            "value": "Helen Cho",
+            "where": "u0103 REQ-3203 access request.txt",
+            "verified": true
+          },
+          "holds": true,
+          "right": {
+            "label": "User",
+            "value": "Rita Mehta",
+            "where": "u0103 REQ-3203 access request.txt",
+            "verified": true
+          }
+        },
+        {
+          "why": "Owner approver Helen Cho does not match Granted by Karl Fischer.",
+          "kind": "different",
+          "left": {
+            "label": "Owner approver",
+            "value": "Helen Cho",
+            "where": "u0103 REQ-3203 access request.txt",
+            "verified": true
+          },
+          "holds": true,
+          "right": {
+            "label": "Granted by",
+            "value": "Karl Fischer",
+            "where": "u0103 REQ-3203 access request.txt",
+            "verified": true
+          }
+        }
+      ],
+      "decided_by_rule": false,
+      "instruction_cited": false
+    },
+    {
+      "control": "ITGC-CM-01",
+      "sample": "CHG-2101",
+      "scenario": "exception",
+      "attribute": 0,
+      "category": "clean",
+      "expected": "PASS",
+      "acceptable": [
+        "PASS"
+      ],
+      "why": "",
+      "proposed": "PASS",
+      "outcome": "EXPECTED",
+      "note": "Change request CHG-2101 exists and names transport DEVK900601, which matches the population row's deployed transport.",
+      "observed": "Change record CHG-2101 'Supplier bank detail approval step' lists transport DEVK900601, the same transport deployed per the population row.",
+      "expected_condition": "A ticket exists that is linked to the deployment.",
+      "limitations": "Linked by transport number, not by description alone.",
+      "citations": [
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Change request CHG-2101: Supplier bank detail approval step",
+          "file_id": "ef737d3e-4d6e-4499-9dcb-c220405fbdad",
+          "location": "",
+          "file_name": "CHG-2101 change record.txt"
+        },
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Transport in the approved request: DEVK900601",
+          "file_id": "ef737d3e-4d6e-4499-9dcb-c220405fbdad",
+          "location": "",
+          "file_name": "CHG-2101 change record.txt"
+        }
+      ],
+      "checks": [
+        {
+          "why": "Ticket transport DEVK900601 matches Deployed transport DEVK900601.",
+          "kind": "equal",
+          "left": {
+            "label": "Ticket transport",
+            "value": "DEVK900601",
+            "where": "CHG-2101 change record.txt",
+            "verified": true
+          },
+          "holds": true,
+          "right": {
+            "label": "Deployed transport",
+            "value": "DEVK900601",
+            "where": "population row, Transport deployed",
+            "verified": true
+          }
+        }
+      ],
+      "decided_by_rule": false,
+      "instruction_cited": false
+    },
+    {
+      "control": "ITGC-CM-01",
+      "sample": "CHG-2101",
+      "scenario": "exception",
+      "attribute": 1,
+      "category": "clean",
+      "expected": "PASS",
+      "acceptable": [
+        "PASS"
+      ],
+      "why": "",
+      "proposed": "PASS",
+      "outcome": "EXPECTED",
+      "note": "Tested 2027-09-08 by Nadia Farouk, script TS-2101, 7 of 7 steps passed, before the 2027-09-12 deployment.",
+      "observed": "Test on 2027-09-08 with a passed result (7 of 7 steps) was documented; deployment was 2027-09-12.",
+      "expected_condition": "Documented test results dated before the deployment date.",
+      "limitations": "The test script itself was not provided; the result is taken from the change record.",
+      "citations": [
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Tested on 2027-09-08 by Nadia Farouk (business tester); result: passed (script TS-2101, 7 of 7 steps passed)",
+          "file_id": "ef737d3e-4d6e-4499-9dcb-c220405fbdad",
+          "location": "",
+          "file_name": "CHG-2101 change record.txt"
+        },
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Transport DEVK900601 imported to PRD on 2027-09-12",
+          "file_id": "ef737d3e-4d6e-4499-9dcb-c220405fbdad",
+          "location": "",
+          "file_name": "CHG-2101 change record.txt"
+        }
+      ],
+      "checks": [
+        {
+          "why": "Test date 2027-09-08 is on or before Deployment date 2027-09-12.",
+          "kind": "on_or_before",
+          "left": {
+            "label": "Test date",
+            "value": "2027-09-08",
+            "where": "CHG-2101 change record.txt",
+            "verified": true
+          },
+          "holds": true,
+          "right": {
+            "label": "Deployment date",
+            "value": "2027-09-12",
+            "where": "population row, Deployed on",
+            "verified": true
+          }
+        }
+      ],
+      "decided_by_rule": false,
+      "instruction_cited": false
+    },
+    {
+      "control": "ITGC-CM-01",
+      "sample": "CHG-2101",
+      "scenario": "exception",
+      "attribute": 2,
+      "category": "clean",
+      "expected": "PASS",
+      "acceptable": [
+        "PASS"
+      ],
+      "why": "",
+      "proposed": "PASS",
+      "outcome": "EXPECTED",
+      "note": "Test evidence names QAS, a non-production system.",
+      "observed": "Test environment is QAS (quality assurance system, non-production).",
+      "expected_condition": "A non-production environment named on the test evidence.",
+      "limitations": "",
+      "citations": [
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Test environment: QAS (quality assurance system, non-production)",
+          "file_id": "ef737d3e-4d6e-4499-9dcb-c220405fbdad",
+          "location": "",
+          "file_name": "CHG-2101 change record.txt"
+        }
+      ],
+      "checks": [],
+      "decided_by_rule": false,
+      "instruction_cited": false
+    },
+    {
+      "control": "ITGC-CM-01",
+      "sample": "CHG-2101",
+      "scenario": "exception",
+      "attribute": 3,
+      "category": "negative",
+      "expected": "EXCEPTION",
+      "acceptable": [
+        "EXCEPTION",
+        "REVIEW"
+      ],
+      "why": "Jonas Brandt approved as business owner; the register names Elena Rossi as the business owner.",
+      "proposed": "EXCEPTION",
+      "outcome": "EXPECTED",
+      "note": "Both approvals were dated 2027-09-09, before deployment. But the business owner approval came from Jonas Brandt, whom the register says is not a designated owner. The designated business owner for finance changes is Elena Rossi.",
+      "observed": "Business owner approval was by Jonas Brandt (not a designated owner); Elena Rossi is the designated finance business owner and did not approve. IT owner Marcus Lee approved 2027-09-09.",
+      "expected_condition": "Approval by the designated business owner and IT owner before the 2027-09-12 deployment.",
+      "limitations": "No delegation evidence was provided; if a documented delegation from Elena Rossi exists, management should supply it.",
+      "citations": [
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Business owner approval: Jonas Brandt approved on 2027-09-09",
+          "file_id": "ef737d3e-4d6e-4499-9dcb-c220405fbdad",
+          "location": "",
+          "file_name": "CHG-2101 change record.txt"
+        },
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Business owner, finance changes: Elena Rossi (Finance Director)",
+          "file_id": "20e81516-7a64-4e0b-ac08-8ed5287b401a",
+          "location": "",
+          "file_name": "CHG-2101 SAP ERP owner register.txt"
+        },
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Jonas Brandt: Accounts Payable team lead (not a designated owner)",
+          "file_id": "20e81516-7a64-4e0b-ac08-8ed5287b401a",
+          "location": "",
+          "file_name": "CHG-2101 SAP ERP owner register.txt"
+        }
+      ],
+      "checks": [
+        {
+          "why": "Business approver Jonas Brandt does not match Designated business owner Elena Rossi.",
+          "kind": "equal",
+          "left": {
+            "label": "Business approver",
+            "value": "Jonas Brandt",
+            "where": "CHG-2101 change record.txt",
+            "verified": true
+          },
+          "holds": false,
+          "right": {
+            "label": "Designated business owner",
+            "value": "Elena Rossi",
+            "where": "CHG-2101 SAP ERP owner register.txt",
+            "verified": true
+          }
+        },
+        {
+          "why": "IT approver Marcus Lee matches Designated IT owner Marcus Lee.",
+          "kind": "equal",
+          "left": {
+            "label": "IT approver",
+            "value": "Marcus Lee",
+            "where": "CHG-2101 change record.txt",
+            "verified": true
+          },
+          "holds": true,
+          "right": {
+            "label": "Designated IT owner",
+            "value": "Marcus Lee",
+            "where": "CHG-2101 SAP ERP owner register.txt",
+            "verified": true
+          }
+        },
+        {
+          "why": "Approval date 2027-09-09 is on or before Deployment date 2027-09-12.",
+          "kind": "on_or_before",
+          "left": {
+            "label": "Approval date",
+            "value": "2027-09-09",
+            "where": "CHG-2101 change record.txt",
+            "verified": true
+          },
+          "holds": true,
+          "right": {
+            "label": "Deployment date",
+            "value": "2027-09-12",
+            "where": "population row, Deployed on",
+            "verified": true
+          }
+        }
+      ],
+      "decided_by_rule": false,
+      "instruction_cited": false
+    },
+    {
+      "control": "ITGC-CM-01",
+      "sample": "CHG-2101",
+      "scenario": "exception",
+      "attribute": 4,
+      "category": "clean",
+      "expected": "PASS",
+      "acceptable": [
+        "PASS"
+      ],
+      "why": "",
+      "proposed": "PASS",
+      "outcome": "EXPECTED",
+      "note": "Developer Aiko Sato and implementer Olga Ivanova (basis.oivanova) are neither approver (Jonas Brandt, Marcus Lee).",
+      "observed": "Developer is Aiko Sato; implementer is Olga Ivanova; approvers are Jonas Brandt and Marcus Lee.",
+      "expected_condition": "No approver is the developer or implementer.",
+      "limitations": "The evidence does not show reporting lines between the IT approver and the developers.",
+      "citations": [
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Developer: Aiko Sato",
+          "file_id": "ef737d3e-4d6e-4499-9dcb-c220405fbdad",
+          "location": "",
+          "file_name": "CHG-2101 change record.txt"
+        },
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "imported to PRD on 2027-09-12 by basis.oivanova (Olga Ivanova, Basis administrator)",
+          "file_id": "ef737d3e-4d6e-4499-9dcb-c220405fbdad",
+          "location": "",
+          "file_name": "CHG-2101 change record.txt"
+        },
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "IT owner approval: Marcus Lee approved on 2027-09-09",
+          "file_id": "ef737d3e-4d6e-4499-9dcb-c220405fbdad",
+          "location": "",
+          "file_name": "CHG-2101 change record.txt"
+        }
+      ],
+      "checks": [
+        {
+          "why": "Developer Aiko Sato does not match Business approver Jonas Brandt.",
+          "kind": "different",
+          "left": {
+            "label": "Developer",
+            "value": "Aiko Sato",
+            "where": "CHG-2101 change record.txt",
+            "verified": true
+          },
+          "holds": true,
+          "right": {
+            "label": "Business approver",
+            "value": "Jonas Brandt",
+            "where": "CHG-2101 change record.txt",
+            "verified": true
+          }
+        },
+        {
+          "why": "Developer Aiko Sato does not match IT approver Marcus Lee.",
+          "kind": "different",
+          "left": {
+            "label": "Developer",
+            "value": "Aiko Sato",
+            "where": "CHG-2101 change record.txt",
+            "verified": true
+          },
+          "holds": true,
+          "right": {
+            "label": "IT approver",
+            "value": "Marcus Lee",
+            "where": "CHG-2101 change record.txt",
+            "verified": true
+          }
+        },
+        {
+          "why": "Implementer Olga Ivanova does not match Business approver Jonas Brandt.",
+          "kind": "different",
+          "left": {
+            "label": "Implementer",
+            "value": "Olga Ivanova",
+            "where": "CHG-2101 change record.txt",
+            "verified": true
+          },
+          "holds": true,
+          "right": {
+            "label": "Business approver",
+            "value": "Jonas Brandt",
+            "where": "CHG-2101 change record.txt",
+            "verified": true
+          }
+        },
+        {
+          "why": "Implementer Olga Ivanova does not match IT approver Marcus Lee.",
+          "kind": "different",
+          "left": {
+            "label": "Implementer",
+            "value": "Olga Ivanova",
+            "where": "CHG-2101 change record.txt",
+            "verified": true
+          },
+          "holds": true,
+          "right": {
+            "label": "IT approver",
+            "value": "Marcus Lee",
+            "where": "CHG-2101 change record.txt",
+            "verified": true
+          }
+        }
+      ],
+      "decided_by_rule": false,
+      "instruction_cited": false
+    },
+    {
+      "control": "ITGC-CM-01",
+      "sample": "CHG-2101",
+      "scenario": "exception",
+      "attribute": 5,
+      "category": "clean",
+      "expected": "PASS",
+      "acceptable": [
+        "PASS"
+      ],
+      "why": "",
+      "proposed": "PASS",
+      "outcome": "EXPECTED",
+      "note": "The transport imported to PRD (DEVK900601) is the transport in the approved request.",
+      "observed": "Approved transport is DEVK900601; the deployment record shows DEVK900601 imported to PRD on 2027-09-12.",
+      "expected_condition": "Deployed object or version equals the one in the approved ticket.",
+      "limitations": "Comparison is at transport-number level; transport contents were not provided.",
+      "citations": [
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Transport in the approved request: DEVK900601",
+          "file_id": "ef737d3e-4d6e-4499-9dcb-c220405fbdad",
+          "location": "",
+          "file_name": "CHG-2101 change record.txt"
+        },
+        {
+          "box": null,
+          "page": null,
+          "found": true,
+          "quote": "Transport DEVK900601 imported to PRD on 2027-09-12",
+          "file_id": "ef737d3e-4d6e-4499-9dcb-c220405fbdad",
+          "location": "",
+          "file_name": "CHG-2101 change record.txt"
+        }
+      ],
+      "checks": [
+        {
+          "why": "Approved transport DEVK900601 matches Deployed transport DEVK900601.",
+          "kind": "equal",
+          "left": {
+            "label": "Approved transport",
+            "value": "DEVK900601",
+            "where": "CHG-2101 change record.txt",
+            "verified": true
+          },
+          "holds": true,
+          "right": {
+            "label": "Deployed transport",
+            "value": "DEVK900601",
+            "where": "population row, Transport deployed",
+            "verified": true
+          }
+        }
+      ],
+      "decided_by_rule": false,
+      "instruction_cited": false
+    }
+  ],
+  "calls": [
+    {
+      "agent": "itgc-access-tester",
+      "tier": "BALANCED",
+      "model": "claude-sonnet-5-5",
+      "prompt_version": "control-tester/4",
+      "status": "SUCCEEDED",
+      "calls": 3,
+      "input_tokens": 16855,
+      "output_tokens": 8926,
+      "cost_usd": 0.12297
+    },
+    {
+      "agent": "itgc-change-tester",
+      "tier": "BALANCED",
+      "model": "claude-sonnet-5-5",
+      "prompt_version": "control-tester/4",
+      "status": "SUCCEEDED",
+      "calls": 1,
+      "input_tokens": 5797,
+      "output_tokens": 3346,
+      "cost_usd": 0.045054
+    }
+  ],
+  "total_cost_usd": 0.168024
+}

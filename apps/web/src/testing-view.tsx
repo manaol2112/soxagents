@@ -58,6 +58,7 @@ export function TestPlanCard({
   controlId,
   canAct,
   sampled,
+  blocked = null,
 }: {
   test: ControlTest | null;
   notice: TestNotice | null;
@@ -66,6 +67,8 @@ export function TestPlanCard({
   controlId: string;
   canAct: boolean;
   sampled: boolean;
+  /** Why the samples cannot be approved yet, such as a narrative not confirmed. */
+  blocked?: string | null;
 }) {
   const identity = { organizationId, projectId, controlId };
   if (test === null) {
@@ -106,7 +109,11 @@ export function TestPlanCard({
         </div>
         {editable ? (
           <div className="action-bar-buttons">
-            <form method="post" action="/workspace/control-tests">
+            <form
+              autoComplete="off"
+              method="post"
+              action="/workspace/control-tests"
+            >
               <Hidden identity={identity} />
               <input type="hidden" name="intent" value="propose" />
               <input
@@ -118,15 +125,25 @@ export function TestPlanCard({
                 Draw again
               </button>
             </form>
-            <form method="post" action="/workspace/control-tests">
-              <Hidden identity={identity} />
-              <input type="hidden" name="intent" value="approve" />
-              <input type="hidden" name="test_id" value={test.id} />
-              <input type="hidden" name="version" value={test.version} />
-              <button type="submit">
-                <UiIcon name="check" size={14} /> Approve samples
-              </button>
-            </form>
+            {blocked === null ? (
+              <form
+                autoComplete="off"
+                method="post"
+                action="/workspace/control-tests"
+              >
+                <Hidden identity={identity} />
+                <input type="hidden" name="intent" value="approve" />
+                <input type="hidden" name="test_id" value={test.id} />
+                <input type="hidden" name="version" value={test.version} />
+                <button type="submit">
+                  <UiIcon name="check" size={14} /> Approve samples
+                </button>
+              </form>
+            ) : (
+              <p className="action-bar-note test-gate">
+                <UiIcon name="info" size={14} /> {blocked}
+              </p>
+            )}
           </div>
         ) : test.status === "APPROVED" ? (
           <p className="action-bar-note">
@@ -257,6 +274,7 @@ function ReplaceMenu({
     <details className="row-menu">
       <summary className="btn btn-secondary btn-sm">Replace</summary>
       <form
+        autoComplete="off"
         method="post"
         action="/workspace/control-tests"
         className="row-menu-panel"

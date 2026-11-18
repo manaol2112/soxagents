@@ -1,0 +1,1323 @@
+/* Evidence annotations in the preview (docs/evidence-annotations.md, section 1; the compact
+   layout the product owner approved on 14 November 2026): the evidence with numbered boxes
+   on the left, what the file shows and one line per annotation on the right, and the basis
+   of the selected one as a callout beside its box.
+
+   Two sets of colour. In the panel and the callout a kind reads the theme's status tokens
+   (--ea-c). Over the evidence, which stays a light page in both themes, it reads the
+   --mark-* tokens, inside a ring of --mark-paper so a box reads on a dark image too. */
+
+.ea-tone-success {
+  --ea-c: var(--success);
+  --ea-mark: var(--mark-success);
+}
+
+.ea-tone-info {
+  --ea-c: var(--info);
+  --ea-mark: var(--mark-info);
+}
+
+/* Source: the third tone, the violet of the approved mockup. */
+.ea-tone-source {
+  --ea-c: var(--ai);
+  --ea-mark: var(--mark-source);
+}
+
+.ea-tone-danger {
+  --ea-c: var(--danger);
+  --ea-mark: var(--mark-danger);
+}
+
+.ea-tone-neutral {
+  --ea-c: var(--neutral);
+  --ea-mark: var(--mark-neutral);
+}
+
+/* Cited (section 5a): a passage a screen cites, never an annotation. Amber, with a dashed
+   edge and a square tickmark, and the word "Cited" in the legend and the key. */
+.ea-tone-cited {
+  --ea-c: var(--warning);
+  --ea-mark: var(--mark-cited);
+}
+
+/* Layout: evidence left, the review right. */
+
+.preview-body.ea-body {
+  position: relative;
+  grid-template-columns: minmax(0, 1fr) 23.25rem;
+}
+
+.ea-stage-col {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* A file shown by itself: nothing to list beside it. */
+.preview-body.ea-body.is-plain {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Room on the left for the tickmark of a box at the page's edge. */
+.preview-stage.ea-stage {
+  padding-left: 2.125rem;
+}
+
+/* A PDF's tools stay at the top of the evidence as it scrolls. */
+.ea-stage .pdf-bar {
+  position: sticky;
+  top: -1rem;
+  z-index: 8;
+  justify-self: stretch;
+  width: auto;
+  margin: -1rem -1rem 0 -2.125rem;
+  padding: 0.4rem 1rem 0.4rem 2.125rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* A file that cannot be shown: the sentence, and the original to download. */
+.ea-stage .preview-empty {
+  flex-wrap: wrap;
+  min-height: 12rem;
+  text-align: center;
+}
+
+.ea-stage-foot {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem 0.875rem;
+  padding: 0.5rem 1rem;
+  color: var(--text-secondary);
+  background: var(--surface-sunken);
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--fs-sm);
+}
+
+.ea-stage-foot > p {
+  margin: 0;
+}
+
+.ea-quiet:empty {
+  display: none;
+}
+
+.ea-drawbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text);
+}
+
+.ea-key {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  margin: 0 0 0 auto;
+  padding: 0;
+  list-style: none;
+}
+
+.ea-key li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.ea-key svg {
+  flex: none;
+  color: var(--ea-c);
+}
+
+/* In the dialog's header: Download annotated copy, Add annotation. */
+.ea-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.ea-head:empty {
+  display: none;
+}
+
+/* The layer over a page of the evidence. The frame it sits in sets no line height. */
+
+.ea-layer {
+  position: absolute;
+  inset: 0;
+  font-size: var(--fs-base);
+  line-height: 1.45;
+}
+
+/* A box: its border sits just outside the words it marks (the padding), never on them. */
+button.ea-box {
+  position: absolute;
+  z-index: 1;
+  display: block;
+  box-sizing: content-box;
+  min-width: 0;
+  margin: -4px;
+  padding: 2px;
+  background: color-mix(in srgb, var(--ea-mark) 8%, transparent);
+  border: 2px solid var(--ea-mark);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 0 1.5px var(--mark-paper);
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    box-shadow 120ms ease;
+}
+
+button.ea-box:hover {
+  background: color-mix(in srgb, var(--ea-mark) 15%, transparent);
+  border-color: var(--ea-mark);
+}
+
+button.ea-box.is-selected {
+  z-index: 2;
+  background: color-mix(in srgb, var(--ea-mark) 15%, transparent);
+  box-shadow:
+    inset 0 0 0 1px var(--ea-mark),
+    0 0 0 1.5px var(--mark-paper),
+    0 0 0 5px color-mix(in srgb, var(--ea-mark) 32%, transparent);
+}
+
+/* A cited passage's box: dashed, so it is told from an annotation's by its edge too. */
+button.ea-box.is-cited {
+  border-style: dashed;
+}
+
+button.ea-box.is-cited .ea-tick,
+.ea-num.is-cited {
+  border-radius: var(--radius-sm);
+}
+
+button.ea-box:focus-visible:not(:disabled) {
+  box-shadow:
+    0 0 0 2px var(--mark-paper),
+    0 0 0 4px var(--mark-info);
+}
+
+/* The tickmark: beside its box, never over its text. */
+.ea-tick {
+  position: absolute;
+  top: calc(50% - 11px);
+  left: -27px;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  color: var(--mark-paper);
+  background: var(--ea-mark);
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--mark-paper);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  pointer-events: none;
+}
+
+/* The box under a person's hand, with its eight handles. */
+.ea-edit-box {
+  position: absolute;
+  z-index: 3;
+  box-sizing: content-box;
+  margin: -4px;
+  padding: 2px;
+  background: color-mix(in srgb, var(--ea-mark) 14%, transparent);
+  border: 2px solid var(--ea-mark);
+  border-radius: var(--radius-sm);
+  box-shadow:
+    0 0 0 1.5px var(--mark-paper),
+    0 0 0 5px color-mix(in srgb, var(--ea-mark) 26%, transparent);
+}
+
+button.ea-move {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 2px;
+  box-shadow: none;
+  cursor: move;
+  touch-action: none;
+}
+
+button.ea-move:hover {
+  background: transparent;
+}
+
+button.ea-handle {
+  position: absolute;
+  z-index: 1;
+  width: 12px;
+  min-width: 0;
+  height: 12px;
+  padding: 0;
+  background: var(--mark-paper);
+  border: 2px solid var(--ea-mark);
+  border-radius: 3px;
+  box-shadow: none;
+  transform: translate(-50%, -50%);
+  touch-action: none;
+}
+
+button.ea-handle:hover {
+  background: var(--mark-paper);
+  border-color: var(--ea-mark);
+}
+
+/* A handle is small to see and 24px to take hold of (WCAG 2.2, 2.5.8). */
+button.ea-handle::before {
+  position: absolute;
+  inset: -8px;
+  content: "";
+}
+
+button.ea-handle.is-nw,
+button.ea-handle.is-se {
+  cursor: nwse-resize;
+}
+
+button.ea-handle.is-ne,
+button.ea-handle.is-sw {
+  cursor: nesw-resize;
+}
+
+button.ea-handle.is-n,
+button.ea-handle.is-s {
+  cursor: ns-resize;
+}
+
+button.ea-handle.is-e,
+button.ea-handle.is-w {
+  cursor: ew-resize;
+}
+
+button.ea-move:focus-visible:not(:disabled),
+button.ea-handle:focus-visible:not(:disabled) {
+  box-shadow:
+    0 0 0 2px var(--mark-paper),
+    0 0 0 4px var(--mark-info);
+}
+
+/* Where a new box is drawn. */
+.ea-draw {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  background: color-mix(in srgb, var(--mark-info) 6%, transparent);
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.ea-sketch {
+  position: absolute;
+  background: color-mix(in srgb, var(--mark-info) 12%, transparent);
+  border: 2px dashed var(--mark-info);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 0 1.5px var(--mark-paper);
+}
+
+/* The callout: the basis of the annotation in view. Laid over the evidence, so opening it
+   moves nothing. */
+
+.ea-callout {
+  position: absolute;
+  z-index: 5;
+  width: min(440px, 100%);
+  padding: 0.75rem 0.875rem;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--ea-c);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-pop);
+  font-size: var(--fs-base);
+  line-height: 1.45;
+  text-align: left;
+  animation: ea-in 200ms ease-out;
+}
+
+@keyframes ea-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+/* Its pointer, level with the box it stands beside. */
+.ea-callout.is-beside::before {
+  position: absolute;
+  top: var(--ea-pointer, 18px);
+  left: -9px;
+  width: 14px;
+  height: 14px;
+  margin-top: -7px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border-strong);
+  border-left: 3px solid var(--ea-c);
+  border-radius: 0 0 0 2px;
+  content: "";
+  transform: rotate(45deg);
+}
+
+/* A sheet along the bottom: on a small screen, and for an annotation with no box. It lies
+   over the foot of the evidence, above the line under it. */
+.ea-sheet-host {
+  z-index: 6;
+  display: grid;
+  justify-items: center;
+  pointer-events: none;
+}
+
+.ea-sheet-host:empty {
+  display: none;
+}
+
+.ea-sheet-host.is-foot {
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  left: 0;
+  padding: 0 0.75rem 0.75rem;
+}
+
+.ea-callout.is-sheet {
+  position: static;
+  width: min(40rem, 100%);
+  max-height: min(26rem, 60vh);
+  overflow: auto;
+  pointer-events: auto;
+}
+
+.ea-basis,
+.ea-form {
+  outline: 0;
+}
+
+.ea-basis:focus-visible,
+.ea-form:focus-visible {
+  border-radius: var(--radius-sm);
+  box-shadow: var(--ring);
+}
+
+.ea-top {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.ea-kind {
+  display: inline-flex;
+  flex: 1;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.ea-kind svg {
+  flex: none;
+  color: var(--ea-c);
+}
+
+button.ea-close {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  margin: -0.25rem -0.375rem -0.25rem 0;
+  padding: 0;
+}
+
+.ea-num {
+  display: inline-grid;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  color: var(--text-on-status);
+  background: var(--ea-c);
+  border-radius: 50%;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.ea-attr {
+  display: inline-grid;
+  flex: none;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  place-items: center;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.ea-statement {
+  margin: 0.5rem 0 0;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  line-height: 1.38;
+}
+
+/* The exact words it rests on, as the file has them. */
+.ea-reads {
+  margin: 0.5rem 0 0;
+  padding: 0.3rem 0.5rem;
+  color: var(--text-secondary);
+  background: var(--surface-sunken);
+  border-left: 3px solid var(--ea-c);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.ea-check {
+  display: flex;
+  gap: 0.3rem;
+  margin: 0.45rem 0 0;
+  color: var(--success);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.ea-check svg {
+  flex: none;
+  margin-top: 0.15rem;
+}
+
+/* The agent's own wording, kept when a person rewrites it. */
+.ea-was {
+  margin: 0.45rem 0 0;
+  padding: 0.3rem 0.5rem;
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+}
+
+.ea-acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  margin-top: 0.7rem;
+}
+
+.ea-spacer {
+  flex: 1;
+}
+
+/* Where it is in the list, with previous and next: kept together, on the right. */
+.ea-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin-left: auto;
+}
+
+.ea-at {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+button.ea-step {
+  width: 28px;
+  padding: 0;
+}
+
+.ea-ask {
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+.ea-kbd {
+  padding: 1px 5px;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  line-height: 1.3;
+}
+
+/* On the primary action's fill. */
+.ea-kbd.is-on-fill {
+  color: var(--text-on-accent);
+  background: transparent;
+  border-color: color-mix(in srgb, var(--text-on-accent) 55%, transparent);
+}
+
+.ea-problem {
+  margin: 0.5rem 0 0;
+  color: var(--danger);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+/* Editing in the callout. */
+
+.ea-form label,
+.ea-form legend,
+.ea-label {
+  display: block;
+  margin: 0.6rem 0 0.25rem;
+  padding: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.ea-form textarea {
+  min-height: 4.75rem;
+  font-size: var(--fs-md);
+}
+
+.ea-attrs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.ea-attrs legend {
+  float: left;
+  width: 100%;
+}
+
+button.ea-chip {
+  min-width: 24px;
+  height: 24px;
+  padding: 0 0.375rem;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+
+button.ea-chip:hover {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+  border-color: var(--border-control);
+}
+
+/* On is said by the fill, the heavier edge and aria-pressed, not by colour alone. */
+button.ea-chip.is-on {
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border: 2px solid var(--accent-text);
+}
+
+.ea-tip {
+  margin: 0.5rem 0 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.ea-attrs .ea-tip {
+  margin: 0 0 0 0.25rem;
+}
+
+/* The panel: what the file shows, the annotations, and the review's footer. */
+
+.ea-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+  border-left: 1px solid var(--border-subtle);
+}
+
+.ea-sec {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.ea-sec.ea-list {
+  border-bottom: 0;
+}
+
+.ea-sec h3 {
+  display: flex;
+  align-items: center;
+  margin: 0 0 0.5rem;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.ea-sec h3 small {
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.ea-matrix,
+.ea-rows {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ea-matrix {
+  gap: 0.375rem;
+}
+
+.ea-mrow {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  align-items: center;
+  font-size: var(--fs-base);
+}
+
+.ea-mtext {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ea-mrow.is-none {
+  color: var(--text-tertiary);
+}
+
+.ea-mrow.is-none .ea-attr {
+  color: var(--text-tertiary);
+  background: var(--neutral-soft);
+}
+
+.ea-refs {
+  display: inline-flex;
+  gap: 3px;
+}
+
+button.ea-ref {
+  width: 20px;
+  min-width: 0;
+  height: 20px;
+  padding: 0;
+  color: var(--text-on-status);
+  background: var(--ea-c);
+  border: 0;
+  border-radius: 50%;
+  box-shadow: none;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+button.ea-ref:hover {
+  color: var(--text-on-status);
+  background: var(--ea-c);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ea-c) 35%, transparent);
+}
+
+button.ea-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto 16px;
+  gap: 0.5625rem;
+  align-items: center;
+  width: 100%;
+  height: auto;
+  padding: 0.4375rem 0.5rem;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius);
+  box-shadow: none;
+  font-size: var(--fs-base);
+  font-weight: 400;
+  line-height: 1.3;
+  text-align: left;
+}
+
+.ea-rows li + li {
+  margin-top: 1px;
+}
+
+button.ea-row:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+button.ea-row.is-selected {
+  background: color-mix(in srgb, var(--ea-c) 10%, transparent);
+  box-shadow: inset 0 0 0 1.5px var(--ea-c);
+}
+
+button.ea-row:focus-visible:not(:disabled),
+button.ea-ref:focus-visible:not(:disabled),
+button.ea-chip:focus-visible:not(:disabled) {
+  box-shadow: var(--ring);
+}
+
+.ea-what {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ea-what span {
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+
+.ea-letters {
+  display: inline-flex;
+  gap: 3px;
+}
+
+/* The review mark: an empty dashed ring for a proposal, a check for one confirmed, a
+   pencil for one edited. Its word is the line's title and its screen-reader text. */
+.ea-st {
+  display: inline-grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  border-radius: 50%;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  line-height: 1;
+}
+
+.ea-st.is-proposed {
+  border: 1.5px dashed var(--border-control);
+}
+
+.ea-st.is-confirmed {
+  color: var(--text-on-status);
+  background: var(--success);
+}
+
+.ea-st.is-edited {
+  color: var(--text-on-accent);
+  background: var(--accent);
+}
+
+/* A cited passage's line: its mark in place of a review mark (it is never reviewed). */
+.ea-st.is-cited {
+  color: var(--ea-c);
+}
+
+.ea-sec.ea-list + .ea-sec.ea-cited {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ea-what q {
+  color: var(--text-strong);
+}
+
+.ea-none {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+}
+
+.ea-progress {
+  height: 4px;
+  margin-top: 0.625rem;
+  overflow: hidden;
+  background: var(--border);
+  border-radius: 999px;
+}
+
+.ea-progress i {
+  display: block;
+  height: 100%;
+  background: var(--success);
+  transition: width 200ms ease;
+}
+
+.ea-foot {
+  display: grid;
+  gap: 0.4375rem;
+  margin-top: auto;
+  padding: 0.75rem 1rem;
+  background: var(--surface-muted);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ea-foot small {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.ea-foot p {
+  margin: 0;
+}
+
+.ea-done {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--success);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+.ea-done:empty {
+  display: none;
+}
+
+/* The side panel's two tabs (section 5b): the legend, and "About this file". A bar that
+   stays at the top, holding the shared segmented control (a muted track, the chosen tab a
+   raised chip). */
+.ea-tabs-bar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 0;
+  padding: 0.5rem 1rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.ea-tabs {
+  display: flex;
+  gap: 2px;
+  margin: 0;
+  padding: 2px;
+  background: var(--surface-sunken);
+  border-radius: var(--radius);
+}
+
+button.ea-tab {
+  flex: 1;
+  height: 28px;
+  padding: 0 0.625rem;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  transition:
+    background 120ms ease,
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+button.ea-tab:hover {
+  color: var(--text-strong);
+  background: transparent;
+  border-color: transparent;
+}
+
+button.ea-tab.is-on {
+  color: var(--text-strong);
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+}
+
+button.ea-tab:focus-visible:not(:disabled) {
+  box-shadow: var(--ring);
+}
+
+.ea-tabpanel {
+  display: flex;
+  flex: 1 0 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.ea-tabpanel[hidden] {
+  display: none;
+}
+
+/* "About this file": the reviewer's content, each part a section of the panel, set at
+   the panel's own size rather than the reviewer's larger one. */
+.ea-about-body {
+  display: grid;
+  align-content: start;
+}
+
+.ea-about section.ea-sec {
+  display: grid;
+  gap: 0.625rem;
+}
+
+.ea-about .ea-sec h3 {
+  margin-bottom: 0;
+}
+
+.ea-about .ep-done {
+  margin: 0.75rem 1rem 0;
+}
+
+.ea-about .ed-fact {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.125rem;
+}
+
+.ea-about .ed-fact-icon,
+.ea-about .ed-suggest-icon,
+.ea-about .ed-size-head > .ed-fact-icon {
+  display: none;
+}
+
+.ea-about .ed-fact small {
+  font-size: var(--fs-sm);
+}
+
+.ea-about .ed-fact-type {
+  font-size: var(--fs-lg);
+}
+
+.ea-about .ed-fact p {
+  font-size: var(--fs-base);
+}
+
+.ea-about .ed-suggest {
+  gap: 0.625rem;
+  padding: 0.75rem;
+  border-radius: var(--radius-lg);
+}
+
+.ea-about .ed-suggest-head {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.ea-about .ed-suggest-head strong {
+  font-size: var(--fs-md);
+}
+
+.ea-about .ed-suggest-head p {
+  font-size: var(--fs-base);
+}
+
+.ea-about .ed-suggest-actions {
+  gap: 0.375rem;
+}
+
+.ea-about .ed-suggest-actions button {
+  height: 32px;
+  font-size: var(--fs-base);
+}
+
+.ea-about .ed-size {
+  gap: 0.625rem;
+  padding: 0.75rem;
+  border-radius: var(--radius-lg);
+}
+
+.ea-about .ed-size-head {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.ea-about .ed-size-head strong {
+  font-size: var(--fs-md);
+}
+
+.ea-about .ed-size-head p {
+  font-size: var(--fs-base);
+}
+
+.ea-about .ed-size-choices {
+  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+  gap: 0.375rem;
+}
+
+.ea-about .ed-size-choices button {
+  padding: 0.5rem 0.25rem;
+  border-radius: var(--radius);
+}
+
+.ea-about .ed-size-choices strong {
+  font-size: var(--fs-lg);
+}
+
+.ea-about .ed-panel {
+  padding: 0.625rem 0.75rem;
+  border-radius: var(--radius);
+}
+
+.ea-about .ed-samples {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.ea-about-read {
+  display: grid;
+  justify-items: start;
+  gap: 0.5rem;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+  line-height: 1.5;
+}
+
+.ea-about-read p {
+  margin: 0;
+}
+
+p.ea-about-read {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.ea-about-item {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--fs-base);
+}
+
+.ea-about-item span {
+  color: var(--text-secondary);
+}
+
+.ea-about-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.ea-about-stack {
+  display: grid;
+  gap: 0.5rem;
+}
+
+/* A part that opens on request: the findings, the history. */
+.ea-about-more > summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  list-style: none;
+  cursor: pointer;
+}
+
+.ea-about-more > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ea-about-more > summary::after {
+  width: 0.4rem;
+  height: 0.4rem;
+  margin-left: auto;
+  border-right: 1.5px solid currentcolor;
+  border-bottom: 1.5px solid currentcolor;
+  content: "";
+  transform: rotate(45deg);
+  transition: transform 150ms ease;
+}
+
+.ea-about-more[open] > summary::after {
+  transform: rotate(-135deg);
+}
+
+.ea-about-more > summary small {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.ea-about-more > summary:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.ea-about-more[open] > summary {
+  margin-bottom: 0.625rem;
+}
+
+.ea-about-remove {
+  border-bottom: 0;
+}
+
+/* The file's rows, where "About this file" draws them in place of the file. */
+.ea-data[hidden] {
+  display: none;
+}
+
+.ea-data-pane {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.875rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.ea-data-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.ea-data-head strong {
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+/* While the annotations are read: the panel's shape. */
+.ea-skel {
+  display: block;
+  height: 0.875rem;
+  margin: 0.5rem 0;
+  background: var(--surface-sunken);
+  border-radius: var(--radius-sm);
+  animation: ea-wait 1.2s ease-in-out infinite alternate;
+}
+
+.ea-skel.is-head {
+  width: 45%;
+  height: 0.625rem;
+}
+
+.ea-skel.is-short {
+  width: 70%;
+}
+
+@keyframes ea-wait {
+  to {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ea-callout,
+  .ea-skel {
+    animation: none;
+  }
+
+  button.ea-tab,
+  .ea-about-more > summary::after {
+    transition: none;
+  }
+}
+
+/* A narrow window: the legend goes under the evidence and the whole body scrolls as one. */
+@media (max-width: 960px) {
+  .preview-body.ea-body {
+    display: block;
+    overflow: auto;
+  }
+
+  .ea-stage-col {
+    display: block;
+  }
+
+  .preview-stage.ea-stage {
+    overflow: visible;
+  }
+
+  .ea-panel {
+    overflow: visible;
+    border-top: 1px solid var(--border-subtle);
+    border-left: 0;
+  }
+
+  .ea-key {
+    margin-left: 0;
+  }
+
+  /* The sheet stays along the bottom of the window as the body scrolls under it. */
+  .ea-sheet-host.is-end {
+    position: sticky;
+    bottom: 0;
+  }
+
+  .ea-callout.is-sheet {
+    width: 100%;
+    border-top: 3px solid var(--ea-c);
+    border-left-width: 1px;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  }
+}
+
+@media (max-width: 720px) {
+  /* A page shown small: smaller tickmarks and a closer box, so neighbours stay apart. */
+  .preview-stage.ea-stage {
+    padding-left: 1.625rem;
+  }
+
+  .ea-stage .pdf-bar {
+    margin-left: -1.625rem;
+    padding-left: 1.625rem;
+  }
+
+  button.ea-box,
+  .ea-edit-box {
+    margin: -1.5px;
+    padding: 0;
+    border-width: 1.5px;
+  }
+
+  .ea-tick {
+    top: calc(50% - 8px);
+    left: -20px;
+    width: 16px;
+    height: 16px;
+    box-shadow: 0 0 0 1.5px var(--mark-paper);
+    font-size: var(--fs-2xs);
+  }
+
+  /* The annotated file's actions, and the file switcher, take their own line under its
+     name, so the name keeps the room it needs. */
+  .preview-head:has(.ea-head:not(:empty)),
+  .preview-head:has(> .preview-file-switch) {
+    flex-wrap: wrap;
+  }
+
+  .preview-head > .preview-file-switch {
+    flex: 1 1 100%;
+    order: 6;
+    max-width: none;
+  }
+
+  .ea-head {
+    order: 5;
+    width: 100%;
+  }
+}

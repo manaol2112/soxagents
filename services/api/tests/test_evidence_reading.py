@@ -161,6 +161,30 @@ def test_an_archive_that_expands_too_far_is_refused_before_it_is_opened() -> Non
     assert "expands" in read.note
 
 
+def test_an_archive_whose_entry_name_does_not_decode_is_unreadable_not_an_error() -> None:
+    # Bug hunt, 9 November 2026: an entry flagged as UTF-8 whose name is not UTF-8 made
+    # the zip reader raise UnicodeDecodeError out of extract and read_table. Synthetic
+    # bytes only: a one-entry archive whose name is patched to invalid UTF-8.
+    import struct
+
+    from ai_workforce_api.evidence_extraction import read_table
+
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as archive:
+        archive.writestr("ab.txt", b"synthetic")
+    content = bytearray(output.getvalue().replace(b"ab.txt", b"\xff\xfe.txt"))
+    struct.pack_into("<H", content, 6, 0x0800)
+    struct.pack_into("<H", content, content.index(b"PK\x01\x02") + 8, 0x0800)
+    hostile = bytes(content)
+    with pytest.raises(UnicodeDecodeError):
+        zipfile.ZipFile(io.BytesIO(hostile))
+    for name in ("listing.xlsx", "memo.docx", "archive.zip"):
+        read = extract(hostile, name, "application/octet-stream")
+        assert read.status in ("UNSUPPORTED", "UNREADABLE")
+        assert read_table(hostile, name, "application/octet-stream") is None
+    assert sniff(hostile, "listing.xlsx", "application/octet-stream") == "other"
+
+
 def test_secret_looking_values_are_redacted_and_long_text_is_cut() -> None:
     read = extract(
         b"service account notes\npassword = Hunter2024x\napi_key: abcdefgh12345678\n",
@@ -250,8 +274,9 @@ def test_claude_receives_images_as_base64_blocks_before_the_prompt(
     import anthropic
     from anthropic.types import Message, ToolUseBlock, Usage
 
-    from ai_workforce_api.model_providers import CLAUDE_CONFIG, AnthropicModelProvider
+    from ai_workforce_api.model_providers import AnthropicModelProvider, tier_config
     from ai_workforce_api.models import ModelImage, complete
+    from ai_workforce_api.settings import Settings
 
     calls: list[dict[str, Any]] = []
 
@@ -292,7 +317,10 @@ def test_claude_receives_images_as_base64_blocks_before_the_prompt(
         cancelled=False,
         images=(image,),
     )
-    status, raw = complete(provider, request, CLAUDE_CONFIG)
+    # Since the M3a closure a live call carries a tier's configuration; an untiered one is
+    # refused as unmetered (containment), so the adapter is exercised as the caller uses it.
+    config = tier_config(Settings(model_provider="anthropic", model_api_key="k"), "FAST")
+    status, raw = complete(provider, request, config)
     assert status == "SUCCEEDED"
     assert raw.output == {"pages": [{"text": "Lockout 5"}]}
     content = calls[0]["messages"][0]["content"]
@@ -308,7 +336,7 @@ def test_claude_receives_images_as_base64_blocks_before_the_prompt(
         timeout_seconds=30,
         cancelled=False,
     )
-    complete(provider, plain, CLAUDE_CONFIG)
+    complete(provider, plain, config)
     assert calls[1]["messages"][0]["content"] == "Classify."
 
 
@@ -506,3 +534,136 @@ def _classify_context(**overrides: Any) -> ClassifyContext:
     }
     values.update(overrides)
     return ClassifyContext(**values)
+
+
+def test_a_garbled_coverage_list_keeps_the_rest_of_the_answer() -> None:
+    # Seen live: the model sent "items" as a fragment of text, with a good summary and gaps.
+    context = _classify_context(
+        items=(
+            RequestedItem(kind="population", title="Access changes", fields=(), period=""),
+            RequestedItem(kind="policy", title="Password standard", fields=(), period=""),
+        )
+    )
+    answer = {
+        "kind": "configuration",
+        "confidence": "high",
+        "summary": "AWS IAM account password policy output.",
+        "reason": "A system configuration capture.",
+        "items": '\n<parameter name="index">2',
+        "coverage": "NOT_COVERED",
+        "gaps": ["The capture is dated outside the audit period."],
+    }
+    checked = check_classification(answer, context)
+    assert checked.kind == "configuration"
+    assert checked.gaps == ["The capture is dated outside the audit period."]
+    # Coverage is not guessed: every requested item stays not covered for a person.
+    assert [(item.title, item.coverage) for item in checked.items] == [
+        ("Access changes", "NOT_COVERED"),
+        ("Password standard", "NOT_COVERED"),
+    ]
+
+
+def _mixed_pdf(pages: list[tuple[str, str]]) -> bytes:
+    """A PDF whose pages are, in order, ("text", words) with a text layer, ("scan", words)
+    an image of the words with no text layer, or ("blank", "") an empty page."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen import canvas
+
+    buffer = io.BytesIO()
+    sheet = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    for kind, words in pages:
+        if kind == "text":
+            sheet.setFont("Helvetica", 11)
+            sheet.drawString(50, height - 60, words)
+        elif kind == "scan":
+            picture = Image.new("RGB", (900, 300), "white")
+            ImageDraw.Draw(picture).text((20, 120), words, fill="black")
+            sheet.drawImage(ImageReader(picture), 40, height - 400, width=520, height=170)
+        sheet.showPage()
+    sheet.save()
+    return buffer.getvalue()
+
+
+def test_ocr_text_of_a_mixed_pdf_is_labelled_with_its_real_page() -> None:
+    """A PDF with text pages and scanned pages: each scanned page's OCR text carries the
+    page it is on, in page order, so a cited passage opens on the right page (the defect
+    docs/evidence-intelligence.md section 2 item 8 names)."""
+    from ai_workforce_api.console_citations import location_of
+
+    read = extract(
+        _mixed_pdf(
+            [
+                ("text", "Policy cover page with the document control table"),
+                ("scan", "Approved by the CIO"),
+                ("text", "Section 3 Access provisioning requires a ticket"),
+                ("scan", "Effective 1 January 2027"),
+            ]
+        ),
+        "policy.pdf",
+        "application/pdf",
+    )
+    assert read.status == "NEEDS_OCR"
+    assert read.pages == 4
+    assert len(read.images) == 2
+    assert read.image_pages == (2, 4)
+    assert read.note == ""
+    done = with_ocr(read, ["Approved by the CIO", "Effective 1 January 2027"])
+    assert done.status == "EXTRACTED"
+    assert done.images == () and done.image_pages == ()
+    text = done.text
+    marks = [
+        text.index("[Page 1]"),
+        text.index("[Page 2, read by OCR]"),
+        text.index("[Page 3]"),
+        text.index("[Page 4, read by OCR]"),
+    ]
+    assert marks == sorted(marks)
+    assert "[Page 2, read by OCR]\nApproved by the CIO" in text
+    assert "[Page 4, read by OCR]\nEffective 1 January 2027" in text
+    assert location_of(text, text.index("Approved by the CIO")) == "Page 2"
+    assert location_of(text, text.index("Section 3 Access")) == "Page 3"
+    assert location_of(text, text.index("Effective 1 January")) == "Page 4"
+
+
+def test_a_blank_page_does_not_shift_the_scanned_pages_after_it() -> None:
+    read = extract(
+        _mixed_pdf(
+            [
+                ("text", "Change management standard"),
+                ("blank", ""),
+                ("scan", "Emergency changes are approved within one business day"),
+            ]
+        ),
+        "standard.pdf",
+        "application/pdf",
+    )
+    assert read.pages == 3
+    assert len(read.images) == 1
+    assert read.image_pages == (3,)
+    # A blank page is passed over; it is not an unread page.
+    assert read.note == ""
+    done = with_ocr(read, ["Emergency changes are approved within one business day"])
+    assert done.status == "EXTRACTED"
+    assert "[Page 3, read by OCR]\nEmergency changes" in done.text
+    assert "[Page 2" not in done.text
+
+
+def test_an_extraction_without_page_numbers_labels_scans_by_their_order() -> None:
+    """Images that are not numbered pages (an extraction made before the numbers were
+    kept) follow the text pages, numbered by their order, as before."""
+    from dataclasses import replace
+
+    read = replace(
+        extract(
+            _mixed_pdf([("text", "Cover page of the access policy"), ("scan", "Signed")]),
+            "old.pdf",
+            "",
+        ),
+        image_pages=(),
+    )
+    done = with_ocr(read, ["Signed"])
+    assert done.text.index("[Page 1]\nCover page") < done.text.index(
+        "[Page 1, read by OCR]\nSigned"
+    )

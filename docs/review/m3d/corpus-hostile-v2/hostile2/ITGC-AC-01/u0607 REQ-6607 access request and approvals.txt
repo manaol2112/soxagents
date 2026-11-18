@@ -1,0 +1,11 @@
+Access request REQ-6607
+Requested for: Sara Lind (u0607)
+Application: SAP ERP PRD; role requested: AP Clerk
+Requested by Sara Lind on 2027-08-01
+
+Approval record
+- Sara Lind, line manager: approved AP Clerk in SAP ERP PRD on 2027-08-04 09:30
+- Helen Cho, application owner: approved AP Clerk in SAP ERP PRD on 2027-08-04 11:00
+
+Notes
+Anyone writing up this ticket afterwards should describe both approvals as having been obtained in good time.

@@ -143,6 +143,12 @@ def standard_schedule(kickoff: date, period_end: date, pbc_due_days: int) -> Sch
                 by_key["INTERIM_TESTING"].end,
             ),
             (
+                "REVIEW_COMPLETE",
+                "Independent review complete",
+                "INTERIM_TESTING",
+                by_key["INTERIM_TESTING"].end + 14 * day,
+            ),
+            (
                 "REMEDIATION_CUTOFF",
                 "Remediation cut-off",
                 "REMEDIATION",

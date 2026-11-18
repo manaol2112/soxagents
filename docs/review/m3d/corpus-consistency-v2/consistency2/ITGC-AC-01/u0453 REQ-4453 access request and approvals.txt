@@ -1,0 +1,8 @@
+Access request REQ-4453
+Requested for: Ana Reyes (u0453)
+Application: SAP ERP PRD; role requested: AR Clerk
+Requested by Ana Reyes on 2027-04-01
+
+Approval record
+- Mei Tanaka, line manager: approved AR Clerk in SAP ERP PRD on 2027-04-14 09:30
+- Helen Cho, application owner: approved AR Clerk in SAP ERP PRD on 2027-04-14 11:00

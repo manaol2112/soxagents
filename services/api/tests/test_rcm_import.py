@@ -10,7 +10,9 @@ from ai_workforce_api.rcm_import import (
     RcmFileError,
     best_sheet,
     build,
+    column_values,
     detect_header,
+    field_value,
     headers,
     parse_file,
     suggest_fields,
@@ -234,3 +236,79 @@ def test_ordinary_control_wording_is_not_mistaken_for_a_secret() -> None:
     maps = {"domain": {"": "ACCESS"}, "nature": {"": "MANUAL"}, "frequency": {"": "ANNUAL"}}
     result = build(rows, 1, ["control_ref", "activity"], maps)
     assert [c.control_ref for c in result.controls] == ["C1", "C2"]
+
+
+def test_columns_are_matched_by_their_values_as_well_as_their_headings() -> None:
+    """A heading names a field; the values confirm it, veto it, or pick between columns."""
+    names = [
+        "Control ID",
+        "Control Category",
+        "Process",
+        "Risk ID",
+        "Risk (What Could Go Wrong)",
+        "Control Description",
+        "Nature",
+        "Type",
+        "Frequency",
+        "Key Control",
+        "System(s)",
+    ]
+    samples = [
+        ["BP-SAP-01", "ITGC-SF-02", "IPE-WD-03"],
+        ["Business Process", "ITGC", "Key Report (IPE)"],
+        ["Procure-to-Pay", "Order-to-Cash / Revenue", "ITGC – Program Change"],
+        ["R-P2P-01", "R-O2C-04", "R-ITGC-02"],
+        ["Invoices are paid without a valid purchase order.", "Revenue is recorded early."],
+        ["Three-way match is performed before an invoice is released for payment."],
+        ["Preventive", "Detective"],
+        ["Automated", "IT-Dependent Manual", "Manual"],
+        ["Monthly", "Quarterly", "As needed"],
+        ["Y", "N"],
+        ["SAP", "Salesforce; Workday"],
+    ]
+    fields = suggest_fields(names, samples=samples)
+    assert dict(zip(names, fields, strict=True)) == {
+        "Control ID": "control_ref",
+        # Both the category and the process read as the area, together.
+        "Control Category": "domain",
+        "Process": "domain",
+        # The risk is the wording, not the identifier.
+        "Risk ID": "custom",
+        "Risk (What Could Go Wrong)": "risk",
+        "Control Description": "activity",
+        # Preventive or detective is the control's type, never its nature.
+        "Nature": "custom",
+        "Type": "nature",
+        "Frequency": "frequency",
+        "Key Control": "key_control",
+        "System(s)": "applications",
+    }
+
+
+def test_a_category_and_a_process_give_each_control_its_own_area() -> None:
+    cases = {
+        "Business Process / Order-to-Cash / Revenue": "ORDER_TO_CASH",
+        "Business Process / Procure-to-Pay": "PROCURE_TO_PAY",
+        "Business Process / Hire-to-Retire / Payroll": "HIRE_TO_RETIRE",
+        "Business Process / Record-to-Report": "RECORD_TO_REPORT",
+        "ITGC / ITGC – Logical Access": "ACCESS",
+        "ITGC / ITGC – Program Change": "CHANGE",
+        # Within ITGC, vendor management is IT operations, not procure to pay.
+        "ITGC / ITGC – Vendor Management": "OPERATIONS",
+        "Key Report (IPE) / Procure-to-Pay": "IPE",
+        "IT Application Control / Hire-to-Retire": "ITAC",
+        "ELC / Governance": "ENTITY",
+        # One column still works as before.
+        "Logical access": "ACCESS",
+        "Revenue": "ORDER_TO_CASH",
+        "ITGC": None,
+    }
+    for term, expected in cases.items():
+        assert suggest_value("domain", term) == expected, term
+    row = ["BP-01", "Business Process", "Order-to-Cash / Revenue", "x"]
+    fields = ["control_ref", "domain", "domain", "custom"]
+    assert field_value(row, fields, "domain") == "Business Process / Order-to-Cash / Revenue"
+    assert column_values([["a", "b"], ["1", "x"], ["2", "x"], ["", "y"]], 1) == [
+        ["1", "2"],
+        ["x", "y"],
+    ]

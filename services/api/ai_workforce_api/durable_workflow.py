@@ -202,6 +202,276 @@ class TurnRequest(TypedDict):
     message_id: str
 
 
+class TestRunRequest(TypedDict):
+    sheet_id: str
+
+
+class WorkpaperRequest(TypedDict):
+    workpaper_id: str
+
+
+@workflow.defn(name="workpaper_draft")
+class WorkpaperDraftWorkflow:
+    """The agent drafts one workpaper, with retries."""
+
+    @workflow.run
+    async def run(self, payload: WorkpaperRequest) -> str:
+        try:
+            result = await workflow.execute_activity(
+                "draft_workpaper",
+                args=[payload["workpaper_id"]],
+                start_to_close_timeout=timedelta(minutes=10),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+        except ActivityError:
+            await workflow.execute_activity(
+                "fail_workpaper_draft",
+                args=[payload["workpaper_id"]],
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            return "FAILED"
+        return str(result)
+
+
+class RedraftRequest(TypedDict):
+    proposal_id: str
+
+
+@workflow.defn(name="workpaper_section_redraft")
+class WorkpaperRedraftWorkflow:
+    """The agent redrafts one section a person asked for (docs/design-workpaper.md,
+    section 3.11), with retries; a run that gives up ends its proposal FAILED."""
+
+    @workflow.run
+    async def run(self, payload: RedraftRequest) -> str:
+        try:
+            result = await workflow.execute_activity(
+                "redraft_workpaper_section",
+                args=[payload["proposal_id"]],
+                start_to_close_timeout=timedelta(minutes=10),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+        except ActivityError:
+            await workflow.execute_activity(
+                "fail_workpaper_redraft",
+                args=[payload["proposal_id"]],
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            return "FAILED"
+        return str(result)
+
+
+class ReviewRequest(TypedDict):
+    review_id: str
+
+
+@workflow.defn(name="control_review")
+class ControlReviewWorkflow:
+    """The independent reviewer re-performs one control's testing, with retries."""
+
+    @workflow.run
+    async def run(self, payload: ReviewRequest) -> str:
+        try:
+            result = await workflow.execute_activity(
+                "reperform_review",
+                args=[payload["review_id"]],
+                start_to_close_timeout=timedelta(minutes=15),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+        except ActivityError:
+            await workflow.execute_activity(
+                "fail_review",
+                args=[payload["review_id"]],
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            return "FAILED"
+        return str(result)
+
+
+class SetupDraftRequest(TypedDict):
+    project_id: str
+
+
+class PlanRunRequest(TypedDict):
+    plan_id: str
+
+
+# What run_evidence_plan and fail_evidence_plan_run return when the plan was queued again
+# (evidence_plans.REQUEUED; the workflow module imports nothing of the API's), and how many
+# runs one workflow makes at most: the first and evidence_plans.PLAN_RUN_FOLLOWS (3) more.
+PLAN_REQUEUED = "REQUEUED"
+PLAN_FOLLOWS = 4
+
+
+@workflow.defn(name="evidence_plan_run")
+class EvidencePlanRunWorkflow:
+    """The planner agent plans a launched control, with retries; the rules' plan stands
+    if it cannot."""
+
+    @workflow.run
+    async def run(self, payload: PlanRunRequest) -> str:
+        """A run whose end queued the same plan again (REQUEUED: what fell due while it
+        worked), or whose failure was followed by queueing it again, is run as a new activity
+        with its own time limit, never inside the one before (after the review of B1k, 16
+        November 2026). Each is a new run with its own attempts; the plan's follow-on runs are
+        bounded on the plan (evidence_plans.PLAN_RUN_FOLLOWS, 3, so a chain makes at most
+        PLAN_FOLLOWS runs), and FOLLOWS bounds the workflow as well."""
+        result = "FAILED"
+        for _turn in range(PLAN_FOLLOWS):
+            try:
+                result = str(
+                    await workflow.execute_activity(
+                        "run_evidence_plan",
+                        args=[payload["plan_id"]],
+                        start_to_close_timeout=timedelta(minutes=10),
+                        retry_policy=RetryPolicy(maximum_attempts=3),
+                    )
+                )
+            except ActivityError:
+                followed = await workflow.execute_activity(
+                    "fail_evidence_plan_run",
+                    args=[payload["plan_id"]],
+                    start_to_close_timeout=timedelta(seconds=60),
+                )
+                result = "FAILED"
+                if followed != PLAN_REQUEUED:
+                    return result
+                continue
+            if result != PLAN_REQUEUED:
+                return result
+        return result
+
+
+class SystemReviewRequest(TypedDict):
+    application_id: str
+
+
+@workflow.defn(name="system_review")
+class SystemReviewWorkflow:
+    """The scoping agent reviews one in-scope system, with retries."""
+
+    @workflow.run
+    async def run(self, payload: SystemReviewRequest) -> str:
+        try:
+            result = await workflow.execute_activity(
+                "review_system",
+                args=[payload["application_id"]],
+                start_to_close_timeout=timedelta(minutes=10),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+        except ActivityError:
+            await workflow.execute_activity(
+                "fail_system_review",
+                args=[payload["application_id"]],
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            return "FAILED"
+        return str(result)
+
+
+class PriorYearRequest(TypedDict):
+    document_id: str
+
+
+@workflow.defn(name="prior_year_run")
+class PriorYearWorkflow:
+    """The agent matches and analyses one prior-year reference, with retries."""
+
+    @workflow.run
+    async def run(self, payload: PriorYearRequest) -> str:
+        try:
+            result = await workflow.execute_activity(
+                "run_prior_year",
+                args=[payload["document_id"]],
+                start_to_close_timeout=timedelta(minutes=30),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+        except ActivityError:
+            await workflow.execute_activity(
+                "fail_prior_year_run",
+                args=[payload["document_id"]],
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            return "FAILED"
+        return str(result)
+
+
+class NarrativeRequest(TypedDict):
+    control_id: str
+
+
+@workflow.defn(name="process_narrative_run")
+class NarrativeWorkflow:
+    """The agents draft and review one control's process narrative, with retries."""
+
+    @workflow.run
+    async def run(self, payload: NarrativeRequest) -> str:
+        try:
+            result = await workflow.execute_activity(
+                "run_narrative",
+                args=[payload["control_id"]],
+                start_to_close_timeout=timedelta(minutes=30),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+        except ActivityError:
+            await workflow.execute_activity(
+                "fail_narrative_run",
+                args=[payload["control_id"]],
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            return "FAILED"
+        return str(result)
+
+
+@workflow.defn(name="setup_draft")
+class SetupDraftWorkflow:
+    """The planner drafts an engagement's setup, with retries."""
+
+    @workflow.run
+    async def run(self, payload: SetupDraftRequest) -> str:
+        try:
+            result = await workflow.execute_activity(
+                "draft_setup",
+                args=[payload["project_id"]],
+                start_to_close_timeout=timedelta(minutes=10),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+        except ActivityError:
+            await workflow.execute_activity(
+                "fail_setup_draft",
+                args=[payload["project_id"]],
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            return "FAILED"
+        return str(result)
+
+
+@workflow.defn(name="control_testing")
+class ControlTestingWorkflow:
+    """The control's tester tests a sheet's items, with retries, and again if asked."""
+
+    @workflow.run
+    async def run(self, payload: TestRunRequest) -> str:
+        for _ in range(5):
+            try:
+                result = await workflow.execute_activity(
+                    "test_control",
+                    args=[payload["sheet_id"]],
+                    start_to_close_timeout=timedelta(minutes=30),
+                    retry_policy=RetryPolicy(maximum_attempts=3),
+                )
+            except ActivityError:
+                await workflow.execute_activity(
+                    "fail_test_run",
+                    args=[payload["sheet_id"]],
+                    start_to_close_timeout=timedelta(seconds=30),
+                )
+                return "FAILED"
+            if str(result) != "AGAIN":
+                return str(result)
+        return "AGAIN"
+
+
 @workflow.defn(name="console_turn")
 class ConsoleTurnWorkflow:
     """Answers one message in the agent console, with one retry."""
@@ -244,6 +514,61 @@ class PbcDraftWorkflow:
             await workflow.execute_activity(
                 "fail_pbc_draft",
                 args=[payload["draft_id"]],
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            return "FAILED"
+        return str(result)
+
+
+class AssessmentRequest(TypedDict):
+    run_id: str
+
+
+@workflow.defn(name="evidence_assessment")
+class EvidenceAssessmentWorkflow:
+    """Checks one evidence file against its control's attributes (the assurance chain,
+    docs/evidence-assurance.md), with retries."""
+
+    @workflow.run
+    async def run(self, payload: AssessmentRequest) -> str:
+        try:
+            result = await workflow.execute_activity(
+                "assess_evidence_file",
+                args=[payload["run_id"]],
+                start_to_close_timeout=timedelta(minutes=12),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+        except ActivityError:
+            await workflow.execute_activity(
+                "fail_evidence_assessment",
+                args=[payload["run_id"]],
+                start_to_close_timeout=timedelta(seconds=30),
+            )
+            return "FAILED"
+        return str(result)
+
+
+class PolicyEvidenceRequest(TypedDict):
+    project_id: str
+
+
+@workflow.defn(name="policy_evidence_run")
+class PolicyEvidenceWorkflow:
+    """The agent reads an engagement's policies on file against its requests, with retries."""
+
+    @workflow.run
+    async def run(self, payload: PolicyEvidenceRequest) -> str:
+        try:
+            result = await workflow.execute_activity(
+                "run_policy_evidence",
+                args=[payload["project_id"]],
+                start_to_close_timeout=timedelta(minutes=30),
+                retry_policy=RetryPolicy(maximum_attempts=3),
+            )
+        except ActivityError:
+            await workflow.execute_activity(
+                "fail_policy_evidence_run",
+                args=[payload["project_id"]],
                 start_to_close_timeout=timedelta(seconds=30),
             )
             return "FAILED"

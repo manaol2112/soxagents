@@ -415,18 +415,6 @@ def _run[T](settings: Settings, work: Callable[[psycopg.Connection[Any]], T]) ->
 # Processing
 
 
-def process_received(
-    connection: psycopg.Connection[Any],
-    provider: MailboxProvider,
-    organization_id: UUID,
-    project_id: UUID,
-    provider_message_id: str,
-) -> InboundBody | None:
-    """Record one received message. Repeating it returns the same record."""
-    message = provider.read_message(provider_message_id)
-    return _process(connection, provider, organization_id, project_id, message)
-
-
 def _process(
     connection: psycopg.Connection[Any],
     provider: MailboxProvider,

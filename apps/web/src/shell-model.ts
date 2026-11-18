@@ -1,19 +1,11 @@
-export const SECTIONS = [
-  "console",
-  "overview",
-  "projects",
-  "agents",
-  "tasks",
-  "evidence",
-  "approvals",
-  "setup",
-  "controls",
-  "plan",
-  "timeline",
-  "deficiencies",
-] as const;
-
-export type SectionId = (typeof SECTIONS)[number];
+import type { Client } from "./client-model.ts";
+import { DEFAULT_DEMO, type DemoSummary, parseDemo } from "./demo-model.ts";
+import { DEFAULT_TOUR, parseTour, type TourState } from "./demo-tour-model.ts";
+import type { Completion } from "./engagement-lifecycle.ts";
+import type { ProjectNoticeCode } from "./project-form.ts";
+import { canonicalQuery, parseSection, type SectionId } from "./routes.ts";
+import { parseSubscription, type SubscriptionSummary } from "./trial-model.ts";
+import { parseTrialUsage, type TrialUsage } from "./trial-usage-model.ts";
 
 export type SessionUser = {
   id: string;
@@ -25,6 +17,8 @@ export type Organization = {
   name: string;
   slug: string;
   role: string;
+  /** The firm's subscription as the API says it stands (trial-model.ts). */
+  subscription: SubscriptionSummary;
 };
 
 export type Project = {
@@ -32,6 +26,26 @@ export type Project = {
   name: string;
   slug: string;
   status: string;
+  /** What the engagements page shows on a card; "" or null when not set. */
+  clientName: string;
+  kind: string;
+  periodEnd: string | null;
+  ownerName: string;
+  controls: number;
+  openDeficiencies: number;
+  /** The firm's client it belongs to, for "New engagement for" this client. */
+  clientId: string | null;
+  /** Where the work stands, for the card: agent tasks by status, evidence past due by
+   * the metrics rulebook, the next milestone not done, and the last activity. */
+  progress: ProjectProgress[];
+  overdueRequests: number;
+  nextMilestone: { name: string; due: string } | null;
+  missedMilestones: number;
+  lastActivityAt: string | null;
+  /** The engagement team's names, the lead first. */
+  team: string[];
+  /** The firm's synthetic demo engagement (demo-model.ts): marked by the server. */
+  demo: boolean;
 };
 
 export type AssignableMember = {
@@ -51,6 +65,14 @@ export type ProjectActivity = {
 };
 
 export type ProjectDetail = {
+  /** Where it stands on completion; loaded on the Engagements page only. */
+  completion: Completion | null;
+  /** The engagement's profile, for the edit form (Milestone 8.15). */
+  clientId: string | null;
+  clientName: string;
+  periodEnd: string | null;
+  /** Launched: the client and the period end no longer change. */
+  launched: boolean;
   id: string;
   name: string;
   slug: string;
@@ -94,14 +116,36 @@ export type AgentDetail = {
   source: AgentSource;
 };
 
-export type ProjectNotice =
-  | "saved"
-  | "invalid"
-  | "conflict"
-  | "slug"
-  | "status"
-  | "denied"
-  | "unavailable";
+export type ProjectNotice = ProjectNoticeCode;
+
+const PROJECT_NOTICES: ReadonlySet<string> = new Set<ProjectNoticeCode>([
+  "saved",
+  "completed-done",
+  "reopened",
+  "deleted",
+  "invalid",
+  "conflict",
+  "slug",
+  "status",
+  "launch",
+  "archived",
+  "completed",
+  "open-work",
+  "launched",
+  "setup-running",
+  "work-on-record",
+  "reason",
+  "delete-name",
+  "locked",
+  "rollforward",
+  "client-renamed",
+  "client-exists",
+  "client-changed",
+  "denied",
+  "unavailable",
+  "trial-limit",
+  "trial-ended",
+]);
 
 export type AgentNotice =
   | "saved"
@@ -179,6 +223,8 @@ export type ShellModel =
   | {
       status: "ready";
       email: string;
+      /** The session's own user (`/auth/me`): who is reading, where a page needs it. */
+      userId: string;
       organizations: Organization[];
       organization: Organization;
       projects: Project[];
@@ -187,6 +233,8 @@ export type ShellModel =
       notifications: "empty" | "unavailable";
       canManageProjects: boolean;
       members: AssignableMember[];
+      /** The firm's clients, for the engagement form (Milestone 8.18). */
+      clients: Client[];
       projectDetail: ProjectDetail | null;
       notice: ProjectNotice | null;
       canManageAgents: boolean;
@@ -201,7 +249,19 @@ export type ShellModel =
       taskAssignees: AssignableMember[];
       agentInstances: AgentInstanceChoice[];
       taskNotice: TaskNotice | null;
+      /** The firm's synthetic demo, as the API says it stands (demo-model.ts). */
+      demo: DemoSummary;
+      /** Where this person stands in the demo's guided tour (demo-tour-model.ts). */
+      tour: TourState;
+      /** The trial's allowances and usage (trial-usage-model.ts); read for Settings. */
+      trialUsage: TrialUsage | null;
     };
+
+/** Whether the shell says to sign in. Never while the page is still loading: a member
+ * moving between pages is not signed out, so the loading shell shows placeholders. */
+export function showsSignInPrompt(model: ShellModel): boolean {
+  return model.status !== "ready" && model.status !== "loading";
+}
 
 export type WorkspaceSnapshot = {
   meStatus: number;
@@ -216,6 +276,7 @@ export type WorkspaceSnapshot = {
   notifications: "empty" | "unavailable";
   canManageProjects: boolean;
   members: AssignableMember[];
+  clients?: Client[];
   projectDetail: ProjectDetail | null;
   notice: string | null;
   agentsStatus: number;
@@ -229,6 +290,12 @@ export type WorkspaceSnapshot = {
   canManageTasks: boolean;
   taskAssignees: unknown;
   agentInstances: unknown;
+  /** The firm's demo answer, read only for a firm on a running trial. */
+  demo?: unknown;
+  /** The tour's answer, read only when the firm's demo is ready. */
+  tour?: unknown;
+  /** The subscription route's answer, read for the settings page. */
+  subscription?: unknown;
 };
 
 const ROLE_LABELS: Record<string, string> = {
@@ -289,8 +356,11 @@ export function deriveShell(snapshot: WorkspaceSnapshot): ShellModel {
   if (!isOk(snapshot.projectsStatus) || projects === null) {
     return { status: "error" };
   }
+  // The engagement asked for; otherwise one still in use (never an archived one while
+  // another is open), the same choice projectIdInList makes for the page's data.
   const selectedProject =
     projects.find((item) => item.id === snapshot.requestedProjectId) ??
+    projects.find((item) => item.status !== "ARCHIVED") ??
     projects[0] ??
     null;
   const requested = parseSection(snapshot.requestedSection);
@@ -316,6 +386,7 @@ export function deriveShell(snapshot: WorkspaceSnapshot): ShellModel {
   return {
     status: "ready",
     email: user.email,
+    userId: user.id,
     organizations,
     organization,
     projects,
@@ -324,6 +395,7 @@ export function deriveShell(snapshot: WorkspaceSnapshot): ShellModel {
     notifications: snapshot.notifications,
     canManageProjects: snapshot.canManageProjects,
     members: snapshot.members,
+    clients: snapshot.clients ?? [],
     projectDetail:
       snapshot.projectDetail !== null &&
       selectedProject !== null &&
@@ -344,23 +416,152 @@ export function deriveShell(snapshot: WorkspaceSnapshot): ShellModel {
     taskAssignees: tasks.assignees,
     agentInstances: tasks.instances,
     taskNotice: section === "tasks" ? parseTaskNotice(snapshot.notice) : null,
+    demo: snapshot.demo === undefined ? DEFAULT_DEMO : parseDemo(snapshot.demo),
+    tour: snapshot.tour === undefined ? DEFAULT_TOUR : parseTour(snapshot.tour),
+    trialUsage:
+      snapshot.subscription === undefined
+        ? null
+        : parseTrialUsage(snapshot.subscription),
   };
 }
 
-export function statusChoices(current: string): string[] {
-  if (current === "DRAFT") {
-    return ["DRAFT", "ACTIVE", "ARCHIVED"];
+/**
+ * The engagements the switcher offers: the ones still in use, and the one open now even
+ * when it is archived, so its name stays in place. Archived engagements are found on the
+ * Engagements page, as the recent list already leaves them out (recentOf).
+ */
+export function switcherProjects(
+  projects: readonly Project[],
+  selectedId: string | null,
+): Project[] {
+  return projects.filter(
+    (project) => project.status !== "ARCHIVED" || project.id === selectedId,
+  );
+}
+
+/**
+ * What the engagement switcher shows for each engagement: the client, then the name.
+ * Two engagements can share a name, so the client comes first; when both still match,
+ * the period end tells them apart.
+ */
+export function projectLabels(
+  projects: readonly Project[],
+): Map<string, string> {
+  const base = (project: Project) =>
+    project.clientName.trim() === ""
+      ? project.name
+      : `${project.clientName.trim()} · ${project.name}`;
+  const seen = new Map<string, number>();
+  for (const project of projects) {
+    const label = base(project).toLowerCase();
+    seen.set(label, (seen.get(label) ?? 0) + 1);
   }
-  if (current === "ACTIVE") {
-    return ["ACTIVE", "PAUSED", "ARCHIVED"];
+  return new Map(
+    projects.map((project) => {
+      const label = base(project);
+      if ((seen.get(label.toLowerCase()) ?? 0) < 2) {
+        return [project.id, label];
+      }
+      const period =
+        project.periodEnd === null
+          ? "no period end"
+          : `period end ${project.periodEnd}`;
+      return [project.id, `${label} (${period})`];
+    }),
+  );
+}
+
+export {
+  DESTINATIONS,
+  destinationHref,
+  parseReportTab,
+  parseSection,
+  parseSettingsTab,
+  REPORT_TAB_LABELS,
+  REPORT_TABS,
+  type ReportTab,
+  type Route,
+  resolveRoute,
+  SECTIONS,
+  SETTINGS_FIRM_FROM,
+  SETTINGS_TAB_LABELS,
+  SETTINGS_TABS,
+  type SectionId,
+  type SettingsTab,
+} from "./routes.ts";
+
+/** The sections that open once the engagement has launched. Before that, setup is the work. */
+export const LAUNCHED_SECTIONS: readonly SectionId[] = [
+  "console",
+  "overview",
+  "controls",
+  "register",
+  "planning",
+  "testing",
+  "review",
+  "plan",
+  "timeline",
+  "evidence",
+  "deficiencies",
+  "approvals",
+  "reports",
+];
+
+/** A launched engagement with no controls yet: Controls is where they are set up
+ * (decided by the product owner), with the setup's own steps. */
+export function controlsToSetUp(
+  project: { status: string; controls: number } | null,
+): boolean {
+  return (
+    project !== null &&
+    project.status !== "DRAFT" &&
+    project.status !== "ARCHIVED" &&
+    project.status !== "COMPLETED" &&
+    project.controls === 0
+  );
+}
+
+/** The menu before the firm's first engagement: Home, which starts one, and the firm's
+ * own pages. The engagement's pages have nothing to show yet (decided by the product
+ * owner on 27 October 2026). */
+const BEFORE_FIRST_ENGAGEMENT: readonly SectionId[] = [
+  "overview",
+  "projects",
+  "library",
+];
+
+/** Whether the menu lists a section, given whether an engagement is open. */
+export function shownInMenu(
+  section: SectionId,
+  engagementOpen: boolean,
+): boolean {
+  return engagementOpen || BEFORE_FIRST_ENGAGEMENT.includes(section);
+}
+
+/** Home with nothing in scope has nothing to show yet: a launched engagement without
+ * controls opens on Systems & Processes, where the systems, processes and controls are
+ * added (decided by the product owner on 27 October 2026). Null when Home stays. */
+export function homePlacement(
+  section: SectionId,
+  organizationId: string,
+  project: (Pick<Project, "id"> & { status: string; controls: number }) | null,
+): string | null {
+  if (section !== "overview" || project === null || !controlsToSetUp(project)) {
+    return null;
   }
-  if (current === "PAUSED") {
-    return ["PAUSED", "ACTIVE", "ARCHIVED"];
-  }
-  if (current === "ARCHIVED") {
-    return ["ARCHIVED"];
-  }
-  return [];
+  return workspaceHref("controls", organizationId, project.id);
+}
+
+/** A draft engagement has not launched: its controls, evidence, plan, and approvals wait. */
+export function lockedBeforeLaunch(
+  section: SectionId,
+  project: Pick<Project, "status"> | null,
+): boolean {
+  return (
+    project !== null &&
+    project.status === "DRAFT" &&
+    LAUNCHED_SECTIONS.includes(section)
+  );
 }
 
 export function canManageProjects(role: string): boolean {
@@ -414,10 +615,11 @@ export function workspaceHref(
   if (taskId !== null) {
     params.set("task", taskId);
   }
+  // Home is the default page, so only it can leave the section out.
   if (section !== "overview") {
     params.set("section", section);
   }
-  return `/?${params.toString()}`;
+  return `/?${canonicalQuery(params).toString()}`;
 }
 
 function loadAgents(
@@ -498,7 +700,13 @@ function parseOrganizations(value: unknown): Organization[] | null {
     ) {
       return null;
     }
-    organizations.push({ id, name, slug, role });
+    organizations.push({
+      id,
+      name,
+      slug,
+      role,
+      subscription: parseSubscription(item),
+    });
   }
   return organizations;
 }
@@ -524,7 +732,51 @@ function parseProjects(value: unknown): Project[] | null {
     ) {
       return null;
     }
-    projects.push({ id, name, slug, status });
+    projects.push({
+      id,
+      name,
+      slug,
+      status,
+      clientName: typeof item.client_name === "string" ? item.client_name : "",
+      kind:
+        typeof item.engagement_type === "string" ? item.engagement_type : "",
+      periodEnd: typeof item.period_end === "string" ? item.period_end : null,
+      ownerName: typeof item.owner_name === "string" ? item.owner_name : "",
+      controls: typeof item.controls === "number" ? item.controls : 0,
+      openDeficiencies:
+        typeof item.open_deficiencies === "number" ? item.open_deficiencies : 0,
+      clientId: typeof item.client_id === "string" ? item.client_id : null,
+      progress: Array.isArray(item.progress)
+        ? item.progress.flatMap((entry) =>
+            isRecord(entry) &&
+            typeof entry.status === "string" &&
+            typeof entry.count === "number"
+              ? [{ status: entry.status, count: entry.count }]
+              : [],
+          )
+        : [],
+      overdueRequests:
+        typeof item.overdue_requests === "number" ? item.overdue_requests : 0,
+      nextMilestone:
+        isRecord(item.next_milestone) &&
+        typeof item.next_milestone.name === "string" &&
+        typeof item.next_milestone.due === "string"
+          ? { name: item.next_milestone.name, due: item.next_milestone.due }
+          : null,
+      missedMilestones:
+        typeof item.missed_milestones === "number" ? item.missed_milestones : 0,
+      lastActivityAt:
+        typeof item.last_activity_at === "string"
+          ? item.last_activity_at
+          : null,
+      team: Array.isArray(item.team)
+        ? item.team.filter(
+            (entry): entry is string =>
+              typeof entry === "string" && entry !== "",
+          )
+        : [],
+      demo: item.demo === true,
+    });
   }
   return projects;
 }
@@ -636,18 +888,9 @@ function parseAgentNotice(value: string | null): AgentNotice | null {
 }
 
 function parseNotice(value: string | null): ProjectNotice | null {
-  if (
-    value === "saved" ||
-    value === "invalid" ||
-    value === "conflict" ||
-    value === "slug" ||
-    value === "status" ||
-    value === "denied" ||
-    value === "unavailable"
-  ) {
-    return value;
-  }
-  return null;
+  return value !== null && PROJECT_NOTICES.has(value)
+    ? (value as ProjectNotice)
+    : null;
 }
 
 export function parseTasks(value: unknown): TaskSummary[] | null {
@@ -909,7 +1152,12 @@ export function projectIdInList(
       }
     }
   }
-  const first = value[0];
+  // None asked for (or not in the list): the first still in use, so an archived
+  // engagement never opens by default; the first only when every one is archived.
+  const open = value.find(
+    (item) => isRecord(item) && item.status !== "ARCHIVED",
+  );
+  const first = open ?? value[0];
   if (isRecord(first) && typeof first.id === "string") {
     return first.id;
   }
@@ -959,6 +1207,11 @@ export function parseProjectDetail(value: unknown): ProjectDetail | null {
     return null;
   }
   return {
+    completion: null,
+    clientId: typeof value.client_id === "string" ? value.client_id : null,
+    clientName: typeof value.client_name === "string" ? value.client_name : "",
+    periodEnd: typeof value.period_end === "string" ? value.period_end : null,
+    launched: value.launched === true,
     id: value.id,
     name: value.name,
     slug: value.slug,
@@ -1017,27 +1270,6 @@ function parseActivity(value: unknown): ProjectActivity[] | null {
 
 function isDateText(value: unknown): value is string | null {
   return value === null || typeof value === "string";
-}
-
-function parseSection(value: string | null): SectionId {
-  if (
-    value === "projects" ||
-    value === "agents" ||
-    value === "tasks" ||
-    value === "evidence" ||
-    value === "approvals" ||
-    value === "setup" ||
-    value === "controls" ||
-    value === "plan" ||
-    value === "timeline" ||
-    value === "deficiencies" ||
-    value === "overview" ||
-    value === "console"
-  ) {
-    return value;
-  }
-  // An engagement opens on the agent console.
-  return "console";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

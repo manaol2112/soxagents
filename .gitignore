@@ -38,6 +38,7 @@ yarn.lock
 dist/
 build/
 .next/
+.next-review/
 out/
 .turbo/
 *.tsbuildinfo
@@ -53,6 +54,8 @@ blob-report/
 junit.xml
 
 # Local infrastructure data
+# Database backups (make backup): engagement data, never committed.
+backups/
 .docker-data/
 tmp/
 *.log

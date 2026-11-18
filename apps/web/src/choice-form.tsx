@@ -14,7 +14,7 @@ export function ChoiceForm({
   hidden: Array<{ name: string; value: string }>;
 }) {
   return (
-    <form method="get" action="/">
+    <form autoComplete="off" method="get" action="/">
       {hidden.map((field) => (
         <input
           key={field.name}
@@ -25,6 +25,10 @@ export function ChoiceForm({
       ))}
       <label htmlFor={name}>{label}</label>
       <select
+        // Remounted when the chosen value changes from outside (a demo reset moves the
+        // page to the new engagement without a full load), so the shown choice never
+        // stays on the old one (29 October 2026).
+        key={value}
         id={name}
         name={name}
         defaultValue={value}

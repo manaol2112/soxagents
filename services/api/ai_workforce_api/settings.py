@@ -1,13 +1,47 @@
 """Process settings. Secrets come from the environment, never from defaults."""
 
-from pydantic import Field
+from ipaddress import IPv4Network, IPv6Network, ip_network
+from typing import Self
+from urllib.parse import urlsplit, urlunsplit
+
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def loopback_database_url(url: str) -> str:
+    """A database URL whose host is `localhost`, pointed at 127.0.0.1 instead.
+
+    Compose publishes PostgreSQL on 127.0.0.1 only. On Windows, `localhost` is tried as ::1
+    first, and a refused connection there is retried for seconds before the IPv4 address is
+    tried, so every connection took longer than the web app's three seconds per request and
+    signed-in pages showed "Workspace unavailable" (16 November 2026). 127.0.0.1 is the same
+    machine, reached at once. Any other host, and a URL that cannot be read as one, is
+    returned unchanged."""
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+        port = parts.port
+    except ValueError:
+        return url
+    if not parts.scheme.startswith("postgres") or host is None or host.lower() != "localhost":
+        return url
+    user_info, _, _ = parts.netloc.rpartition("@")
+    netloc = "127.0.0.1" if port is None else f"127.0.0.1:{port}"
+    if user_info != "":
+        netloc = f"{user_info}@{netloc}"
+    return urlunsplit(parts._replace(netloc=netloc))
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore", env_file=None)
 
     database_url: str = ""
+
+    @field_validator("database_url")
+    @classmethod
+    def _loopback(cls, value: str) -> str:
+        return loopback_database_url(value)
+
     email_live_send_enabled: bool = False
     email_provider: str = ""
     email_allowed_recipient_domains: str = ""
@@ -16,23 +50,165 @@ class Settings(BaseSettings):
     graph_client_id: str = ""
     graph_client_secret: str = Field(default="", repr=False)
     shared_mailbox_address: str = ""
+    # Live email over SMTP (smtp_mailbox.py): send only, to the allowed domains.
+    smtp_host: str = ""
+    smtp_port: int = Field(default=465, ge=1, le=65535)
+    # True: TLS from the start (port 465). False: STARTTLS on a plain connection (587).
+    smtp_secure: bool = True
+    smtp_user: str = Field(default="", repr=False)
+    smtp_password: str = Field(default="", repr=False)
+    email_from: str = ""
+    # Where demo requests and new sign-ups are announced (support_notifications.py);
+    # empty sends none. Its domain must be among the allowed recipient domains.
+    support_notify_email: str = ""
     app_base_url: str = ""
+    # Where links that leave the app point (the secure upload link and the welcome email's
+    # sign-in link), when that differs from app_base_url: for example the machine's address
+    # on the local network. Empty uses app_base_url.
+    public_base_url: str = ""
+
+    def link_base_url(self) -> str:
+        """The base of links sent outside the app, without a trailing slash."""
+        return (self.public_base_url.strip() or self.app_base_url.strip()).rstrip("/")
+
     oidc_issuer_url: str = ""
     oidc_client_id: str = ""
     oidc_client_secret: str = ""
     oidc_redirect_url: str = ""
+    google_client_id: str = ""
+    google_client_secret: str = Field(default="", repr=False)
+    google_redirect_url: str = ""
+    # Comma-separated DNS servers for the invitation mail-domain check. Empty uses the
+    # machine's own resolvers.
+    dns_nameservers: str = ""
     session_ttl_seconds: int = Field(default=28800, ge=60)
     login_attempt_ttl_seconds: int = Field(default=600, ge=60)
     session_cookie_secure: bool = True
+    # The local sign-in without an identity provider. Refused in production (below).
     preview_login_enabled: bool = False
+    # Where the process runs: "production" for real engagements. Development switches,
+    # like turning the independence rules off or the preview sign-in on, are refused there.
+    app_env: str = ""
+    # The proxies in front of the API whose X-Forwarded-For is believed, comma-separated
+    # addresses or networks (TRUSTED_PROXIES, such as "127.0.0.1" or "10.0.0.0/8"). Empty
+    # believes none: the caller's address is the socket's peer (rate_limit.client_address;
+    # security review, 17 November 2026).
+    trusted_proxies: str = ""
+
+    @field_validator("trusted_proxies")
+    @classmethod
+    def _proxies(cls, value: str) -> str:
+        for entry in value.split(","):
+            if entry.strip():
+                try:
+                    ip_network(entry.strip(), strict=False)
+                except ValueError:
+                    raise ValueError(
+                        f"TRUSTED_PROXIES holds {entry.strip()!r}, which is not an address "
+                        "or a network"
+                    ) from None
+        return value
+
+    def trusted_proxy_networks(self) -> tuple[IPv4Network | IPv6Network, ...]:
+        """The trusted proxies as networks (a single address is a network of one)."""
+        return tuple(
+            ip_network(entry.strip(), strict=False)
+            for entry in self.trusted_proxies.split(",")
+            if entry.strip()
+        )
+
+    @model_validator(mode="after")
+    def _no_preview_in_production(self) -> Self:
+        # The preview sign-in opens an owner's session with no identity provider: a
+        # development switch, never on where real engagements run (security review,
+        # 17 November 2026).
+        if self.preview_login_enabled and self.app_env.strip().lower() == "production":
+            raise ValueError("PREVIEW_LOGIN_ENABLED cannot be true when APP_ENV is production")
+        return self
+
+    # The independent-review rules (see independence.py). Leave true for real engagements.
+    review_independence_required: bool = True
     workflow_provider: str = ""
     workflow_address: str = ""
     model_provider: str = ""
     model_api_key: str = Field(default="", repr=False)
+    # The BALANCED tier's model when MODEL_BALANCED is empty (kept from before the tiers).
     model_name: str = ""
+    # Milestone 3a: three configurable tiers, each a pinned model of the provider
+    # (model_providers.py names the defaults and their prices). Empty takes the default.
+    model_fast: str = ""
+    model_balanced: str = ""
+    model_deep: str = ""
+    # Prices for models the table does not know, as JSON: {"model-id": [input, output]}
+    # in dollars per million tokens. A live model without a price is refused.
+    model_prices: str = ""
+    # The DEEP tier is explicitly authorized work only: the roster keys listed here
+    # (comma-separated, for example "independent-reviewer,engagement-planner") run on it;
+    # every other agent runs on FAST or BALANCED as model_providers.AGENT_TIERS says.
+    model_deep_agents: str = ""
+    # Containment: a live model call that does not go through the agent caller (no tier,
+    # no budget, no provenance) is refused unless this is true. Development only; never
+    # for real engagements. Each refusal is logged.
+    model_allow_unmetered: bool = False
+    # Budgets in micro-dollars (1,000,000 = $1). Provisional development defaults: $1 a
+    # call, $10 a job, $50 an engagement a calendar month. 0 means no limit, for tests
+    # with a stubbed provider. A call past a limit is refused before dispatch and
+    # recorded as BUDGET_EXCEEDED.
+    model_budget_call_micros: int = Field(default=1_000_000, ge=0)
+    model_budget_job_micros: int = Field(default=10_000_000, ge=0)
+    model_budget_engagement_month_micros: int = Field(default=50_000_000, ge=0)
+    # The free trial (Trial Management, Step 2; the owner's decisions of 28 October 2026):
+    # what a firm's subscription row is given when it signs itself up. The row is what the
+    # database and the agent caller enforce, so a change here applies to trials that start
+    # after it. The AI allowance is for the whole trial, never renewed.
+    trial_days: int = Field(default=7, ge=1, le=365)
+    trial_limit_engagements: int = Field(default=1, ge=0)
+    trial_limit_systems: int = Field(default=1, ge=0)
+    trial_limit_controls: int = Field(default=5, ge=0)
+    trial_limit_members: int = Field(default=1, ge=0)
+    trial_limit_uploads: int = Field(default=10, ge=0)
+    trial_limit_upload_bytes: int = Field(default=250_000_000, ge=0)
+    trial_ai_budget_micros: int = Field(default=5_000_000, ge=0)
+    trial_ai_run_limit: int = Field(default=20, ge=0)
+    trial_ai_concurrent_runs: int = Field(default=1, ge=1)
+    trial_ai_run_seconds: int = Field(default=600, ge=60)
+    # Request throttles (pre-launch hardening, Step 7; rate_limit.py): how many requests
+    # a window allows per network address, per sign-up identity and per firm. 0 turns a
+    # throttle off. Sign-in windows fail open on a counting error; sign-up and the demo
+    # fail closed.
+    rate_limit_login_per_address: int = Field(default=30, ge=0)
+    rate_limit_login_window_seconds: int = Field(default=600, ge=10)
+    rate_limit_signup_per_address: int = Field(default=5, ge=0)
+    rate_limit_signup_per_identity: int = Field(default=2, ge=0)
+    rate_limit_signup_window_seconds: int = Field(default=3600, ge=60)
+    rate_limit_demo_per_firm: int = Field(default=10, ge=0)
+    rate_limit_demo_window_seconds: int = Field(default=3600, ge=60)
+    # How long an agent run may be quiet between model calls and still hold the
+    # trial's one concurrent slot (subscriptions.py).
+    trial_ai_quiet_seconds: int = Field(default=90, ge=10, le=3600)
+    # The dataset a trial firm's synthetic demo engagement is built from (demo_datasets.py),
+    # by key. Empty means no demo is available yet: the invitation leads to the preparation
+    # notice. `placeholder/0` is for development and integration tests only.
+    demo_dataset: str = Field(default="", pattern=r"^$|^[a-z0-9-]+/[0-9]+$")
+    # The key that encrypts stored prompts and answers (provenance.py): 32 bytes,
+    # base64. Without it, only hashes are kept. Never logged.
+    provenance_key: str = Field(default="", repr=False)
+    # Earlier provenance keys, comma-separated, kept so content sealed under them stays
+    # readable after a rotation. Each key is identified by its id (sha256 prefix).
+    provenance_previous_keys: str = Field(default="", repr=False)
+    # How long encrypted prompts and answers are kept before the deploy step removes
+    # them. The hashes and the call record stay.
+    model_content_retention_days: int = Field(default=90, ge=1, le=3650)
+    # Live tests against the provider run only when this is true (MODEL_LIVE_TESTS=1).
+    model_live_tests: bool = False
     # Runs background work, such as drafting evidence requests, in the API process when
     # no workflow engine is configured. For local development.
     local_worker_enabled: bool = False
+    # How many background jobs the local worker runs at once: evidence request drafts,
+    # scoping reviews, system scans, and evidence analyses share these threads. Each
+    # draft is one model call of a few seconds, so 80 requests take minutes on 2 threads
+    # and well under one on 6.
+    local_worker_threads: int = Field(default=6, ge=1, le=16)
     # The local OCR engine for screenshots and scanned pages. Empty means `tesseract` on
     # the PATH. Without it, such files are marked for a person to read.
     ocr_tesseract_path: str = ""
@@ -57,4 +233,11 @@ class Settings(BaseSettings):
             and self.oidc_client_id != ""
             and self.oidc_client_secret != ""
             and self.oidc_redirect_url != ""
+        )
+
+    def google_configured(self) -> bool:
+        return (
+            self.google_client_id != ""
+            and self.google_client_secret != ""
+            and self.google_redirect_url != ""
         )

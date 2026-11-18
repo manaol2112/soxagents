@@ -12,6 +12,7 @@ import {
   type EvidenceSettings,
   REVIEW_CHECK_LABELS,
   type ReviewCheck,
+  runFailureLine as readingFailureLine,
   readingLabel,
 } from "./analysis-model";
 import { formatDate } from "./format";
@@ -24,8 +25,8 @@ export const ANALYSIS_NOTICES: Record<AnalysisNotice, string> = {
     "The evidence coordinator is reading the file again. Refresh in a moment to see it.",
   "analysis-changed":
     "That file's reading changed, is still in progress, or is already confirmed. Refresh to see its current state.",
-  "ocr-saved": "OCR setting saved. It applies to files read from now on.",
-  "ocr-changed": "The OCR setting changed. Refresh and try again.",
+  "ocr-saved": "Setting saved. It applies to files read from now on.",
+  "ocr-changed": "This setting changed. Refresh and try again.",
   denied: "Your role cannot change this.",
   invalid: "Check the fields and try again.",
   unavailable: "That could not be saved. Try again.",
@@ -64,18 +65,31 @@ const COVERAGE: Record<Coverage, { label: string; tone: string }> = {
 };
 
 /** What the evidence coordinator read from one stored file. Untrusted content. */
+/** Where a form in the panel returns to: the page's tab, open file, and filters. */
+function KeepFields({ keep }: { keep: Record<string, string> }) {
+  return (
+    <>
+      {Object.entries(keep).map(([key, value]) => (
+        <input key={key} type="hidden" name={`keep_${key}`} value={value} />
+      ))}
+    </>
+  );
+}
+
 export function AnalysisPanel({
   analysis,
   review = null,
   organizationId,
   projectId,
   canAct,
+  keep = {},
 }: {
   analysis: EvidenceAnalysis | null;
   review?: EvidenceReview | null;
   organizationId: string;
   projectId: string;
   canAct: boolean;
+  keep?: Record<string, string>;
 }) {
   if (analysis === null) {
     return null;
@@ -86,6 +100,7 @@ export function AnalysisPanel({
       <input type="hidden" name="project_id" value={projectId} />
       <input type="hidden" name="analysis_id" value={analysis.id} />
       <input type="hidden" name="version" value={analysis.version} />
+      <KeepFields keep={keep} />
     </>
   );
   if (analysis.status === "PENDING" || analysis.status === "WORKING") {
@@ -103,10 +118,14 @@ export function AnalysisPanel({
       <div className="analysis">
         <p className="analysis-head">
           <span className="pill pill-dot tone-danger">Not read</span>
-          <small>{analysis.note || "Reading the file did not finish."}</small>
+          <small>{readingFailureLine(analysis)}</small>
         </p>
         {canAct ? (
-          <form method="post" action="/workspace/evidence-analyses">
+          <form
+            autoComplete="off"
+            method="post"
+            action="/workspace/evidence-analyses"
+          >
             {hidden}
             <input type="hidden" name="intent" value="reanalyze" />
             <button type="submit" className="btn-secondary btn-sm">
@@ -133,8 +152,8 @@ export function AnalysisPanel({
         )}
         <small>
           {readingLabel(analysis)} ·{" "}
-          {analysis.source === "MODEL" ? "Claude" : "Reviewed rules"} ·{" "}
-          {result.confidence} confidence
+          {analysis.source === "MODEL" ? "Read by an agent" : "Standard checks"}{" "}
+          · {result.confidence} confidence
         </small>
       </p>
       {result.summary !== "" ? (
@@ -170,6 +189,12 @@ export function AnalysisPanel({
           </ul>
         </div>
       ) : null}
+      {readingFailureLine(analysis) !== null ? (
+        // The reader's answer could not be used: the server's sentence, beside the result.
+        <p className="analysis-note" role="status">
+          {readingFailureLine(analysis)}
+        </p>
+      ) : null}
       {result.period !== "" || analysis.note !== "" ? (
         <p className="analysis-note">
           {[result.period, analysis.note]
@@ -188,14 +213,16 @@ export function AnalysisPanel({
           <p className="analysis-note">{result.reason}</p>
         ) : null}
         <p className="untrusted-note">
-          <UiIcon name="info" size={13} /> Read from the client&apos;s file and
-          shown as plain text.
-          {analysis.redacted ? " Secret-looking values were redacted." : ""}
+          <UiIcon name="info" size={13} /> Read from the organization&apos;s
+          file and shown as plain text.
+          {analysis.redacted
+            ? " Passwords and keys found in it were hidden."
+            : ""}
           {analysis.excerpt.length < analysis.textLength
             ? " Only the start is shown."
             : ""}
           {analysis.truncated
-            ? " The file was longer than the agent reads."
+            ? " Only the first part of this long file was read."
             : ""}
         </p>
         {analysis.excerpt !== "" ? (
@@ -214,6 +241,7 @@ export function AnalysisPanel({
       {canAct ? (
         <div className="analysis-actions">
           <form
+            autoComplete="off"
             method="post"
             action="/workspace/evidence-analyses"
             className="analysis-confirm"
@@ -247,7 +275,11 @@ export function AnalysisPanel({
           </form>
           {(confirmed ?? result.kind) === "population" &&
           analysis.requestId !== null ? (
-            <form method="post" action="/workspace/control-tests">
+            <form
+              autoComplete="off"
+              method="post"
+              action="/workspace/control-tests"
+            >
               <input
                 type="hidden"
                 name="organization_id"
@@ -266,7 +298,11 @@ export function AnalysisPanel({
             </form>
           ) : null}
           {confirmed === null && review?.decision == null ? (
-            <form method="post" action="/workspace/evidence-analyses">
+            <form
+              autoComplete="off"
+              method="post"
+              action="/workspace/evidence-analyses"
+            >
               {hidden}
               <input type="hidden" name="intent" value="reanalyze" />
               <button type="submit" className="btn-secondary btn-sm">
@@ -282,6 +318,7 @@ export function AnalysisPanel({
           organizationId={organizationId}
           projectId={projectId}
           canAct={canAct}
+          keep={keep}
         />
       ) : null}
     </div>
@@ -294,11 +331,13 @@ function ReviewSection({
   organizationId,
   projectId,
   canAct,
+  keep,
 }: {
   review: EvidenceReview;
   organizationId: string;
   projectId: string;
   canAct: boolean;
+  keep: Record<string, string>;
 }) {
   const final = review.conclusion ?? review.proposed;
   return (
@@ -396,6 +435,7 @@ function ReviewSection({
         </p>
       ) : canAct ? (
         <form
+          autoComplete="off"
           method="post"
           action="/workspace/evidence-analyses"
           className="review-signoff"
@@ -406,6 +446,7 @@ function ReviewSection({
           <input type="hidden" name="analysis_id" value={review.id} />
           <input type="hidden" name="version" value={review.version} />
           <input type="hidden" name="intent" value="decide" />
+          <KeepFields keep={keep} />
           <fieldset>
             <legend>Your review</legend>
             <label className="choice">
@@ -475,8 +516,7 @@ export function EvidenceReadingCard({
         <div>
           <h2 id="evidence-reading-title">Evidence reading</h2>
           <p className="card-desc">
-            The evidence coordinator reads each stored file and suggests what
-            kind of evidence it is. Screenshots and scanned pages need OCR.
+            How the evidence coordinator reads screenshots and scanned pages.
           </p>
         </div>
       </div>
@@ -507,6 +547,7 @@ export function EvidenceReadingCard({
             </ul>
             {canManage ? (
               <form
+                autoComplete="off"
                 method="post"
                 action="/workspace/evidence-analyses"
                 className="reading-form"
@@ -528,10 +569,10 @@ export function EvidenceReadingCard({
                       defaultChecked={settings.ocrEngine === "LOCAL"}
                     />
                     <span>
-                      <strong>Local OCR (recommended)</strong>
+                      <strong>Read inside the workspace (recommended)</strong>
                       <small>
-                        Images are read by the OCR engine installed with the
-                        platform and never leave the firm.
+                        Text is read from images inside your workspace. Images
+                        never leave the firm.
                       </small>
                     </span>
                   </label>
@@ -543,12 +584,11 @@ export function EvidenceReadingCard({
                       defaultChecked={settings.ocrEngine === "MODEL"}
                     />
                     <span>
-                      <strong>The model reads images</strong>
+                      <strong>Read by the AI model</strong>
                       <small>
-                        Screenshots and scanned pages are sent to the model
-                        provider, which reads them more accurately. Client
-                        evidence images leave the firm. Local OCR is used if the
-                        model cannot answer.
+                        Screenshots and scanned pages are sent to the AI model
+                        for more accurate reading, so the images leave the
+                        workspace. Reading inside the workspace is the fallback.
                       </small>
                     </span>
                   </label>
@@ -560,8 +600,8 @@ export function EvidenceReadingCard({
             ) : (
               <p className="analysis-note">
                 {settings.ocrEngine === "MODEL"
-                  ? "The model reads screenshots and scanned pages for this firm."
-                  : "Screenshots and scanned pages are read by local OCR and never leave the firm."}{" "}
+                  ? "The AI model reads screenshots and scanned pages for this firm."
+                  : "Screenshots and scanned pages are read inside the workspace and never leave the firm."}{" "}
                 An owner or admin can change this.
               </p>
             )}

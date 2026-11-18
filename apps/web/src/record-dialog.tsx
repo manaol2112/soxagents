@@ -1,0 +1,139 @@
+"use client";
+
+import { useRouter } from "next/navigation";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useTransition,
+} from "react";
+import { createPortal } from "react-dom";
+
+import { UiIcon } from "./ui-icon";
+import { isTopmostDialog, useFocusTrap } from "./use-focus-trap";
+
+/**
+ * A record opened over the page (Milestone 8.17), as a template preview is: the page
+ * underneath stays where it was, and closing (the close button, Escape, or a click
+ * outside) returns to it without reloading or scrolling. The record itself is rendered
+ * on the server and passed in.
+ */
+export function RecordDialog({
+  eyebrow,
+  title,
+  description,
+  closeHref,
+  children,
+  className,
+  onClose,
+  icon = null,
+}: {
+  /** A tile beside the title, as the product owner's dialogs carry (2 November 2026). */
+  icon?: ReactNode;
+  /** Text, or a line with a badge of its own (the setup's introduction). */
+  eyebrow: ReactNode;
+  title: string;
+  description?: string;
+  closeHref: string;
+  children: ReactNode;
+  /** A dialog with a layout of its own adds its class (the launch checklist). */
+  className?: string;
+  /** A dialog whose closing is an action of its own (the demo invitation keeps the
+   * person's answer) handles it here instead of the route change. */
+  onClose?: () => void;
+}) {
+  const router = useRouter();
+  const dialog = useRef<HTMLDivElement>(null);
+  useFocusTrap(dialog);
+  const [pending, startTransition] = useTransition();
+  const [mounted, setMounted] = useState(false);
+  // Read through a ref so a new callback each render never re-runs the focus effect.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  const close = useCallback(() => {
+    if (onCloseRef.current !== undefined) {
+      onCloseRef.current();
+      return;
+    }
+    startTransition(() => {
+      router.replace(closeHref, { scroll: false });
+    });
+  }, [router, closeHref]);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!mounted) {
+      return;
+    }
+    const previous = document.activeElement as HTMLElement | null;
+    dialog.current?.focus();
+    const onKey = (event: KeyboardEvent) => {
+      // A confirmation open inside the record closes first, on its own.
+      if (event.key === "Escape" && isTopmostDialog(dialog.current)) {
+        close();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    document.body.classList.add("has-dialog");
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.classList.remove("has-dialog");
+      previous?.focus();
+    };
+  }, [close, mounted]);
+
+  if (!mounted) {
+    return null;
+  }
+  return createPortal(
+    // biome-ignore lint/a11y/noStaticElementInteractions: a click on the backdrop closes; Escape and the close button do too.
+    <div
+      className="preview-backdrop record-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          close();
+        }
+      }}
+    >
+      <div
+        ref={dialog}
+        className={
+          className === undefined
+            ? "record-dialog"
+            : `record-dialog ${className}`
+        }
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="record-dialog-title"
+        aria-busy={pending}
+        tabIndex={-1}
+      >
+        <header className="rd-head">
+          {icon !== null ? <span className="rd-icon">{icon}</span> : null}
+          <div className="rd-head-text">
+            <p className="rd-eyebrow">{eyebrow}</p>
+            <h2 id="record-dialog-title">{title}</h2>
+            {description ? <p className="rd-desc">{description}</p> : null}
+          </div>
+          <button
+            type="button"
+            className="btn-ghost btn-sm rd-close"
+            onClick={close}
+            aria-label="Close"
+          >
+            <UiIcon name="x" size={16} />
+          </button>
+        </header>
+        <div className="rd-body">{children}</div>
+      </div>
+    </div>,
+    document.body,
+  );
+}

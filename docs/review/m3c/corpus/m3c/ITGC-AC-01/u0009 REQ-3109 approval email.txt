@@ -1,0 +1,7 @@
+From: Priya Raman <priya.raman@northwind.example>
+To: IAM service desk <iam@northwind.example>
+Date: 2027-07-14 16:05
+Subject: RE: REQ-3109 access for Liam O'Brien (u0009)
+
+I approve REQ-3109: role AP Clerk in SAP ERP PRD for Liam O'Brien, who reports to me.
+Priya Raman, Accounts Payable Manager

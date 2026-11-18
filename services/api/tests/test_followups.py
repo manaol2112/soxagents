@@ -1,4 +1,5 @@
 import hashlib
+import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
@@ -18,20 +19,70 @@ from ai_workforce_api.authorization import Principal, PrincipalKind
 from ai_workforce_api.db import connect
 from ai_workforce_api.durable import TASK_QUEUE, activities_for, follow_up_workflow_id
 from ai_workforce_api.durable_workflow import FollowUpRequest, FollowUpWorkflow
+from ai_workforce_api.evidence_portal import LINK_PLACEHOLDER
 from ai_workforce_api.followups import DONE, HOLD_SECONDS, Occurrence, advance, plan
 from ai_workforce_api.mailbox import MailboxProvider, open_mailbox
-from ai_workforce_api.migrate import apply_migrations, migrations_dir
-from ai_workforce_api.outbound import PBC_REMINDER, render_reminder, send_reminder
+from ai_workforce_api.outbound import (
+    PBC_REMINDER,
+    PBC_REMINDER_V3,
+    render_reminder,
+    send_reminder,
+)
 from ai_workforce_api.settings import Settings
 
-_APPROVED_REMINDER = "218c32e995682d02a05ab598cbd12195ca3c46b132d7ba3459185a36acaf2ab5"
+# Version 2 (Milestone 8.12): the reminder carries the secure upload link.
+_APPROVED_REMINDER = "38f73066ede3f916e7eef8f3c0bb52f1f62d2bf629ffecb9e032ae9745e9fa50"
 _SENT_AT = datetime(2026, 10, 1, 9, tzinfo=UTC)
 
 
+_APPROVED_REMINDER_V3 = "34d708882709b98d09c735be3206952a02bb47cb882738e98abfba262f93992b"
+
+
 def test_the_reminder_template_is_the_reviewed_version() -> None:
-    template = PBC_REMINDER
-    text = f"{template.template_id}\n{template.version}\n{template.subject}\n{template.body}"
-    assert hashlib.sha256(text.encode()).hexdigest() == _APPROVED_REMINDER
+    for template, expected in ((PBC_REMINDER, _APPROVED_REMINDER),
+                               (PBC_REMINDER_V3, _APPROVED_REMINDER_V3)):  # fmt: skip
+        text = f"{template.template_id}\n{template.version}\n{template.subject}\n{template.body}"
+        assert hashlib.sha256(text.encode()).hexdigest() == expected
+
+
+def test_a_reminder_approved_on_version_2_is_sent_exactly_as_approved(
+    migrated: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reminder asked for and approved before the redesign goes out on version 2, the
+    wording its approval binds, not on version 3."""
+    from ai_workforce_api import outbound
+
+    seeded, project_id, owner, admin = _team(migrated, "reminder-v2")
+    request_id = _sent(migrated, seeded, project_id, owner, admin)
+    _advance(migrated, seeded, project_id, request_id, days=4)
+    due = _follow_ups(owner, seeded, project_id)[0]
+    with monkeypatch.context() as before:
+        # As before the change: version 2 was the reminder's current template.
+        before.setattr(outbound, "CURRENT_REMINDER", PBC_REMINDER)
+        submitted = owner.post(_reminder(seeded, project_id, request_id, due["id"], "submit"))
+    assert submitted.status_code == 200, submitted.text
+    approval = submitted.json()["approval"]
+    assert submitted.json()["preview"]["template_version"] == 2
+    _decide(admin, seeded, project_id, approval["id"], "APPROVED")
+    sent = owner.post(
+        _reminder(seeded, project_id, request_id, due["id"], "send"),
+        json={"approval_id": approval["id"]},
+    )
+    assert sent.status_code == 200, sent.text
+    body = sent.json()
+    assert (body["status"], body["template_version"]) == ("ACCEPTED", 2)
+    assert body["subject"] == (
+        f"[{_reference(request_id)}] Reminder: Evidence request: control/access-review"
+    )
+    with connect(migrated.url) as connection:
+        stored = connection.execute(
+            "SELECT body, metadata ->> 'template' FROM mailbox_messages "
+            "WHERE provider_message_id = %s",
+            (body["provider_message_id"],),
+        ).fetchone()
+    assert stored is not None and stored[1] == "pbc-reminder.v2"
+    assert stored[0].startswith("Hello,\n\nThis is reminder 1 of ")
+    assert "WHAT WE NEED" not in stored[0]
 
 
 def test_reminders_render_in_the_request_thread() -> None:
@@ -39,13 +90,26 @@ def test_reminders_render_in_the_request_thread() -> None:
         update={"status": "SENT", "outbound_message_id": "mock-1", "thread_id": "thread-1"}
     )
     follow_up_id = uuid4()
-    message = render_reminder(request, "SOX 2026", follow_up_id, 1)
+    # Rewritten for the approved redesign (12 November 2026). Old: only version 2, subject
+    # "[PBC-…] Reminder: Evidence request: <control>". New: a new reminder is on version
+    # 3 ("Reminder: <control>: … due … [PBC-…]"), and version 2 is still rendered,
+    # unchanged, for a reminder approved on it.
     reference = f"PBC-{request.id.hex[-8:].upper()}"
+    old = render_reminder(request, "SOX 2026", follow_up_id, 1, version=2)
+    assert old.subject == f"[{reference}] Reminder: Evidence request: control/access-review"
+    assert "This is reminder 1 of 2 for the evidence the audit team for SOX 2026" in old.body
+    assert old.request_ref.startswith(f"pbc/{request.id}/pbc-reminder-v2/{follow_up_id}/")
+    message = render_reminder(request, "SOX 2026", follow_up_id, 1)
     assert message.action_id == "mail.reminder"
     assert message.thread_id == "thread-1"
-    assert message.subject == f"[{reference}] Reminder: Evidence request: control/access-review"
-    assert "This is reminder 1 of 2 for the evidence the audit team for SOX 2026" in message.body
-    assert message.request_ref.startswith(f"pbc/{request.id}/pbc-reminder-v1/{follow_up_id}/")
+    assert message.subject == (
+        f"Reminder: control/access-review: evidence due 1 Nov 2026 [{reference}]"
+    )
+    assert "This is reminder 1 of 2 for the evidence the SOX 2026 audit team asked for" in (
+        message.body
+    )
+    assert "The population of new accounts" in message.body and "WHAT WE NEED" in message.body
+    assert message.request_ref.startswith(f"pbc/{request.id}/pbc-reminder-v3/{follow_up_id}/")
     assert message.metadata["follow_up_id"] == str(follow_up_id)
     assert message.metadata["follow_up_sequence"] == "1"
     assert render_reminder(request, "SOX 2026", follow_up_id, 1) == message
@@ -105,7 +169,10 @@ def test_a_due_reminder_is_approved_then_sent_in_the_request_thread(migrated: Da
     approval = submitted.json()["approval"]
     assert approval["action_id"] == "mail.reminder"
     assert submitted.json()["follow_up"]["status"] == "APPROVAL_PENDING"
-    assert submitted.json()["preview"]["subject"].startswith(f"[{_reference(request_id)}] Reminder")
+    # Old: started "[PBC-…] Reminder"; new (version 3): "Reminder: … [PBC-…]".
+    preview_subject = submitted.json()["preview"]["subject"]
+    assert preview_subject.startswith("Reminder: ")
+    assert preview_subject.endswith(f"[{_reference(request_id)}]")
     twice = owner.post(_reminder(seeded, project_id, request_id, due["id"], "submit"))
     assert twice.status_code == 409
     early = owner.post(
@@ -393,9 +460,10 @@ async def test_the_durable_timer_escalates_a_silent_request(migrated: Database) 
 
 
 @pytest.fixture
-def migrated(empty_database: Database) -> Database:
-    apply_migrations(empty_database.url, migrations_dir())
-    return empty_database
+def migrated(migrated_database: Database) -> Database:
+    # Cloned from the session's migrated template (conftest): the state apply_migrations
+    # produces, without running the migrations again for every test.
+    return migrated_database
 
 
 @pytest.fixture
@@ -488,3 +556,51 @@ def _audit_text(database: Database) -> str:
     with connect(database.url) as connection:
         rows = connection.execute("SELECT payload::text FROM audit_events").fetchall()
     return str(rows)
+
+
+def test_a_reminder_goes_out_as_approved_whatever_a_contact_is_renamed_to(
+    migrated: Database,
+) -> None:
+    """The reminder's text names the recipient from the engagement's contacts. What it
+    was rendered with is kept with its approval (migration 0157), so a contact renamed
+    after the reminder was asked for neither changes the reminder nor blocks its send."""
+    seeded, project_id, owner, admin = _team(migrated, "reminder-frozen")
+    request_id = _sent(migrated, seeded, project_id, owner, admin)
+    _advance(migrated, seeded, project_id, request_id, days=4)
+    due = _follow_ups(owner, seeded, project_id)[0]
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "INSERT INTO engagement_contacts (organization_id, project_id, name, email, "
+            "created_by) VALUES (%s, %s, 'Dana Lee', 'client@example.com', %s)",
+            (seeded["organization_id"], project_id, seeded["user_id"]),
+        )
+    submitted = owner.post(_reminder(seeded, project_id, request_id, due["id"], "submit"))
+    assert submitted.status_code == 200, submitted.text
+    approved = submitted.json()["preview"]
+    assert approved["body"].startswith("Hello Dana,\n\nThis is reminder 1 of ")
+    with connect(migrated.url) as connection:
+        connection.execute("UPDATE engagement_contacts SET name = 'Sam Other'")
+        # What was kept can be neither changed nor removed.
+        for statement in (
+            "UPDATE approved_message_facts SET facts = '{}'",
+            "DELETE FROM approved_message_facts",
+        ):
+            with pytest.raises(psycopg.Error):
+                connection.execute(statement)
+            connection.rollback()
+    _decide(admin, seeded, project_id, submitted.json()["approval"]["id"], "APPROVED")
+    sent = owner.post(
+        _reminder(seeded, project_id, request_id, due["id"], "send"),
+        json={"approval_id": submitted.json()["approval"]["id"]},
+    )
+    assert sent.status_code == 200, sent.text
+    assert sent.json()["status"] == "ACCEPTED"
+    with connect(migrated.url) as connection:
+        stored = connection.execute(
+            "SELECT body FROM mailbox_messages WHERE provider_message_id = %s",
+            (sent.json()["provider_message_id"],),
+        ).fetchone()
+    assert stored is not None
+    link = re.search(r"https?://\S+/upload/\S+", stored[0])
+    assert link is not None
+    assert stored[0].replace(link.group(0), LINK_PLACEHOLDER) == approved["body"]

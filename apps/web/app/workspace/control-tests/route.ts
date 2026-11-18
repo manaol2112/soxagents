@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-
+import { browserUrl } from "../../../src/browser-url";
 import { apiBaseUrl, sessionToken } from "../../../src/load-workspace";
 import { testNoticeFor, testWrite } from "../../../src/testing-model";
 
@@ -18,6 +18,7 @@ export async function POST(request: Request) {
   }
   const session = sessionToken((await cookies()).get("aw_session")?.value);
   let status = 0;
+  let detail = "";
   try {
     const headers = new Headers({ "content-type": "application/json" });
     if (session !== undefined) {
@@ -31,10 +32,15 @@ export async function POST(request: Request) {
       signal: AbortSignal.timeout(10000),
     });
     status = response.status;
+    if (status === 409) {
+      // The reason matters: a changed plan, or a narrative not confirmed yet.
+      const body = (await response.json()) as { detail?: unknown };
+      detail = typeof body.detail === "string" ? body.detail : "";
+    }
   } catch {
-    status = 0;
+    status = status === 409 ? 409 : 0;
   }
-  return redirect(request, fields, testNoticeFor(write.intent, status));
+  return redirect(request, fields, testNoticeFor(write.intent, status, detail));
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -44,7 +50,7 @@ function redirect(
   fields: Record<string, string>,
   notice: string,
 ) {
-  const destination = new URL("/", request.url);
+  const destination = browserUrl("/", request);
   destination.searchParams.set("section", "controls");
   for (const [field, param] of [
     ["organization_id", "organization"],

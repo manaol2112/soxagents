@@ -1,4 +1,7 @@
 import { cookies } from "next/headers";
+import { type Client, parseClients } from "./client-model";
+import { demoReady, offersDemo } from "./demo-model";
+import { parseCompletion } from "./engagement-lifecycle";
 
 import {
   agentIdInList,
@@ -36,6 +39,22 @@ export async function loadWorkspace(
       ? { status: 200, body: [] }
       : await apiGet(`/organizations/${organizationId}/projects`, session);
   const visibleProjectId = projectIdInList(projects.body, request.projectId);
+  // The demo invitation and the account menu's entry: one more read, for a firm on a
+  // running trial only (no other firm is offered one).
+  const demo =
+    organizationId !== null && offersDemo(organizations.body, organizationId)
+      ? await apiGet(`/organizations/${organizationId}/demo`, session)
+      : { status: 0, body: null };
+  // The trial's allowances and usage (Step 6): one more read, for the settings page.
+  const subscription =
+    organizationId !== null && request.section === "settings"
+      ? await apiGet(`/organizations/${organizationId}/subscription`, session)
+      : { status: 0, body: null };
+  // The guided tour's standing (Step 5): one more read, only once the demo exists.
+  const tour =
+    organizationId !== null && demo.status === 200 && demoReady(demo.body)
+      ? await apiGet(`/organizations/${organizationId}/demo/tour`, session)
+      : { status: 0, body: null };
   const agents = await loadAgents(
     session,
     organizationId,
@@ -54,7 +73,7 @@ export async function loadWorkspace(
     organizationId,
     request.section,
     projects.body,
-    visibleProjectId,
+    request.projectId,
   );
   if (management === "error") {
     return deriveShell({
@@ -83,6 +102,9 @@ export async function loadWorkspace(
       canManageTasks: taskWork.canManage,
       taskAssignees: taskWork.assignees,
       agentInstances: taskWork.instances,
+      demo: demo.status === 200 ? demo.body : undefined,
+      tour: tour.status === 200 ? tour.body : undefined,
+      subscription: subscription.status === 200 ? subscription.body : undefined,
     });
   }
   return deriveShell({
@@ -98,6 +120,7 @@ export async function loadWorkspace(
     notifications: "empty",
     canManageProjects: management.canManageProjects,
     members: management.members,
+    clients: management.clients ?? [],
     projectDetail: management.projectDetail,
     notice: request.notice,
     agentsStatus: agents.status,
@@ -111,6 +134,9 @@ export async function loadWorkspace(
     canManageTasks: taskWork.canManage,
     taskAssignees: taskWork.assignees,
     agentInstances: taskWork.instances,
+    demo: demo.status === 200 ? demo.body : undefined,
+    tour: tour.status === 200 ? tour.body : undefined,
+    subscription: subscription.status === 200 ? subscription.body : undefined,
   });
 }
 
@@ -276,6 +302,7 @@ async function loadProjectManagement(
       canManageProjects: boolean;
       members: ReturnType<typeof parseAssignableMembers> & object;
       projectDetail: ReturnType<typeof parseProjectDetail>;
+      clients?: Client[];
     }
   | "error"
 > {
@@ -323,9 +350,24 @@ async function loadProjectManagement(
   } else if (membersResponse.status !== 403) {
     return "error";
   }
-  const projectId = projectIdInList(projectsBody, requestedProjectId);
+  // The firm's clients, for the engagement form; the page works without them.
+  let clients: Client[] = [];
+  if (canManageProjects) {
+    const listed = await apiGet(
+      `/organizations/${organizationId}/clients`,
+      session,
+    );
+    clients = listed.status === 200 ? (parseClients(listed.body) ?? []) : [];
+  }
+  // On the engagements page an engagement opens only when it is chosen (its card's menu,
+  // or the edit form), never by default.
+  const projectId =
+    requestedProjectId !== null &&
+    projectIdInList(projectsBody, requestedProjectId) === requestedProjectId
+      ? requestedProjectId
+      : null;
   if (projectId === null) {
-    return { canManageProjects, members, projectDetail: null };
+    return { canManageProjects, members, clients, projectDetail: null };
   }
   const detailResponse = await apiGet(
     `/organizations/${organizationId}/projects/${projectId}`,
@@ -338,7 +380,14 @@ async function loadProjectManagement(
   if (projectDetail === null) {
     return "error";
   }
-  return { canManageProjects, members, projectDetail };
+  // Where it stands on completion, for the settings card; the page works without it.
+  const completion = await apiGet(
+    `/organizations/${organizationId}/projects/${projectId}/completion`,
+    session,
+  );
+  projectDetail.completion =
+    completion.status === 200 ? parseCompletion(completion.body) : null;
+  return { canManageProjects, members, clients, projectDetail };
 }
 
 export function apiBaseUrl(): string {

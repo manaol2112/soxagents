@@ -1,9 +1,11 @@
 """Reading and classifying stored evidence: the background job and its API.
 
-When a person stores an attachment, the evidence coordinator reads it in the
-background: the file's text (by OCR for screenshots and scanned pages), what kind of
-evidence it is, and how it covers each item its request asked for. A person confirms
-the kind. Nothing here changes a request: a person still marks it received.
+When a person stores an attachment or uploads a file, the evidence coordinator reads it
+in the background: the file's text (by OCR for screenshots and scanned pages), what kind
+of evidence it is, and how it covers each item its request asked for. A person confirms
+the kind. An uploaded file is first matched to its control (evidence_matching.py). A
+filed upload marks its request received (evidence_receipts.py); a mailbox attachment
+never changes its request: a person marks it received.
 
 The custody record is never changed. The bytes are read through the custody check, and
 the job stops if the stored object no longer matches its hash.
@@ -20,6 +22,8 @@ from fastapi import FastAPI, HTTPException, Request
 from psycopg.types.json import Json
 from pydantic import BaseModel, Field, field_validator
 
+from ai_workforce_api.after_commit import after_commit, committed
+from ai_workforce_api.agent_runs import cancel_requested, finish_cancelled
 from ai_workforce_api.authorization import (
     Action,
     NotVisible,
@@ -29,10 +33,31 @@ from ai_workforce_api.authorization import (
     _session_principal,
     authorize,
 )
+from ai_workforce_api.control_instances import family_applications
 from ai_workforce_api.control_tests import approved, control_for_population, propose
-from ai_workforce_api.db import connect, independent_steps, transaction
+from ai_workforce_api.db import (
+    connect,
+    hold_claim,
+    independent_steps,
+    releasing_claims,
+    transaction,
+)
+from ai_workforce_api.evidence_apps import (
+    model_tag,
+    own_application,
+    request_default,
+    rules_tag,
+    save_tag,
+)
+from ai_workforce_api.evidence_assurance import (
+    CUSTODY_FAILED_NOTE,
+    queue_after_reading,
+    queue_safely,
+    schedule_assessments,
+)
 from ai_workforce_api.evidence_classify import (
     CLASSIFY_SCHEMA,
+    MAX_ITEMS,
     SYSTEM_PROMPT,
     Classification,
     ClassifyContext,
@@ -41,6 +66,7 @@ from ai_workforce_api.evidence_classify import (
     check_classification,
     prompt_for,
     rules_classify,
+    with_requirements,
 )
 from ai_workforce_api.evidence_extraction import (
     Extraction,
@@ -50,6 +76,28 @@ from ai_workforce_api.evidence_extraction import (
     with_ocr,
     without_ocr,
 )
+from ai_workforce_api.evidence_findings import (
+    ReaderFindings,
+    derive_from_analysis,
+    reassess_on_reading,
+)
+from ai_workforce_api.evidence_links import (
+    RequestRef,
+    control_request,
+    evidence_hint,
+    file_request,
+)
+from ai_workforce_api.evidence_matching import (
+    MATCH_SCHEMA,
+    FileFacts,
+    Match,
+    candidates,
+    check_match,
+    no_match,
+    rules_match,
+)
+from ai_workforce_api.evidence_matching import SYSTEM_PROMPT as MATCH_PROMPT
+from ai_workforce_api.evidence_matching import prompt_for as match_prompt
 from ai_workforce_api.evidence_ocr import (
     Engine,
     OcrFactory,
@@ -59,6 +107,7 @@ from ai_workforce_api.evidence_ocr import (
     local_ocr_available,
     model_jpeg,
 )
+from ai_workforce_api.evidence_receipts import apply_receipt
 from ai_workforce_api.evidence_review import (
     Review,
     ReviewContext,
@@ -68,16 +117,42 @@ from ai_workforce_api.evidence_review import (
     save_review,
     unable_review,
 )
+from ai_workforce_api.evidence_withdrawn import is_withdrawn
+from ai_workforce_api.evidence_wizard import (
+    Ended,
+    Item,
+    Placing,
+    WizardFile,
+    design_items,
+    listed_items,
+    plan_placement,
+    reading_ended,
+    request_ref,
+    requested_item,
+    wizard_file,
+)
 from ai_workforce_api.inbound import clean_line
-from ai_workforce_api.model_providers import CLAUDE_CONFIG, call_note, live_model, provider_for
-from ai_workforce_api.models import ModelProvider, ModelRaw, ModelRequest, complete, record_call
+from ai_workforce_api.model_providers import (
+    CLAUDE_CONFIG,
+    call_note,
+    fallback_note,
+    live_model,
+    provider_for,
+)
+from ai_workforce_api.models import ModelProvider, ModelRaw, ModelRequest, complete
+from ai_workforce_api.provenance import AgentCaller, CallerProvider, Job, agent_actor
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.storage import ObjectStore, StoreError, digest_of, open_store
+from ai_workforce_api.testing_engine import runs_for_file
 
 logger = logging.getLogger(__name__)
 
 LEASE_MINUTES = 10
 MAX_ATTEMPTS = 3
+# Prompt versions recorded on every call (Milestone 3a): the reader's (matching,
+# classification, OCR) and the tester's screenshot review.
+READER_PROMPT_VERSION = "evidence-reader/1"
+REVIEW_PROMPT_VERSION = "evidence-review/1"
 EXCERPT_CHARS = 3_000
 StoreFactory = Callable[[Settings, psycopg.Connection[Any]], ObjectStore]
 AnalysisRunner = Callable[[UUID], str]
@@ -100,7 +175,8 @@ def analysis_runner(
     engines = ocr if ocr is not None else engines_for(settings)
 
     def run(analysis_id: UUID) -> str:
-        with connect(settings.database_url) as connection:
+        # A run that raises gives its claim back, so the retry reads the file (db.Claim).
+        with releasing_claims(settings.database_url), connect(settings.database_url) as connection:
             return run_analysis(
                 connection, settings, model if use_model else None, analysis_id, engines, store
             )
@@ -136,10 +212,18 @@ def schedule_analyses(
     """Hand analyses to the background. If that fails, they stay pending and resume later."""
     if scheduler is None or not analysis_ids:
         return
-    try:
-        scheduler.schedule_evidence_analyses(analysis_ids)
-    except Exception:
-        logger.warning("evidence analyses could not be scheduled; they will resume on restart")
+    ids = list(analysis_ids)
+
+    def hand_over() -> None:
+        try:
+            scheduler.schedule_evidence_analyses(ids)
+        except Exception:
+            logger.warning("evidence analyses could not be scheduled; they will resume on restart")
+
+    # Inside a request the handoff waits until the request has committed (after_commit.py):
+    # handed over before, the worker's claim saw the rows as they were and skipped them.
+    # Outside one (a worker, a script) it is made at once, as before.
+    after_commit(hand_over)
 
 
 # The job
@@ -160,6 +244,7 @@ def run_analysis(
             UPDATE evidence_analyses a
             SET status = 'WORKING', attempts = attempts + 1,
                 lease_until = clock_timestamp() + make_interval(mins => %s),
+                started_at = clock_timestamp(), finished_at = NULL,
                 version = version + 1, updated_at = clock_timestamp()
             WHERE id = %s AND attempts < %s
               AND (status = 'PENDING'
@@ -168,24 +253,26 @@ def run_analysis(
             """,
             (LEASE_MINUTES, analysis_id, MAX_ATTEMPTS),
         ).fetchone()
+        if claimed is not None:
+            hold_claim(cursor, "evidence_analyses", "id", analysis_id, "status")
     if claimed is None:
         return "SKIPPED"
     organization_id, project_id, file_id, requester = claimed
     stored = connection.execute(
         """
         SELECT object_key, content_sha256, size_bytes, content_type, file_name,
-               mailbox_attachment_id
+               source, folder_path
         FROM evidence_files WHERE id = %s AND project_id = %s
         """,
         (file_id, project_id),
     ).fetchone()
     if stored is None:
         raise NotVisible()
-    key, digest, size, content_type, file_name, attachment_id = stored
+    key, digest, size, content_type, file_name, source_kind, folder = stored
     # A storage outage raises, so the attempt is retried.
     content = store(settings, connection).get(str(key))
     if digest_of(content) != digest or len(content) != int(size):
-        _fail(connection, analysis_id, "The stored file no longer matches its custody record.")
+        handled = _fail(connection, analysis_id, CUSTODY_FAILED_NOTE)
         _audit(
             connection,
             organization_id,
@@ -195,21 +282,54 @@ def run_analysis(
             file_id,
             {"content_sha256": str(digest)},
         )
+        # The assurance chain holds the file where it is D&I evidence: nothing of it is
+        # checked against the attributes (docs/evidence-assurance.md, the gate's CUSTODY).
+        # A wizard file was handled with its ending (_fail): not placed, it needs a person
+        # with the gate's reason, and its batch's checks wait for the rest of its files.
+        if not handled:
+            with transaction(connection) as cursor:
+                queue_after_reading(cursor, project_id, file_id, requester)
         return "FAILED"
 
-    def record(status: str, raw: ModelRaw) -> UUID:
-        return record_call(
-            connection,
-            requester,
-            organization_id,
-            project_id,
-            "claude",
-            status,
-            raw,
-            CLAUDE_CONFIG,
+    # Every model call of this read goes through one caller: the reader's FAST tier, the
+    # budgets, the cancellation check and the provenance record (Milestone 3a). The
+    # evidence modules keep their (provider, record) protocol; the caller sits behind it.
+    reader: CallerProvider | None = None
+    if provider is not None:
+        reader = CallerProvider(
+            AgentCaller(
+                connection,
+                provider,
+                Job(
+                    "evidence-reader",
+                    "evidence_file",
+                    file_id,
+                    organization_id,
+                    project_id,
+                    requester,
+                    agent_instance_id=agent_actor(connection, project_id, "evidence-coordinator"),
+                ),
+                settings=settings,
+                cancelled=lambda: cancel_requested(connection, "analysis", analysis_id),
+            ),
+            READER_PROMPT_VERSION,
+            {"analysis": str(analysis_id), "file": {"id": str(file_id), "sha256": str(digest)}},
         )
+    model: ModelProvider | None = reader
 
-    request = _request_for(connection, project_id, attachment_id)
+    def record(status: str, raw: ModelRaw) -> UUID:
+        # Only the caller records: without a model nothing asks to be recorded.
+        if reader is None:
+            raise RuntimeError("a model call was recorded without a model")
+        return reader.record(status, raw)
+
+    request = file_request(connection, project_id, file_id)
+    filing = _filing(connection, file_id) if source_kind == "UPLOAD" else None
+    # A file added in the D&I evidence wizard is read against every D&I item of its
+    # control, and placed from the reading (docs/evidence-wizard.md, 2.2 and 2.3).
+    wizard: WizardFile | None = (
+        wizard_file(connection, project_id, file_id) if source_kind == "UPLOAD" else None
+    )
     extraction = extract(content, str(file_name), str(content_type))
     ocr_engine: Engine | None = None
     ocr_call_id: UUID | None = None
@@ -218,14 +338,44 @@ def run_analysis(
     file_kind = extraction.file_kind
     if extraction.images:
         extraction, ocr_engine, ocr_call_id = _read_images(
-            connection, organization_id, provider, ocr, record, extraction
+            connection, organization_id, model, ocr, record, extraction
         )
-    context = _context(connection, project_id, str(file_name), extraction, request)
+    decided: tuple[Match, UUID | None] | None = None
+    if filing is not None and filing[1] == "PENDING":
+        # An upload names no request: the coordinator matches it to its control first.
+        facts = FileFacts(
+            file_name=str(file_name),
+            folder_path=str(folder),
+            file_kind=file_kind,
+            text=extraction.text,
+            columns=extraction.columns,
+        )
+        decided = _match(connection, project_id, model, record, facts)
+        if decided[0].control is not None:
+            request = control_request(
+                connection,
+                project_id,
+                decided[0].control.control_id,
+                evidence_hint(str(file_name), file_kind, extraction.text),
+            )
+    items: list[Item] = []
+    listed: tuple[Item, ...] = ()
+    if wizard is not None:
+        items = design_items(connection, project_id, wizard.batch.control_id)
+        listed = listed_items(items, wizard.batch.requirement_id)
+        context = _wizard_context(
+            connection, project_id, str(file_name), extraction, wizard.batch.control_id, listed
+        )
+    else:
+        context = _context(
+            connection, project_id, str(file_name), extraction, request,
+            _added_for(connection, file_id),
+        )  # fmt: skip
     classification: Classification | None = None
     source = "RULES"
-    note = "No model is configured." if provider is None else ""
+    note = "No model is configured." if model is None else ""
     call_id: UUID | None = None
-    if provider is not None and extraction.text.strip():
+    if model is not None and extraction.text.strip():
         model_request = ModelRequest(
             operation="generate",
             prompt=prompt_for(context),
@@ -235,7 +385,7 @@ def run_analysis(
             cancelled=False,
             system=SYSTEM_PROMPT,
         )
-        status, raw = complete(provider, model_request, CLAUDE_CONFIG)
+        status, raw = complete(model, model_request, CLAUDE_CONFIG)
         call_id = record(status, raw)
         # A MALFORMED answer is still read by the stricter evidence check, which cuts
         # over-long text and lists. The call stays recorded as malformed.
@@ -244,20 +394,41 @@ def run_analysis(
                 classification = check_classification(raw.output, context)
                 source = "MODEL"
             except ValueError as error:
-                note = f"Model answer rejected: {error}."
+                # The rules classify instead, and the record says the model's answer
+                # was rejected: FALLBACK, never RULES.
+                source = "FALLBACK"
+                note = (
+                    f"Model answer rejected: {error}. The reviewed rules classified the "
+                    "file instead."
+                )
         else:
-            note = call_note(status)
-    elif provider is not None:
+            source = "FALLBACK"
+            note = fallback_note(status, "the reviewed rules classified the file instead")
+    elif model is not None:
         note = "Nothing could be read from the file, so the rules were used."
     if classification is None:
         classification = rules_classify(context)
+    classification = with_requirements(classification, context)
+    placing: Placing | None = None
+    if wizard is not None:
+        # Code decides where the file goes; the reader only proposed. Placed, the file is
+        # read on from here as a file added on its item's request is.
+        placing = plan_placement(
+            connection, analysis_id, wizard, classification, source, extraction.text, listed,
+            len(items) > len(listed),
+        )  # fmt: skip
+    # Until the filing is tried, in the reading's transaction, the file is read on for the
+    # request its placement means it for (the screenshot review's context and sampling's).
+    filed_on = request
+    if placing is not None and placing.request is not None:
+        request = placing.request
     review: tuple[Review, str, ReviewContext, UUID | None, str, str] | None = None
     if is_screenshot(file_kind, bool(images)):
         review = _review(
             connection,
             organization_id,
             project_id,
-            provider,
+            model,
             record,
             request,
             context,
@@ -268,6 +439,18 @@ def run_analysis(
     sampling = _sampling(
         connection, project_id, request, classification.kind, content, file_name, content_type
     )
+    # A person cancelled the read while it worked: nothing of it is kept, and the record
+    # says who stopped it. Reading the file again is the recovery.
+    if reader is not None and cancel_requested(connection, "analysis", analysis_id):
+        # A wizard file's ending is handled in the cancellation's own transaction
+        # (agent_runs: evidence_wizard.analysis_ended).
+        finish_cancelled(
+            connection,
+            "analysis",
+            analysis_id,
+            actor_agent_instance_id=reader.caller.job.agent_instance_id,
+        )
+        return "CANCELLED"
     with transaction(connection) as cursor:
         saved = cursor.execute(
             """
@@ -277,12 +460,15 @@ def run_analysis(
                 extracted_text = %s, text_truncated = %s, content_redacted = %s,
                 page_count = %s, row_count = %s, columns = %s, classification = %s,
                 source = %s, model_call_id = %s, ocr_model_call_id = %s, note = %s,
+                finished_at = clock_timestamp(),
                 version = version + 1, updated_at = clock_timestamp()
             WHERE id = %s AND status = 'WORKING'
             RETURNING id
             """,
             (
-                None if request is None else request[0],
+                (None if filed_on is None else filed_on[0])
+                if wizard is not None
+                else (None if request is None else request[0]),
                 extraction.method,
                 extraction.status,
                 ocr_engine,
@@ -302,6 +488,49 @@ def run_analysis(
         ).fetchone()
         if saved is None:
             return "SKIPPED"
+        ended: Ended | None = None
+        if wizard is not None and placing is not None:
+            # The wizard's one hook for a reading's end: the filing is tried first and the
+            # placement recorded, then the batch's landing check; the reading then names
+            # the request the file is on now (where its deterministic findings go).
+            ended = reading_ended(
+                cursor, project_id, file_id, requester, analysis_id=analysis_id,
+                placing=placing,
+            )  # fmt: skip
+            if ended is not None:
+                now = None if filed_on is None else filed_on[0]
+                if ended.request_id != now:
+                    cursor.execute(
+                        "UPDATE evidence_analyses SET pbc_request_id = %s WHERE id = %s",
+                        (ended.request_id, analysis_id),
+                    )
+                request = (
+                    None if ended.request_id is None else request_ref(cursor, ended.request_id)
+                )
+            else:
+                # Not the wizard's any more (filed elsewhere meanwhile): read as any upload.
+                request = filed_on
+        # The findings this reading gives, and the open findings it answers
+        # (docs/evidence-intelligence.md, increment 2). The reader's own findings wait
+        # until the end of this transaction, which knows by then whether the assurance
+        # chain covers the file; the deterministic checks are recorded here.
+        reader_findings = ReaderFindings()
+        derive_from_analysis(
+            cursor, organization_id, project_id, analysis_id, reader=reader_findings
+        )
+        reassess_on_reading(cursor, organization_id, project_id, analysis_id)
+        if ended is None and filing is not None:
+            filed = _save_filing(cursor, filing[0], decided, request)
+            if filed is not None and request is not None:
+                apply_receipt(
+                    cursor,
+                    organization_id,
+                    project_id,
+                    filing[0],
+                    request[0],
+                    requester,
+                    filed,
+                )
         if review is not None:
             result, status_text, review_context, review_call, review_note, tester = review
             save_review(
@@ -320,7 +549,7 @@ def run_analysis(
                 tester=tester,
             )
         if sampling is not None and request is not None and request[3] is not None:
-            (period_end, frequency, nature, size, tester), table = sampling
+            (period_end, frequency, nature, size, tester), table, round_id, window = sampling
             propose(
                 cursor,
                 organization_id=organization_id,
@@ -336,6 +565,8 @@ def run_analysis(
                 size=size,
                 proposer=requester,
                 tester=tester,
+                test_round_id=round_id,
+                window=window,
             )
         cursor.execute(
             """
@@ -362,28 +593,98 @@ def run_analysis(
                 ),
             ),
         )
+        # Which of the control's applications the file shows: Claude's answer, else rules;
+        # when neither can tell, the application of the request it came in on. A wizard
+        # file not placed on an item is its batch's control's.
+        tagged = (
+            request[3]
+            if request is not None and request[3] is not None
+            else None
+            if wizard is None
+            else wizard.batch.control_id
+        )
+        if tagged is not None:
+            apps = family_applications(cursor, project_id, tagged)
+            if apps:
+                tag = model_tag(apps, classification.application) if len(apps) > 1 else None
+                save_tag(
+                    cursor,
+                    organization_id,
+                    project_id,
+                    file_id,
+                    request_default(
+                        tag
+                        or rules_tag(
+                            apps, str(file_name), str(folder), extraction.text, classification.kind
+                        ),
+                        own_application(cursor, project_id, tagged),
+                    ),
+                )
+        # The control's tester places the new file on its samples and tests them.
+        runs_for_file(cursor, organization_id, project_id, file_id, requester)
+        # The assurance chain (docs/evidence-assurance.md): where the file is in force on
+        # a D&I requirement, its run is recorded here, in the reading's own transaction,
+        # and the worker picks it up once this has committed. For a file the chain covers,
+        # the reader's own model-derived findings are not proposed to a person: they were
+        # never checked by a second reading. A reading by the rules is not the model's.
+        # A wizard file waits for its batch: its checks are queued once the last of the
+        # batch's files has been read. The reader's own model-derived findings are never
+        # proposed for a wizard file: the chain judges D&I evidence once it is placed.
+        covered = (
+            queue_after_reading(cursor, project_id, file_id, requester)
+            if ended is None
+            else ended.covered
+        )
+        if not ((covered or wizard is not None) and source == "MODEL"):
+            reader_findings.record(cursor)
     return "READY"
 
 
 def _sampling(
     connection: psycopg.Connection[Any],
     project_id: UUID,
-    request: tuple[UUID, str, str, UUID | None] | None,
+    request: RequestRef | None,
     kind: str,
     content: bytes,
     file_name: Any,
     content_type: Any,
-) -> tuple[tuple[date | None, str, str, int, str], Table] | None:
-    """The control and table to sample, when this file is its population."""
+) -> (
+    tuple[
+        tuple[date | None, str, str, int, str],
+        Table,
+        UUID | None,
+        tuple[date, date] | None,
+    ]
+    | None
+):
+    """The control and table to sample, when this file is its population.
+
+    A population sent for a roll-forward or retest round is sampled for that round, in
+    its window and at its size; any other is interim testing's.
+    """
+    from ai_workforce_api.test_rounds import round_for_request
+
     if kind != "population" or request is None or request[3] is None:
         return None
     plan = control_for_population(connection, project_id, request[3])
-    if plan is None or approved(connection, project_id, request[3]):
+    if plan is None:
+        return None
+    found = round_for_request(connection, request[0])
+    window: tuple[date, date] | None = None
+    if found is not None:
+        decided = connection.execute(
+            "SELECT status FROM control_tests WHERE test_round_id = %s", (found.id,)
+        ).fetchone()
+        if found.method != "SAMPLE" or (decided is not None and decided[0] == "APPROVED"):
+            return None
+        plan = (plan[0], plan[1], plan[2], found.sample_size, plan[4])
+        window = (found.window_start, found.window_end)
+    elif approved(connection, project_id, request[3]):
         return None
     table = read_table(content, str(file_name), str(content_type))
     if table is None or not table.rows:
         return None
-    return plan, table
+    return plan, table, None if found is None else found.id, window
 
 
 def _review(
@@ -392,7 +693,7 @@ def _review(
     project_id: UUID,
     provider: ModelProvider | None,
     record: Callable[[str, ModelRaw], UUID],
-    request: tuple[UUID, str, str, UUID | None] | None,
+    request: RequestRef | None,
     context: ClassifyContext,
     images: tuple[bytes, ...],
     extraction: Extraction,
@@ -441,6 +742,11 @@ def _review(
             "visual review. An owner or admin can turn on model OCR under AI workforce."
         )
     else:
+        # The screenshot review is the control's tester's work: its own agent and tier
+        # within the same job, when the read runs through the caller.
+        if isinstance(provider, CallerProvider):
+            provider = provider.for_agent(tester, "BALANCED", REVIEW_PROMPT_VERSION)
+            record = provider.record
         result, call_id, failed = run_review(provider, images, review_context, record, model_jpeg)
         if result is not None:
             return result, "READY", review_context, call_id, "", tester
@@ -498,26 +804,136 @@ def ocr_choice(connection: psycopg.Connection[Any], organization_id: UUID) -> En
     return "MODEL" if row is not None and row[0] == "MODEL" else "LOCAL"
 
 
-def _request_for(
-    connection: psycopg.Connection[Any], project_id: UUID, attachment_id: UUID
-) -> tuple[UUID, str, str, UUID | None] | None:
-    """The request the attachment's reply is matched or assigned to, if any."""
+def _filing(connection: psycopg.Connection[Any], file_id: UUID) -> tuple[UUID, str] | None:
+    """An uploaded file's filing record and its status."""
     row = connection.execute(
-        """
-        SELECT r.id, r.control_ref, r.evidence_description, r.engagement_control_id
-        FROM mailbox_attachments ma
-        JOIN inbound_messages i
-          ON i.mailbox_message_id = ma.message_id AND i.project_id = ma.project_id
-        JOIN pbc_requests r ON r.id = i.pbc_request_id AND r.project_id = i.project_id
-        WHERE ma.id = %s AND ma.project_id = %s AND i.match_status IN ('MATCHED', 'ASSIGNED')
-        ORDER BY i.created_at DESC
-        LIMIT 1
-        """,
-        (attachment_id, project_id),
+        "SELECT id, status FROM evidence_matches WHERE evidence_file_id = %s",
+        (file_id,),
     ).fetchone()
-    if row is None:
+    return None if row is None else (UUID(str(row[0])), str(row[1]))
+
+
+def _match(
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    provider: ModelProvider | None,
+    record: Callable[[str, ModelRaw], UUID],
+    facts: FileFacts,
+) -> tuple[Match, UUID | None]:
+    """Rules first (a control ID in the path or name), then Claude, then suggestions."""
+    pool = candidates(connection, project_id)
+    if not pool:
+        return no_match(facts, pool, "No controls are in scope yet."), None
+    found = rules_match(facts, pool)
+    if found is not None:
+        return found, None
+    if provider is None:
+        return no_match(facts, pool, "No model is configured, so a person chooses."), None
+    status, raw = complete(
+        provider,
+        ModelRequest(
+            operation="generate",
+            prompt=match_prompt(facts, pool),
+            output_schema=MATCH_SCHEMA,
+            allowed_tool_ids=(),
+            timeout_seconds=90,
+            cancelled=False,
+            system=MATCH_PROMPT,
+        ),
+        CLAUDE_CONFIG,
+    )
+    call_id = record(status, raw)
+    if status in ("SUCCEEDED", "MALFORMED") and raw.output is not None:
+        try:
+            return check_match(raw.output, pool), call_id
+        except ValueError as error:
+            return (
+                no_match(facts, pool, f"The agent's answer was rejected: {error}.", "FAILED"),
+                call_id,
+            )
+    return no_match(facts, pool, f"{call_note(status)} A person chooses.", "FAILED"), call_id
+
+
+def _save_filing(
+    cursor: psycopg.Cursor[Any],
+    match_id: UUID,
+    decided: tuple[Match, UUID | None] | None,
+    request: RequestRef | None,
+) -> Literal["AGENT", "PERSON", "OWNER"] | None:
+    """Record the coordinator's match. Returns who filed the file, if it is filed."""
+    if decided is not None:
+        found, call_id = decided
+        control = found.control
+        row = cursor.execute(
+            """
+            UPDATE evidence_matches
+            SET status = %s, engagement_control_id = %s, pbc_request_id = %s,
+                filed_by = %s, source = %s, confidence = %s, reason = %s, suggestions = %s,
+                model_call_id = %s, version = version + 1
+            WHERE id = %s AND status = 'PENDING'
+            RETURNING status
+            """,
+            (
+                "FILED" if control is not None else "NEEDS_MATCH",
+                None if control is None else control.control_id,
+                None if control is None or request is None else request[0],
+                None if control is None else "AGENT",
+                found.source,
+                found.confidence,
+                found.reason,
+                Json([item.dump() for item in found.suggestions]),
+                call_id,
+                match_id,
+            ),
+        ).fetchone()
+        return "AGENT" if row is not None and row[0] == "FILED" else None
+    row = cursor.execute(
+        "SELECT status, filed_by FROM evidence_matches WHERE id = %s", (match_id,)
+    ).fetchone()
+    if row is None or row[0] != "FILED":
         return None
-    return UUID(str(row[0])), str(row[1]), str(row[2]), row[3]
+    if row[1] == "PERSON":
+        return "PERSON"
+    return "OWNER" if row[1] == "OWNER" else "AGENT"
+
+
+def _added_for(connection: psycopg.Connection[Any], file_id: UUID) -> UUID | None:
+    """The item of its request a person added the file for, if any."""
+    row = connection.execute(
+        "SELECT requirement_id FROM evidence_matches "
+        "WHERE evidence_file_id = %s AND status = 'FILED'",
+        (file_id,),
+    ).fetchone()
+    return None if row is None or row[0] is None else UUID(str(row[0]))
+
+
+def _planned_items(
+    connection: psycopg.Connection[Any], request_id: UUID, only: UUID | None = None
+) -> tuple[RequestedItem, ...]:
+    """The plan requirements a request carries, in the order its text lists them; only the
+    one a file was added for, when it was added on an item."""
+    from ai_workforce_api.pbc_drafting import PRIMARY_KIND
+
+    rows = connection.execute(
+        """
+        SELECT id, title, description, categories, period_label FROM evidence_requirements
+        WHERE pbc_request_id = %s AND status = 'REQUESTED' AND (%s::uuid IS NULL OR id = %s)
+        ORDER BY CASE necessity WHEN 'REQUIRED' THEN 0 WHEN 'CONDITIONAL' THEN 1 ELSE 2 END,
+                 created_at, requirement_key
+        """,
+        (request_id, only, only),
+    ).fetchall()
+    return tuple(
+        RequestedItem(
+            kind=PRIMARY_KIND.get(str(row[3][0]) if row[3] else "", "other"),
+            title=clean_line(str(row[1]), 220),
+            fields=(),
+            period=clean_line(str(row[4]), 200),
+            requirement_id=str(row[0]),
+            detail=clean_line(str(row[2]), 1500),
+        )
+        for row in rows[:MAX_ITEMS]
+    )
 
 
 def _context(
@@ -525,7 +941,8 @@ def _context(
     project_id: UUID,
     file_name: str,
     extraction: Extraction,
-    request: tuple[UUID, str, str, UUID | None] | None,
+    request: RequestRef | None,
+    added_for: UUID | None = None,
 ) -> ClassifyContext:
     items: tuple[RequestedItem, ...] = ()
     control: dict[str, Any] = {}
@@ -535,7 +952,12 @@ def _context(
             "SELECT content FROM pbc_drafts WHERE pbc_request_id = %s AND status = 'DRAFTED'",
             (request[0],),
         ).fetchone()
-        if draft is not None and isinstance(draft[0], dict):
+        planned = _planned_items(connection, request[0], added_for)
+        if planned:
+            # A request made from the evidence plan: each item is a requirement, so what the
+            # file covers is recorded against the requirement itself.
+            items = planned
+        elif draft is not None and isinstance(draft[0], dict):
             items = tuple(
                 RequestedItem(
                     kind=str(item.get("kind", "other")),
@@ -543,7 +965,7 @@ def _context(
                     fields=tuple(clean_line(str(f), 80) for f in item.get("fields", [])[:15]),
                     period=clean_line(str(item.get("period", "")), 160),
                 )
-                for item in draft[0].get("items", [])[:8]
+                for item in draft[0].get("items", [])[:MAX_ITEMS]
                 if isinstance(item, dict)
             )
         if request[3] is not None:
@@ -586,22 +1008,80 @@ def _context(
     )
 
 
+def _wizard_context(
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    file_name: str,
+    extraction: Extraction,
+    control_id: UUID,
+    listed: tuple[Item, ...],
+) -> ClassifyContext:
+    """A wizard file's reading: every D&I item of the control it may be placed on, each by
+    its requirement (evidence_wizard.listed_items), so what the file covers is recorded
+    against each item, with the control's own facts."""
+    from dataclasses import replace
+
+    from ai_workforce_api.pbc_drafting import load_context
+
+    base = _context(connection, project_id, file_name, extraction, None)
+    items = tuple(requested_item(item) for item in listed)
+    try:
+        loaded = load_context(connection, project_id, control_id)
+    except NotVisible:
+        return replace(base, items=items)
+    return replace(
+        base,
+        request_title=f"Design and implementation evidence for {loaded.control_ref}",
+        items=items,
+        control_ref=loaded.control_ref,
+        control_title=loaded.title,
+        control_activity=loaded.activity,
+        area=loaded.domain_label,
+        frequency=loaded.frequency_label or loaded.frequency,
+        systems=tuple(loaded.applications),
+        period=loaded.period,
+    )
+
+
 def fail_analysis(connection: psycopg.Connection[Any], analysis_id: UUID) -> None:
     """After the last retry, an analysis is failed so a person can run it again."""
-    _fail(connection, analysis_id, "Reading the file did not finish.")
+    handled = _fail(connection, analysis_id, "Reading the file did not finish.")
+    # The assurance chain waits for a request's files to be read: this one will not be,
+    # so its request is checked on its other files, with this one named as left out.
+    row = connection.execute(
+        "SELECT project_id, evidence_file_id, requested_by_user_id FROM evidence_analyses "
+        "WHERE id = %s AND status = 'FAILED'",
+        (analysis_id,),
+    ).fetchone()
+    if row is not None and not handled:
+        with transaction(connection) as cursor:
+            queue_after_reading(cursor, row[0], row[1], row[2])
 
 
-def _fail(connection: psycopg.Connection[Any], analysis_id: UUID, note: str) -> None:
+def _fail(connection: psycopg.Connection[Any], analysis_id: UUID, note: str) -> bool:
+    """Fail the reading. For a wizard file, its placement and its batch's landing check run
+    in the same transaction (evidence_wizard.reading_ended), and True is returned; the
+    caller brings the chain in step for any other file."""
     with transaction(connection) as cursor:
-        cursor.execute(
+        row = cursor.execute(
             """
             UPDATE evidence_analyses
             SET status = 'FAILED', lease_until = NULL, note = %s,
+                finished_at = clock_timestamp(),
                 version = version + 1, updated_at = clock_timestamp()
             WHERE id = %s AND status IN ('PENDING', 'WORKING')
+            RETURNING project_id, evidence_file_id, requested_by_user_id
             """,
             (note[:300], analysis_id),
-        )
+        ).fetchone()
+        if row is None:
+            return False
+        ended = reading_ended(
+            cursor, UUID(str(row[0])), UUID(str(row[1])), UUID(str(row[2])),
+            analysis_id=analysis_id,
+            failed="CUSTODY" if note == CUSTODY_FAILED_NOTE else "READ_FAILED",
+        )  # fmt: skip
+        return ended is not None
 
 
 def reset_analysis(connection: psycopg.Connection[Any], analysis_id: UUID) -> None:
@@ -683,6 +1163,24 @@ class AnalysisBody(BaseModel):
     confirmed_by_name: str | None
     updated_at: datetime
     version: int
+    # One plain sentence for the person when the reading gave no usable answer (B1i): it
+    # failed, or the reviewed rules classified the file in the model's place; "" otherwise.
+    failure_note: str = ""
+
+
+def analysis_failure_note(status: str, source: str | None, note: str) -> str:
+    """AnalysisBody.failure_note, from the reading's own status, source and note."""
+    if status == "FAILED":
+        return (
+            f"{note.strip() or 'The file could not be read.'} Nothing of this reading is kept. "
+            "Read the file again, or classify it yourself."
+        )
+    if source == "FALLBACK" and note.strip():
+        return (
+            f"{note.strip()} Check the classification before you confirm it, or read the "
+            "file again."
+        )
+    return ""
 
 
 class VersionBody(BaseModel):
@@ -761,9 +1259,15 @@ def register_evidence_analysis(
         body: ConfirmBody,
         request: Request,
     ) -> AnalysisBody:
-        return run(
-            request,
-            lambda c, p: _confirm(c, p, organization_id, project_id, analysis_id, body),
+        # A confirmed kind clears the assurance chain's hold: the run it queues is handed
+        # to the worker once the confirmation has committed.
+        return committed(
+            lambda: run(
+                request,
+                lambda c, p: _confirm(
+                    c, p, organization_id, project_id, analysis_id, body, settings, scheduler
+                ),
+            )
         )
 
     @app.get("/organizations/{organization_id}/evidence-settings")
@@ -812,6 +1316,9 @@ def _body(row: tuple[Any, ...]) -> AnalysisBody:
         confirmed_by_name=None if row[21] is None else str(row[21]),
         updated_at=row[22],
         version=int(row[23]),
+        failure_note=analysis_failure_note(
+            str(row[3]), None if row[16] is None else str(row[16]), str(row[17])
+        ),
     )
 
 
@@ -886,7 +1393,8 @@ def _reanalyze(
     with transaction(connection) as cursor:
         current = cursor.execute(
             """
-            SELECT status, version, confirmed_kind, evidence_file_id FROM evidence_analyses
+            SELECT status, version, confirmed_kind, evidence_file_id, source
+            FROM evidence_analyses
             WHERE id = %s AND organization_id = %s AND project_id = %s FOR UPDATE
             """,
             (analysis_id, organization_id, project_id),
@@ -899,26 +1407,27 @@ def _reanalyze(
             raise AnalysisState("analysis is in progress")
         if current[2] is not None:
             raise AnalysisState("analysis is confirmed")
+        if current[4] == "SEEDED":
+            # A reading prepared with the demo is a kept example (migration 0129): the
+            # test results cite its text. A live analysis runs on a file added now.
+            raise AnalysisState(
+                "the analysis was prepared with the demo and is kept as an example; add a "
+                "copy of the file to analyse it live"
+            )
         if review_decided(connection, analysis_id):
             raise AnalysisState("review is signed off")
-        # An unsigned review is derived data and is redone with the reading.
-        cursor.execute(
-            "DELETE FROM evidence_reviews WHERE evidence_analysis_id = %s AND decision IS NULL",
-            (analysis_id,),
-        )
+        if is_withdrawn(cursor, UUID(str(current[3]))):
+            raise AnalysisState("the file is withdrawn")
+        restart_analysis(cursor, analysis_id, principal.id)
+        # An upload that waits for a person is matched again with the new reading.
         cursor.execute(
             """
-            UPDATE evidence_analyses
-            SET status = 'PENDING', attempts = 0, lease_until = NULL, requested_by_user_id = %s,
-                extraction = NULL, extraction_status = NULL, ocr_engine = NULL,
-                extracted_text = '', text_truncated = false, content_redacted = false,
-                page_count = NULL, row_count = NULL, columns = '[]'::jsonb,
-                classification = NULL, source = NULL, model_call_id = NULL,
-                ocr_model_call_id = NULL, note = '',
-                version = version + 1, updated_at = clock_timestamp()
-            WHERE id = %s
+            UPDATE evidence_matches
+            SET status = 'PENDING', suggestions = '[]'::jsonb, reason = '', source = NULL,
+                confidence = NULL, model_call_id = NULL, version = version + 1
+            WHERE evidence_file_id = %s AND status = 'NEEDS_MATCH'
             """,
-            (principal.id, analysis_id),
+            (current[3],),
         )
         cursor.execute(
             """
@@ -933,6 +1442,29 @@ def _reanalyze(
     return _select(connection, organization_id, project_id, analysis_id)
 
 
+def restart_analysis(cursor: psycopg.Cursor[Any], analysis_id: UUID, requester: UUID) -> None:
+    """Read the file again from the start. The caller has checked it may be reread."""
+    # An unsigned review is derived data and is redone with the reading.
+    cursor.execute(
+        "DELETE FROM evidence_reviews WHERE evidence_analysis_id = %s AND decision IS NULL",
+        (analysis_id,),
+    )
+    cursor.execute(
+        """
+        UPDATE evidence_analyses
+        SET status = 'PENDING', attempts = 0, lease_until = NULL, requested_by_user_id = %s,
+            extraction = NULL, extraction_status = NULL, ocr_engine = NULL,
+            extracted_text = '', text_truncated = false, content_redacted = false,
+            page_count = NULL, row_count = NULL, columns = '[]'::jsonb,
+            classification = NULL, source = NULL, model_call_id = NULL,
+            ocr_model_call_id = NULL, note = '', started_at = NULL, finished_at = NULL,
+            version = version + 1, updated_at = clock_timestamp()
+        WHERE id = %s
+        """,
+        (requester, analysis_id),
+    )
+
+
 def _confirm(
     connection: psycopg.Connection[Any],
     principal: Principal,
@@ -940,6 +1472,8 @@ def _confirm(
     project_id: UUID,
     analysis_id: UUID,
     body: ConfirmBody,
+    settings: Settings | None = None,
+    scheduler: object | None = None,
 ) -> AnalysisBody:
     _person(connection, principal, organization_id, project_id)
     with transaction(connection) as cursor:
@@ -983,7 +1517,73 @@ def _confirm(
                 Json({"kind": body.kind, "suggested": suggested, "agreed": body.kind == suggested}),
             ),
         )
+        # Sampling starts from a population whoever recognised it: a person who corrects
+        # the reader's kind to population gets the same seeded proposal the reader's own
+        # classification would have drawn (M3b closure). Never over an existing test plan.
+        if body.kind == "population" and suggested != "population" and settings is not None:
+            _propose_from_confirmed(
+                connection, cursor, settings, organization_id, project_id, current[3],
+                principal.id,
+            )  # fmt: skip
+        # The file's kind is a person's now: the assurance chain's KIND_UNSURE hold is
+        # cleared and the check starts (or starts again under the confirmed kind).
+        queued = queue_safely(cursor, project_id, UUID(str(current[3])), principal.id)
+    after_commit(lambda: schedule_assessments(scheduler, queued))
     return _select(connection, organization_id, project_id, analysis_id)
+
+
+def _propose_from_confirmed(
+    connection: psycopg.Connection[Any],
+    cursor: psycopg.Cursor[Any],
+    settings: Settings,
+    organization_id: UUID,
+    project_id: UUID,
+    file_id: Any,
+    person: UUID,
+) -> None:
+    request = file_request(connection, project_id, UUID(str(file_id)))
+    if request is None or request[3] is None:
+        return
+    exists = cursor.execute(
+        "SELECT 1 FROM control_tests WHERE engagement_control_id = %s AND project_id = %s",
+        (request[3], project_id),
+    ).fetchone()
+    if exists is not None:
+        return
+    stored = cursor.execute(
+        "SELECT object_key, content_sha256, size_bytes, file_name, content_type "
+        "FROM evidence_files WHERE id = %s AND project_id = %s",
+        (file_id, project_id),
+    ).fetchone()
+    if stored is None:
+        return
+    content = open_store(settings, connection).get(str(stored[0]))
+    if digest_of(content) != stored[1] or len(content) != int(stored[2]):
+        return
+    sampling = _sampling(
+        connection, project_id, request, "population", content, stored[3], stored[4]
+    )
+    if sampling is None:
+        return
+    (period_end, frequency, nature, size, tester), table, round_id, window = sampling
+    propose(
+        cursor,
+        organization_id=organization_id,
+        project_id=project_id,
+        control_id=request[3],
+        file_id=UUID(str(file_id)),
+        file_name=str(stored[3]),
+        sha256=str(stored[1]),
+        table=table,
+        period_end=period_end,
+        frequency=frequency,
+        nature=nature,
+        size=size,
+        proposer=person,
+        tester=tester,
+        test_round_id=round_id,
+        window=window,
+    )
 
 
 def _settings(

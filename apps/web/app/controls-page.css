@@ -1,0 +1,1271 @@
+/* ==========================================================================
+   The Controls page (controls-page.tsx; decided by the product owner on 26 October
+   2026): a header, six tiles, a filter bar, a filter side panel, and the table, each row
+   opening in place with its status and next steps.
+   ========================================================================== */
+
+.cpg {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.875rem;
+}
+
+.cpg-select {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.cpg-select select {
+  height: 32px;
+  padding: 0 1.9rem 0 0.7rem;
+  font: inherit;
+  font-size: var(--fs-sm);
+  color: var(--text);
+  appearance: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.cpg-select > svg {
+  position: absolute;
+  right: 0.6rem;
+  color: var(--text-tertiary);
+  transform: rotate(90deg);
+  pointer-events: none;
+}
+
+.cpg-tiles {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.cpg-tile {
+  display: flex;
+  height: auto;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.85rem 1rem;
+  font: inherit;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+/* A tile is a button: the global button hover would fill it with the accent colour, so
+   it keeps its own surface and lifts with its border and shadow (31 October 2026). */
+.cpg-tile:hover {
+  color: inherit;
+  background: var(--surface);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-xs);
+}
+
+.cpg-tile > span:first-child {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+/* A tile is a button, which keeps its text on one line by default: its label wraps inside
+   it instead ("Testing in progress" ran past its tile at 1440px, 28 October 2026). */
+.cpg-tile {
+  line-height: 1.3;
+  white-space: normal;
+}
+
+.cpg-tile-icon {
+  flex: none;
+}
+
+.cpg-tile strong {
+  font-size: var(--fs-display);
+  font-weight: 600;
+  line-height: 1.1;
+  color: var(--text-strong);
+  font-variant-numeric: tabular-nums;
+}
+
+.cpg-tile small {
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+/* The summary tiles (17 November 2026): the number carries it, the label and icon in grey;
+   only a count that needs someone keeps its colour. */
+.cpg-tile small {
+  color: var(--text-secondary);
+}
+
+.cpg-tile small.is-warning {
+  color: var(--warning);
+}
+
+.cpg-tile small.is-danger {
+  color: var(--danger);
+}
+
+.cpg-tile-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.cpg-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.cpg-search {
+  display: flex;
+  flex: 1 1 280px;
+  gap: 0.45rem;
+  align-items: center;
+  height: 34px;
+  padding: 0 0.7rem;
+  color: var(--text-tertiary);
+  background: var(--surface);
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius);
+}
+
+.cpg-search input,
+.cpg-search input:focus {
+  flex: 1;
+  min-width: 0;
+  height: auto;
+  padding: 0;
+  font: inherit;
+  font-size: var(--fs-sm);
+  color: var(--text);
+  background: none;
+  border: 0;
+  outline: none;
+  box-shadow: none;
+}
+
+/* The ring around the box, not the borderless field inside it. */
+.cpg-search:focus-within {
+  border-color: var(--accent);
+  box-shadow: var(--ring);
+}
+
+.cpg-views {
+  display: inline-flex;
+  min-width: 0;
+  margin: 0;
+  padding: 2px;
+  background: var(--surface-sunken);
+  border: 0;
+  border-radius: var(--radius);
+}
+
+.cpg-views button {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+  height: 26px;
+  padding: 0 0.6rem;
+  font: inherit;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.cpg-views button.is-on {
+  color: var(--text-strong);
+  font-weight: 500;
+  background: var(--surface);
+  box-shadow: var(--shadow-xs);
+}
+
+.cpg-body {
+  display: grid;
+  grid-template-columns: 224px minmax(0, 1fr);
+  gap: 0.875rem;
+  align-items: start;
+}
+
+.cpg-body.is-wide {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.cpg-filters {
+  display: grid;
+  gap: 0.9rem;
+  padding: 0.9rem 1rem;
+}
+
+.cpg-filters > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.cpg-filters h2 {
+  margin: 0;
+  font-size: var(--fs-md);
+  color: var(--text-strong);
+}
+
+.cpg-filters fieldset {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0.85rem 0 0;
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.cpg-filters legend {
+  float: left;
+  width: 100%;
+  margin-bottom: 0.3rem;
+  padding: 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.cpg-check {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  align-items: center;
+  font-size: var(--fs-sm);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.cpg-check small {
+  font-size: var(--fs-xs);
+  color: var(--text-tertiary);
+}
+
+.cpg-filters .cpg-select,
+.cpg-filters .cpg-select select,
+.cpg-reset {
+  width: 100%;
+}
+
+.cpg-link {
+  padding: 0;
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--accent-text);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.cpg-main {
+  display: grid;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+/* The table's head, to the owner's reference (2 November 2026): an icon tile beside a
+   large title and its count, the bulk actions at the right. */
+.cpg-main-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 1.25rem 1.5rem 1rem;
+}
+
+.cpg-main-head h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  margin: 0;
+  margin-right: auto;
+  font-size: var(--fs-lg);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-strong);
+}
+
+.cpg-main-head h2 > span:not(.cpg-title-icon) {
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.cpg-title-icon {
+  display: inline-grid;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.cpg-scroll {
+  /* Holds its positioned descendants (the hidden column labels) inside the scroll. */
+  position: relative;
+  overflow-x: auto;
+  padding: 0 0.75rem 0.25rem;
+}
+
+/* Separate borders, so the header and the group bands can round their ends. */
+.cpg-table {
+  width: 100%;
+  min-width: 760px;
+  font-size: var(--fs-sm);
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.cpg-table th,
+.cpg-table td {
+  padding: 0.6rem 0.4rem;
+  text-align: left;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* The column names as every table's (.table th; design audit, 17 November 2026). */
+.cpg-table thead th {
+  height: 32px;
+  padding-top: 0;
+  padding-bottom: 0;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+  background: var(--surface-muted);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+}
+
+.cpg-table thead th:first-child {
+  padding-left: 0.75rem;
+}
+
+/* The scope, plan and testing statuses, in one cell. */
+.cpg-statuses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  align-items: center;
+}
+
+.cpg-control small {
+  font-size: var(--fs-xs);
+  color: var(--text-tertiary);
+}
+
+.cpg-table .cpg-pick,
+.cpg-table .cpg-expand {
+  width: 1%;
+  padding-right: 0;
+}
+
+.cpg-expand button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: var(--text-secondary);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.cpg-expand button:hover {
+  background: var(--surface-muted);
+}
+
+.cpg-expand svg {
+  transition: transform 180ms ease;
+}
+
+.cpg-expand button[aria-expanded="true"] svg {
+  transform: rotate(90deg);
+}
+
+.cpg-row:hover > td {
+  background: var(--surface-muted);
+}
+
+.cpg-row.is-open > td {
+  background: var(--accent-soft);
+  border-bottom-color: transparent;
+}
+
+.cpg-control {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 150px;
+}
+
+/* The control's ID as every list's reference code (.ref-code; design review, 17 November 2026). */
+.cpg-control strong,
+.cpg-control a {
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  color: var(--text-strong);
+}
+
+.cpg-control a {
+  justify-self: start;
+  text-decoration: none;
+}
+
+.cpg-control a:hover,
+.cpg-control a:focus-visible {
+  text-decoration: underline;
+}
+
+.cpg-row.is-link {
+  cursor: pointer;
+}
+
+.cpg-control > span {
+  color: var(--text);
+}
+
+.cpg-key {
+  display: inline-flex;
+  gap: 0.2rem;
+  align-items: center;
+  margin-left: 0.4rem;
+  padding: 0 0.4rem;
+  font-size: var(--fs-2xs);
+  font-weight: 500;
+  color: var(--text-secondary);
+  vertical-align: 1px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.cpg-two {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.cpg-two small {
+  color: var(--text-secondary);
+}
+
+.cpg-type {
+  display: inline-block;
+  padding: 0.05rem 0.45rem;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.cpg-pill {
+  display: inline-flex;
+  gap: 0.25rem;
+  align-items: center;
+  padding: 0.1rem 0.5rem;
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+}
+
+.cpg-pill.is-danger {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+}
+
+.cpg-pill.is-muted {
+  color: var(--neutral);
+  background: var(--neutral-soft);
+  border-color: var(--neutral-border);
+}
+
+.cpg-owner {
+  display: inline-flex;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.cpg-avatar {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: 999px;
+}
+
+.cpg-next {
+  padding: 0 0.6rem;
+  white-space: nowrap;
+}
+
+/* Each system (or process) on its own tinted band with its icon, set apart from the
+   rows above it. */
+.cpg-group th {
+  padding: 1.25rem 0 0.35rem;
+  background: none;
+  border-bottom: 0;
+}
+
+.cpg-table tbody .cpg-group:first-child th {
+  padding-top: 0.85rem;
+}
+
+.cpg-group-band {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  background: var(--surface-muted);
+  border-radius: var(--radius);
+}
+
+.cpg-group-band svg {
+  flex: none;
+  color: var(--accent-text);
+}
+
+.cpg-group-band strong {
+  font-weight: 600;
+}
+
+.cpg-group-band span {
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.cpg-detail-row > td {
+  padding: 0;
+  background: var(--surface);
+}
+
+.cpg-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 1rem;
+  padding: 0.25rem 1rem 1rem 3.5rem;
+  animation: cpg-open 200ms ease;
+}
+
+@keyframes cpg-open {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+.cpg-detail h4 {
+  margin: 0.9rem 0 0.35rem;
+  font-size: var(--fs-sm);
+  color: var(--text-strong);
+}
+
+.cpg-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.cpg-tabs button {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+  margin-bottom: -1px;
+  padding: 0.55rem 0.45rem;
+  font: inherit;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+
+.cpg-tabs button.is-on {
+  font-weight: 600;
+  color: var(--text-strong);
+  border-bottom-color: var(--accent);
+}
+
+.cpg-tabs small {
+  padding: 0 0.35rem;
+  font-size: var(--fs-2xs);
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border-radius: 999px;
+}
+
+.cpg-description {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.cpg-facts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+  margin: 0.9rem 0 0;
+}
+
+.cpg-facts > div {
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.cpg-facts dt {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+
+.cpg-facts dd {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+  margin: 0.3rem 0 0;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.cpg-fact-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: var(--radius-sm);
+}
+
+.cpg-remove {
+  margin-top: 0.75rem;
+}
+
+.cpg-list {
+  display: grid;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cpg-list li {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.55rem 0;
+  font-size: var(--fs-sm);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.cpg-list li > span {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.cpg-list small,
+.cpg-muted {
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+
+.cpg-phase {
+  display: grid;
+  gap: 0.6rem;
+  justify-items: start;
+  padding-top: 0.9rem;
+  font-size: var(--fs-sm);
+}
+
+.cpg-phase p {
+  margin: 0;
+}
+
+.cpg-steps {
+  align-self: start;
+  margin-top: 0.75rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.cpg-steps h4 {
+  margin-top: 0;
+}
+
+.cpg-steps ol {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cpg-steps li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  gap: 0.6rem;
+  align-items: center;
+  padding: 0.5rem 0;
+}
+
+/* The line joining each step to the next. */
+.cpg-steps li:not(:last-child)::after {
+  position: absolute;
+  top: calc(50% + 11px);
+  bottom: calc(-50% + 11px);
+  left: 8px;
+  width: 2px;
+  content: "";
+  background: var(--border);
+}
+
+.cpg-step-mark {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  color: var(--text-on-accent);
+  background: var(--surface);
+  border: 2px solid var(--border-strong);
+  border-radius: 999px;
+}
+
+.cpg-steps li.is-now .cpg-step-mark {
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 3px var(--surface);
+}
+
+.cpg-steps li.is-done .cpg-step-mark {
+  background: var(--success);
+  border-color: var(--success);
+}
+
+.cpg-step-text {
+  display: grid;
+}
+
+.cpg-step-text strong {
+  font-size: var(--fs-sm);
+  color: var(--text-strong);
+}
+
+.cpg-steps li.is-now .cpg-step-text strong {
+  color: var(--accent-text);
+}
+
+.cpg-step-text small {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+
+.cpg-steps button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.cpg-steps li > a,
+.cpg-steps li > button {
+  min-width: 112px;
+}
+
+/* The card view, to the owner's reference (2 November 2026): each system on the
+   table's band, with how many of its plans are approved and a fold, then its controls
+   as cards filling the row. */
+.cpg-card-groups {
+  display: grid;
+  gap: 1.25rem;
+  /* A grid item: without this it grows to its cards' widest content on a phone. */
+  min-width: 0;
+  padding: 0.25rem 1rem 1rem;
+}
+
+.cpg-card-group {
+  display: grid;
+  gap: 0.85rem;
+  min-width: 0;
+}
+
+.cpg-group-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-left: auto;
+  font-size: var(--fs-sm);
+}
+
+.cpg-group-bar {
+  display: block;
+  width: 112px;
+  height: 8px;
+  overflow: hidden;
+  background: var(--border);
+  border-radius: 999px;
+}
+
+.cpg-group-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--success);
+  border-radius: inherit;
+}
+
+.cpg-group-band > .cpg-group-fold {
+  display: inline-grid;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  margin-left: auto;
+  padding: 0;
+  place-items: center;
+  color: var(--text-secondary);
+  background: none;
+  border: 0;
+  border-radius: var(--radius);
+  box-shadow: none;
+}
+
+.cpg-group-progress + .cpg-group-fold {
+  margin-left: 0.5rem;
+}
+
+.cpg-group-band > .cpg-group-fold:hover {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+}
+
+.cpg-group-band > .cpg-group-fold svg {
+  color: inherit;
+  transform: rotate(90deg);
+  transition: transform 150ms ease;
+}
+
+.cpg-group-band > .cpg-group-fold[aria-expanded="true"] svg {
+  transform: rotate(-90deg);
+}
+
+.cpg-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr));
+  gap: 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Cards in a row share one height, the footer at the bottom (design review, 17 November
+   2026). */
+.cpg-card {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
+}
+
+.cpg-card-top {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 1rem;
+  align-items: start;
+  padding: 1.1rem 1.25rem 1rem;
+}
+
+.cpg-card-icon {
+  display: inline-grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  border-radius: var(--radius-xl);
+}
+
+.cpg-card-name {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.cpg-card-name > a,
+.cpg-card-ref {
+  width: fit-content;
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.cpg-card-name > a:hover {
+  text-decoration: underline;
+}
+
+.cpg-card-name > strong {
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.cpg-card-name > small {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.cpg-card-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 0.75rem;
+  margin: 0 1.25rem;
+  padding: 0.85rem 0 1rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.cpg-card-foot > .cpg-owner {
+  margin-right: auto;
+  font-size: var(--fs-sm);
+}
+
+.cpg-card-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.8rem;
+  font-size: var(--fs-sm);
+}
+
+.cpg-card-open {
+  display: inline-grid;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  color: var(--text-strong);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+}
+
+.cpg-card-open:hover {
+  background: var(--surface-hover);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cpg-group-band > .cpg-group-fold svg {
+    transition: none;
+  }
+}
+
+.cpg-empty {
+  margin: 0;
+  padding: 2rem 1rem;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.cpg-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.7rem 1rem;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+}
+
+.cpg-pager {
+  display: inline-flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.cpg-pager > button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.cpg-pager > button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.cpg-page {
+  display: grid;
+  place-items: center;
+  min-width: 30px;
+  height: 30px;
+  font-weight: 600;
+  color: var(--text-on-accent);
+  background: var(--accent);
+  border-radius: var(--radius);
+}
+
+@media (max-width: 1280px) {
+  .cpg-tiles {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .cpg-detail {
+    grid-template-columns: minmax(0, 1fr);
+    padding-left: 1rem;
+  }
+}
+
+@media (max-width: 900px) {
+  .cpg-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cpg-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .cpg-tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .cpg-main-head h2 {
+    font-size: var(--fs-lg);
+  }
+
+  /* On a phone the band's progress takes its own line under the name. */
+  .cpg-card-group .cpg-group-band {
+    flex-wrap: wrap;
+    font-size: var(--fs-lg);
+  }
+
+  .cpg-group-progress {
+    order: 1;
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .cpg-group-progress + .cpg-group-fold {
+    margin-left: auto;
+  }
+
+  .cpg-card-top {
+    gap: 0.75rem;
+    padding: 1rem;
+  }
+
+  .cpg-card-icon {
+    width: 40px;
+    height: 40px;
+  }
+
+  /* The owner on one line; the status and the arrow on the next, the arrow at the end. */
+  .cpg-card-foot {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    margin: 0 1rem;
+  }
+
+  .cpg-card-foot > .cpg-owner {
+    grid-column: 1 / -1;
+  }
+
+  .cpg-card-foot > .cpg-card-status {
+    justify-self: start;
+  }
+
+  .cpg-title-icon {
+    width: 32px;
+    height: 32px;
+  }
+
+  .cpg-tile {
+    padding: 0.75rem;
+  }
+
+  .cpg-tile small {
+    white-space: normal;
+  }
+
+  .cpg-tile-icon {
+    width: 28px;
+    height: 28px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cpg-tile,
+  .cpg-expand svg {
+    transition: none;
+  }
+
+  .cpg-detail {
+    animation: none;
+  }
+}
+
+/* The page's own buttons, not the app's primary button. */
+.cpg-tile,
+.cpg-link,
+.cpg-tabs button,
+.cpg-expand button,
+.cpg-views button,
+.cpg-pager > button {
+  font-weight: inherit;
+  line-height: normal;
+  box-shadow: none;
+}
+
+.cpg-tile {
+  width: 100%;
+  min-height: 72px;
+  box-shadow: var(--shadow-xs);
+}
+
+.cpg-link {
+  height: auto;
+}
+
+.cpg-tabs button {
+  height: auto;
+  border-radius: 0;
+}
+
+.cpg-tabs button.is-on {
+  font-weight: 600;
+}
+
+.cpg-table .cpg-more-cell {
+  width: 1%;
+  padding-right: 0.25rem;
+  padding-left: 0;
+}
+
+.cpg-menu {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--text-secondary);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+}
+
+.cpg-menu:hover,
+.cpg-menu[aria-expanded="true"] {
+  color: var(--text);
+  background: var(--surface-muted);
+}
+
+.cpg-menu-panel {
+  position: fixed;
+  z-index: 40;
+  display: grid;
+  min-width: 180px;
+  padding: 0.3rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+  animation: cpg-open 150ms ease;
+}
+
+.cpg-menu-panel a {
+  padding: 0.45rem 0.6rem;
+  font-size: var(--fs-sm);
+  color: var(--text);
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+}
+
+.cpg-menu-panel a:hover,
+.cpg-menu-panel a:focus-visible {
+  background: var(--surface-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cpg-menu-panel {
+    animation: none;
+  }
+}
+
+/* The register in the neutral theme (17 November 2026): references in the text colour, the
+   type and key as outline badges, the group's icon and the owners' initials in grey. Colour
+   stays for a plan or a test that needs someone. */
+.cpg-group-band svg {
+  color: var(--text-secondary);
+}
+
+.cpg-avatar {
+  color: var(--text-secondary);
+  background: var(--surface-sunken);
+  border-color: var(--border);
+}
+.cpg-pill.is-neutral {
+  color: var(--text-secondary);
+  background: transparent;
+  border-color: var(--border);
+}
+
+

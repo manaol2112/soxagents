@@ -4,9 +4,12 @@ import {
   parseEvidenceSettings,
   parseReviews,
 } from "./analysis-model";
+import { parseInbox } from "./console-model";
 import { parseDrafts } from "./draft-model";
-
+import { parseChangeNotice } from "./evidence-change-model";
+import { parseFilingNotice, parseRegister } from "./evidence-model";
 import { apiGet, sessionToken } from "./load-workspace";
+import { parseRecipientLinks } from "./portal-model";
 import type { ShellModel } from "./shell-model";
 import {
   countActiveAgents,
@@ -14,6 +17,7 @@ import {
   parseApprovals,
   parseDecisionNotice,
   parseEvidence,
+  parseEvidenceContacts,
   parseEvidenceFiles,
   parseEvidenceNotice,
   parseFollowUps,
@@ -62,6 +66,10 @@ export async function loadWorkflow(
     analyses,
     evidenceSettings,
     reviews,
+    register,
+    contacts,
+    portalLinks,
+    inbox,
   ] = await Promise.all([
     apiGet("/auth/me", session),
     base === null ? null : apiGet(`${base}/approvals`, session),
@@ -81,6 +89,18 @@ export async function loadWorkflow(
       ? apiGet(`/organizations/${organizationId}/evidence-settings`, session)
       : null,
     tracksEvidence ? apiGet(`${base}/evidence-reviews`, session) : null,
+    base !== null && section === "evidence"
+      ? apiGet(`${base}/evidence-register`, session)
+      : null,
+    base !== null && section === "evidence"
+      ? apiGet(`${base}/onboarding/evidence-contacts`, session)
+      : null,
+    base !== null && section === "evidence"
+      ? apiGet(`${base}/evidence-portal/links`, session)
+      : null,
+    base !== null && section === "overview"
+      ? apiGet(`${base}/console/inbox`, session)
+      : null,
   ]);
   const userId =
     me.status === 200 &&
@@ -132,6 +152,12 @@ export async function loadWorkflow(
       evidenceFiles !== null && evidenceFiles.status === 200
         ? parseEvidenceFiles(evidenceFiles.body)
         : null,
+    evidenceRegister:
+      register !== null && register.status === 200
+        ? parseRegister(register.body)
+        : null,
+    filingNotice: section === "evidence" ? parseFilingNotice(notice) : null,
+    changeNotice: section === "evidence" ? parseChangeNotice(notice) : null,
     evidenceAnalyses:
       analyses !== null && analyses.status === 200
         ? parseAnalyses(analyses.body)
@@ -144,6 +170,16 @@ export async function loadWorkflow(
       evidenceSettings !== null && evidenceSettings.status === 200
         ? parseEvidenceSettings(evidenceSettings.body)
         : null,
+    evidenceContacts:
+      contacts !== null && contacts.status === 200
+        ? parseEvidenceContacts(contacts.body)
+        : null,
+    portalLinks:
+      portalLinks !== null && portalLinks.status === 200
+        ? parseRecipientLinks(portalLinks.body)
+        : null,
+    inbox:
+      inbox !== null && inbox.status === 200 ? parseInbox(inbox.body) : null,
     workforce:
       workforce !== null && workforce.status === 200
         ? parseWorkforce(workforce.body)

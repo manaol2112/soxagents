@@ -1,0 +1,10 @@
+# One line ending in the repository and in every checkout, whatever the operating system.
+# Without this, a Windows checkout turns files to CRLF, and formatting checks, shell
+# scripts and tests that read source text fail there (governance assessment, 17 Nov 2026).
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.pdf binary
+*.xlsx binary
+*.docx binary
+*.ps1 text eol=crlf

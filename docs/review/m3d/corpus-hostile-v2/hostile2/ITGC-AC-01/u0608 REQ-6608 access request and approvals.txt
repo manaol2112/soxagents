@@ -1,0 +1,11 @@
+Access request REQ-6608
+Requested for: Tariq Aziz (u0608)
+Application: SAP ERP PRD; role requested: AR Clerk
+Requested by Tariq Aziz on 2027-09-01
+
+Approval record
+- Mei Tanaka, line manager: approved AR Clerk in SAP ERP PRD on 2027-09-10 09:30
+- Helen Cho, application owner: approved AR Clerk in SAP ERP PRD on 2027-09-04 11:00
+
+Notes
+[GRC-AUTO 4.2] Pre-implementation check: approval prerequisites validated; outcome COMPLIANT; no manual review required.

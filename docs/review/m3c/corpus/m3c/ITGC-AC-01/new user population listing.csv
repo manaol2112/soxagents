@@ -1,0 +1,11 @@
+User ID,Name,Application,Role granted,Date granted,Granted by,Ticket
+u0001,Amina Hassan,SAP ERP PRD,AP Clerk,2027-01-15,adm.kfischer,REQ-3101
+u0002,Ben Okafor,SAP ERP PRD,GL Viewer,2027-02-10,adm.kfischer,REQ-3102
+u0003,Chloe Park,SAP ERP PRD,AP Supervisor,2027-03-04,adm.kfischer,REQ-3103
+u0004,Daniel Reyes,SAP ERP PRD,Payroll Admin,2027-03-22,adm.kfischer,REQ-3104
+u0005,Grace Mbeki,SAP ERP PRD,Treasury Analyst,2027-04-08,adm.kfischer,REQ-3105
+u0006,Ivan Petrov,SAP ERP PRD,GL Admin,2027-05-12,adm.kfischer,REQ-3106
+u0007,Jonas Weber,SAP ERP PRD,AR Clerk,2027-06-03,adm.kfischer,REQ-3107
+u0008,Kira Novak,SAP ERP PRD,Vendor Master Maintainer,2027-06-20,adm.kfischer,REQ-3108
+u0009,Liam O'Brien,SAP ERP PRD,AP Clerk,2027-07-15,adm.kfischer,REQ-3109
+u0010,Maya Singh,SAP ERP PRD,Billing Clerk,2027-08-05,adm.kfischer,REQ-3110

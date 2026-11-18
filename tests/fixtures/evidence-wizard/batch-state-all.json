@@ -1,0 +1,993 @@
+{
+ "batch_id": "cbceb9bf-8553-4866-97ec-89fc191a1204",
+ "chosen_requirement_id": null,
+ "control_id": "01a1d5c0-1441-7e7f-8f37-ffb61bf80534",
+ "created_at": "2026-11-13T16:31:49.537567Z",
+ "files": [
+  {
+   "addresses": [
+    {
+     "code": "A",
+     "verdict": "SUPPORTED"
+    },
+    {
+     "code": "C",
+     "verdict": "SUPPORTED"
+    },
+    {
+     "code": "D",
+     "verdict": "SUPPORTED"
+    },
+    {
+     "code": "E",
+     "verdict": "SUPPORTED"
+    }
+   ],
+   "classification": {
+    "confidence": "high",
+    "kind": "policy",
+    "label": "Policy or procedure",
+    "summary": "A policy file."
+   },
+   "duplicate": false,
+   "extension": "txt",
+   "file_id": "b6747ed0-858a-4e2f-9aeb-0df50a90a900",
+   "name": "access policy.txt",
+   "placement": {
+    "method": "AGENT",
+    "reason": "The reader found it covers \u201cAccess management policy\u201d.",
+    "requirement_ids": [
+     "01a1d5c0-1d84-74c5-8cdb-719bf1a0688a"
+    ],
+    "status": "PLACED",
+    "suggestions": [],
+    "version": 1
+   },
+   "read": {
+    "finished_at": "2026-11-13T16:31:50.027178Z",
+    "method": "TEXT",
+    "note": "",
+    "pages": null,
+    "started_at": "2026-11-13T16:31:49.915346Z",
+    "status": "READY"
+   },
+   "size_bytes": 211,
+   "stage": "SORTED"
+  },
+  {
+   "addresses": [
+    {
+     "code": "A",
+     "verdict": "SUPPORTED"
+    },
+    {
+     "code": "C",
+     "verdict": "SUPPORTED"
+    },
+    {
+     "code": "D",
+     "verdict": "SUPPORTED"
+    },
+    {
+     "code": "E",
+     "verdict": "SUPPORTED"
+    }
+   ],
+   "classification": {
+    "confidence": "high",
+    "kind": "walkthrough",
+    "label": "Walkthrough evidence",
+    "summary": "A walkthrough file."
+   },
+   "duplicate": false,
+   "extension": "txt",
+   "file_id": "ac5ec489-8dd0-4846-95b2-08d8ccf9a990",
+   "name": "ticket REQ-1041.txt",
+   "placement": {
+    "method": "AGENT",
+    "reason": "The reader found it covers \u201cWalkthrough instance: one access request from request to grant\u201d.",
+    "requirement_ids": [
+     "01a1d5c0-1d89-7db1-801e-e6f012953a44"
+    ],
+    "status": "PLACED",
+    "suggestions": [],
+    "version": 1
+   },
+   "read": {
+    "finished_at": "2026-11-13T16:31:50.199119Z",
+    "method": "TEXT",
+    "note": "",
+    "pages": null,
+    "started_at": "2026-11-13T16:31:50.144421Z",
+    "status": "READY"
+   },
+   "size_bytes": 162,
+   "stage": "SORTED"
+  },
+  {
+   "addresses": [
+    {
+     "code": "A",
+     "verdict": "SUPPORTED"
+    },
+    {
+     "code": "C",
+     "verdict": "SUPPORTED"
+    },
+    {
+     "code": "D",
+     "verdict": "SUPPORTED"
+    },
+    {
+     "code": "E",
+     "verdict": "SUPPORTED"
+    }
+   ],
+   "classification": {
+    "confidence": "high",
+    "kind": "change_history",
+    "label": "Change history or audit log",
+    "summary": "A change_history file."
+   },
+   "duplicate": false,
+   "extension": "txt",
+   "file_id": "2cfac7e6-0058-466b-b33f-ad2a4db5e6f7",
+   "name": "sap change log.txt",
+   "placement": {
+    "method": "AGENT",
+    "reason": "The reader found it covers \u201cWalkthrough instance: one access request from request to grant\u201d in part, and it is the only item a file of this kind (change history or audit log) fits.",
+    "requirement_ids": [
+     "01a1d5c0-1d89-7db1-801e-e6f012953a44"
+    ],
+    "status": "PLACED",
+    "suggestions": [],
+    "version": 1
+   },
+   "read": {
+    "finished_at": "2026-11-13T16:31:50.350613Z",
+    "method": "TEXT",
+    "note": "",
+    "pages": null,
+    "started_at": "2026-11-13T16:31:50.291180Z",
+    "status": "READY"
+   },
+   "size_bytes": 85,
+   "stage": "SORTED"
+  },
+  {
+   "addresses": [],
+   "classification": {
+    "confidence": "high",
+    "kind": "other",
+    "label": "Other",
+    "summary": "A other file."
+   },
+   "duplicate": false,
+   "extension": "txt",
+   "file_id": "e9fe71f5-0640-4bbe-acb6-6a564d0fdcdf",
+   "name": "parking minutes.txt",
+   "placement": {
+    "method": "AGENT",
+    "reason": "The reader found it is not evidence for any of the control's D&I items. It stays in the control's files.",
+    "requirement_ids": [],
+    "status": "NOT_DESIGN",
+    "suggestions": [],
+    "version": 1
+   },
+   "read": {
+    "finished_at": "2026-11-13T16:31:50.483536Z",
+    "method": "TEXT",
+    "note": "",
+    "pages": null,
+    "started_at": "2026-11-13T16:31:50.430735Z",
+    "status": "READY"
+   },
+   "size_bytes": 78,
+   "stage": "NOT_DESIGN"
+  },
+  {
+   "addresses": [],
+   "classification": {
+    "confidence": "low",
+    "kind": "walkthrough",
+    "label": "Walkthrough evidence",
+    "summary": "A walkthrough file."
+   },
+   "duplicate": false,
+   "extension": "txt",
+   "file_id": "0d6ac527-e8b5-4c54-a97c-39eefc193e98",
+   "name": "access notes.txt",
+   "placement": {
+    "method": "AGENT",
+    "reason": "The reader is not sure what kind of evidence this file is. Confirm its kind to start the check.",
+    "requirement_ids": [],
+    "status": "NEEDS_PERSON",
+    "suggestions": [
+     {
+      "reason": "The reader found it covers this item in part.",
+      "requirement_id": "01a1d5c0-1d89-7db1-801e-e6f012953a44",
+      "title": "Walkthrough instance: one access request from request to grant"
+     },
+     {
+      "reason": "The reader found it covers this item in part.",
+      "requirement_id": "01a1d5c0-1d84-74c5-8cdb-719bf1a0688a",
+      "title": "Access management policy"
+     }
+    ],
+    "version": 1
+   },
+   "read": {
+    "finished_at": "2026-11-13T16:31:50.612560Z",
+    "method": "TEXT",
+    "note": "",
+    "pages": null,
+    "started_at": "2026-11-13T16:31:50.543074Z",
+    "status": "READY"
+   },
+   "size_bytes": 82,
+   "stage": "NEEDS_PERSON"
+  },
+  {
+   "addresses": [],
+   "classification": null,
+   "duplicate": false,
+   "extension": "txt",
+   "file_id": "5db10e6e-0c7a-4b63-91b1-493cb1f8f4e1",
+   "name": "unreadable scan.txt",
+   "placement": {
+    "method": "AGENT",
+    "reason": "The file could not be read this time. Read it again.",
+    "requirement_ids": [],
+    "status": "NEEDS_PERSON",
+    "suggestions": [],
+    "version": 1
+   },
+   "read": {
+    "finished_at": "2026-11-13T16:31:51.439061Z",
+    "method": "NONE",
+    "note": "Reading the file did not finish.",
+    "pages": null,
+    "started_at": null,
+    "status": "FAILED"
+   },
+   "size_bytes": 40,
+   "stage": "FAILED"
+  },
+  {
+   "addresses": [],
+   "classification": null,
+   "duplicate": false,
+   "extension": "csv",
+   "file_id": "397fd85b-f721-4e08-9112-b7fba7abd825",
+   "name": "queued listing.csv",
+   "placement": {
+    "method": "AGENT",
+    "reason": "",
+    "requirement_ids": [],
+    "status": "PENDING",
+    "suggestions": [],
+    "version": 0
+   },
+   "read": {
+    "finished_at": null,
+    "method": "NONE",
+    "note": "",
+    "pages": null,
+    "started_at": null,
+    "status": "PENDING"
+   },
+   "size_bytes": 69,
+   "stage": "STORED"
+  },
+  {
+   "addresses": [],
+   "classification": null,
+   "duplicate": false,
+   "extension": "txt",
+   "file_id": "3cba78da-ebc3-4d06-a0d1-619816744113",
+   "name": "being read.txt",
+   "placement": {
+    "method": "AGENT",
+    "reason": "",
+    "requirement_ids": [],
+    "status": "PENDING",
+    "suggestions": [],
+    "version": 0
+   },
+   "read": {
+    "finished_at": null,
+    "method": "NONE",
+    "note": "",
+    "pages": null,
+    "started_at": "2026-11-13T16:27:51.831310Z",
+    "status": "WORKING"
+   },
+   "size_bytes": 41,
+   "stage": "READING"
+  }
+ ],
+ "items": [
+  {
+   "addresses": {
+    "b6747ed0-858a-4e2f-9aeb-0df50a90a900": [
+     {
+      "code": "A",
+      "verdict": "SUPPORTED"
+     },
+     {
+      "code": "C",
+      "verdict": "SUPPORTED"
+     },
+     {
+      "code": "D",
+      "verdict": "SUPPORTED"
+     },
+     {
+      "code": "E",
+      "verdict": "SUPPORTED"
+     }
+    ]
+   },
+   "assurance": {
+    "attributes": [
+     {
+      "absent": [],
+      "attribute_id": "01a1d5c0-144b-708b-adec-7411f29713db",
+      "code": "A",
+      "elements": [
+       {
+        "absent": [],
+        "key": "wording",
+        "passages": [
+         {
+          "file_id": "b6747ed0-858a-4e2f-9aeb-0df50a90a900",
+          "location": {
+           "cell": null,
+           "column": null,
+           "label": "",
+           "page": null,
+           "row": null,
+           "sheet": null
+          },
+          "quote": "must be approved by the user's line manager before it is granted"
+         }
+        ],
+        "result": "MET",
+        "text": "A request exists that names the user and the specific access (application, role, or permission) that was granted"
+       }
+      ],
+      "expected": false,
+      "finding_id": null,
+      "finding_status": null,
+      "passages": [
+       {
+        "file_id": "b6747ed0-858a-4e2f-9aeb-0df50a90a900",
+        "location": {
+         "cell": null,
+         "column": null,
+         "label": "",
+         "page": null,
+         "row": null,
+         "sheet": null
+        },
+        "quote": "must be approved by the user's line manager before it is granted"
+       }
+      ],
+      "result": "MET",
+      "shows": "DESIGN",
+      "summary": "Both readings find the documents require what attribute A tests.",
+      "verdict": "SUPPORTED",
+      "views": []
+     },
+     {
+      "absent": [],
+      "attribute_id": "01a1d5c0-144d-7ff4-ae5c-0ac6adf37ada",
+      "code": "B",
+      "elements": [
+       {
+        "absent": [
+         "No record that shows it."
+        ],
+        "key": "wording",
+        "passages": [],
+        "result": "NOT_MET",
+        "text": "The request was approved by the user's manager and, where the access management policy requires it, by the application owner"
+       }
+      ],
+      "expected": false,
+      "finding_id": null,
+      "finding_status": null,
+      "passages": [],
+      "result": null,
+      "shows": null,
+      "summary": "This request does not ask for this attribute; what the readings found is shown for reference.",
+      "verdict": "NOT_ADDRESSED",
+      "views": [
+       {
+        "passages": [],
+        "reason": "read for B",
+        "result": "NOT_MET",
+        "role": "ASSESSOR"
+       },
+       {
+        "passages": [],
+        "reason": "read for B",
+        "result": "NOT_MET",
+        "role": "REVIEWER"
+       }
+      ]
+     },
+     {
+      "absent": [],
+      "attribute_id": "01a1d5c0-144e-7d5c-a593-6467bec869df",
+      "code": "C",
+      "elements": [
+       {
+        "absent": [],
+        "key": "wording",
+        "passages": [
+         {
+          "file_id": "b6747ed0-858a-4e2f-9aeb-0df50a90a900",
+          "location": {
+           "cell": null,
+           "column": null,
+           "label": "",
+           "page": null,
+           "row": null,
+           "sheet": null
+          },
+          "quote": "must be approved by the user's line manager before it is granted"
+         }
+        ],
+        "result": "MET",
+        "text": "The approval is dated on or before the date the access was granted in the system"
+       }
+      ],
+      "expected": false,
+      "finding_id": null,
+      "finding_status": null,
+      "passages": [
+       {
+        "file_id": "b6747ed0-858a-4e2f-9aeb-0df50a90a900",
+        "location": {
+         "cell": null,
+         "column": null,
+         "label": "",
+         "page": null,
+         "row": null,
+         "sheet": null
+        },
+        "quote": "must be approved by the user's line manager before it is granted"
+       }
+      ],
+      "result": "MET",
+      "shows": "DESIGN",
+      "summary": "Both readings find the documents require what attribute C tests.",
+      "verdict": "SUPPORTED",
+      "views": []
+     },
+     {
+      "absent": [],
+      "attribute_id": "01a1d5c0-144f-78ee-b11a-58193c1710d2",
+      "code": "D",
+      "elements": [
+       {
+        "absent": [],
+        "key": "wording",
+        "passages": [
+         {
+          "file_id": "b6747ed0-858a-4e2f-9aeb-0df50a90a900",
+          "location": {
+           "cell": null,
+           "column": null,
+           "label": "",
+           "page": null,
+           "row": null,
+           "sheet": null
+          },
+          "quote": "must be approved by the user's line manager before it is granted"
+         }
+        ],
+        "result": "MET",
+        "text": "The access granted in the system is the access that was approved, and no more"
+       }
+      ],
+      "expected": false,
+      "finding_id": null,
+      "finding_status": null,
+      "passages": [
+       {
+        "file_id": "b6747ed0-858a-4e2f-9aeb-0df50a90a900",
+        "location": {
+         "cell": null,
+         "column": null,
+         "label": "",
+         "page": null,
+         "row": null,
+         "sheet": null
+        },
+        "quote": "must be approved by the user's line manager before it is granted"
+       }
+      ],
+      "result": "MET",
+      "shows": "DESIGN",
+      "summary": "Both readings find the documents require what attribute D tests.",
+      "verdict": "SUPPORTED",
+      "views": []
+     },
+     {
+      "absent": [],
+      "attribute_id": "01a1d5c0-1450-740f-9687-aa4140bc415d",
+      "code": "E",
+      "elements": [
+       {
+        "absent": [],
+        "key": "wording",
+        "passages": [
+         {
+          "file_id": "b6747ed0-858a-4e2f-9aeb-0df50a90a900",
+          "location": {
+           "cell": null,
+           "column": null,
+           "label": "",
+           "page": null,
+           "row": null,
+           "sheet": null
+          },
+          "quote": "must be approved by the user's line manager before it is granted"
+         }
+        ],
+        "result": "MET",
+        "text": "The approver is not the user, and the administrator who granted the access did not approve it"
+       }
+      ],
+      "expected": false,
+      "finding_id": null,
+      "finding_status": null,
+      "passages": [
+       {
+        "file_id": "b6747ed0-858a-4e2f-9aeb-0df50a90a900",
+        "location": {
+         "cell": null,
+         "column": null,
+         "label": "",
+         "page": null,
+         "row": null,
+         "sheet": null
+        },
+        "quote": "must be approved by the user's line manager before it is granted"
+       }
+      ],
+      "result": "MET",
+      "shows": "DESIGN",
+      "summary": "Both readings find the documents require what attribute E tests.",
+      "verdict": "SUPPORTED",
+      "views": []
+     }
+    ],
+    "file_ids": [
+     "b6747ed0-858a-4e2f-9aeb-0df50a90a900"
+    ],
+    "finished_at": "2026-11-13T16:31:51.014077Z",
+    "held": null,
+    "held_files": [],
+    "lens": "DESIGN_DOCUMENT",
+    "note": "",
+    "out_of_date": [],
+    "read_in_part": false,
+    "requirement_id": "01a1d5c0-1d84-74c5-8cdb-719bf1a0688a",
+    "run_id": "01a1d5c0-479c-7122-9029-f5482a02d524",
+    "stage": "DONE",
+    "status": "REVIEWED"
+   },
+   "file_ids": [
+    "b6747ed0-858a-4e2f-9aeb-0df50a90a900"
+   ],
+   "letters": [],
+   "request_title": "Request PBC-B137D849",
+   "requirement_id": "01a1d5c0-1d84-74c5-8cdb-719bf1a0688a",
+   "title": "Access management policy"
+  },
+  {
+   "addresses": {
+    "2cfac7e6-0058-466b-b33f-ad2a4db5e6f7": [
+     {
+      "code": "A",
+      "verdict": "SUPPORTED"
+     },
+     {
+      "code": "C",
+      "verdict": "SUPPORTED"
+     },
+     {
+      "code": "D",
+      "verdict": "SUPPORTED"
+     },
+     {
+      "code": "E",
+      "verdict": "SUPPORTED"
+     }
+    ],
+    "ac5ec489-8dd0-4846-95b2-08d8ccf9a990": [
+     {
+      "code": "A",
+      "verdict": "SUPPORTED"
+     },
+     {
+      "code": "C",
+      "verdict": "SUPPORTED"
+     },
+     {
+      "code": "D",
+      "verdict": "SUPPORTED"
+     },
+     {
+      "code": "E",
+      "verdict": "SUPPORTED"
+     }
+    ]
+   },
+   "assurance": {
+    "attributes": [
+     {
+      "absent": [],
+      "attribute_id": "01a1d5c0-144b-708b-adec-7411f29713db",
+      "code": "A",
+      "elements": [
+       {
+        "absent": [],
+        "key": "wording",
+        "passages": [
+         {
+          "file_id": "ac5ec489-8dd0-4846-95b2-08d8ccf9a990",
+          "location": {
+           "cell": null,
+           "column": null,
+           "label": "",
+           "page": null,
+           "row": null,
+           "sheet": null
+          },
+          "quote": "Approved by: Priya Shah, line manager, on 2026-03-03"
+         },
+         {
+          "file_id": "2cfac7e6-0058-466b-b33f-ad2a4db5e6f7",
+          "location": {
+           "cell": null,
+           "column": null,
+           "label": "",
+           "page": null,
+           "row": null,
+           "sheet": null
+          },
+          "quote": "BASIS_ADMIN granted role FI_AP_CLERK to DLEE"
+         }
+        ],
+        "result": "MET",
+        "text": "A request exists that names the user and the specific access (application, role, or permission) that was granted"
+       }
+      ],
+      "expected": true,
+      "finding_id": null,
+      "finding_status": null,
+      "passages": [
+       {
+        "file_id": "ac5ec489-8dd0-4846-95b2-08d8ccf9a990",
+        "location": {
+         "cell": null,
+         "column": null,
+         "label": "",
+         "page": null,
+         "row": null,
+         "sheet": null
+        },
+        "quote": "Approved by: Priya Shah, line manager, on 2026-03-03"
+       },
+       {
+        "file_id": "2cfac7e6-0058-466b-b33f-ad2a4db5e6f7",
+        "location": {
+         "cell": null,
+         "column": null,
+         "label": "",
+         "page": null,
+         "row": null,
+         "sheet": null
+        },
+        "quote": "BASIS_ADMIN granted role FI_AP_CLERK to DLEE"
+       }
+      ],
+      "result": "MET",
+      "shows": "IMPLEMENTATION",
+      "summary": "Both readings find this instance shows attribute A.",
+      "verdict": "SUPPORTED",
+      "views": []
+     },
+     {
+      "absent": [
+       "No record that shows it."
+      ],
+      "attribute_id": "01a1d5c0-144d-7ff4-ae5c-0ac6adf37ada",
+      "code": "B",
+      "elements": [
+       {
+        "absent": [
+         "No record that shows it."
+        ],
+        "key": "wording",
+        "passages": [],
+        "result": "NOT_MET",
+        "text": "The request was approved by the user's manager and, where the access management policy requires it, by the application owner"
+       }
+      ],
+      "expected": true,
+      "finding_id": "01a1d5c0-49a3-78b5-8924-97479bc0243a",
+      "finding_status": "PROPOSED",
+      "passages": [],
+      "result": "NOT_MET",
+      "shows": null,
+      "summary": "Both readings find the evidence does not show attribute B.",
+      "verdict": "ISSUE",
+      "views": []
+     },
+     {
+      "absent": [],
+      "attribute_id": "01a1d5c0-144e-7d5c-a593-6467bec869df",
+      "code": "C",
+      "elements": [
+       {
+        "absent": [],
+        "key": "wording",
+        "passages": [
+         {
+          "file_id": "ac5ec489-8dd0-4846-95b2-08d8ccf9a990",
+          "location": {
+           "cell": null,
+           "column": null,
+           "label": "",
+           "page": null,
+           "row": null,
+           "sheet": null
+          },
+          "quote": "Approved by: Priya Shah, line manager, on 2026-03-03"
+         },
+         {
+          "file_id": "2cfac7e6-0058-466b-b33f-ad2a4db5e6f7",
+          "location": {
+           "cell": null,
+           "column": null,
+           "label": "",
+           "page": null,
+           "row": null,
+           "sheet": null
+          },
+          "quote": "BASIS_ADMIN granted role FI_AP_CLERK to DLEE"
+         }
+        ],
+        "result": "MET",
+        "text": "The approval is dated on or before the date the access was granted in the system"
+       }
+      ],
+      "expected": true,
+      "finding_id": null,
+      "finding_status": null,
+      "passages": [
+       {
+        "file_id": "ac5ec489-8dd0-4846-95b2-08d8ccf9a990",
+        "location": {
+         "cell": null,
+         "column": null,
+         "label": "",
+         "page": null,
+         "row": null,
+         "sheet": null
+        },
+        "quote": "Approved by: Priya Shah, line manager, on 2026-03-03"
+       },
+       {
+        "file_id": "2cfac7e6-0058-466b-b33f-ad2a4db5e6f7",
+        "location": {
+         "cell": null,
+         "column": null,
+         "label": "",
+         "page": null,
+         "row": null,
+         "sheet": null
+        },
+        "quote": "BASIS_ADMIN granted role FI_AP_CLERK to DLEE"
+       }
+      ],
+      "result": "MET",
+      "shows": "IMPLEMENTATION",
+      "summary": "Both readings find this instance shows attribute C.",
+      "verdict": "SUPPORTED",
+      "views": []
+     },
+     {
+      "absent": [],
+      "attribute_id": "01a1d5c0-144f-78ee-b11a-58193c1710d2",
+      "code": "D",
+      "elements": [
+       {
+        "absent": [],
+        "key": "wording",
+        "passages": [
+         {
+          "file_id": "ac5ec489-8dd0-4846-95b2-08d8ccf9a990",
+          "location": {
+           "cell": null,
+           "column": null,
+           "label": "",
+           "page": null,
+           "row": null,
+           "sheet": null
+          },
+          "quote": "Approved by: Priya Shah, line manager, on 2026-03-03"
+         },
+         {
+          "file_id": "2cfac7e6-0058-466b-b33f-ad2a4db5e6f7",
+          "location": {
+           "cell": null,
+           "column": null,
+           "label": "",
+           "page": null,
+           "row": null,
+           "sheet": null
+          },
+          "quote": "BASIS_ADMIN granted role FI_AP_CLERK to DLEE"
+         }
+        ],
+        "result": "MET",
+        "text": "The access granted in the system is the access that was approved, and no more"
+       }
+      ],
+      "expected": true,
+      "finding_id": null,
+      "finding_status": null,
+      "passages": [
+       {
+        "file_id": "ac5ec489-8dd0-4846-95b2-08d8ccf9a990",
+        "location": {
+         "cell": null,
+         "column": null,
+         "label": "",
+         "page": null,
+         "row": null,
+         "sheet": null
+        },
+        "quote": "Approved by: Priya Shah, line manager, on 2026-03-03"
+       },
+       {
+        "file_id": "2cfac7e6-0058-466b-b33f-ad2a4db5e6f7",
+        "location": {
+         "cell": null,
+         "column": null,
+         "label": "",
+         "page": null,
+         "row": null,
+         "sheet": null
+        },
+        "quote": "BASIS_ADMIN granted role FI_AP_CLERK to DLEE"
+       }
+      ],
+      "result": "MET",
+      "shows": "IMPLEMENTATION",
+      "summary": "Both readings find this instance shows attribute D.",
+      "verdict": "SUPPORTED",
+      "views": []
+     },
+     {
+      "absent": [],
+      "attribute_id": "01a1d5c0-1450-740f-9687-aa4140bc415d",
+      "code": "E",
+      "elements": [
+       {
+        "absent": [],
+        "key": "wording",
+        "passages": [
+         {
+          "file_id": "ac5ec489-8dd0-4846-95b2-08d8ccf9a990",
+          "location": {
+           "cell": null,
+           "column": null,
+           "label": "",
+           "page": null,
+           "row": null,
+           "sheet": null
+          },
+          "quote": "Approved by: Priya Shah, line manager, on 2026-03-03"
+         },
+         {
+          "file_id": "2cfac7e6-0058-466b-b33f-ad2a4db5e6f7",
+          "location": {
+           "cell": null,
+           "column": null,
+           "label": "",
+           "page": null,
+           "row": null,
+           "sheet": null
+          },
+          "quote": "BASIS_ADMIN granted role FI_AP_CLERK to DLEE"
+         }
+        ],
+        "result": "MET",
+        "text": "The approver is not the user, and the administrator who granted the access did not approve it"
+       }
+      ],
+      "expected": true,
+      "finding_id": null,
+      "finding_status": null,
+      "passages": [
+       {
+        "file_id": "ac5ec489-8dd0-4846-95b2-08d8ccf9a990",
+        "location": {
+         "cell": null,
+         "column": null,
+         "label": "",
+         "page": null,
+         "row": null,
+         "sheet": null
+        },
+        "quote": "Approved by: Priya Shah, line manager, on 2026-03-03"
+       },
+       {
+        "file_id": "2cfac7e6-0058-466b-b33f-ad2a4db5e6f7",
+        "location": {
+         "cell": null,
+         "column": null,
+         "label": "",
+         "page": null,
+         "row": null,
+         "sheet": null
+        },
+        "quote": "BASIS_ADMIN granted role FI_AP_CLERK to DLEE"
+       }
+      ],
+      "result": "MET",
+      "shows": "IMPLEMENTATION",
+      "summary": "Both readings find this instance shows attribute E.",
+      "verdict": "SUPPORTED",
+      "views": []
+     }
+    ],
+    "file_ids": [
+     "ac5ec489-8dd0-4846-95b2-08d8ccf9a990",
+     "2cfac7e6-0058-466b-b33f-ad2a4db5e6f7"
+    ],
+    "finished_at": "2026-11-13T16:31:51.193954Z",
+    "held": null,
+    "held_files": [],
+    "lens": "INSTANCE_RECORD",
+    "note": "",
+    "out_of_date": [],
+    "read_in_part": false,
+    "requirement_id": "01a1d5c0-1d89-7db1-801e-e6f012953a44",
+    "run_id": "01a1d5c0-47a0-7535-a778-2bfbb01a2d65",
+    "stage": "DONE",
+    "status": "REVIEWED"
+   },
+   "file_ids": [
+    "ac5ec489-8dd0-4846-95b2-08d8ccf9a990",
+    "2cfac7e6-0058-466b-b33f-ad2a4db5e6f7"
+   ],
+   "letters": [
+    "A",
+    "B",
+    "C",
+    "D",
+    "E"
+   ],
+   "request_title": "Request PBC-B137D849",
+   "requirement_id": "01a1d5c0-1d89-7db1-801e-e6f012953a44",
+   "title": "Walkthrough instance: one access request from request to grant"
+  }
+ ],
+ "server_now": "2026-11-13T16:31:51.905031Z",
+ "stages": {
+  "checked_items": 2,
+  "files": 8,
+  "items": 2,
+  "read": 6,
+  "sorted": 6,
+  "stored": 8
+ }
+}

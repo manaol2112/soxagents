@@ -1,0 +1,249 @@
+# Running the agents (operations)
+
+Milestone 3a. How the agents' background work runs in each environment, what the model
+configuration means, what each execution state is, and where the records are.
+
+## Workers
+
+Agent work (reading evidence, drafting requests, testing, drafting workpapers, the
+independent re-performance, planning, the console's turns) is a job on its own record:
+the record carries a lease status (`PENDING`, `WORKING`, `IDLE`; an analysis ends in
+`READY` or `FAILED`), the attempt count and the lease expiry. One of two workers runs it:
+
+| Environment | Setting | Worker |
+| --- | --- | --- |
+| Development | `LOCAL_WORKER_ENABLED=true`, `WORKFLOW_ADDRESS` empty | A thread pool inside the API process (`LOCAL_WORKER_THREADS`, default 6). Open records are resumed when the API starts. |
+| Staging, production | `WORKFLOW_ADDRESS=host:7233` | Temporal (`docker-compose.yml` publishes it on localhost:7233). The API process serves the worker; each job is a workflow with retries and a start-to-close timeout. |
+| Neither | both empty | Nothing runs. Queued work stays queued and every page says automation is unavailable. |
+
+A job that fails is tried again up to its `MAX_ATTEMPTS` (three), then rests with a note
+("did not finish") and the queue offers to run it again. A worker that dies mid-job
+leaves the record `WORKING` with a lease; the next worker resumes it when the lease runs
+out (15 minutes for a test run, 10 for a read), and a unit written before the crash
+stands (each item is one transaction).
+
+## The model
+
+`MODEL_PROVIDER=anthropic` and `MODEL_API_KEY` turn the live provider on. Three tiers each
+pin a model; empty values take the defaults, which were checked against the provider's
+model list, its published prices and a structured-output call on 20 October 2026:
+
+| Tier | Default | Price (in, out, $ per million tokens) | Policy (the owner's development defaults) |
+| --- | --- | --- | --- |
+| FAST (`MODEL_FAST`) | `claude-haiku-5-5` | 0.10, 0.50 | Routine classification and low-complexity extraction: reading, matching and classifying evidence, model OCR, RCM system scans and term mapping, system suggestions, the library match |
+| BALANCED (`MODEL_BALANCED`, or the older `MODEL_NAME`) | `claude-sonnet-5-5` | 2, 10 | Evidence interpretation, testing drafts and routine reviewer analysis: the evidence coordinator, the testers, the screenshot review, workpapers, the independent reviewer's re-performance, the planner's plans, attributes, process maps, setup and scoping, the console's lead agent |
+| DEEP (`MODEL_DEEP`) | `claude-opus-5-5` | 4, 20 | Explicitly authorized complex analysis only: no agent runs on it unless `MODEL_DEEP_AGENTS` names its roster key (for example `independent-reviewer,engagement-planner`) |
+
+The mapping is `model_providers.AGENT_TIERS`; it is a development default, not a
+production policy. A live model whose price the code does not know is refused at the
+call and reported by `GET …/workspace/automation` (`model: none` with the reason);
+`MODEL_PRICES` names a price for it. The automation route also says which model answered
+last, how, and the engagement's spend this month against the limits (`budget`), all read
+from the call records, never by calling the model. No page or queue read calls the model
+(`test_agent_execution`).
+
+## One way to call the model (containment)
+
+Every model call an agent makes goes through `provenance.AgentCaller` (`generate` for a
+structured answer, `chat` for the console's turns): the tier picks the model and price,
+the budgets are checked before dispatch, a cancellation is honoured, each attempt is
+recorded with its provenance, and the prompt and answer are sealed when a key is set.
+The evidence reading modules keep their provider-and-record protocol; `CallerProvider`
+is the caller behind it.
+
+The live provider refuses anything else: a generation under the untiered configuration
+or a chat turn not marked by the caller is turned away before any network call
+(`MODEL_ERROR`, logged as "unmetered live model … refused"). `MODEL_ALLOW_UNMETERED=true`
+lifts that for development only; it is never set for a real engagement, and
+`test_provenance` asserts the refusal and the static rule that only the adapter and the
+caller record calls or invoke a chat turn.
+
+### Caller inventory (Milestone 3a closure)
+
+| Module and operation | Live model possible | Provenance and budget | Through the caller |
+| --- | --- | --- | --- |
+| `testing_engine` tester run, per item | yes | full, with inputs (sheet, version, plan revision, files and hashes) | yes, cancellable |
+| `control_reviews` re-performance, per item | yes | full, with inputs | yes, cancellable |
+| `evidence_analysis` matching, classification, model OCR, screenshot review | yes | full, with inputs (file and hash); the review on the tester's agent | yes (`CallerProvider`), cancellable |
+| `pbc_drafting` request draft | yes | full | yes |
+| `workpaper_service` narrative draft | yes | full | yes, cancellable |
+| `evidence_plans` planner | yes | full | yes |
+| `console` lead agent turns | yes | full (`propose_tools`, `console/1`) | yes (`chat`); the console keeps its own retry policy |
+| `setup_drafting`, `system_applicability` (scoping, SOC reports), `control_attributes`, `process_understanding` | yes | full | yes (closure) |
+| `rcm_systems`, `rcm_terms`, `library_matching`, `system_suggestions` | yes | full (FAST) | yes (closure) |
+| `models` route `POST …/model-calls`, `manager` task planning | no: `_provider_for` returns the local or the unavailable provider, never the live one | the record as before | not applicable; refused live by construction |
+
+No caller remains that can reach the live model without a budget and a provenance
+record.
+
+## Budgets
+
+Enforced before a call is sent, from an estimate of its cost (the prompt, the system
+text, the images, the full output allowance); a call past a limit is not sent and is
+recorded as `BUDGET_EXCEEDED` with the limit named. Every attempt counts, retries
+included. Micro-dollars; 0 removes a limit.
+
+| Setting | Development default |
+| --- | --- |
+| `MODEL_BUDGET_CALL_MICROS` | 1,000,000 ($1 a call) |
+| `MODEL_BUDGET_JOB_MICROS` | 10,000,000 ($10 a job: one run of one record) |
+| `MODEL_BUDGET_ENGAGEMENT_MONTH_MICROS` | 50,000,000 ($50 an engagement a calendar month, UTC) |
+
+These are provisional development limits, not production ones. A job stopped by a
+budget rests like a failed one; a console turn stopped by one tells the person. The
+owner raises the limit or waits for the month. The month's spend and the limits are on
+`GET …/workspace/automation`.
+
+A trial firm has one more budget, for the whole trial (Trial Management, Step 2; migration 0127, `subscriptions.py`): by default $5, 20 agent runs, one at a time, 10 minutes each (`TRIAL_AI_*` in the settings; the firm's row carries its own values). Before each of its calls the caller reserves the call's worst case in `model_call_reservations`, on its own connection and under a lock on the firm's subscription row, so two calls arriving together cannot both pass; after the call the reservation settles to what it cost. A reservation that is never settled stays counted at its worst case, so a crash or a rolled-back job never under-counts. The firm's spend is the ledger's sum; a refused call is recorded as `BUDGET_EXCEEDED` with the reason, and an ended trial refuses every call. The ledger is never deleted and a settled row never changes. What the ledger cannot see: a retry inside the provider's own client, and the later turns of a web search, are not reported as usage; the worst-case reservation is the margin for them, not a guarantee. **Before public release:** the count of concurrent runs treats a run as finished 90 seconds after its last model call (the workers lease records per table and the ledger has no run-level begin and end to read), so a run doing long non-model work between calls can release its allowance early; the fix is an explicit run lifecycle on the agent caller, closed by the worker. Policy documents and prior-year workpapers are not yet counted toward the trial's uploads and storage.
+
+A trial firm's synthetic demo engagement (Step 3; migration 0128, `demo.py`, `demo_datasets.py`) is built on the server from the dataset named by `DEMO_DATASET`, under a lock on the firm's demo record (`organization_demos`), inside one transaction: a failed build leaves nothing behind, the record says `FAILED` with the error's class and code, and the next request retries, up to five times. `projects.demo` is set only inside that transaction (the database refuses it anywhere else and never lets it change), a firm has one active demo at most, and the demo is left out of every trial count. With `DEMO_DATASET` empty (the default until the Northstar dataset ships) the invitation records the person's answer and says the demo is being prepared; `placeholder/0` builds a draft placeholder engagement for development and integration tests, shown as a preparation and never as the demo. Audit events: `demo.invitation_dismissed`, `demo.requested`, `demo.initialized`, `demo.failed`.
+
+The `northstar/1` dataset (Step 4A; `demo_northstar/records.py`, `files.py`, `dataset.py`) is deterministic from one seed: the same twenty-seven files, byte for byte, for every firm, with every scenario a single named record told the same way in each file that mentions it. The build writes through the application's own tables (projects, engagement_settings, clients, engagement_contacts, engagement_applications, engagement_processes, engagement_controls, evidence_files and the object store, evidence_matches, evidence_file_applications, evidence_analyses) and launches through `onboarding.launch_engagement` when readiness allows, skipping the request drafts the launch queues; it makes no model call and takes no AI reservation. Analyses are read by `evidence_extraction.extract` at build time and classified by the rules (`source = 'RULES'`). Migration 0129 widens the provenance CHECKs with `SEEDED`, the value Step 4B gives prepared outputs; MODEL, RULES, FALLBACK and FAILED keep their meanings. The expected outcomes live only in `services/api/tests/northstar_manifest.py`. Audit events: `demo.dataset_built` (counts and whether the launch happened), `evidence.uploaded` with `seeded: true` per file.
+
+Step 4B adds the lifecycle (`demo_northstar/lifecycle.py`), run in the same transaction after the launch, through the services the routes call: `master_plans.accept_criteria`, `evidence_plans.approve/release/set_sufficiency`, `phase_release.release`, `evidence_receipts.apply_receipt`, `control_tests.propose/_approve`, `testing_engine.create_single_sheet`, `test_sheets.change_sheet(sign_off_work)` and `decide_deficiency`, `workpaper_service.ensure/_save/_prepare`, `control_reviews._finish/_add_note/_respond_note/_clear_note/_sign_off`, `workspace._decide/_update/_progress`. The demo's personnel (migration 0130) act as the lead, the tester and the independent reviewer; nothing is written under the trial person's name but the demo's own start. Prepared outputs are SEEDED: criteria origin, request drafts, test results (every PASS or EXCEPTION cites a quote verified against the file's extracted text by `test_citations.check_citations`), workpaper versions, re-performance. `demo.dataset_built.lifecycle` records the counts. A demo initialization now takes about 10 seconds; the route allows 60. The closure (`demo_northstar/closure.py`, `rounds.py`) adds the scenario date (migration 0131): `scenario_today(connection, project_id)` returns the clock, or for a demo engagement with `engagement_settings.scenario_as_of` that date; it is read by `workspace._progress` (a fix cannot take effect after it), `round_readiness.round_facts` (a retest may start from `test_from`) and `workspace._plan` (milestone status), and nowhere else. The column is set only under `aw.demo_initialization` and refused on any non-demo engagement by trigger. The closure then rebuilds the schedule from the scenario kickoff, files a design walkthrough memo per control, serves the remaining interim items, tests the roll-forward of NS-AC-01, retests D-001 and D-003 in RETEST rounds (new populations, new sheets, the reviewer's sign-off, closure by the lead's request and the reviewer's decision), produces four reports through `exports.create_export` labelled as a simulated interim draft, and runs `acceptance()`: a demo whose checks fail is recorded FAILED, never READY. A full initialization takes about 17 seconds.
+
+Step 5 adds the guided tour. A trial member who opens the demo engagement is welcomed once; starting the tour or exploring independently is kept on their account (`demo_tour_progress`, migration 0132), so the welcome never comes back and the tour resumes where it stood from the top bar's "Resume demo". `GET /organizations/{org}/demo/tour` answers where the person stands and the records the eight stages open (resolved from the engagement's own records by reference: the primary control NS-AC-02, its interim request and sheet, the deficiencies D-001 and D-003, the prepared reports); `PUT` moves it (start, reach a stage, skip, finish; audited as `demo.tour_started`, `demo.tour_skipped`, `demo.tour_resumed`, `demo.tour_completed`). Progress made on an earlier demo engagement reads as stale and the member starts afresh. Walking the tour calls no model and changes no engagement record. `GET /organizations/{org}/projects/{project}/exports` lists the engagement's exports and reports on record (never the stored key or digest) for Reports › Status and reports; downloads go through the existing export route. A reading prepared with the demo (`evidence_analyses.source = 'SEEDED'`) cannot be re-analysed in place: the API answers 409. The reporting rules are at version 1.1 (docs/metrics.md).
+
+Step 6 adds the reset and the trial's usage. `POST /organizations/{org}/demo/reset` with `{"expected_resets": n}` replaces the firm's demo: the current demo engagement is archived and the replacement built in one savepoint, the record moves to the new engagement with `resets + 1`, and `demo.reset` is audited with the archived engagement's id; a build that fails rolls the archive back, audits `demo.reset_failed`, answers 503 and costs no reset. At most three resets per trial; a request carrying an earlier count answers 409 `already-reset`, an exhausted allowance 409 `resets-exhausted`, a paid or ended trial 403/402. Tour progress on the old engagement reads as stale, so the welcome offers the tour again. `GET /organizations/{org}/subscription` feeds Settings › Free trial; every figure is the server's. Migration 0133 counts every stored document against `limit_upload_bytes` (`trial_stored_bytes`: evidence files, request attachments not linked to an evidence file, governing documents with a stored file, workpaper templates), demo engagements left out; the count allowance stays evidence files. A model call reservation left open longer than the trial's run limit (`ai_run_seconds`, 600 s by default) is abandoned: `release_abandoned` settles it at its estimate, dated when the run could last no longer, at the next reservation for the firm, and `migrate` housekeeping does the same for every firm (`model call reservations: n abandoned runs released`). The client portal answers a trial limit as 402 like every other route. Pre-launch hardening (Step 7). Throttles: `rate_limit_hits` counts requests per scope and key in fixed windows; the thresholds are `RATE_LIMIT_LOGIN_PER_ADDRESS` (30 per 600 s, sign-in starts and callbacks, failing open), `RATE_LIMIT_SIGNUP_PER_ADDRESS` (5 per hour) and `RATE_LIMIT_SIGNUP_PER_IDENTITY` (2 per hour, failing closed), `RATE_LIMIT_DEMO_PER_FIRM` (10 per hour); 0 turns one off; a refusal answers 429 with `Retry-After` and the sign-in page shows the "throttled" notice; housekeeping removes windows older than a day. The address a throttle counts is the connection's own, unless the connection comes from a proxy listed in `TRUSTED_PROXIES` (comma-separated addresses or networks, empty by default): then it is the right-most `X-Forwarded-For` hop that is not itself a trusted proxy, and the hops a caller wrote before it are never read (security review, 17 November 2026; before, the first hop was believed from anyone, so a caller could name a new address on each request). The landing page's demo request reaches the API through the web tier, which forwards the visitor's address as its right-most hop; set `TRUSTED_PROXIES` to the web tier's address (127.0.0.1 when both run on one machine) where it fronts the API, and to the front proxy's address in production, whose proxy must append the client address. The preview sign-in opens only for a caller whose address is a loopback address (never decided by the Host header), and the API refuses to start with `PREVIEW_LOGIN_ENABLED=true` and `APP_ENV=production`. Trial identities: `trial_identities` holds the hash of the normalised mailbox behind each trial; a second firm under the same mailbox is created suspended (`status_reason = 'duplicate-identity'`), audited `registration.held`, and support lifts it by setting the subscription back to TRIAL with a reason. Storage: every store-then-insert path discards its object when the row is refused (`storage_sweep.discarding`), and housekeeping sweeps objects under `evidence/`, `documents/` and `exports/` that no record names and that are older than an hour (`object storage: n objects listed, n orphaned, n removed`); the development store's guard (migration 0135) allows exactly that delete. Archived engagements: migration 0136 refuses any insert, update or delete of an archived engagement's records at the database (a draft that never launched and was archived may still be deleted: its row is marked deleted first, and a deleted engagement's rows are outside the guard); deploy-time routines skip archived engagements. The trial's quiet window is `TRIAL_AI_QUIET_SECONDS` (90): a run counts as in progress while a call is in flight and for that long after its last call settled.
+
+`make test-demo` runs the demo suites (Northstar dataset, lifecycle, closure, tour, reset, demo, subscriptions) as a release gate; the Northstar fixture builds once per run.
+
+## What a record says about who produced it
+
+| Source | Meaning |
+| --- | --- |
+| `MODEL` | The model's answer, checked (schema, attributes, citations, candidates) |
+| `RULES` | The reviewed rules by design: no model is configured, or the rules are the method |
+| `FALLBACK` | The model failed or its answer was rejected, and the rules produced a separate result; the failed call is linked and the note names the failure first |
+| `FAILED` | The model failed and nothing stands in; a person decides (a test item is "unable to tell") |
+| `REVIEW` | A control tested once reused its screenshot review (no model configured) |
+
+A model failure is never written as `RULES`, and a rules result never makes a failed call
+read as `MODEL`.
+
+## Provenance
+
+Every call is a row in `model_calls`: the requesting person (`actor_user_id`), the
+executing agent's instance (`actor_agent_instance_id`) and key, the model that answered
+and its tier, the prompt's version and SHA-256, the answer's SHA-256, the record worked
+on, the job and attempt, the duration, the status and the error class (never a vendor
+message, never the key), the tokens and the cost, and `inputs`: what the call was made
+from (the evidence file ids and content hashes, the sheet and its version, the approved
+plan revision, the request or control). `GET …/model-calls/{id}` returns all of it.
+Audit events written by a job name the agent's instance beside the person it worked for.
+These records are audit records: they are never purged.
+
+With `PROVENANCE_KEY` (32 random bytes, base64) the prompt and the answer themselves are
+kept in `model_call_contents`, encrypted (AES-GCM, the call id as associated data) for
+`MODEL_CONTENT_RETENTION_DAYS` (default 90, configurable). The deploy step
+(`make migrate`) removes the expired ones; the call records and hashes stay. The firm's
+owner or admin, or the engagement's reviewer, reads a call's content with
+`GET …/model-calls/{id}/content?purpose=…`, inside the engagement only; the purpose is
+required and every read is audited (`model_call.content_read`). Without the key only
+hashes are kept.
+
+### Encryption keys and rotation
+
+- **Identification.** Each key is named by its id: the first twelve hex characters of
+  the SHA-256 of the key bytes. Every sealed record carries the id of the key that
+  sealed it (`model_call_contents.key_id`, and `key_id` on the content route's answer).
+  The id reveals nothing about the key.
+- **Rotation.** Generate a new key (`openssl rand -base64 32`), set it as
+  `PROVENANCE_KEY`, and move the previous value into `PROVENANCE_PREVIOUS_KEYS`
+  (comma-separated; several may be kept). Restart the API. New content is sealed under
+  the new key; content sealed under an earlier key is read with the earlier key, chosen
+  by its id. Nothing is re-sealed: the old key must stay configured for as long as its
+  content is to be readable, that is at most the retention period, after which the
+  purge removes the last content it sealed and it can be dropped.
+- **Old-key access.** A key kept only in `PROVENANCE_PREVIOUS_KEYS` decrypts; it never
+  seals. Dropping a key from both settings makes its content unreadable at once; the
+  read answers 409 naming the key id to restore.
+- **Recovery if a key is lost.** The content sealed under it cannot be recovered. The
+  call records, their hashes, inputs, tokens, costs, statuses and audit events are
+  unaffected and remain the audit record; a reviewer can still see what was asked (the
+  hash, the version, the inputs) and how it ended. The unreadable content rows expire
+  with their retention, or an operator removes them early with
+  `DELETE FROM model_call_contents WHERE key_id = …` (the trigger allows a delete only
+  once expired; an early removal is a deliberate operator action in a transaction that
+  disables the trigger, and is recorded in the change log).
+- **Not built.** Re-sealing under a new key, per-tenant keys, and an external key
+  management service. The single process key is documented, identified and rotatable;
+  that is the whole of the design for this milestone.
+
+## Cancellation
+
+`POST …/agent-runs/{kind}/{id}/cancel` with `kind` one of `test-sheet`, `review`,
+`analysis`, `workpaper`, for a member who may update the engagement; the control's Agent
+says block offers it as **Cancel run** while a tester run or a re-performance is queued or
+running. The record keeps the two moments apart:
+
+| State | Meaning | Where |
+| --- | --- | --- |
+| `REQUESTED` | A person asked a running job to stop; it has not yet | `cancel_requested_at` and `cancel_requested_by` set, `cancelled_at` null; `cancel_state: REQUESTED` on the sheet, review and workpaper bodies; audit `agent_run.cancel_requested` |
+| `CANCELLED` | The job stopped (at once when it was only queued; at its next check when it was running) | `cancelled_at` set, the status at rest, the note "Cancelled by …. Run it again when ready."; `cancel_state: CANCELLED`; audit `testing.run_cancelled` (or the kind's own action) naming the agent that stopped and the person who asked |
+| `NONE` | Nothing pending, and the last outcome was not a cancellation | after the job is run again |
+
+What is guaranteed: a job checks for a cancellation before every model call, between
+units, and **after** a call returns, so an answer that arrives after the request is
+never committed (the call stays on the record as made, with its cost; the unit stays
+untested); the caller checks before each retry, so no further attempt is made once
+cancellation is asked for; units written before the request stand and keep their
+attribution; a failed or stopped run keeps its own note and audit events. Running the job
+again is the recovery, and it tests only what was left.
+
+## Live tests
+
+`services/api/tests/test_live_model.py` runs only with `MODEL_LIVE_TESTS=1` and a key
+(`set -a && . ./.env && set +a && MODEL_LIVE_TESTS=1 uv run pytest -s
+services/api/tests/test_live_model.py`). It makes one short call per tier and runs the
+tester once on a synthetic control: a few cents. It is never part of `make test`,
+`make test-fast` or `make test-critical`.
+
+## Backup and restore
+
+Added 17 November 2026 (governance assessment, findings D1 and D2). Until then no backup
+existed and `make reset` deleted every local database without asking.
+
+| Command | What it does |
+| --- | --- |
+| `make backup` | Writes one database to `backups/<name>-<UTC time>.dump`. `DB=<name>` picks the database; the default is the one in `DATABASE_URL`. |
+| `make restore FILE=<dump> TARGET=<new name>` | Restores a backup into a database that does not exist yet. It never overwrites and never drops. |
+| `make backup-verify` | Takes a backup, restores it into a scratch database, compares every table's row count and the newest migration, and drops the scratch database. |
+| `make reset CONFIRM=delete-local-data` | Deletes all local data. See below. |
+
+**What a backup holds.** Every table of the one database, in PostgreSQL's custom format.
+With no S3 bucket configured, evidence files are rows of that database and are included.
+With a bucket configured they are not: copy the bucket separately.
+
+**What it leaves out.** The rows of `auth_sessions`, `evidence_portal_sessions` and
+`evidence_portal_codes`, so a backup carries no sign-in session and people sign in again
+after a restore. It does not hold `.env`. Keep `PROVENANCE_KEY` and any previous keys
+somewhere safe as well: without them, restored model-call content cannot be read (see
+Provenance keys above).
+
+**What it is not.** The file is not encrypted and holds engagement data. `backups/` is
+git-ignored, which keeps it out of the repository and nothing more: it is on one disk until
+it is copied to protected storage. Nothing here schedules backups; run `make backup` before
+risky work, and set a schedule before real client data is held.
+
+**Using a restored copy.** Restore into a new name, set `DATABASE_URL` to that database,
+restart the API (`make go`), and check the engagement. The earlier database is untouched,
+so going back is setting `DATABASE_URL` back.
+
+**Reset.** `make reset` deletes the PostgreSQL volume (every database in it) and the local
+object-store volume. It refuses unless all of these hold (`scripts/reset.sh`):
+
+1. `CONFIRM=delete-local-data` is given.
+2. `APP_ENV` is `development`, `dev`, `local` or `test`. Anywhere else, including an unset
+   `APP_ENV`, `ALLOW_NON_DEV_RESET=<the POSTGRES_DB name>` must also be given.
+3. With an S3 bucket configured, `ACCEPT_OBJECT_STORE_LOSS=yes` is given.
+4. A backup of every database (test databases aside) was written first. `SKIP_BACKUP=yes`
+   leaves this out, deliberately.
+
+`RESET_DRY_RUN=1` runs every check and prints the deletion instead of doing it. The guard
+is held by `tests/data-protection.test.ts`, which uses a fake Docker command.
+
+**Checked on 17 November 2026.** `backup-verify` on a synthetic database: 174 tables and
+the newest migration matched after the restore. A restore over an existing database was
+refused. The reset was exercised with the fake command and the dry run only; it has not
+been run against real data.

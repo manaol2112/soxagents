@@ -1,0 +1,12 @@
+Access request REQ-3110
+Requested for: Maya Singh (u0010)
+Application: SAP ERP PRD
+Role requested: Billing Clerk
+Requested by: Maya Singh on 2027-07-29
+Line manager (HR record): Tomás Vidal
+
+Approvals
+- See the attached approval email.
+
+Provisioning
+- Granted role Billing Clerk in SAP ERP PRD on 2027-08-05 by adm.kfischer (Karl Fischer, IAM administrator)

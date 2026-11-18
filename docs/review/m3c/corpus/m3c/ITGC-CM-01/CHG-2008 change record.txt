@@ -1,0 +1,15 @@
+Change request CHG-2008: Customer master duplicate check
+System: SAP ERP
+Raised on 2027-08-03
+Developer: Aiko Sato
+Transport in the approved request: DEVK900508
+
+Testing
+- Test results: to be provided after go-live
+
+Approvals
+- Business owner approval: Elena Rossi approved on 2027-08-10
+- IT owner approval: Marcus Lee approved on 2027-08-10
+
+Deployment
+- Transport DEVK900508 imported to PRD on 2027-08-12 by basis.oivanova (Olga Ivanova, Basis administrator)

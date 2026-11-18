@@ -1,0 +1,1795 @@
+"""Routes for a control's context: classification, attributes, process understanding,
+supporting documents, issues, and readiness.
+
+Reads need project read access; every change needs a person with project update access,
+inside the engagement the control belongs to. A change that clears a control's blockers
+asks its waiting test sheets to run again.
+"""
+
+from collections.abc import Callable
+from datetime import datetime
+from typing import Any, Literal
+from uuid import UUID
+
+import psycopg
+from fastapi import FastAPI, HTTPException, Query, Request
+from psycopg.types.json import Json
+from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
+
+from ai_workforce_api import (
+    attribute_assumptions,
+    authentication_profile,
+    control_attributes,
+    control_design,
+    control_details,
+    criteria_history,
+    library_definitions,
+    prior_year,
+    process_narrative,
+    process_understanding,
+    understanding_chat,
+    understanding_once,
+    understanding_review,
+    walkthrough_answers,
+)
+from ai_workforce_api.actions import contains_secret
+from ai_workforce_api.after_commit import after_commit, committed
+from ai_workforce_api.agent_answers import AgentNoteBody, notes_for
+from ai_workforce_api.authorization import (
+    Action,
+    NotVisible,
+    Principal,
+    PrincipalKind,
+    _call,
+    _session_principal,
+    authorize,
+)
+from ai_workforce_api.control_context import (
+    CLASSIFICATIONS,
+    MAX_UPLOAD,
+    NARRATIVE_SOURCE,
+    Classification,
+    ContextState,
+    DocumentBody,
+    DocumentKind,
+    IssueBody,
+    Source,
+    classifications_of,
+    context_package,
+    derived_classifications,
+    documents,
+    frequency_conflicts,
+    governs,
+    issues_for,
+    line,
+    link_document,
+    linked_documents,
+    raise_issues,
+    sources_for,
+    store_document,
+)
+from ai_workforce_api.db import transaction
+from ai_workforce_api.evidence_plans import (
+    PendingCriteriaBody,
+    attributes_rerun_useful,
+    attributes_run,
+    pending_criteria,
+)
+from ai_workforce_api.model_providers import live_model, provider_for
+from ai_workforce_api.models import ModelProvider
+from ai_workforce_api.pbc_drafting import load_context
+from ai_workforce_api.readiness import ReadinessBody, assess, resume_testing
+from ai_workforce_api.settings import Settings
+from ai_workforce_api.testing_engine import TestScheduler, schedule_runs
+from ai_workforce_api.upload_body import read_body
+
+
+class AttributesRunBody(BaseModel):
+    """ "Run again" on the Attributes step. `force`: run the agents on purpose even when
+    nothing they read has changed since their last finished run."""
+
+    force: bool = False
+
+
+class ContextBody(BaseModel):
+    control_id: UUID
+    classifications: list[Classification]
+    derived_classifications: list[Classification]
+    classifications_overridden: bool
+    process_required: bool
+    readiness: ReadinessBody | None
+    attributes: control_attributes.AttributesBody
+    issues: list[IssueBody]
+    documents: list[DocumentBody]
+    understanding: process_understanding.UnderstandingBody
+    # Library version 3: how the control is tested, and an update for an older copy.
+    testing: library_definitions.TestingBody | None = None
+    # Milestone 8.9: the control's statement with the client's values.
+    design: control_design.DesignBody | None = None
+    library_update: library_definitions.UpdateBody | None = None
+    # The agents are updating the attributes and their criteria now (the plan's run, or
+    # the approved narrative's): the Attributes step shows it working and reads again.
+    attributes_run: Literal["PENDING", "WORKING", "STOPPED", ""] = ""
+    # STOPPED: what happened to their last run and what a person does next.
+    attributes_run_note: str = ""
+    # Whether running the agents again would do anything (evidence_plans.
+    # attributes_rerun_useful, B1h): something they read changed since their last finished
+    # run, or a run stopped before finishing work that is still needed. The step offers
+    # "Run again", and shows a stopped run's note, only then.
+    attributes_rerun_useful: bool = False
+    # What they are doing: proposing attributes, tailoring criteria, or reviewing the set.
+    attributes_stage: Literal["ATTRIBUTES", "CRITERIA", "REVIEW", "UNDERSTANDING", ""] = ""
+    # The agents of the step whose last answer could not be used (13 November 2026), in the
+    # order of the run: the attribute agent, the reviewer of its drafts, the planner, the
+    # reviewer of the set. Each says what failed, what was kept and what to do next, and
+    # `sentence` is the three as one note to show (agent_answers.AgentNoteBody). Empty when
+    # every agent's last answer was used. Read from the calls' outcome records, so it holds
+    # after a reload, and a later run whose answer is used clears it.
+    attributes_agent_notes: list[AgentNoteBody] = []
+    # The same as one plain note for the Attributes step, "" when nothing failed: the
+    # agents' notes above in the run's order; when the planner has none of its own (a run
+    # from before 13 November 2026), its last plan run that kept the plan or let the rules
+    # plan instead (evidence_plans.latest_plan_failure_note); and otherwise a stopped run's
+    # note. Present whether or not a rerun would do anything (attributes_rerun_useful): the
+    # step said nothing when it would not (the product owner, 13 November 2026).
+    attributes_failure_note: str = ""
+    # The plan a person approved has a revision from the planner waiting for a decision
+    # (its changes are proposed, never applied), and the approved attributes whose criteria
+    # that revision proposes, in their order: their criteria apply only when a person
+    # accepts the revision (POST .../controls/{id}/evidence-plan/pending-revision with
+    # {"version", "decision": "ACCEPT"}). Until then the step reads "Needs criteria".
+    plan_revision_pending: bool = False
+    attributes_pending_criteria: list[PendingCriteriaBody] = []
+    # B1j (16 November 2026): when the control's Control Understanding was completed, once
+    # (understanding_once); null until then. From then on no agent reopens it.
+    understanding_completed_at: datetime | None = None
+    # The question pass, since B1k the IT audit specialist's review of the questions asked
+    # (understanding_review.pass_state): WAITING while what it reads is not in; CHECKING while
+    # a read waits or works; DONE once read or once the understanding is completed; FAILED
+    # when the last read could not be used (the page offers Run again and Proceed without it).
+    question_pass: understanding_once.QuestionPass = "WAITING"
+    # The review of the control's questions the page shows (understanding_review.body): the
+    # latest read before completion; once completed the latest READY one, or null.
+    review: understanding_review.ReviewBody | None = None
+    # After completion, a read a person asked for ("Review again") that is not READY yet:
+    # PENDING (the page shows it checking and reads again) or FAILED (Review again is still
+    # offered); null otherwise (understanding_review.request_body).
+    review_request: understanding_review.ReviewRequestBody | None = None
+    # Why a completed understanding has no review to show, for one quiet line (B1k "Without
+    # a model"): NO_MODEL, PROCEEDED or ACCEPTED; "" when there is a review or it is not
+    # completed (understanding_review.not_run).
+    review_not_run: understanding_review.NotRun = ""
+    # A read is due by the rules and none is queued or at work: the page asks for it with
+    # POST .../understanding/review/follow (explicit and idempotent), never by a read.
+    review_due: bool = False
+    # The walkthrough questions and values a person left as "Not known yet" (B1l point 1).
+    not_known: list[understanding_review.NotKnownItemBody] = []
+    # What the agents assumed on the set as a whole (assumptions that name no attribute):
+    # the open ones and those decided in the last 30 days, newest first, at most 10.
+    set_assumptions: list[attribute_assumptions.AssumptionBody] = []
+    note: str = ""
+
+
+class ClassificationsBody(BaseModel):
+    # None goes back to what the control's area and nature imply.
+    classifications: list[Classification] | None = Field(default=None, max_length=7)
+
+
+class IssueDecision(BaseModel):
+    status: Literal["RESOLVED", "DISMISSED"]
+    note: str = Field(min_length=1, max_length=1000)
+    version: int = Field(ge=1)
+
+
+class AdoptBody(BaseModel):
+    version: int = Field(ge=1)
+
+
+class PointAnswer(BaseModel):
+    """One point the client confirmed as stated, or corrected: the answer is the statement
+    kept on the record."""
+
+    issue_id: UUID
+    version: int = Field(ge=1)
+    answer: str = Field(min_length=1, max_length=1000)
+
+
+class PointsConfirm(BaseModel):
+    items: list[PointAnswer] = Field(min_length=1, max_length=12)
+
+
+class DocumentWrite(BaseModel):
+    kind: DocumentKind
+    title: str = Field(min_length=1, max_length=200)
+    text: str = Field(min_length=1, max_length=100_000)
+    control_ids: list[UUID] = Field(default_factory=list, max_length=200)
+
+
+class LinksBody(BaseModel):
+    control_ids: list[UUID] = Field(min_length=1, max_length=200)
+
+
+class UnlinkBody(BaseModel):
+    control_id: UUID
+
+
+class ManyValuesResult(BaseModel):
+    # How many controls the answers filled.
+    controls: int
+
+
+class UploadResult(BaseModel):
+    document: DocumentBody | None
+    readable: bool
+    note: str
+    linked: list[UUID] = []
+
+
+# What a request hands to the background worker once it has committed (run, in
+# register_control_context; after_commit.py, shared with the other routes since the D&I
+# requests list, 12 November 2026). Outside a request there is nothing to wait for.
+_after_commit = after_commit
+
+
+def register_control_context(
+    app: FastAPI,
+    settings: Settings,
+    scheduler: TestScheduler | None = None,
+    provider: ModelProvider | None = None,
+) -> None:
+    base = "/organizations/{organization_id}/projects/{project_id}"
+    control = f"{base}/controls/{{control_id}}"
+
+    def model() -> ModelProvider | None:
+        if provider is not None:
+            return provider
+        return provider_for(settings) if live_model(settings) else None
+
+    def run[T](request: Request, work: Callable[[psycopg.Connection[Any], Principal], T]) -> T:
+        principal = _session_principal(request)
+        # Background work a request queues is handed to the worker only once the request
+        # has committed (12 November 2026; after_commit.committed). Handed over inside the
+        # request, the worker's claim ran against the rows as they were before it: a run
+        # just queued was not there to claim, was skipped, and then waited, queued, for
+        # nobody. A handoff that fails never fails the request that committed.
+        try:
+            return committed(
+                lambda: _call(settings, lambda connection: work(connection, principal))
+            )
+        except ContextState as error:
+            raise HTTPException(status_code=409, detail=error.detail) from None
+        except ValueError:
+            raise HTTPException(status_code=422, detail="control context is invalid") from None
+
+    def changed(
+        connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID, actor: UUID
+    ) -> None:
+        # The save may complete the understanding (B1j, B1k): the specialist's review was read
+        # on its budget, nothing in it is still to answer, and no agent run is at work; with
+        # no model or no worker to run the review, by the rules; a control whose attributes
+        # are accepted counts as completed. Recorded once, before anything is queued, so the
+        # run that follows asks nothing.
+        understanding_once.complete(
+            connection,
+            project_id,
+            control_id,
+            reviewing=getattr(scheduler, "schedule_plan_runs", None) is not None
+            and model() is not None,
+        )
+        sheets = resume_testing(connection, project_id, control_id)
+        _after_commit(lambda: schedule_runs(scheduler, sheets))
+        # The assurance chain's runs rest on the approved attributes and their criteria:
+        # those a change put out of date are marked so and queued again
+        # (docs/evidence-assurance.md).
+        from ai_workforce_api.evidence_assurance import follow_control
+
+        follow_control(connection, project_id, control_id, actor, scheduler)
+        # Settled attributes open the planning gate for operating evidence: it is
+        # requested now (evidence_plans.release), as far as the planning gate allows.
+        from ai_workforce_api.evidence_plans import release
+        from ai_workforce_api.pbc_drafting import DraftScheduler, schedule
+
+        owner = connection.execute(
+            "SELECT organization_id FROM projects WHERE id = %s", (project_id,)
+        ).fetchone()
+        released = (
+            [] if owner is None else release(connection, owner[0], project_id, control_id, actor)
+        )
+        # The background worker drafts them; with no worker they resume at the next start.
+        drafts = scheduler if isinstance(scheduler, DraftScheduler) else None
+        _after_commit(lambda: schedule(drafts, released))
+        # An attribute approved after the plan was made gets its evidence now, by the planner
+        # agent in the background. Only when a worker can run it and a model is configured:
+        # a plan waiting for a run nobody starts could not be approved.
+        plans = getattr(scheduler, "schedule_plan_runs", None)
+        if plans is not None and model() is not None:
+            from ai_workforce_api.evidence_plans import (
+                queue_for_understanding,
+                replan_for_new_attributes,
+            )
+
+            # Control Understanding just became complete, or changed once complete: the
+            # attribute agent and the planner follow it in the same run, so the attributes
+            # and their criteria are prepared before a person opens the Attributes step
+            # (product owner, 12 November 2026). One run at a time for the control.
+            planned = queue_for_understanding(
+                connection, project_id, control_id
+            ) or replan_for_new_attributes(connection, control_id)
+            if planned is not None:
+                _after_commit(lambda: plans([planned]))
+        # The save may have been the last thing the D&I requests list waited for (the
+        # understanding completed, or the attributes settled, with every request already
+        # accepted): the D&I evidence is then released in this request, for the person of
+        # the list's last decision, never for whoever made this save (it may reach this
+        # control from another one's bulk save; B1f, 12 November 2026,
+        # phase_release.settle_design). After the queueing above: a run just queued means
+        # the list may still change, so nothing is released.
+        from ai_workforce_api.phase_release import settle_design
+
+        if owner is not None:
+            settle_design(connection, owner[0], project_id, control_id, "REQUEST", actor, scheduler)
+
+    @app.get(f"{control}/context")
+    def read(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> ContextBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id, Action.TASK_READ)
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    @app.put(f"{control}/classifications")
+    def classify(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        body: ClassificationsBody,
+        request: Request,
+    ) -> ContextBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            chosen = (
+                None
+                if not body.classifications
+                else [item for item in CLASSIFICATIONS if item in body.classifications]
+            )
+            with transaction(c) as cursor:
+                cursor.execute(
+                    "UPDATE engagement_controls SET classifications = %s, version = version + 1, "
+                    "updated_at = clock_timestamp() WHERE id = %s",
+                    (chosen, control_id),
+                )
+                _audit(cursor, organization_id, project_id, p.id, "control.classified",
+                       control_id, {"classifications": chosen})  # fmt: skip
+            changed(c, project_id, control_id, p.id)
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    # Attributes
+
+    @app.post(f"{control}/attributes")
+    def add(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        body: control_attributes.AttributeAdd,
+        request: Request,
+    ) -> ContextBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            _completed_if_accepted(c, project_id, control_id)
+            control_attributes.add_attribute(c, organization_id, project_id, control_id, p.id, body)
+            changed(c, project_id, control_id, p.id)
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    @app.patch(f"{control}/attributes/{{attribute_id}}")
+    def edit(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        attribute_id: UUID,
+        body: control_attributes.AttributeEdit,
+        request: Request,
+    ) -> ContextBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            control_attributes.edit_attribute(
+                c, organization_id, project_id, control_id, attribute_id, p.id, body
+            )
+            changed(c, project_id, control_id, p.id)
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    @app.post(f"{control}/attributes/{{attribute_id}}/retire")
+    def retire(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        attribute_id: UUID,
+        body: control_attributes.VersionOnly,
+        request: Request,
+    ) -> ContextBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            control_attributes.retire_attribute(
+                c, organization_id, project_id, control_id, attribute_id, p.id, body
+            )
+            changed(c, project_id, control_id, p.id)
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    @app.post(f"{control}/attributes/{{attribute_id}}/decide")
+    def decide(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        attribute_id: UUID,
+        body: control_attributes.AttributeDecision,
+        request: Request,
+    ) -> ContextBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            _not_while_updating(c, control_id)
+            control_attributes.decide(
+                c, organization_id, project_id, control_id, attribute_id, p.id, body
+            )
+            changed(c, project_id, control_id, p.id)
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    @app.post(f"{control}/attributes/decide-many")
+    def decide_many(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        body: control_attributes.AttributeChoices,
+        request: Request,
+    ) -> ContextBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            _not_while_updating(c, control_id)
+            control_attributes.decide_many(c, organization_id, project_id, control_id, p.id, body)
+            changed(c, project_id, control_id, p.id)
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    @app.post(f"{control}/attributes/accept")
+    def accept_attributes(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        body: control_attributes.AttributesAccepted,
+        request: Request,
+    ) -> ContextBody:
+        """One decision per attribute, one call for the set: the agent's change is approved
+        and its criteria accepted together, by the person, each with its own record."""
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            _not_while_updating(c, control_id)
+            control_attributes.accept_many(c, organization_id, project_id, control_id, p.id, body)
+            changed(c, project_id, control_id, p.id)
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    # What the agents assumed once the understanding was completed (B1j, 16 November 2026;
+    # attribute_assumptions): That's right, or Change... in the person's own words. Who may
+    # decide the attributes may decide them, never while the agents update the attributes.
+
+    @app.post(f"{control}/assumptions/{{assumption_id}}/confirm")
+    def confirm_assumption(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        assumption_id: UUID,
+        body: attribute_assumptions.ConfirmBody,
+        request: Request,
+    ) -> ContextBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            _not_while_updating(c, control_id)
+            attribute_assumptions.confirm(
+                c, organization_id, project_id, control_id, assumption_id, p.id, body
+            )
+            changed(c, project_id, control_id, p.id)
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    @app.post(f"{control}/assumptions/{{assumption_id}}/change")
+    def change_assumption(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        assumption_id: UUID,
+        body: attribute_assumptions.ChangeBody,
+        request: Request,
+    ) -> ContextBody:
+        """The person's own fact in place of the agent's assumption, and one update of the
+        attributes it names, limited to them (evidence_plans.queue_assumption_update). With
+        no worker or no model nothing is queued: the fact is recorded, and "Run again"
+        applies it."""
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            _not_while_updating(c, control_id)
+            matter, codes = attribute_assumptions.change(
+                c, organization_id, project_id, control_id, assumption_id, p.id, body
+            )
+            plans = getattr(scheduler, "schedule_plan_runs", None)
+            if plans is not None and model() is not None:
+                from ai_workforce_api.evidence_plans import queue_assumption_update
+
+                planned = queue_assumption_update(c, project_id, control_id, codes, matter)
+                if planned is not None:
+                    _after_commit(lambda: plans([planned]))
+            changed(c, project_id, control_id, p.id)
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    # Control Understanding's review by the IT audit specialist (B1k, B1l): "Not known yet,
+    # proceed" on any question, "Run again" or "Review again", and "Proceed without it". Who
+    # may answer the understanding may do each.
+
+    @app.post(f"{control}/issues/{{issue_id}}/not-known")
+    def issue_not_known(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        issue_id: UUID,
+        body: understanding_review.NotKnownBody,
+        request: Request,
+    ) -> ContextBody:
+        """The question is closed as the person's "not known", never as an answer, and the
+        matter becomes an assumption on the attributes it bears on."""
+
+        asked: list[bool] = []
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            understanding_review.not_known(
+                c, organization_id, project_id, control_id, issue_id, p.id, body
+            )
+            # The last of the narrative's points closed: the narrative is drafted again from
+            # the answers, as confirm_points does (B1j point 5: the server's rule of
+            # redrafting after the last point stays).
+            if _last_point_closed(c, control_id, issue_id) and _needs_narrative(
+                c, project_id, control_id
+            ):
+                asked.append(
+                    process_narrative.request(
+                        c, organization_id, project_id, control_id, p.id, "DRAFT"
+                    )
+                )
+            changed(c, project_id, control_id, p.id)
+            return _body(c, project_id, control_id)
+
+        result = run(request, work)
+        if any(asked):
+            process_narrative.schedule(scheduler, [control_id])
+        return result
+
+    @app.post(f"{control}/understanding/not-known")
+    def answer_not_known(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        body: understanding_review.AnswerNotKnownBody,
+        request: Request,
+    ) -> ContextBody:
+        """Not known yet, proceed, on a walkthrough question or a value of the statement (B1l
+        point 1): the person's not-known record, never an answer, and the matter becomes an
+        assumption on the attributes the question informs."""
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            understanding_review.answer_not_known(
+                c, organization_id, project_id, control_id, p.id, body
+            )
+            changed(c, project_id, control_id, p.id)
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    @app.post(f"{control}/understanding/review/follow")
+    def review_follow(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> ContextBody:
+        """The page's explicit request, when the context says review_due, that a read due by
+        the rules be queued (a read that fell due while the control's run was busy): queued
+        on the plan run and handed to the worker; a run already queued is handed over again.
+        Idempotent: nothing more is queued while one waits. Without a worker or a model the
+        understanding completes by the rules instead (B1k "Without a model")."""
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            plans = getattr(scheduler, "schedule_plan_runs", None)
+            if plans is None or model() is None:
+                understanding_once.complete(c, project_id, control_id, reviewing=False)
+                return _body(c, project_id, control_id)
+            planned = understanding_review.follow(c, project_id, control_id)
+            if planned is not None:
+                _after_commit(lambda: plans([planned]))
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    @app.post(f"{control}/understanding/review/run", status_code=202)
+    def review_run(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> ContextBody:
+        """A person asks the specialist to read: Run again after a read that could not be
+        used, or Review again after completion (its findings become assumptions). In the
+        background, on the control's plan run; with no worker or no model, refused."""
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            plans = getattr(scheduler, "schedule_plan_runs", None)
+            if plans is None or model() is None:
+                raise ContextState(understanding_review.NO_MODEL)
+            planned = understanding_review.request_run(c, project_id, control_id, p.id)
+            if planned is not None:
+                _after_commit(lambda: plans([planned]))
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    @app.post(f"{control}/understanding/review/proceed")
+    def review_proceed(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> ContextBody:
+        """Proceed without a review that could not be used: the understanding completes by
+        the rules, and the attributes follow it."""
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            understanding_review.proceed(c, project_id, control_id, p.id)
+            changed(c, project_id, control_id, p.id)
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    @app.get(f"{control}/attributes/{{attribute_id}}/criteria-history")
+    def criteria_versions(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        attribute_id: UUID,
+        request: Request,
+    ) -> criteria_history.CriteriaHistoryBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> criteria_history.CriteriaHistoryBody:
+            _allowed(c, p, organization_id, project_id, control_id, Action.TASK_READ)
+            return criteria_history.versions(c, control_id, attribute_id)
+
+        return run(request, work)
+
+    @app.post(f"{control}/attributes/generate")
+    def generate(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        request: Request,
+        body: AttributesRunBody | None = None,
+    ) -> ContextBody:
+        force = body is not None and body.force
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            _completed_if_accepted(c, project_id, control_id)
+            # With a worker and a model the whole run is asked for, in the background:
+            # proposals, tailored criteria and the reviewer's review, as after Control
+            # Understanding (12 November 2026); the page shows it working and reads again.
+            # Otherwise the attribute agent alone answers here, as before.
+            plans = getattr(scheduler, "schedule_plan_runs", None)
+            if plans is not None and model() is not None:
+                from ai_workforce_api.evidence_plans import request_attributes_run
+
+                planned = request_attributes_run(c, project_id, control_id, force)
+                if planned is not None:
+                    _after_commit(lambda: plans([planned]))
+                    return _body(c, project_id, control_id)
+                state = attributes_run(c, control_id)[0]
+                if state == "PENDING":
+                    # Queued and waiting: handed to the worker again, in case the first
+                    # handoff did not reach it. The claim is atomic, so a run already
+                    # taken is skipped.
+                    waiting = c.execute(
+                        "SELECT id FROM evidence_plans WHERE engagement_control_id = %s "
+                        "AND run_status = 'PENDING'",
+                        (control_id,),
+                    ).fetchone()
+                    if waiting is not None:
+                        queued = UUID(str(waiting[0]))
+                        _after_commit(lambda: plans([queued]))
+                if state in ("PENDING", "WORKING"):
+                    return _body(
+                        c, project_id, control_id,
+                        "The agents are already updating the attributes.",
+                    )  # fmt: skip
+                from ai_workforce_api.evidence_plans import nothing_changed_note
+
+                if not force and not attributes_rerun_useful(c, project_id, control_id):
+                    # The agents would read what they read at their last finished run: no
+                    # agent is called and nothing is written (B1h). A person who wants
+                    # them run all the same sends `force`.
+                    return _body(
+                        c, project_id, control_id,
+                        nothing_changed_note(c, project_id, control_id),
+                    )  # fmt: skip
+            note = generate_reviewed(c, model(), organization_id, project_id, control_id, p.id)
+            return _body(c, project_id, control_id, note)
+
+        return run(request, work)
+
+    # The client's values in the control's statement (8.9)
+
+    @app.put(f"{control}/values")
+    def set_values(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        body: control_design.ValuesBody,
+        request: Request,
+    ) -> ContextBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            changed_ids = control_design.set_values(
+                c, organization_id, project_id, control_id, p.id, body
+            )
+            for changed_id in changed_ids:
+                changed(c, project_id, changed_id, p.id)
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    # The walkthrough's answers (11 November 2026; walkthrough_answers.py): a topic's at
+    # once, each checked against its question, confirmed and audited. Who may set the
+    # statement's values may answer them.
+
+    @app.put(f"{control}/walkthrough-answers")
+    def set_walkthrough_answers(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        body: walkthrough_answers.AnswersBody,
+        request: Request,
+    ) -> walkthrough_answers.SavedBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> walkthrough_answers.SavedBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            try:
+                saved = walkthrough_answers.save(
+                    c, organization_id, project_id, control_id, p.id, body
+                )
+            except walkthrough_answers.AnswerRefused as error:
+                raise HTTPException(status_code=422, detail=error.detail) from None
+            changed(c, project_id, control_id, p.id)
+            # How many were saved, and how many follow-ups the same save closed (ignored).
+            return saved
+
+        return run(request, work)
+
+    # Bringing forward another control's answers (28 October 2026)
+
+    @app.get(f"{control}/understanding/sources")
+    def copy_sources(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> control_design.CopySourcesBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> control_design.CopySourcesBody:
+            _allowed(c, p, organization_id, project_id, control_id, Action.TASK_READ)
+            return control_design.copy_sources(c, project_id, control_id)
+
+        return run(request, work)
+
+    @app.post(f"{control}/understanding/copy")
+    def copy_understanding(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        body: control_design.CopyBody,
+        request: Request,
+    ) -> ContextBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            for changed_id in control_design.copy_values(
+                c, organization_id, project_id, control_id, p.id, body
+            ):
+                changed(c, project_id, changed_id, p.id)
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    # Control Understanding as a conversation (9 November 2026,
+    # docs/control-understanding-conversation.md): a typed reply read, never saved; the
+    # same control on other systems; this control's answers copied to the ones chosen.
+
+    @app.post(f"{control}/understanding/interpret")
+    def interpret_reply(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        body: understanding_chat.InterpretBody,
+        request: Request,
+    ) -> understanding_chat.InterpretResult:
+        def work(c: psycopg.Connection[Any], p: Principal) -> understanding_chat.InterpretResult:
+            # Who may answer may have a reply read: it can spend the engagement's budget.
+            _allowed(c, p, organization_id, project_id, control_id)
+            return understanding_chat.interpret(
+                c, model(), organization_id, project_id, control_id, p.id, body
+            )
+
+        return run(request, work)
+
+    @app.post(f"{control}/understanding/notes")
+    def understanding_notes(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        body: understanding_chat.NotesBody,
+        request: Request,
+    ) -> understanding_chat.NotesResult:
+        def work(c: psycopg.Connection[Any], p: Principal) -> understanding_chat.NotesResult:
+            # Who may answer may have notes read: it can spend the engagement's budget.
+            _allowed(c, p, organization_id, project_id, control_id)
+            return understanding_chat.read_notes(
+                c, model(), organization_id, project_id, control_id, p.id, body
+            )
+
+        return run(request, work)
+
+    # Not named understanding_review: a route function of that name shadowed the module for
+    # every route defined in this function (the second fix round of B1k, 16 November 2026: the
+    # not-known routes then read their body as a query parameter, and the review routes
+    # called the route function instead of the module).
+    @app.get(f"{control}/understanding/review")
+    def read_understanding_review(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        request: Request,
+        # The same control on another system to start from (its control id), or "none";
+        # left out, the one answering the most (11 November 2026).
+        start_from: str | None = Query(default=None, alias="from", max_length=64),
+    ) -> understanding_chat.UnderstandingReviewBody:
+        def work(
+            c: psycopg.Connection[Any], p: Principal
+        ) -> understanding_chat.UnderstandingReviewBody:
+            _allowed(c, p, organization_id, project_id, control_id, Action.TASK_READ)
+            try:
+                return understanding_chat.understanding_review(
+                    c, project_id, control_id, start_from
+                )
+            except understanding_chat.StartFromRefused as error:
+                raise HTTPException(status_code=422, detail=error.detail) from None
+
+        return run(request, work)
+
+    @app.get(f"{control}/understanding/copy-targets")
+    def understanding_copy_targets(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> understanding_chat.CopyTargetsBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> understanding_chat.CopyTargetsBody:
+            _allowed(c, p, organization_id, project_id, control_id, Action.TASK_READ)
+            return understanding_chat.copy_targets(c, project_id, control_id)
+
+        return run(request, work)
+
+    @app.post(f"{control}/understanding/copy-out")
+    def understanding_copy_out(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        body: understanding_chat.CopyOutBody,
+        request: Request,
+    ) -> understanding_chat.CopyTargetsBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> understanding_chat.CopyTargetsBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            for changed_id in understanding_chat.copy_out(
+                c, organization_id, project_id, control_id, p.id, body
+            ):
+                changed(c, project_id, changed_id, p.id)
+            return understanding_chat.copy_targets(c, project_id, control_id)
+
+        return run(request, work)
+
+    # The authentication control's settings, asked by how users sign in (10 November 2026)
+
+    @app.get(f"{control}/authentication")
+    def authentication_read(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> authentication_profile.ProfileBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> authentication_profile.ProfileBody:
+            _allowed(c, p, organization_id, project_id, control_id, Action.TASK_READ)
+            return authentication_profile.profile(c, control_id)
+
+        return run(request, work)
+
+    @app.put(f"{control}/authentication")
+    def authentication_set(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        body: authentication_profile.ProfileSet,
+        request: Request,
+    ) -> authentication_profile.ProfileBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> authentication_profile.ProfileBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            for changed_id in authentication_profile.set_profile(
+                c, organization_id, project_id, control_id, p.id, body
+            ):
+                changed(c, project_id, changed_id, p.id)
+            return authentication_profile.profile(c, control_id)
+
+        return run(request, work)
+
+    @app.post(f"{control}/authentication/read-policy")
+    def authentication_read_policy(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> understanding_chat.NotesResult:
+        def work(c: psycopg.Connection[Any], p: Principal) -> understanding_chat.NotesResult:
+            # Who may answer may have the policy read: it can spend the engagement's budget.
+            _allowed(c, p, organization_id, project_id, control_id)
+            result: understanding_chat.NotesResult = authentication_profile.read_policy(
+                c, model(), organization_id, project_id, control_id, p.id
+            )
+            return result
+
+        return run(request, work)
+
+    # The control's RCM details, completed on its own system from step 01 (10 November 2026)
+
+    @app.get(f"{control}/details")
+    def control_details_read(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> control_details.DetailsBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> control_details.DetailsBody:
+            _allowed(c, p, organization_id, project_id, control_id, Action.TASK_READ)
+            return control_details.details(c, p, organization_id, project_id, control_id)
+
+        return run(request, work)
+
+    @app.put(f"{control}/details")
+    def control_details_set(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        body: control_details.DetailsSet,
+        request: Request,
+    ) -> control_details.DetailsSaved:
+        def work(c: psycopg.Connection[Any], p: Principal) -> control_details.DetailsSaved:
+            _allowed(c, p, organization_id, project_id, control_id)
+            saved = control_details.set_details(c, p, organization_id, project_id, control_id, body)
+            for changed_id in saved.changed:
+                changed(c, project_id, changed_id, p.id)
+            read = control_details.details(c, p, organization_id, project_id, control_id)
+            return control_details.DetailsSaved(
+                **read.model_dump(), copied_to=saved.copied, applied_to=saved.applied
+            )
+
+        return run(request, work)
+
+    # Client values for several controls at once, answered from the plan queue
+
+    @app.put(f"{base}/control-values")
+    def set_many_values(
+        organization_id: UUID,
+        project_id: UUID,
+        body: control_design.ManyValuesBody,
+        request: Request,
+    ) -> ManyValuesResult:
+        def work(c: psycopg.Connection[Any], p: Principal) -> ManyValuesResult:
+            for item in body.items:
+                _allowed(c, p, organization_id, project_id, item.control_id)
+            changed_ids = control_design.set_values_many(c, organization_id, project_id, p.id, body)
+            for changed_id in changed_ids:
+                changed(c, project_id, changed_id, p.id)
+            return ManyValuesResult(controls=len(changed_ids))
+
+        return run(request, work)
+
+    # Prior-year proposals (prior_year.py): accepted or dismissed by a person, several at
+    # once. An accepted answer fills the control's question, as a value set here does.
+
+    @app.post(f"{base}/prior-year/proposals")
+    def decide_prior_year(
+        organization_id: UUID,
+        project_id: UUID,
+        body: prior_year.ProposalDecision,
+        request: Request,
+    ) -> ManyValuesResult:
+        def work(c: psycopg.Connection[Any], p: Principal) -> ManyValuesResult:
+            _project(c, p, organization_id, project_id)
+            changed_ids = prior_year.decide_proposals(c, organization_id, project_id, p.id, body)
+            for changed_id in changed_ids:
+                changed(c, project_id, changed_id, p.id)
+            return ManyValuesResult(controls=len(changed_ids))
+
+        return run(request, work)
+
+    # Library version 3 for a control copied from an earlier version
+
+    @app.get(f"{control}/library-update")
+    def library_update(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> library_definitions.UpdateBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> library_definitions.UpdateBody:
+            _allowed(c, p, organization_id, project_id, control_id, Action.TASK_READ)
+            return library_definitions.library_update(c, control_id)
+
+        return run(request, work)
+
+    @app.post(f"{control}/library-update/adopt")
+    def adopt_library(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> ContextBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            library_definitions.adopt(c, organization_id, project_id, control_id, p.id)
+            changed(c, project_id, control_id, p.id)
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    # Process understanding
+
+    @app.put(f"{control}/process")
+    def save_process(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        body: process_understanding.UnderstandingSave,
+        request: Request,
+    ) -> ContextBody:
+        planning: list[bool] = []
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            context = load_context(c, project_id, control_id)
+            process_understanding.save(
+                c, organization_id, project_id, control_id, p.id, body,
+                sources_for(c, project_id, control_id, context),
+            )  # fmt: skip
+            if body.confirm:
+                # The approved narrative updates the test plan, in the background: the
+                # attributes and evidence follow how the control operates (decided by the
+                # product owner on 26 October 2026).
+                planning.append(
+                    process_narrative.request(
+                        c, organization_id, project_id, control_id, p.id, "PLAN"
+                    )
+                )
+            changed(c, project_id, control_id, p.id)
+            return _body(c, project_id, control_id)
+
+        body_out = run(request, work)
+        if any(planning):
+            process_narrative.schedule(scheduler, [control_id])
+        return body_out
+
+    @app.post(f"{control}/process/build")
+    def build_process(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> ContextBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            note = _build(c, model(), organization_id, project_id, control_id, p.id)
+            return _body(c, project_id, control_id, note)
+
+        return run(request, work)
+
+    def _narrate(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        request: Request,
+        mode: process_narrative.Mode,
+    ) -> ContextBody:
+        asked: list[bool] = []
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            # A process narrative is drafted only for a control that needs one (B1j, 16
+            # November 2026: on ITGC-CM-06 the page drafted one after every answer, and its
+            # reviewer's questions reopened Control Understanding).
+            if not _needs_narrative(c, project_id, control_id):
+                raise ContextState(NO_NARRATIVE)
+            asked.append(
+                process_narrative.request(c, organization_id, project_id, control_id, p.id, mode)
+            )
+            return _body(c, project_id, control_id)
+
+        body = run(request, work)
+        # Scheduled only once the run is committed: a worker started inside the transaction
+        # would find no waiting run and skip it.
+        if any(asked):
+            process_narrative.schedule(scheduler, [control_id])
+        return body
+
+    @app.post(f"{control}/process/narrate")
+    def narrate(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> ContextBody:
+        """Draft the narrative from the client's answers and review it, in the background."""
+        return _narrate(organization_id, project_id, control_id, request, "DRAFT")
+
+    @app.post(f"{control}/process/review-narrative")
+    def review_narrative(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> ContextBody:
+        """Review the narrative as it stands again, and fix it, in the background."""
+        return _narrate(organization_id, project_id, control_id, request, "REVIEW")
+
+    @app.post(f"{control}/process/update-plan")
+    def update_plan(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> ContextBody:
+        """Update the test plan from the approved narrative again, in the background."""
+        return _narrate(organization_id, project_id, control_id, request, "PLAN")
+
+    @app.post(f"{control}/process/points")
+    def confirm_points(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        body: PointsConfirm,
+        request: Request,
+    ) -> ContextBody:
+        """Confirm or correct a round of the narrative's points as one decision (decided by
+        the product owner on 26 October 2026). When none is left open, the narrative is
+        drafted again from the answers, in the background."""
+        asked: list[bool] = []
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            with transaction(c) as cursor:
+                for item in body.items:
+                    answer = line(item.answer, 1000)
+                    if not answer or contains_secret({"answer": answer}):
+                        raise ValueError("an answer must be plain text")
+                    row = cursor.execute(
+                        """
+                        UPDATE control_context_issues
+                        SET status = 'RESOLVED', resolution_note = %s, resolved_by = %s,
+                            resolved_at = clock_timestamp(), version = version + 1,
+                            updated_at = clock_timestamp()
+                        WHERE id = %s AND engagement_control_id = %s AND status = 'OPEN'
+                          AND version = %s AND origin = 'PROCESS' AND question <> ''
+                        RETURNING proposal
+                        """,
+                        (answer, p.id, item.issue_id, control_id, item.version),
+                    ).fetchone()
+                    if row is None:
+                        raise ContextState("a point changed")
+                    _audit(cursor, organization_id, project_id, p.id, "context.issue_resolved",
+                           item.issue_id, {"status": "RESOLVED", "point": True,
+                                           "as_proposed": answer == str(row[0])})  # fmt: skip
+                waiting = cursor.execute(
+                    "SELECT count(*) FROM control_context_issues "
+                    "WHERE engagement_control_id = %s AND origin = 'PROCESS' "
+                    "AND status = 'OPEN' AND question <> ''",
+                    (control_id,),
+                ).fetchone()
+            if (
+                waiting is not None
+                and int(waiting[0]) == 0
+                and _needs_narrative(c, project_id, control_id)
+            ):
+                asked.append(
+                    process_narrative.request(
+                        c, organization_id, project_id, control_id, p.id, "DRAFT"
+                    )
+                )
+            changed(c, project_id, control_id, p.id)
+            return _body(c, project_id, control_id)
+
+        result = run(request, work)
+        if any(asked):
+            process_narrative.schedule(scheduler, [control_id])
+        return result
+
+    @app.get(f"{control}/process/versions")
+    def process_versions(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> list[process_understanding.VersionBody]:
+        def work(
+            c: psycopg.Connection[Any], p: Principal
+        ) -> list[process_understanding.VersionBody]:
+            _allowed(c, p, organization_id, project_id, control_id, Action.TASK_READ)
+            return process_understanding.versions(c, control_id)
+
+        return run(request, work)
+
+    @app.post(f"{control}/process/adopt")
+    def adopt_process(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        body: AdoptBody,
+        request: Request,
+    ) -> ContextBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            process_understanding.adopt(
+                c, organization_id, project_id, control_id, p.id, body.version
+            )
+            changed(c, project_id, control_id, p.id)
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    # A full review against the sources: after a document is added, or on request.
+
+    @app.post(f"{control}/review")
+    def review(
+        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+    ) -> ContextBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            _completed_if_accepted(c, project_id, control_id)
+            note = review_control(c, model(), organization_id, project_id, control_id, p.id)
+            return _body(c, project_id, control_id, note)
+
+        return run(request, work)
+
+    @app.post(f"{control}/issues/{{issue_id}}/resolve")
+    def resolve(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        issue_id: UUID,
+        body: IssueDecision,
+        request: Request,
+    ) -> ContextBody:
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            if not line(body.note, 1000):
+                raise ValueError("a resolution needs a note")
+            with transaction(c) as cursor:
+                row = cursor.execute(
+                    """
+                    UPDATE control_context_issues
+                    SET status = %s, resolution_note = %s, resolved_by = %s,
+                        resolved_at = clock_timestamp(), version = version + 1,
+                        updated_at = clock_timestamp()
+                    WHERE id = %s AND engagement_control_id = %s AND status = 'OPEN'
+                      AND version = %s
+                    RETURNING id
+                    """,
+                    (body.status, line(body.note, 1000), p.id, issue_id, control_id,
+                     body.version),
+                ).fetchone()  # fmt: skip
+                if row is None:
+                    raise ContextState("issue changed")
+                _audit(cursor, organization_id, project_id, p.id, "context.issue_resolved",
+                       issue_id, {"status": body.status})  # fmt: skip
+            changed(c, project_id, control_id, p.id)
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    # Supporting documents
+
+    @app.get(f"{base}/source-documents")
+    def list_documents(
+        organization_id: UUID,
+        project_id: UUID,
+        request: Request,
+        control_id: UUID | None = None,
+    ) -> list[DocumentBody]:
+        def work(c: psycopg.Connection[Any], p: Principal) -> list[DocumentBody]:
+            _project(c, p, organization_id, project_id, Action.TASK_READ)
+            return documents(c, project_id, control_id)
+
+        return run(request, work)
+
+    @app.post(f"{base}/source-documents")
+    def write_document(
+        organization_id: UUID, project_id: UUID, body: DocumentWrite, request: Request
+    ) -> UploadResult:
+        def work(c: psycopg.Connection[Any], p: Principal) -> UploadResult:
+            _project(c, p, organization_id, project_id)
+            with transaction(c) as cursor:
+                document_id = store_document(
+                    cursor, organization_id, project_id, p.id, kind=body.kind,
+                    title=body.title, text=body.text, origin="WRITTEN",
+                )  # fmt: skip
+                linked = link_document(cursor, project_id, document_id, body.control_ids, p.id)
+                _audit(cursor, organization_id, project_id, p.id, "document.added",
+                       document_id, {"kind": body.kind, "controls": len(linked)})  # fmt: skip
+            _after_link(c, organization_id, project_id, linked)
+            found = next(d for d in documents(c, project_id) if d.id == document_id)
+            return UploadResult(document=found, readable=True, note="", linked=linked)
+
+        return run(request, work)
+
+    @app.post(f"{base}/source-documents/upload")
+    async def upload_document(
+        organization_id: UUID,
+        project_id: UUID,
+        request: Request,
+        kind: DocumentKind = "NARRATIVE",
+        title: str = "",
+        file_name: str = "",
+        control_id: list[UUID] = Query(default=[]),  # noqa: B008
+    ) -> UploadResult:
+        content = await read_body(request, MAX_UPLOAD, "file is larger than 5 MB")
+        if not content:
+            raise HTTPException(status_code=422, detail="file is empty")
+        content_type = request.headers.get("content-type", "")
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> UploadResult:
+            # Imported here: governing_documents imports this module.
+            from ai_workforce_api.governing_documents import read_reference
+
+            _project(c, p, organization_id, project_id)
+            # A screenshot or scan of a policy is read by OCR, as on the Systems & Processes
+            # page, with the firm's own choice of engine (product owner, 14 November 2026:
+            # "Why png files are not being accepted in the D&I evidence upload?").
+            read = read_reference(
+                c, settings, model(), organization_id, project_id, p.id, content,
+                file_name, content_type,
+            )  # fmt: skip
+            if not read.readable:
+                return UploadResult(document=None, readable=False, note=read.note)
+            with transaction(c) as cursor:
+                document_id = store_document(
+                    cursor, organization_id, project_id, p.id, kind=kind,
+                    title=title or read.file_name, text=read.text, origin="UPLOAD",
+                    file_name=read.file_name, sha256=read.sha256,
+                )  # fmt: skip
+                linked = link_document(cursor, project_id, document_id, control_id, p.id)
+                _audit(cursor, organization_id, project_id, p.id, "document.uploaded",
+                       document_id, {"kind": kind, "controls": len(linked)})  # fmt: skip
+            _after_link(c, organization_id, project_id, linked)
+            found = next(d for d in documents(c, project_id) if d.id == document_id)
+            return UploadResult(document=found, readable=True, note=read.note, linked=linked)
+
+        # Reading the file (OCR, a model) and storing it run off the event loop.
+        return await run_in_threadpool(run, request, work)
+
+    @app.post(f"{base}/source-documents/{{document_id}}/links")
+    def link(
+        organization_id: UUID,
+        project_id: UUID,
+        document_id: UUID,
+        body: LinksBody,
+        request: Request,
+    ) -> UploadResult:
+        def work(c: psycopg.Connection[Any], p: Principal) -> UploadResult:
+            _project(c, p, organization_id, project_id)
+            _document(c, project_id, document_id)
+            with transaction(c) as cursor:
+                linked = link_document(cursor, project_id, document_id, body.control_ids, p.id)
+                _audit(cursor, organization_id, project_id, p.id, "document.linked",
+                       document_id, {"controls": [str(i) for i in linked]})  # fmt: skip
+            _after_link(c, organization_id, project_id, linked)
+            found = next(d for d in documents(c, project_id) if d.id == document_id)
+            return UploadResult(document=found, readable=True, note="", linked=linked)
+
+        return run(request, work)
+
+    @app.post(f"{base}/source-documents/{{document_id}}/unlink")
+    def unlink(
+        organization_id: UUID,
+        project_id: UUID,
+        document_id: UUID,
+        body: UnlinkBody,
+        request: Request,
+    ) -> UploadResult:
+        def work(c: psycopg.Connection[Any], p: Principal) -> UploadResult:
+            _project(c, p, organization_id, project_id)
+            _document(c, project_id, document_id)
+            with transaction(c) as cursor:
+                cursor.execute(
+                    "DELETE FROM source_document_controls WHERE document_id = %s "
+                    "AND engagement_control_id = %s AND project_id = %s",
+                    (document_id, body.control_id, project_id),
+                )
+                # A policy or procedure that governs the control's system or process is
+                # taken off this one control (0112).
+                if governs(cursor, document_id, body.control_id):
+                    cursor.execute(
+                        """
+                        INSERT INTO source_document_exclusions (
+                            document_id, engagement_control_id, project_id, excluded_by
+                        )
+                        SELECT %s, id, project_id, %s FROM engagement_controls
+                        WHERE id = %s AND project_id = %s
+                        ON CONFLICT DO NOTHING
+                        """,
+                        (document_id, p.id, body.control_id, project_id),
+                    )
+                _audit(cursor, organization_id, project_id, p.id, "document.unlinked",
+                       document_id, {"control": str(body.control_id)})  # fmt: skip
+            found = next(d for d in documents(c, project_id) if d.id == document_id)
+            return UploadResult(document=found, readable=True, note="")
+
+        return run(request, work)
+
+
+# The work
+
+
+def _completed_if_accepted(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
+) -> None:
+    """A control whose attributes are accepted counts as completed (B1l point 2): recorded
+    before a path writes an attribute or a proposal that would end the acceptance, so no
+    review is ever started on it. Acceptances record it themselves
+    (understanding_once.record_accepted), and migration 0173 backfilled the controls
+    accepted before; this is the last net."""
+    with transaction(connection) as cursor:
+        understanding_once.complete_if_accepted(cursor, project_id, control_id)
+
+
+def _last_point_closed(
+    connection: psycopg.Connection[Any], control_id: UUID, issue_id: UUID
+) -> bool:
+    """The question just closed was one of the narrative's points (origin PROCESS) and none
+    is left open."""
+    row = connection.execute(
+        """
+        SELECT (SELECT origin = 'PROCESS' AND question <> '' FROM control_context_issues
+                WHERE id = %s),
+               (SELECT count(*) FROM control_context_issues
+                WHERE engagement_control_id = %s AND origin = 'PROCESS' AND status = 'OPEN'
+                  AND question <> '')
+        """,
+        (issue_id, control_id),
+    ).fetchone()
+    return row is not None and bool(row[0]) and int(row[1]) == 0
+
+
+def _generate(
+    connection: psycopg.Connection[Any],
+    provider: ModelProvider | None,
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    actor: UUID,
+    only: tuple[str, ...] = (),
+) -> str:
+    """The attribute agent's proposals for the control. It asks nothing on any path (B1k,
+    extended after its review, 16 November 2026): what it would ask is its assumption."""
+    context = load_context(connection, project_id, control_id)
+    found = _classes(connection, control_id, context)
+    sources = sources_for(connection, project_id, control_id, context)
+    # The approved process narrative is a source the attributes can quote: they test the
+    # control as it operates here (product owner, 26 October 2026).
+    narrative = process_understanding.confirmed_summary(connection, control_id)
+    if narrative:
+        sources.append(
+            Source(NARRATIVE_SOURCE, "Approved process narrative", "NARRATIVE", narrative)
+        )
+    package = context_package(connection, project_id, control_id, context, found)
+    # The understanding the attributes follow (12 November 2026): the documented design with
+    # the client's values. The confirmed answers, each with when it was confirmed, are added
+    # by control_attributes.generate (confirmed_understanding; B1e), under the refs its
+    # answer is checked against. Data the client provided, as the control's other fields are.
+    from ai_workforce_api.evidence_plans import statement_fields
+
+    package["control_design_documented"] = dict(statement_fields(connection, control_id))
+    # Which approved attributes a person owns the criteria of: a duplicate of one is left
+    # out, never turned into a change of it (control_attributes.REVIEW_PROMPT).
+    owned = {
+        str(row[0])
+        for row in connection.execute(
+            "SELECT a.id FROM control_attributes a WHERE a.engagement_control_id = %s "
+            f"AND a.status = 'APPROVED' AND coalesce({control_attributes.CRITERIA_OWNED_SQL}, "
+            "false)",
+            (control_id,),
+        ).fetchall()
+    }
+    for item in package.get("approved_attributes", []):
+        if item["id"] in owned:
+            item["criteria_owned_by_a_person"] = True
+    kept, note = control_attributes.generate(
+        connection,
+        provider,
+        organization_id,
+        project_id,
+        control_id,
+        actor,
+        package,
+        sources,
+        only,
+    )
+    if not note and kept == 0:
+        note = "The agent found nothing to add: the approved attributes cover the sources."
+    return note
+
+
+def reviewed_set(
+    connection: psycopg.Connection[Any],
+    provider: ModelProvider | None,
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    actor: UUID,
+) -> str:
+    """The reviewer agent's review of the control's attributes as they now stand
+    (attribute_review.review_set), which ends every path an agent proposes attributes on
+    (12 November 2026: what reaches the person is the reviewed final version, duplicates
+    merged, on every path). Without a model there is no reviewer, and no agent proposed
+    anything either. Returns the review's note: empty when it finished."""
+    if provider is None:
+        return ""
+    from ai_workforce_api.attribute_review import review_set
+
+    return review_set(connection, provider, organization_id, project_id, control_id, actor)
+
+
+def generate_reviewed(
+    connection: psycopg.Connection[Any],
+    provider: ModelProvider | None,
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    actor: UUID,
+) -> str:
+    """The attribute agent's proposals, then the reviewer's review of the set: the answer of
+    "Propose with the agent" when no background run can take it."""
+    note = _generate(connection, provider, organization_id, project_id, control_id, actor)
+    review = reviewed_set(connection, provider, organization_id, project_id, control_id, actor)
+    return " ".join(part for part in (note, review) if part)
+
+
+def _build(
+    connection: psycopg.Connection[Any],
+    provider: ModelProvider | None,
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    actor: UUID,
+) -> str:
+    context = load_context(connection, project_id, control_id)
+    found = _classes(connection, control_id, context)
+    sources = sources_for(connection, project_id, control_id, context)
+    package = context_package(connection, project_id, control_id, context, found)
+    return process_understanding.build(
+        connection, provider, organization_id, project_id, control_id, actor, package,
+        sources, context,
+    )  # fmt: skip
+
+
+def review_control(
+    connection: psycopg.Connection[Any],
+    provider: ModelProvider | None,
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    actor: UUID,
+) -> str:
+    """Review the control against all its sources: the rules first, then the agent's
+    attribute proposals, then the process map where the control depends on one. Nothing
+    approved changes: what the review finds is proposed, or raised as an issue."""
+    context = load_context(connection, project_id, control_id)
+    found = _classes(connection, control_id, context)
+    with transaction(connection) as cursor:
+        raise_issues(
+            cursor, organization_id, project_id, control_id,
+            frequency_conflicts(context.frequency, linked_documents(connection, project_id,
+                                                                     control_id)),
+            "RULES",
+        )  # fmt: skip
+    notes = [_generate(connection, provider, organization_id, project_id, control_id, actor)]
+    from ai_workforce_api.control_context import needs_process_understanding
+
+    if needs_process_understanding(found):
+        notes.append(_build(connection, provider, organization_id, project_id, control_id, actor))
+    # The set is reviewed before a person sees it, as on every path.
+    notes.append(reviewed_set(connection, provider, organization_id, project_id, control_id, actor))
+    with transaction(connection) as cursor:
+        cursor.execute(
+            "UPDATE source_document_controls SET reviewed_at = clock_timestamp() "
+            "WHERE engagement_control_id = %s AND project_id = %s",
+            (control_id, project_id),
+        )
+    return " ".join(note for note in notes if note)
+
+
+def _after_link(
+    connection: psycopg.Connection[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    linked: list[UUID],
+) -> None:
+    """A newly linked document is checked by the rules at once (they are cheap and need no
+    model); the agent reviews it when asked."""
+    for control_id in linked:
+        context = load_context(connection, project_id, control_id)
+        with transaction(connection) as cursor:
+            raise_issues(
+                cursor, organization_id, project_id, control_id,
+                frequency_conflicts(
+                    context.frequency, linked_documents(connection, project_id, control_id)
+                ),
+                "RULES",
+            )  # fmt: skip
+
+
+def _classes(
+    connection: psycopg.Connection[Any], control_id: UUID, context: Any
+) -> list[Classification]:
+    row = connection.execute(
+        "SELECT classifications FROM engagement_controls WHERE id = %s", (control_id,)
+    ).fetchone()
+    return classifications_of(None if row is None else row[0], context.domain, context.nature)
+
+
+def _body(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID, note: str = ""
+) -> ContextBody:
+    row = connection.execute(
+        "SELECT classifications, domain, nature FROM engagement_controls WHERE id = %s",
+        (control_id,),
+    ).fetchone()
+    if row is None:
+        raise NotVisible()
+    derived = derived_classifications(str(row[1]), str(row[2]))
+    current = classifications_of(row[0], str(row[1]), str(row[2]))
+    readiness = assess(connection, project_id, control_id)
+    running, stage, run_note = attributes_run(connection, control_id)
+    agent_notes = notes_for(connection, control_id)
+    revision_pending, criteria_pending = pending_criteria(connection, control_id)
+    _by_code, for_set = attribute_assumptions.shown(connection, control_id)
+    question_pass, review_due = understanding_review.page_state(connection, project_id, control_id)
+    return ContextBody(
+        control_id=control_id,
+        classifications=current,
+        derived_classifications=derived,
+        classifications_overridden=bool(row[0]),
+        process_required=readiness.process_required if readiness is not None else False,
+        readiness=readiness,
+        attributes=control_attributes.attributes(connection, control_id),
+        issues=issues_for(connection, control_id),
+        documents=documents(connection, project_id, control_id),
+        understanding=process_understanding.understanding(connection, control_id),
+        testing=library_definitions.testing_body(connection, control_id),
+        design=control_design.design_for(connection, control_id),
+        # The latest library version always applies (adopt_latest, with every deploy):
+        # nobody is asked to adopt it.
+        library_update=None,
+        attributes_run=running,
+        attributes_stage=stage,
+        attributes_run_note=run_note,
+        attributes_rerun_useful=attributes_rerun_useful(connection, project_id, control_id),
+        attributes_agent_notes=agent_notes,
+        plan_revision_pending=revision_pending,
+        attributes_pending_criteria=criteria_pending,
+        attributes_failure_note=attributes_failure_note(
+            connection, control_id, agent_notes, running, run_note
+        ),
+        understanding_completed_at=understanding_once.completed_at(connection, control_id),
+        question_pass=question_pass,
+        review=understanding_review.body(connection, control_id),
+        review_request=understanding_review.request_body(connection, control_id),
+        review_not_run=understanding_review.not_run(connection, control_id),
+        review_due=review_due,
+        not_known=understanding_review.not_known_items(connection, control_id),
+        set_assumptions=for_set,
+        note=note,
+    )
+
+
+def attributes_failure_note(
+    connection: psycopg.Connection[Any],
+    control_id: UUID,
+    notes: list[AgentNoteBody],
+    running: str,
+    run_note: str,
+) -> str:
+    """The Attributes step's failure note (ContextBody.attributes_failure_note)."""
+    if running in ("PENDING", "WORKING"):
+        return ""
+    parts = [note.sentence for note in notes]
+    if not any(note.step == "engagement-planner" for note in notes):
+        from ai_workforce_api.evidence_plans import latest_plan_failure_note
+
+        planner = latest_plan_failure_note(connection, control_id)
+        if planner:
+            parts.append(planner)
+    if not parts and running == "STOPPED" and run_note:
+        parts.append(run_note)
+    return " ".join(parts)
+
+
+# Access
+
+
+def _project(
+    connection: psycopg.Connection[Any],
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    action: Action = Action.TASK_UPDATE,
+) -> None:
+    authorize(
+        connection,
+        principal=principal,
+        action=action,
+        organization_id=organization_id,
+        project_id=project_id,
+    )
+    if action is Action.TASK_UPDATE and principal.kind is not PrincipalKind.USER:
+        raise NotVisible()
+
+
+NO_NARRATIVE = "A process narrative is drafted only for a control that needs one."
+
+
+def _needs_narrative(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
+) -> bool:
+    """Whether the control needs a process narrative (control_context.
+    needs_process_understanding: a business process control)."""
+    from ai_workforce_api.control_context import needs_process_understanding
+
+    context = load_context(connection, project_id, control_id)
+    return needs_process_understanding(_classes(connection, control_id, context))
+
+
+def _not_while_updating(connection: psycopg.Connection[Any], control_id: UUID) -> None:
+    """A person's decision on the attributes waits while the agents update them: what they
+    would accept is about to change (evidence_plans.attributes_updating)."""
+    from ai_workforce_api.evidence_plans import ATTRIBUTES_UPDATING, attributes_updating
+
+    if attributes_updating(connection, control_id):
+        raise ContextState(ATTRIBUTES_UPDATING)
+
+
+def _allowed(
+    connection: psycopg.Connection[Any],
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    action: Action = Action.TASK_UPDATE,
+) -> None:
+    _project(connection, principal, organization_id, project_id, action)
+    found = connection.execute(
+        "SELECT 1 FROM engagement_controls WHERE id = %s AND project_id = %s "
+        "AND organization_id = %s",
+        (control_id, project_id, organization_id),
+    ).fetchone()
+    if found is None:
+        raise NotVisible()
+
+
+def _document(connection: psycopg.Connection[Any], project_id: UUID, document_id: UUID) -> None:
+    found = connection.execute(
+        "SELECT 1 FROM source_documents WHERE id = %s AND project_id = %s AND removed_at IS NULL",
+        (document_id, project_id),
+    ).fetchone()
+    if found is None:
+        raise NotVisible()
+
+
+def _audit(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    actor: UUID,
+    action: str,
+    target: UUID,
+    payload: dict[str, Any],
+) -> None:
+    cursor.execute(
+        """
+        INSERT INTO audit_events (
+            organization_id, project_id, actor_user_id, action, target_type, target_id, payload
+        )
+        VALUES (%s, %s, %s, %s, 'control_context', %s, %s)
+        """,
+        (organization_id, project_id, actor, action, target, Json(payload)),
+    )

@@ -1,0 +1,13 @@
+Access request REQ-3202
+Requested for: Peter Novak (u0102)
+Application: SAP ERP PRD
+Role requested: Payroll Admin
+Requested by: Peter Novak on 2027-09-08
+Line manager (HR record): Mei Tanaka
+
+Approvals
+- Line manager approval: Mei Tanaka approved on 2027-09-09
+- Application owner approval: none
+
+Provisioning
+- Granted role Payroll Admin in SAP ERP PRD on 2027-09-11 by adm.kfischer (Karl Fischer, IAM administrator)

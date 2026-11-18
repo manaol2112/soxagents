@@ -1,0 +1,1965 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+
+import {
+  ATTRIBUTE_ROW_CHIPS,
+  type Attribute,
+  acceptItems,
+  agentRan,
+  attributeLetter,
+  attributeRowState,
+  attributeSourceLine,
+  attributesStopped,
+  attributesSummary,
+  attributesWorking,
+  basisLines,
+  clock,
+  contextProblem,
+  contextWrite,
+  criteriaState,
+  criteriaToAccept,
+  decidedNote,
+  documentUploadTarget,
+  firstToDecide,
+  type NarrativeReview,
+  type NarrativeRun,
+  narrativeProgress,
+  offersAgentRun,
+  openRows,
+  parseContext,
+  planOutcomeLine,
+  REVIEW_ACTION_LABELS,
+  reviewActions,
+  reviewHeadline,
+  reviewUnfinished,
+  selectionPlan,
+  UNIFIED_CHIPS,
+  UNIFIED_ORIGINS,
+  unifiedRows,
+  unifiedState,
+  untailored,
+} from "../apps/web/src/control-context-model.ts";
+
+const ORG = "01a13253-ec1a-7604-8944-a06dd7633ce0";
+const PROJECT = "01a1327d-b92a-7bd1-b34b-845a8d89c879";
+const CONTROL = "01a13300-0000-7000-8000-000000000002";
+const OTHER = "01a13300-0000-7000-8000-000000000003";
+const ITEM = "01a13300-0000-7000-8000-000000000009";
+const IDS = { organization_id: ORG, project_id: PROJECT, control_id: CONTROL };
+const BASE = `/organizations/${ORG}/projects/${PROJECT}`;
+
+describe("control context", () => {
+  it("parses readiness, attributes, documents, issues, and the process map", () => {
+    const context = parseContext({
+      control_id: CONTROL,
+      classifications: ["BUSINESS_PROCESS", "NOPE"],
+      derived_classifications: ["BUSINESS_PROCESS"],
+      classifications_overridden: false,
+      process_required: true,
+      readiness: {
+        state: "PROCESS_UNDERSTANDING_INCOMPLETE",
+        label: "Process understanding incomplete",
+        process_required: true,
+        checks: [
+          {
+            key: "process",
+            title: "Process understanding",
+            status: "BLOCKED",
+            summary: "1 open point",
+            blockers: [
+              {
+                detail: "No map yet.",
+                why: "It matters.",
+                resolve: "Build it.",
+              },
+            ],
+          },
+        ],
+      },
+      attributes: {
+        approved: [
+          {
+            id: ITEM,
+            position: 0,
+            text: "Approved before posting",
+            status: "APPROVED",
+            basis: "DOCUMENTED",
+            source_kind: "RCM",
+            source_document_id: null,
+            source_title: "",
+            source_quote: "",
+            note: "",
+            proposal: null,
+            replaces_id: null,
+            decided_by: null,
+            version: 1,
+          },
+        ],
+        proposed: [
+          {
+            id: OTHER,
+            text: "Dated",
+            status: "PROPOSED",
+            proposal: "ADD",
+            basis: "?",
+          },
+        ],
+        history: [],
+      },
+      issues: [
+        {
+          id: ITEM,
+          origin: "SOURCES",
+          kind: "CONFLICT",
+          topic: "Frequency",
+          detail: "Monthly vs quarterly.",
+          quotes: [
+            { source: OTHER, title: "Policy", quote: "reviewed quarterly" },
+          ],
+          raised_by: "RULES",
+          status: "OPEN",
+          version: 1,
+        },
+      ],
+      documents: [
+        {
+          id: OTHER,
+          kind: "POLICY",
+          title: "Credit note policy",
+          origin: "WRITTEN",
+          control_ids: [CONTROL, OTHER, 7],
+          reviewed: false,
+        },
+      ],
+      understanding: {
+        status: "DRAFT",
+        steps: [
+          {
+            key: "s1",
+            description: "Billing raises it.",
+            control_point: true,
+            basis: "?",
+          },
+        ],
+        built_by: "RULES",
+        proposed_steps: null,
+        version: 2,
+      },
+    });
+    assert.ok(context !== null);
+    assert.deepEqual(context.classifications, ["BUSINESS_PROCESS"]);
+    assert.equal(context.readiness?.state, "PROCESS_UNDERSTANDING_INCOMPLETE");
+    assert.equal(
+      context.readiness?.checks[0]?.blockers[0]?.resolve,
+      "Build it.",
+    );
+    assert.equal(context.approved[0]?.sourceKind, "RCM");
+    // Unknown values fall back to the cautious reading: an unknown basis is inferred.
+    assert.equal(context.proposed[0]?.basis, "INFERRED");
+    assert.equal(context.issues[0]?.quotes[0]?.quote, "reviewed quarterly");
+    assert.deepEqual(context.documents[0]?.controlIds, [CONTROL, OTHER]);
+    assert.equal(context.understanding.steps[0]?.controlPoint, true);
+    assert.equal(context.understanding.steps[0]?.basis, "TEAM");
+    assert.equal(context.understanding.proposedSteps, null);
+    assert.equal(parseContext({ classifications: [] }), null);
+  });
+
+  it("builds each action's call and refuses what does not fit", () => {
+    assert.deepEqual(
+      contextWrite({ ...IDS, intent: "attribute-add", text: "  Dated  " }),
+      {
+        intent: "attribute-add",
+        method: "POST",
+        path: `${BASE}/controls/${CONTROL}/attributes`,
+        body: { text: "Dated" },
+        slow: false,
+      },
+    );
+    const decide = contextWrite({
+      ...IDS,
+      intent: "attribute-decide",
+      attribute_id: ITEM,
+      decision: "APPROVE",
+      version: 2,
+      text: "Reworded",
+    });
+    assert.ok(!("error" in decide));
+    assert.deepEqual(decide.body, {
+      decision: "APPROVE",
+      version: 2,
+      text: "Reworded",
+    });
+    const review = contextWrite({ ...IDS, intent: "review" });
+    assert.ok(!("error" in review) && review.slow);
+    const saved = contextWrite({
+      ...IDS,
+      intent: "process-save",
+      summary: "Short.",
+      steps: [
+        {
+          description: " Billing raises it. ",
+          controlPoint: true,
+          basis: "DOCUMENTED",
+          // The attributes evaluated at the step (26 October 2026): a code is kept only
+          // when it is well formed.
+          attributes: ["A1", "not a code!", 7],
+          // The diagram's fields (27 October 2026) travel with a person's save: the
+          // title trimmed, a branch to a step that cannot exist dropped, evidence cleaned.
+          title: " Raise invoice ",
+          kind: "DECISION",
+          yes: 3,
+          no: 99,
+          evidence: [" Invoice copy ", 5, ""],
+        },
+        { description: "   " },
+      ],
+      version: 0,
+      confirm: true,
+    });
+    assert.ok(!("error" in saved));
+    assert.deepEqual(saved.body, {
+      summary: "Short.",
+      // The narrative's sections (0117): none given here.
+      sections: [],
+      steps: [
+        {
+          description: "Billing raises it.",
+          actor: "",
+          system: "",
+          control_point: true,
+          basis: "DOCUMENTED",
+          source: "",
+          quote: "",
+          attributes: ["A1"],
+          title: "Raise invoice",
+          kind: "DECISION",
+          yes: 3,
+          no: 0,
+          evidence: ["Invoice copy"],
+        },
+      ],
+      version: 0,
+      confirm: true,
+    });
+    const written = contextWrite({
+      organization_id: ORG,
+      project_id: PROJECT,
+      intent: "document-write",
+      kind: "POLICY",
+      title: "Policy",
+      body: "Credit notes are approved.",
+      control_ids: [CONTROL, "nope", OTHER],
+    });
+    assert.ok(!("error" in written));
+    assert.equal(written.path, `${BASE}/source-documents`);
+    assert.deepEqual(written.body.control_ids, [CONTROL, OTHER]);
+    const classify = contextWrite({
+      ...IDS,
+      intent: "classify",
+      classifications: [],
+    });
+    assert.ok(!("error" in classify));
+    assert.deepEqual(classify.body, { classifications: null });
+    for (const bad of [
+      { ...IDS, intent: "attribute-add", text: "" },
+      { ...IDS, intent: "attribute-add", text: "token=sk-live-1234567890abcd" },
+      {
+        ...IDS,
+        intent: "attribute-edit",
+        attribute_id: ITEM,
+        text: "x",
+        version: 0,
+      },
+      {
+        ...IDS,
+        intent: "attribute-decide",
+        attribute_id: ITEM,
+        decision: "MAYBE",
+        version: 1,
+      },
+      {
+        ...IDS,
+        intent: "issue-resolve",
+        issue_id: ITEM,
+        status: "RESOLVED",
+        note: " ",
+        version: 1,
+      },
+      {
+        ...IDS,
+        intent: "document-write",
+        kind: "SECRET",
+        title: "t",
+        body: "b",
+      },
+      { ...IDS, intent: "delete-everything" },
+      { ...IDS, control_id: "x", intent: "review" },
+    ]) {
+      assert.deepEqual(contextWrite(bad), { error: "invalid" });
+    }
+  });
+
+  it("parses library version 3 definitions, procedures, and an update", () => {
+    const context = parseContext({
+      control_id: CONTROL,
+      attributes: {
+        approved: [
+          {
+            id: ITEM,
+            text: "Access was approved before it was granted",
+            status: "APPROVED",
+            version: 1,
+            definition: {
+              key: "ac01-approved-before",
+              confidence: "HIGH",
+              condition: "Every sampled grant",
+              evidence: ["Ticket", "Provisioning log", 7],
+              extract: ["Approval date", "Grant date"],
+              compare: "Approval date on or before grant date",
+              passes: "Approved on or before the grant",
+              fails: "Approved after the grant",
+              insufficient: "No approval date",
+              review: "",
+              not_infer: "Approval from a ticket being closed",
+              basis: ["AS 2201.44"],
+              question: "",
+              blocks: false,
+            },
+          },
+          { id: OTHER, text: "Client attribute", definition: { key: 3 } },
+        ],
+      },
+      testing: {
+        version: 3,
+        objective: "Only approved access",
+        procedures: [
+          { key: "p1", phase: "ROLLFORWARD", action: "Inquire", evidence: [] },
+          { key: "p2", phase: "SOMETHING", action: "Inspect" },
+        ],
+        questions: ["What threshold?"],
+      },
+      library_update: {
+        available: true,
+        library_version: 2,
+        current_version: 3,
+        items: [
+          {
+            change: "REWORD",
+            key: "k",
+            text: "New",
+            was: "Old",
+            reason: "Why",
+          },
+          { change: "BOGUS", key: "x" },
+        ],
+        note: "Sheets keep their attributes.",
+      },
+    });
+    assert.ok(context !== null);
+    const definition = context.approved[0]?.definition;
+    assert.equal(definition?.confidence, "HIGH");
+    assert.deepEqual(definition?.evidence, ["Ticket", "Provisioning log"]);
+    assert.equal(definition?.notInfer, "Approval from a ticket being closed");
+    // A client's own attribute has no definition.
+    assert.equal(context.approved[1]?.definition, null);
+    assert.deepEqual(
+      context.testing?.procedures.map((p) => p.phase),
+      ["ROLLFORWARD", "OPERATING"],
+    );
+    assert.deepEqual(context.testing?.questions, ["What threshold?"]);
+    assert.equal(context.libraryUpdate?.libraryVersion, 2);
+    assert.deepEqual(
+      context.libraryUpdate?.items.map((item) => item.change),
+      ["REWORD", "KEEP"],
+    );
+    // No update when the API says none is available, and none for older payloads.
+    const current = parseContext({
+      control_id: CONTROL,
+      library_update: { available: false, items: [] },
+    });
+    assert.equal(current?.libraryUpdate, null);
+    assert.equal(current?.testing, null);
+    assert.deepEqual(contextWrite({ ...IDS, intent: "library-adopt" }), {
+      intent: "library-adopt",
+      method: "POST",
+      path: `${BASE}/controls/${CONTROL}/library-update/adopt`,
+      body: {},
+      slow: false,
+    });
+    assert.equal(
+      contextProblem(409, "no library update for this control"),
+      "This control is already on the current library version.",
+    );
+  });
+
+  it("parses the control statement and builds the values write", () => {
+    const context = parseContext({
+      control_id: CONTROL,
+      design: {
+        text: "Entries above [the journal entry review threshold] are approved.",
+        risk: "Erroneous entries are posted.",
+        assertions: ["Existence or occurrence", 4],
+        control_type: "PREVENTIVE",
+        nature: "MANUAL",
+        frequency: "EVENT_DRIVEN",
+        information: [
+          {
+            name: "Journal listing",
+            kind: "QUERY",
+            elements: ["Amount"],
+            ipe: "IPE-02",
+          },
+        ],
+        itgcs: ["ITGC-AC-01"],
+        slots: [
+          {
+            key: "je-threshold",
+            label: "the journal entry review threshold",
+            kind: "AMOUNT",
+            blocks: true,
+            value: "",
+            automatic: false,
+            version: 0,
+          },
+          { key: "system", label: "the system", automatic: true, value: "SAP" },
+          { label: "no key" },
+        ],
+        missing: ["the journal entry review threshold"],
+      },
+      library_update: {
+        available: true,
+        fields: [{ field: "title", was: "Old", now: "New" }],
+        splits: [
+          {
+            control_ref: "ITGC-OP-03.1",
+            title: "Failed backups",
+            reason: "Moved",
+          },
+        ],
+      },
+    });
+    assert.ok(context !== null);
+    const design = context.design;
+    assert.ok(design !== null);
+    assert.deepEqual(design.assertions, ["Existence or occurrence"]);
+    assert.deepEqual(
+      design.slots.map((slot) => [slot.key, slot.blocks, slot.automatic]),
+      [
+        ["je-threshold", true, false],
+        ["system", false, true],
+      ],
+    );
+    assert.equal(design.information[0]?.ipe, "IPE-02");
+    assert.equal(context.libraryUpdate?.splits[0]?.controlRef, "ITGC-OP-03.1");
+    assert.equal(context.libraryUpdate?.fields[0]?.now, "New");
+    assert.equal(parseContext({ control_id: CONTROL })?.design, null);
+    assert.deepEqual(
+      contextWrite({
+        ...IDS,
+        intent: "values-set",
+        values: { "je-threshold": " 25,000 " },
+        everywhere: true,
+      }),
+      {
+        intent: "values-set",
+        method: "PUT",
+        path: `${BASE}/controls/${CONTROL}/values`,
+        body: { values: { "je-threshold": "25,000" }, everywhere: true },
+        slow: false,
+      },
+    );
+    for (const values of [
+      {},
+      { "Bad Key": "x" },
+      { "je-threshold": "password=hunter22" },
+      { "je-threshold": "x".repeat(301) },
+    ]) {
+      assert.deepEqual(contextWrite({ ...IDS, intent: "values-set", values }), {
+        error: "invalid",
+      });
+    }
+  });
+
+  it("names the upload target for a document linked to several controls", () => {
+    const target = documentUploadTarget(
+      {
+        organization_id: ORG,
+        project_id: PROJECT,
+        kind: "NARRATIVE",
+        title: "",
+      },
+      [CONTROL, OTHER, "nope"],
+      { name: "Access narrative.docx", size: 1200 },
+    );
+    assert.ok(target !== null);
+    const url = new URL(`http://x${target.path}`);
+    assert.equal(url.pathname, `${BASE}/source-documents/upload`);
+    assert.deepEqual(url.searchParams.getAll("control_id"), [CONTROL, OTHER]);
+    assert.equal(url.searchParams.get("title"), "Access narrative.docx");
+    assert.equal(
+      documentUploadTarget(
+        { organization_id: ORG, project_id: PROJECT, kind: "NARRATIVE" },
+        [],
+        { name: "big.pdf", size: 5 * 1024 * 1024 + 1 },
+      ),
+      null,
+    );
+    assert.equal(
+      documentUploadTarget(
+        { organization_id: ORG, project_id: PROJECT, kind: "?" },
+        [],
+        {
+          name: "a.txt",
+          size: 1,
+        },
+      ),
+      null,
+    );
+  });
+});
+
+describe("test plan approval in readiness", () => {
+  it("keeps a control whose plan waits for approval from reading as ready", () => {
+    const context = parseContext({
+      control_id: CONTROL,
+      classifications: [],
+      derived_classifications: [],
+      classifications_overridden: false,
+      process_required: false,
+      readiness: {
+        state: "PLAN_NOT_APPROVED",
+        label: "",
+        process_required: false,
+        checks: [
+          {
+            key: "plan",
+            title: "Test plan approval",
+            status: "BLOCKED",
+            summary: "Not approved",
+            blockers: [
+              {
+                detail: "The test plan waits for a reviewer's approval.",
+                why: "Testing follows the approved plan.",
+                resolve: "Review the test plan and approve it.",
+              },
+            ],
+          },
+        ],
+      },
+    });
+    assert.ok(context?.readiness);
+    assert.equal(context.readiness.state, "PLAN_NOT_APPROVED");
+    assert.equal(context.readiness.label, "Test plan awaiting approval");
+    assert.equal(context.readiness.checks[0]?.key, "plan");
+  });
+});
+
+// The process narrative drafted and reviewed in the background (26 October 2026): its
+// fixed sections, its run, its review, and the questions the agents raise.
+describe("the reviewed process narrative", () => {
+  it("parses the sections in order, the run, the review and the raised questions", () => {
+    const context = parseContext({
+      control_id: CONTROL,
+      issues: [
+        {
+          id: ITEM,
+          origin: "PROCESS",
+          kind: "MISSING",
+          topic: "Exception route",
+          detail: "What happens to a rejected request?",
+          status: "OPEN",
+          version: 1,
+          question: "What happens to a rejected request?",
+          suggestions: ["Returned to the requester", 3],
+        },
+      ],
+      understanding: {
+        status: "DRAFT",
+        summary: "Purpose and scope. The control.",
+        sections: [
+          {
+            key: "PURPOSE",
+            heading: "Purpose and scope",
+            text: "The control.",
+            attributes: ["A1", 2],
+          },
+          { key: "NOPE", text: "Dropped." },
+          {
+            key: "APPROVAL",
+            text: "The manager approves.",
+            attributes: ["A1"],
+          },
+        ],
+        steps: [],
+        built_by: "AGENT",
+        version: 3,
+        run: {
+          status: "WORKING",
+          mode: "DRAFT",
+          stage: "REVIEWING",
+          round: 2,
+          note: "",
+          started_at: "2026-10-26T18:00:00Z",
+          stage_at: "2026-10-26T18:00:40Z",
+          progress: { answers: 12, documents: 2, attributes: 5, points: "x" },
+        },
+        review: {
+          passed: false,
+          reviewer: "AGENT",
+          rounds: 1,
+          coverage: [{ code: "A1", sections: ["PURPOSE"], steps: [2, "x"] }],
+          findings: ["A2 is not explained in any section.", 4],
+          fixes: ["Removed an oversight claim no answer supports.", null],
+          questions: 2,
+          incomplete: true,
+          version: 3,
+        },
+      },
+    });
+    assert.ok(context !== null);
+    const narrative = context.understanding;
+    assert.deepEqual(
+      narrative.sections.map((item) => [
+        item.key,
+        item.heading,
+        item.attributes,
+      ]),
+      [
+        ["PURPOSE", "Purpose and scope", ["A1"]],
+        ["APPROVAL", "Review and approval", ["A1"]],
+      ],
+    );
+    assert.deepEqual(narrative.run, {
+      status: "WORKING",
+      mode: "DRAFT",
+      stage: "REVIEWING",
+      round: 2,
+      note: "",
+      startedAt: "2026-10-26T18:00:00Z",
+      stageAt: "2026-10-26T18:00:40Z",
+      progress: { answers: 12, documents: 2, attributes: 5, points: 0 },
+      planOutcome: null,
+    });
+    assert.deepEqual(narrative.review?.coverage, [
+      { code: "A1", sections: ["PURPOSE"], steps: [2] },
+    ]);
+    assert.deepEqual(narrative.review?.findings, [
+      "A2 is not explained in any section.",
+    ]);
+    assert.equal(narrative.review?.passed, false);
+    assert.deepEqual(narrative.review?.fixes, [
+      "Removed an oversight claim no answer supports.",
+    ]);
+    assert.equal(narrative.review?.questions, 2);
+    assert.equal(narrative.review?.incomplete, true);
+    assert.deepEqual(context.issues[0]?.suggestions, [
+      "Returned to the requester",
+    ]);
+    assert.equal(
+      context.issues[0]?.question,
+      "What happens to a rejected request?",
+    );
+  });
+
+  it("says what holds the review, never listing passed checks as problems", () => {
+    const review: NarrativeReview = {
+      passed: false,
+      reviewer: "AGENT",
+      rounds: 2,
+      coverage: [],
+      findings: [],
+      fixes: ["Removed an oversight claim no answer supports."],
+      questions: 1,
+      incomplete: false,
+      version: 4,
+    };
+    // Held only for the client's facts: the questions are in the walkthrough.
+    assert.equal(
+      reviewHeadline(review, 4),
+      "Waiting on 1 point for the organization to confirm in the walkthrough. The narrative is drafted again once they are confirmed.",
+    );
+    assert.equal(
+      reviewHeadline(
+        { ...review, findings: ["A2 is unexplained."], questions: 3 },
+        4,
+      ),
+      "1 issue to resolve, and 3 points for the organization to confirm in the walkthrough.",
+    );
+    assert.equal(
+      reviewHeadline(
+        { ...review, questions: 0, findings: ["A2 is unexplained."] },
+        4,
+      ),
+      "The review found issues to resolve before approval.",
+    );
+    assert.equal(
+      reviewHeadline({ ...review, passed: true, questions: 0 }, 4),
+      "Reviewed: every attribute covered after 2 rounds of fixes.",
+    );
+    assert.equal(
+      reviewHeadline({ ...review, reviewer: "RULES" }, 4),
+      "Checked by the rules only: no model reviewed it.",
+    );
+    // An edit after the review makes it stale, whatever it found.
+    assert.equal(
+      reviewHeadline({ ...review, passed: true }, 5),
+      "Changed since the review. Review it again before approving.",
+    );
+    // A review the agent did not finish is said as such, not counted as a point.
+    assert.equal(
+      reviewHeadline({ ...review, incomplete: true, questions: 6 }, 4),
+      "The reviewer agent did not finish its review. Run it again; 6 points also wait for the organization's confirmation.",
+    );
+  });
+
+  it("says a review of the draft beside the narrative is that draft's", () => {
+    const review: NarrativeReview = {
+      passed: true,
+      reviewer: "AGENT",
+      rounds: 1,
+      coverage: [],
+      findings: [],
+      fixes: [],
+      questions: 0,
+      incomplete: false,
+      version: -1,
+    };
+    // Never "changed since the review": the way forward is Use the newer draft.
+    assert.equal(
+      reviewHeadline(review, 9),
+      "The newer draft beside this one passed its review. Use the newer draft to take it with its review.",
+    );
+    assert.deepEqual(reviewActions(review, 9), []);
+  });
+
+  it("always offers a way forward from a held review", () => {
+    const review: NarrativeReview = {
+      passed: false,
+      reviewer: "AGENT",
+      rounds: 1,
+      coverage: [],
+      findings: [],
+      fixes: [],
+      questions: 6,
+      incomplete: true,
+      version: 4,
+    };
+    // The case reported on 26 October 2026: the review did not finish, facts awaited.
+    assert.deepEqual(reviewActions(review, 4), ["review", "answer"]);
+    assert.deepEqual(reviewActions({ ...review, incomplete: false }, 4), [
+      "answer",
+    ]);
+    assert.deepEqual(
+      reviewActions(
+        { ...review, incomplete: false, questions: 0, findings: ["A2."] },
+        4,
+      ),
+      ["redraft"],
+    );
+    assert.deepEqual(reviewActions({ ...review, passed: true }, 4), []);
+    assert.deepEqual(reviewActions(review, 5), ["review"]);
+    // Without a model, running the rules again changes nothing.
+    assert.deepEqual(
+      reviewActions(
+        { ...review, reviewer: "RULES", incomplete: false, questions: 0 },
+        4,
+      ),
+      [],
+    );
+    assert.equal(REVIEW_ACTION_LABELS.review, "Run the review again");
+  });
+
+  it("asks for a draft or a review, and saves sections with an optional note", () => {
+    const narrate = contextWrite({ ...IDS, intent: "process-narrate" });
+    assert.ok(!("error" in narrate));
+    assert.equal(narrate.path, `${BASE}/controls/${CONTROL}/process/narrate`);
+    const review = contextWrite({ ...IDS, intent: "process-review" });
+    assert.ok(!("error" in review));
+    assert.equal(
+      review.path,
+      `${BASE}/controls/${CONTROL}/process/review-narrative`,
+    );
+    const saved = contextWrite({
+      ...IDS,
+      intent: "process-save",
+      sections: [
+        {
+          key: "PURPOSE",
+          text: " The control. ",
+          attributes: ["A1", "bad code"],
+        },
+        { key: "NOPE", text: "Dropped." },
+        { key: "MONITORING", text: "   " },
+      ],
+      steps: [],
+      version: 4,
+      confirm: true,
+      override_reason: "Walked through with the owner.",
+    });
+    assert.ok(!("error" in saved));
+    assert.deepEqual(saved.body.sections, [
+      { key: "PURPOSE", text: "The control.", attributes: ["A1"] },
+    ]);
+    assert.equal(saved.body.override_reason, "Walked through with the owner.");
+    const plain = contextWrite({
+      ...IDS,
+      intent: "process-save",
+      steps: [],
+      version: 4,
+    });
+    assert.ok(!("error" in plain) && !("override_reason" in plain.body));
+  });
+});
+
+// The narrative's progress and its points (decided by the product owner on 26 October
+// 2026): a real status while the agents work, and a round of points confirmed as one
+// decision.
+describe("the narrative's progress and points", () => {
+  const run: NarrativeRun = {
+    status: "WORKING",
+    mode: "DRAFT",
+    stage: "REVIEWING",
+    round: 1,
+    note: "",
+    startedAt: "2026-10-26T18:00:00Z",
+    stageAt: "2026-10-26T18:00:40Z",
+    progress: { answers: 12, documents: 2, attributes: 5, points: 0 },
+    planOutcome: null,
+  };
+  const at = Date.parse("2026-10-26T18:01:15Z");
+
+  it("shows each step, the one under way and for how long", () => {
+    const { steps, seconds } = narrativeProgress(run, at);
+    assert.deepEqual(
+      steps.map((step) => [step.label, step.state]),
+      [
+        ["Gathering the facts", "done"],
+        ["Drafting the narrative", "done"],
+        ["Independent review", "active"],
+        ["Final checks", "pending"],
+      ],
+    );
+    assert.equal(steps[0]?.detail, "12 answers, 2 documents and 5 attributes");
+    assert.equal(steps[2]?.seconds, 35);
+    assert.equal(seconds, 75);
+    assert.equal(clock(seconds), "1:15");
+  });
+
+  it("adds the second review only when it happens, and waits before the start", () => {
+    const second = narrativeProgress({ ...run, round: 2 }, at).steps;
+    assert.deepEqual(
+      second.map((step) => step.state),
+      ["done", "done", "done", "active", "pending"],
+    );
+    assert.equal(second[3]?.label, "Second review");
+    const waiting = narrativeProgress(
+      { ...run, status: "PENDING", stage: "" },
+      at,
+    );
+    assert.equal(waiting.steps[0]?.state, "active");
+    assert.equal(waiting.seconds, 0);
+    // Reviewing alone reads the narrative instead of drafting it.
+    assert.equal(
+      narrativeProgress({ ...run, mode: "REVIEW" }, at).steps[1]?.label,
+      "Reading the narrative",
+    );
+  });
+
+  it("sends a round of points as one request, each with its answer", () => {
+    const id = "01a13300-0000-7000-8000-0000000000aa";
+    const sent = contextWrite({
+      ...IDS,
+      intent: "process-points",
+      items: [{ issue_id: id, version: 2, answer: " Signed in ServiceNow. " }],
+    });
+    assert.ok(!("error" in sent));
+    assert.equal(sent.path, `${BASE}/controls/${CONTROL}/process/points`);
+    assert.deepEqual(sent.body, {
+      items: [{ issue_id: id, version: 2, answer: "Signed in ServiceNow." }],
+    });
+    for (const items of [
+      [],
+      [{ issue_id: id, version: 2, answer: "" }],
+      [{ issue_id: "x", version: 2, answer: "Yes" }],
+      [{ issue_id: id, version: 0, answer: "Yes" }],
+    ]) {
+      assert.ok(
+        "error" in contextWrite({ ...IDS, intent: "process-points", items }),
+      );
+    }
+  });
+
+  it("reads a point's statement, section, codes, round and kind", () => {
+    const context = parseContext({
+      control_id: CONTROL,
+      design: null,
+      issues: [
+        {
+          id: "i1",
+          origin: "PROCESS",
+          kind: "MISSING",
+          topic: "Evidence of the check",
+          detail: "",
+          why: "A1 needs evidence.",
+          resolve: "",
+          quotes: [],
+          raised_by: "AGENT",
+          status: "OPEN",
+          resolution_note: "",
+          version: 1,
+          question: "Where is the check recorded?",
+          suggestions: [],
+          proposal: "Role owners sign the listing in ServiceNow.",
+          section: "RECORDING",
+          attributes: ["A1", 3],
+          round: 1,
+          point_kind: "MISSING",
+        },
+      ],
+    });
+    const issue = context?.issues[0];
+    assert.equal(
+      issue?.proposal,
+      "Role owners sign the listing in ServiceNow.",
+    );
+    assert.equal(issue?.section, "RECORDING");
+    assert.deepEqual(issue?.attributes, ["A1"]);
+    assert.equal(issue?.round, 1);
+    assert.equal(issue?.pointKind, "MISSING");
+  });
+});
+
+// The test plan follows the approved narrative (product owner, 26 October 2026).
+describe("updating the test plan from the approved narrative", () => {
+  const run: NarrativeRun = {
+    status: "WORKING",
+    mode: "PLAN",
+    stage: "EVIDENCE",
+    round: 0,
+    note: "",
+    startedAt: "2026-10-26T18:00:00Z",
+    stageAt: "2026-10-26T18:00:50Z",
+    progress: { answers: 0, documents: 0, attributes: 0, points: 0 },
+    planOutcome: null,
+  };
+
+  it("shows the plan update's own steps", () => {
+    const { steps } = narrativeProgress(
+      run,
+      Date.parse("2026-10-26T18:01:00Z"),
+    );
+    assert.deepEqual(
+      steps.map((step) => [step.label, step.state]),
+      [
+        ["Reading the approved narrative", "done"],
+        ["Attributes", "done"],
+        ["Evidence", "active"],
+      ],
+    );
+    assert.equal(steps[2]?.seconds, 10);
+  });
+
+  it("says what changed and where it is decided", () => {
+    assert.equal(
+      planOutcomeLine({
+        attributes: 2,
+        evidence: 0,
+        evidenceProposed: 1,
+        evidenceFallback: false,
+        note: "",
+      }),
+      "The test plan was updated from the approved narrative: 2 attribute changes to decide on the Attributes tab; 1 evidence change to accept on the Evidence tab.",
+    );
+    assert.equal(
+      planOutcomeLine({
+        attributes: 0,
+        evidence: 0,
+        evidenceProposed: 0,
+        evidenceFallback: false,
+        note: "",
+      }),
+      "The test plan was checked against the approved narrative: it already matches how the control operates.",
+    );
+  });
+
+  it("says when the evidence planner fell back, never that the plan matches", () => {
+    assert.equal(
+      planOutcomeLine({
+        attributes: 1,
+        evidence: 0,
+        evidenceProposed: 0,
+        evidenceFallback: true,
+        note: "",
+      }),
+      "The evidence planner did not finish, so the evidence was not updated from the approved narrative (1 attribute change to decide on the Attributes tab). Update the plan again.",
+    );
+  });
+
+  it("reads the plan update's mode and outcome", () => {
+    const context = parseContext({
+      control_id: CONTROL,
+      design: null,
+      understanding: {
+        status: "CONFIRMED",
+        summary: "",
+        steps: [],
+        version: 4,
+        run: {
+          status: "IDLE",
+          mode: "PLAN",
+          stage: "",
+          round: 0,
+          note: "",
+          plan_outcome: {
+            attributes: 2,
+            evidence: 3,
+            evidence_proposed: 1,
+            note: "Done.",
+          },
+        },
+      },
+    });
+    assert.equal(context?.understanding?.run?.mode, "PLAN");
+    assert.deepEqual(context?.understanding?.run?.planOutcome, {
+      attributes: 2,
+      evidence: 3,
+      evidenceProposed: 1,
+      evidenceFallback: false,
+      note: "Done.",
+    });
+  });
+});
+
+// The attributes step (owner's reference, 2 November 2026): one list with a selection
+// decided as one decision.
+function attribute(id: string, overrides: Partial<Attribute> = {}): Attribute {
+  return {
+    id,
+    position: 0,
+    text: `Attribute ${id}`,
+    status: "APPROVED",
+    basis: "DOCUMENTED",
+    sourceKind: "LIBRARY",
+    sourceDocumentId: null,
+    sourceTitle: "",
+    sourceQuote: "",
+    note: "",
+    proposal: null,
+    replacesId: null,
+    decidedBy: null,
+    version: 1,
+    definition: null,
+    criteria: {
+      objective: "",
+      condition: "",
+      passCriteria: "",
+      failCriteria: "",
+      judgmentRequired: null,
+      automatable: null,
+      phases: [],
+      origin: null,
+      acceptedBy: "",
+      acceptedAt: "",
+      owned: false,
+    },
+    review: null,
+    ...overrides,
+  };
+}
+
+describe("testing attributes", () => {
+  const A = "01a13300-0000-7000-8000-00000000000a";
+  const B = "01a13300-0000-7000-8000-00000000000b";
+  const P = "01a13300-0000-7000-8000-00000000000c";
+
+  it("letters past Z", () => {
+    assert.deepEqual([0, 2, 25, 26, 27].map(attributeLetter), [
+      "A",
+      "C",
+      "Z",
+      "AA",
+      "AB",
+    ]);
+  });
+
+  it("summarizes only what the records say, in a neutral voice", () => {
+    const one = attributesSummary({ approved: [attribute(A)], proposed: [] });
+    assert.equal(
+      one,
+      "1 approved testing attribute, from the control library.",
+    );
+    const mixed = attributesSummary({
+      approved: [
+        attribute(A),
+        attribute(B, { sourceKind: "MANUAL" }),
+        attribute(OTHER, { sourceKind: "RCM" }),
+      ],
+      proposed: [attribute(P, { status: "PROPOSED", sourceKind: "AGENT" })],
+    });
+    assert.equal(
+      mixed,
+      "3 approved testing attributes, from the control library, the team and the organization's RCM. 1 proposed change waits on a decision.",
+    );
+    const none = attributesSummary({ approved: [], proposed: [] });
+    assert.match(none, /^No testing attributes yet/);
+    for (const text of [one, mixed, none]) {
+      assert.doesNotMatch(text, /\b(I|I've|my|we)\b/);
+    }
+  });
+
+  it("splits a selection into proposals to decide and attributes to retire", () => {
+    const context = {
+      approved: [attribute(A), attribute(B)],
+      proposed: [attribute(P, { status: "PROPOSED", proposal: "ADD" })],
+    };
+    const some = selectionPlan(new Set([A, P]), context);
+    assert.deepEqual(
+      [some.proposals.map((a) => a.id), some.approved.map((a) => a.id)],
+      [[P], [A]],
+    );
+    assert.equal(some.retireBlocked, false);
+    // A control keeps at least one attribute.
+    assert.equal(selectionPlan(new Set([A, B]), context).retireBlocked, true);
+    assert.equal(selectionPlan(new Set([P]), context).retireBlocked, false);
+  });
+
+  it("confirms what the server applied", () => {
+    assert.equal(decidedNote("APPROVE", 2), "2 proposals approved.");
+    assert.equal(decidedNote("REJECT", 1), "1 proposal rejected.");
+    assert.equal(
+      decidedNote("RETIRE", 1),
+      "1 attribute retired. It stays in the history.",
+    );
+    assert.equal(
+      decidedNote("RETIRE", 2),
+      "2 attributes retired. They stay in the history.",
+    );
+  });
+
+  it("sends a group decision only when every item checks out", () => {
+    const items = [
+      { attribute_id: A, decision: "RETIRE", version: 2 },
+      { attribute_id: P, decision: "APPROVE", version: 1 },
+    ];
+    const write = contextWrite({ ...IDS, intent: "attributes-decide", items });
+    assert.deepEqual(write, {
+      intent: "attributes-decide",
+      method: "POST",
+      path: `${BASE}/controls/${CONTROL}/attributes/decide-many`,
+      body: { items },
+      slow: false,
+    });
+    const refused = [
+      [],
+      [{ attribute_id: "nope", decision: "APPROVE", version: 1 }],
+      [{ attribute_id: A, decision: "DELETE", version: 1 }],
+      [{ attribute_id: A, decision: "APPROVE", version: 0 }],
+      [items[0], { ...items[0], decision: "APPROVE" }],
+      [...items, "junk"],
+    ];
+    for (const bad of refused) {
+      assert.deepEqual(
+        contextWrite({ ...IDS, intent: "attributes-decide", items: bad }),
+        { error: "invalid" },
+        JSON.stringify(bad),
+      );
+    }
+  });
+
+  it("says nothing was saved when a group decision is stale", () => {
+    assert.match(
+      contextProblem(409, "attribute changed") ?? "",
+      /Nothing was saved/,
+    );
+    assert.match(
+      contextProblem(409, "an attribute is listed twice") ?? "",
+      /chosen twice/,
+    );
+  });
+});
+
+// Kept from the case that also covered the retired readiness panel (cleanup, 9 November 2026).
+describe("a context change's problem", () => {
+  it("explains each failure in the page's words", () => {
+    assert.equal(contextProblem(200), null);
+    assert.match(
+      contextProblem(409, "attribute exists") ?? "",
+      /already on the control/,
+    );
+    assert.match(
+      contextProblem(409, "mark the step where the control operates") ?? "",
+      /Mark the step/,
+    );
+    assert.match(contextProblem(409) ?? "", /changed/);
+    assert.match(contextProblem(413) ?? "", /5 MB/);
+    assert.match(contextProblem(403) ?? "", /role/);
+  });
+});
+
+describe("an attribute's tailored criteria (11 November 2026)", () => {
+  const tailored = {
+    objective: "",
+    condition: "The ServiceNow request is approved by the user's manager.",
+    passCriteria: "The manager approved in ServiceNow before the SAP grant.",
+    failCriteria: "No approval, or one after the grant.",
+    judgmentRequired: false,
+    automatable: null,
+    phases: [],
+    origin: "AGENT" as const,
+    acceptedBy: "",
+    acceptedAt: "",
+    owned: false,
+  };
+
+  it("reads the criteria the server sends with each attribute", () => {
+    const context = parseContext({
+      control_id: "01a13300-0000-7000-8000-000000000001",
+      classifications: [],
+      derived_classifications: [],
+      attributes: {
+        approved: [
+          {
+            id: "01a13300-0000-7000-8000-00000000000a",
+            text: "Approved before access",
+            status: "APPROVED",
+            condition: tailored.condition,
+            pass_criteria: tailored.passCriteria,
+            fail_criteria: tailored.failCriteria,
+            judgment_required: false,
+            criteria_origin: "AGENT",
+            criteria_accepted_by: "Sara Lee",
+            criteria_accepted_at: "2026-11-11T10:00:00Z",
+            criteria_owned: true,
+            phases: ["DESIGN", 4],
+          },
+        ],
+        proposed: [],
+        history: [],
+      },
+      issues: [],
+      documents: [],
+    });
+    const criteria = context?.approved[0]?.criteria;
+    assert.equal(criteria?.passCriteria, tailored.passCriteria);
+    assert.equal(criteria?.origin, "AGENT");
+    assert.equal(criteria?.acceptedBy, "Sara Lee");
+    assert.equal(criteria?.owned, true);
+    assert.deepEqual(criteria?.phases, ["DESIGN"]);
+  });
+
+  it("says whether a person owns them, they wait to be accepted, or they are missing", () => {
+    assert.equal(criteriaState({ ...tailored, owned: true }), "OWNED");
+    assert.equal(criteriaState(tailored), "TO_ACCEPT");
+    // The demo's prepared criteria are accepted like the agent's.
+    assert.equal(criteriaState({ ...tailored, origin: "SEEDED" }), "TO_ACCEPT");
+    // Half stated is not criteria a tester can apply.
+    assert.equal(criteriaState({ ...tailored, failCriteria: "" }), "MISSING");
+    // Only the library's standard: not tailored.
+    assert.equal(
+      criteriaState({
+        ...tailored,
+        condition: "",
+        passCriteria: "",
+        failCriteria: "",
+        origin: null,
+      }),
+      "MISSING",
+    );
+    const owned = attribute("a", { criteria: { ...tailored, owned: true } });
+    const waiting = attribute("b", { criteria: tailored });
+    const missing = attribute("c");
+    const context = { approved: [owned, waiting, missing] };
+    assert.deepEqual(
+      criteriaToAccept(context).map((item) => item.id),
+      ["b"],
+    );
+    assert.equal(untailored(context), 2);
+  });
+});
+
+// The Attributes step as one list (product owner, 11 November 2026, approved preview): each
+// row names its state in words, says where its wording came from, and the first row that
+// waits on a person starts open.
+describe("the Attributes step's rows", () => {
+  const tailored = {
+    objective: "",
+    condition: "The ServiceNow request is approved by the user's manager.",
+    passCriteria: "The manager approved in ServiceNow before the SAP grant.",
+    failCriteria: "No approval, or one after the grant.",
+    judgmentRequired: false,
+    automatable: null,
+    phases: [],
+    origin: "AGENT" as const,
+    acceptedBy: "",
+    acceptedAt: "",
+    owned: false,
+  };
+  const accepted = attribute("a", {
+    criteria: { ...tailored, owned: true, acceptedBy: "Sara Lee" },
+  });
+  const toAccept = attribute("b", { criteria: tailored });
+  const missing = attribute("c");
+  const proposal = attribute("p", {
+    status: "PROPOSED",
+    proposal: "ADD",
+    sourceKind: "AGENT",
+    basis: "INFERRED",
+  });
+
+  it("reads each row's state from its criteria, and a proposal as proposed", () => {
+    assert.deepEqual(
+      [accepted, toAccept, missing, proposal].map(attributeRowState),
+      ["ACCEPTED", "TO_ACCEPT", "MISSING", "PROPOSED"],
+    );
+    // A proposal is undecided agent output, whatever criteria it carries.
+    assert.equal(
+      attributeRowState({ ...proposal, criteria: accepted.criteria }),
+      "PROPOSED",
+    );
+  });
+
+  it("names every state in words, and never styles agent output as accepted", () => {
+    assert.deepEqual(
+      Object.values(ATTRIBUTE_ROW_CHIPS).map((chip) => chip.label),
+      ["Proposed", "To accept", "Needs criteria", "Accepted"],
+    );
+    assert.equal(ATTRIBUTE_ROW_CHIPS.PROPOSED.tone, "ai");
+    assert.equal(ATTRIBUTE_ROW_CHIPS.TO_ACCEPT.tone, "ai");
+    assert.equal(ATTRIBUTE_ROW_CHIPS.MISSING.tone, "warning");
+    assert.equal(ATTRIBUTE_ROW_CHIPS.ACCEPTED.tone, "success");
+  });
+
+  it("opens the first row that waits on a person, in the list's order", () => {
+    assert.equal(firstToDecide([accepted, missing, toAccept]), "c");
+    assert.equal(firstToDecide([accepted, proposal]), "p");
+    assert.equal(firstToDecide([accepted]), null);
+    assert.equal(firstToDecide([]), null);
+  });
+
+  it("follows the next waiting row until the person opens or closes one", () => {
+    assert.deepEqual([...openRows(null, [accepted, toAccept, missing])], ["b"]);
+    // Once b is accepted the next waiting row comes up on its own.
+    const after = { ...toAccept, criteria: accepted.criteria };
+    assert.deepEqual([...openRows(null, [accepted, after, missing])], ["c"]);
+    assert.deepEqual([...openRows(null, [accepted])], []);
+    // The person's own choice stands, even when it leaves nothing open.
+    assert.deepEqual(
+      [...openRows(new Set(["a"]), [accepted, toAccept])],
+      ["a"],
+    );
+    assert.deepEqual([...openRows(new Set(), [accepted, toAccept])], []);
+  });
+
+  it("says where the wording came from and who tailored the criteria", () => {
+    assert.equal(
+      attributeSourceLine(toAccept),
+      "Library standard · tailored by the agent",
+    );
+    // Accepted criteria the agent tailored still say who tailored them.
+    assert.equal(
+      attributeSourceLine(accepted),
+      "Library standard · tailored by the agent",
+    );
+    assert.equal(attributeSourceLine(missing), "Library standard");
+    assert.equal(
+      attributeSourceLine(attribute("m", { sourceKind: "MANUAL" })),
+      "Written by the team",
+    );
+    assert.equal(
+      attributeSourceLine(
+        attribute("m", {
+          sourceKind: "MANUAL",
+          criteria: { ...tailored, origin: "PERSON", owned: true },
+        }),
+      ),
+      "Written by the team",
+    );
+    assert.equal(
+      attributeSourceLine(
+        attribute("r", {
+          sourceKind: "RCM",
+          criteria: { ...tailored, origin: "PERSON", owned: true },
+        }),
+      ),
+      "Organization's RCM · criteria by the team",
+    );
+    assert.equal(
+      attributeSourceLine(
+        attribute("d", {
+          sourceKind: "DOCUMENT",
+          sourceTitle: " Access Policy ",
+        }),
+      ),
+      "From Access Policy",
+    );
+    assert.equal(
+      attributeSourceLine(attribute("d", { sourceKind: "DOCUMENT" })),
+      "Supporting document",
+    );
+    assert.equal(
+      attributeSourceLine(proposal),
+      "Drafted by the agent · inferred",
+    );
+    assert.equal(
+      attributeSourceLine({ ...proposal, basis: "DOCUMENTED" }),
+      "Drafted by the agent",
+    );
+  });
+});
+
+// One list, one decision per row (product owner, 12 November 2026: "I don't want it to
+// show propose then the user would have to approve separately"), reviewed by the reviewer
+// agent before a person sees it, with the agents' work shown while they do it.
+describe("the Attributes step as one list the agent prepared", () => {
+  const ATTRIBUTE = "01a13300-0000-7000-8000-0000000000a1";
+  const tailored = {
+    objective: "",
+    condition: "The ServiceNow request is approved by the user's manager.",
+    passCriteria: "The manager approved in ServiceNow before the SAP grant.",
+    failCriteria: "No approval, or one after the grant.",
+    judgmentRequired: false,
+    automatable: null,
+    phases: [],
+    origin: "AGENT" as const,
+    acceptedBy: "",
+    acceptedAt: "",
+    owned: false,
+  };
+  const accepted = attribute("a", { criteria: { ...tailored, owned: true } });
+  const toAccept = attribute("b", { criteria: tailored, version: 4 });
+  const missing = attribute("c");
+  const retired = attribute("d", { criteria: { ...tailored, owned: true } });
+  const reworded = attribute("p-change", {
+    status: "PROPOSED",
+    proposal: "CHANGE",
+    replacesId: "b",
+    sourceKind: "AGENT",
+    text: "Attribute b, as the walkthrough describes it",
+    criteria: tailored,
+    version: 2,
+  });
+  const removal = attribute("p-retire", {
+    status: "PROPOSED",
+    proposal: "RETIRE",
+    replacesId: "d",
+    sourceKind: "AGENT",
+    text: "Attribute d",
+  });
+  const added = attribute("p-add", {
+    status: "PROPOSED",
+    proposal: "ADD",
+    sourceKind: "AGENT",
+    basis: "INFERRED",
+    criteria: tailored,
+  });
+  const orphan = attribute("p-orphan", {
+    status: "PROPOSED",
+    proposal: "CHANGE",
+    replacesId: "gone",
+    sourceKind: "AGENT",
+  });
+  const context = {
+    approved: [accepted, toAccept, missing, retired],
+    proposed: [added, reworded, removal, orphan],
+  };
+  const rows = unifiedRows(context);
+
+  it("shows each change where it would land, on the record it decides", () => {
+    assert.deepEqual(
+      rows.map((row) => [row.item.id, row.kind, row.letter, row.target?.id]),
+      [
+        ["a", "APPROVED", "A", undefined],
+        // The rewording takes the row of the attribute it replaces, with its letter.
+        ["p-change", "REWORDED", "B", "b"],
+        ["c", "APPROVED", "C", undefined],
+        // The retirement marks the attribute it would remove.
+        ["p-retire", "REMOVAL", "D", "d"],
+        // Additions follow, and so does a change whose attribute is gone, each with the
+        // next letter after the approved ones: the letter it has once accepted.
+        ["p-add", "ADDED", "E", undefined],
+        // A change with no row to sit in is still a change, never an addition.
+        ["p-orphan", "REWORDED", "F", undefined],
+      ],
+    );
+    // Accepting the addition appends it to the approved attributes: it keeps its letter.
+    const after = unifiedRows({
+      approved: [...context.approved, { ...added, status: "APPROVED" }],
+      proposed: [orphan],
+    });
+    assert.deepEqual(
+      after.map((row) => [row.item.id, row.letter]),
+      [
+        ["a", "A"],
+        ["b", "B"],
+        ["c", "C"],
+        ["d", "D"],
+        ["p-add", "E"],
+        ["p-orphan", "F"],
+      ],
+    );
+    // Every row has a letter, past Z too.
+    const many = unifiedRows({
+      approved: Array.from({ length: 26 }, (_, index) =>
+        attribute(`m${index}`),
+      ),
+      proposed: [added],
+    });
+    assert.equal(many.at(-1)?.letter, "AA");
+    assert.deepEqual(unifiedRows({ approved: [], proposed: [] }), []);
+    // A second proposal for the same attribute does not hide the first, and is shown as
+    // what it is: a change or a retirement is never presented as an addition.
+    const twice = unifiedRows({
+      approved: [toAccept],
+      proposed: [
+        reworded,
+        { ...reworded, id: "p-change-2" },
+        { ...removal, id: "p-retire-2", replacesId: "b" },
+      ],
+    });
+    assert.deepEqual(
+      twice.map((row) => [row.item.id, row.kind, row.letter, row.target]),
+      [
+        ["p-change", "REWORDED", "A", toAccept],
+        ["p-change-2", "REWORDED", "B", null],
+        ["p-retire-2", "REMOVAL", "C", null],
+      ],
+    );
+    assert.equal(
+      unifiedRows(context).some(
+        (row) => row.kind === "ADDED" && row.item.proposal !== "ADD",
+      ),
+      false,
+    );
+  });
+
+  it("names every row's state, and an agent's change is never shown as accepted", () => {
+    assert.deepEqual(
+      rows.map((row) => unifiedState(row, false)),
+      [
+        "ACCEPTED",
+        "TO_ACCEPT",
+        "MISSING",
+        "TO_ACCEPT",
+        "TO_ACCEPT",
+        "TO_ACCEPT",
+      ],
+    );
+    // A proposal waits for a person whatever criteria it carries.
+    assert.equal(
+      unifiedState(
+        {
+          item: { ...added, criteria: accepted.criteria },
+          kind: "ADDED",
+          target: null,
+          letter: "E",
+        },
+        false,
+      ),
+      "TO_ACCEPT",
+    );
+    // While the agents work every row says so, the accepted ones too.
+    assert.deepEqual(
+      [...new Set(rows.map((row) => unifiedState(row, true)))],
+      ["UPDATING"],
+    );
+    assert.deepEqual(
+      Object.values(UNIFIED_CHIPS).map((chip) => [chip.label, chip.tone]),
+      [
+        ["Updating…", "ai"],
+        ["To accept", "ai"],
+        ["Needs criteria", "warning"],
+        ["Accepted", "success"],
+      ],
+    );
+    assert.deepEqual(UNIFIED_ORIGINS, {
+      APPROVED: "",
+      ADDED: "Added by the agent",
+      REWORDED: "Reworded by the agent",
+      REMOVAL: "Agent suggests removing",
+    });
+  });
+
+  it("accepts every row that waits in one call, each at the version shown", () => {
+    assert.deepEqual(acceptItems(rows), [
+      { attribute_id: "p-change", version: 2 },
+      { attribute_id: "p-retire", version: 1 },
+      { attribute_id: "p-add", version: 1 },
+      { attribute_id: "p-orphan", version: 1 },
+    ]);
+    // An approved attribute whose tailored criteria wait is accepted the same way.
+    assert.deepEqual(
+      acceptItems(
+        unifiedRows({ approved: [accepted, toAccept, missing], proposed: [] }),
+      ),
+      [{ attribute_id: "b", version: 4 }],
+    );
+    const write = contextWrite({
+      organization_id: ORG,
+      project_id: PROJECT,
+      control_id: CONTROL,
+      intent: "attributes-accept",
+      items: [{ attribute_id: ATTRIBUTE, version: 3 }],
+    });
+    assert.deepEqual(write, {
+      intent: "attributes-accept",
+      method: "POST",
+      path: `/organizations/${ORG}/projects/${PROJECT}/controls/${CONTROL}/attributes/accept`,
+      body: { items: [{ attribute_id: ATTRIBUTE, version: 3 }] },
+      slow: false,
+    });
+    for (const items of [
+      [],
+      [{ attribute_id: "not-an-id", version: 1 }],
+      [{ attribute_id: ATTRIBUTE, version: 0 }],
+      [
+        { attribute_id: ATTRIBUTE, version: 1 },
+        { attribute_id: ATTRIBUTE, version: 1 },
+      ],
+    ]) {
+      assert.deepEqual(
+        contextWrite({
+          organization_id: ORG,
+          project_id: PROJECT,
+          control_id: CONTROL,
+          intent: "attributes-accept",
+          items,
+        }),
+        { error: "invalid" },
+      );
+    }
+  });
+
+  it("shows no note of the reviewer, only that a review did not finish", () => {
+    // Product owner, 12 November 2026: "I don't need to see this note from the reviewer
+    // agent. Any note from the reviewer." Its verdicts, reasons and findings stay on the
+    // record (the API still carries them); the step says only when it did not finish.
+    const summary = {
+      status: "REVIEWED" as const,
+      reviewedAt: "2026-11-12T10:00:00Z",
+      reviewer: "Reviewer agent",
+      note: "",
+      findings: ["No attribute covers the sponsor confirmation."],
+      concerns: 2,
+    };
+    assert.equal(reviewUnfinished(null), null);
+    assert.equal(reviewUnfinished(summary), null);
+    assert.equal(
+      reviewUnfinished({
+        ...summary,
+        status: "NOT_REVIEWED",
+        note: "Anything the server noted.",
+      }),
+      "The reviewer agent did not finish, so these are not reviewed.",
+    );
+  });
+
+  it("says what the agents are doing while they work, and nothing when they are not", () => {
+    assert.equal(attributesWorking("", ""), null);
+    // A run that stopped is not working: the step says what happened instead.
+    assert.equal(attributesWorking("STOPPED", "CRITERIA"), null);
+    assert.equal(attributesStopped("WORKING", "x"), null);
+    assert.equal(attributesStopped("", ""), null);
+    assert.equal(
+      attributesStopped(
+        "STOPPED",
+        "The planner's answer could not be used. Run again.",
+      ),
+      "The planner's answer could not be used. Run again.",
+    );
+    assert.equal(
+      attributesStopped("STOPPED", ""),
+      "The run stopped before it finished. Run again.",
+    );
+    assert.equal(attributesWorking("", "REVIEW"), null);
+    assert.equal(
+      attributesWorking("PENDING", ""),
+      "Queued: the agents will update the attributes from the understanding",
+    );
+    assert.equal(
+      attributesWorking("WORKING", "ATTRIBUTES"),
+      "Proposing attributes from the understanding",
+    );
+    assert.equal(
+      attributesWorking("WORKING", "CRITERIA"),
+      "Tailoring pass/fail criteria",
+    );
+    assert.equal(
+      attributesWorking("WORKING", "REVIEW"),
+      "Reviewing against the control and its understanding",
+    );
+    assert.equal(
+      attributesWorking("WORKING", ""),
+      "The planner is tailoring the attributes and their criteria from the understanding",
+    );
+  });
+
+  it("offers a re-run once an agent has worked on the attributes", () => {
+    const none = { approved: [missing], proposed: [], reviewSummary: null };
+    assert.equal(agentRan(none), false);
+    assert.equal(agentRan({ ...none, approved: [toAccept] }), true);
+    assert.equal(agentRan({ ...none, proposed: [added] }), true);
+    assert.equal(agentRan({ ...none, attributesRun: "STOPPED" }), true);
+    assert.equal(
+      agentRan({
+        ...none,
+        reviewSummary: {
+          status: "NOT_REVIEWED",
+          reviewedAt: "",
+          reviewer: "Reviewer agent",
+          note: "",
+          findings: [],
+          concerns: 0,
+        },
+      }),
+      true,
+    );
+  });
+
+  it("reads the review and the run from the API, and nothing when they are absent", () => {
+    const base = { control_id: CONTROL };
+    const plain = parseContext(base);
+    assert.equal(plain?.reviewSummary, null);
+    assert.equal(plain?.attributesRun, "");
+    assert.equal(plain?.attributesStage, "");
+    assert.equal(plain?.attributesRunNote, "");
+    const halted = parseContext({
+      ...base,
+      attributes_run: "STOPPED",
+      attributes_run_note: "The run stopped before it finished. Run again.",
+    });
+    assert.equal(halted?.attributesRun, "STOPPED");
+    assert.equal(
+      halted?.attributesRunNote,
+      "The run stopped before it finished. Run again.",
+    );
+    const read = parseContext({
+      ...base,
+      attributes_run: "WORKING",
+      attributes_stage: "REVIEW",
+      attributes: {
+        approved: [
+          {
+            id: ATTRIBUTE,
+            text: "The request is approved",
+            status: "APPROVED",
+            review: { verdict: "CONCERN", note: "Contradicts an answer." },
+          },
+          {
+            id: ATTRIBUTE,
+            text: "No review",
+            status: "APPROVED",
+            review: null,
+          },
+        ],
+        proposed: [],
+        history: [],
+        review_summary: {
+          status: "REVIEWED",
+          reviewed_at: "2026-11-12T10:00:00Z",
+          reviewer: "Reviewer agent",
+          note: "",
+          findings: ["One finding."],
+          concerns: 1,
+        },
+      },
+    });
+    assert.equal(read?.attributesRun, "WORKING");
+    assert.equal(read?.attributesStage, "REVIEW");
+    assert.deepEqual(read?.approved[0]?.review, {
+      verdict: "CONCERN",
+      note: "Contradicts an answer.",
+    });
+    assert.equal(read?.approved[1]?.review, null);
+    assert.deepEqual(read?.reviewSummary, {
+      status: "REVIEWED",
+      reviewedAt: "2026-11-12T10:00:00Z",
+      reviewer: "Reviewer agent",
+      note: "",
+      findings: ["One finding."],
+      concerns: 1,
+    });
+    // An unknown run or stage reads as none.
+    const odd = parseContext({
+      ...base,
+      attributes_run: "DONE",
+      attributes_stage: "EVIDENCE",
+    });
+    assert.equal(odd?.attributesRun, "");
+    assert.equal(odd?.attributesStage, "");
+  });
+});
+
+describe("what the agent followed and set aside is shown, never silent (12 November 2026)", () => {
+  // Product owner: "shouldn't the attribute just follow what control understanding says",
+  // and "Newer answer wins."
+  const basis = {
+    summary: "The attribute follows the walkthrough.",
+    follows: {
+      answer: "The request tool's ticket history",
+      question: "What shows when changes were made?",
+      statement: "Ticket history shows when access was granted.",
+      confirmedAt: "2026-11-12T16:14:00Z",
+      confirmedBy: "PERSON" as const,
+    },
+    setsAside: [
+      {
+        kind: "OLDER_ANSWER" as const,
+        answer: "The grant date is held in the Active Directory change log.",
+        statement: "",
+        confirmedAt: "2026-10-29T03:00:00Z",
+      },
+      {
+        kind: "RCM_RECORD" as const,
+        answer: "",
+        statement: "The grant date is read in Active Directory.",
+        confirmedAt: "",
+      },
+    ],
+  };
+
+  it("shows what was confirmed as recorded, with its date, and each thing set aside", () => {
+    assert.deepEqual(basisLines(basis), {
+      follows:
+        "What shows when changes were made? The request tool's ticket history (confirmed 12 November 2026)",
+      setsAside: [
+        "An earlier answer: The grant date is held in the Active Directory change log. (answered 29 October 2026)",
+        "The RCM record: The grant date is read in Active Directory.",
+      ],
+    });
+    assert.equal(basisLines(null), null);
+    assert.equal(basisLines(undefined), null);
+  });
+
+  it("never words a value the records filled in as a person's confirmation", () => {
+    const lines = basisLines({
+      ...basis,
+      follows: { ...basis.follows, confirmedBy: "RECORDS" },
+    });
+    assert.match(
+      lines?.follows ?? "",
+      /\(from the records, 12 November 2026\)$/,
+    );
+    assert.doesNotMatch(lines?.follows ?? "", /confirmed/);
+    // With no recorded answer, the agent's sentence stands in, without the question.
+    assert.equal(
+      basisLines({
+        ...basis,
+        follows: { ...basis.follows, answer: "", confirmedAt: "" },
+      })?.follows,
+      "Ticket history shows when access was granted.",
+    );
+  });
+
+  it("reads the record from the API, and nothing from a record that says nothing", () => {
+    const read = (understanding_basis: unknown) =>
+      parseContext({
+        control_id: CONTROL,
+        attributes: {
+          approved: [
+            {
+              id: "11111111-1111-4111-8111-111111111111",
+              text: "Approved before the grant",
+              status: "APPROVED",
+              understanding_basis,
+            },
+          ],
+          proposed: [],
+          history: [],
+        },
+      })?.approved[0]?.understandingBasis;
+    assert.deepEqual(
+      read({
+        follows: {
+          kind: "WALKTHROUGH_ANSWER",
+          key: "wt-ac-change-logging-gap",
+          question: "What shows when changes were made?",
+          answer: "The request tool's ticket history",
+          statement: "",
+          confirmed_at: "2026-11-12T16:14:00Z",
+          confirmed_by: "PERSON",
+        },
+        sets_aside: [
+          {
+            kind: "LIBRARY_WORDING",
+            statement: "The system log shows it.",
+            answer: "",
+            confirmed_at: null,
+          },
+          { kind: "SOMETHING_NEW", statement: "", answer: "" },
+        ],
+        summary: "Follows the walkthrough.",
+        by: "engagement-planner",
+        recorded_at: "2026-11-12T16:15:00Z",
+      }),
+      {
+        summary: "Follows the walkthrough.",
+        follows: {
+          answer: "The request tool's ticket history",
+          question: "What shows when changes were made?",
+          statement: "",
+          confirmedAt: "2026-11-12T16:14:00Z",
+          confirmedBy: "PERSON",
+        },
+        setsAside: [
+          {
+            kind: "LIBRARY_WORDING",
+            answer: "",
+            statement: "The system log shows it.",
+            confirmedAt: "",
+          },
+        ],
+      },
+    );
+    assert.equal(read(null), null);
+    assert.equal(
+      read({ follows: { statement: "", answer: "" }, sets_aside: [] }),
+      null,
+    );
+    assert.equal(read({ follows: { answer: "x" }, sets_aside: [] }), null);
+  });
+});
+
+describe("the agents are offered only when a run would do something (12 November 2026)", () => {
+  // Product owner: "If attributes are all accepted, do you think it's worth showing the run
+  // again for ai to generate?" and "Why do I also keep getting this error?"
+  it("always offers the first run, and a re-run only when it is useful", () => {
+    assert.equal(offersAgentRun(false, false), true);
+    assert.equal(offersAgentRun(false, null), true);
+    assert.equal(offersAgentRun(true, true), true);
+    assert.equal(offersAgentRun(true, false), false);
+    // An API that does not say keeps the action, as before.
+    assert.equal(offersAgentRun(true, null), true);
+    assert.equal(offersAgentRun(true, undefined), true);
+  });
+
+  it("shows a stopped run's note only while something waits on the agents", () => {
+    const note = "The planner's answer could not be used. Run again.";
+    assert.equal(attributesStopped("STOPPED", note), note);
+    assert.equal(attributesStopped("STOPPED", note, true), note);
+    assert.equal(attributesStopped("STOPPED", note, false), null);
+    assert.equal(attributesStopped("", note, true), null);
+  });
+
+  it("sends force only when a person asks to run the agents anyway", () => {
+    const plain = contextWrite({ ...IDS, intent: "attributes-generate" });
+    const forced = contextWrite({
+      ...IDS,
+      intent: "attributes-generate",
+      force: true,
+    });
+    assert.ok(!("error" in plain) && !("error" in forced));
+    assert.deepEqual(plain.body, {});
+    assert.deepEqual(forced.body, { force: true });
+    assert.match(forced.path, /\/attributes\/generate$/);
+  });
+
+  it("reads the API's answer, and nothing where it gives none", () => {
+    const read = (attributes_rerun_useful: unknown) =>
+      parseContext({ control_id: CONTROL, attributes_rerun_useful })
+        ?.attributesRerunUseful;
+    assert.equal(read(true), true);
+    assert.equal(read(false), false);
+    assert.equal(read(undefined), null);
+    assert.equal(read("yes"), null);
+  });
+});

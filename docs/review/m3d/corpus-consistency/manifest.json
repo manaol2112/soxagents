@@ -1,0 +1,923 @@
+{
+  "period_year": 2027,
+  "controls": [
+    {
+      "control_ref": "ITGC-AC-01",
+      "attributes": [
+        "A request exists that names the user and the specific access (application, role, or permission) that was granted",
+        "The request was approved by the user's manager and, where the access management policy requires it, by the application owner",
+        "The approval is dated on or before the date the access was granted in the system",
+        "The access granted in the system is the access that was approved, and no more",
+        "The approver is not the user, and the administrator who granted the access did not approve it"
+      ],
+      "population": {
+        "path": "consistency/ITGC-AC-01/new user population listing.csv",
+        "content_type": "text/csv",
+        "sha256": "4e1d693e4af1009cb1ae35339a326593c9be87f14cf8415a7aa890e6692afb7a",
+        "size": 500
+      },
+      "population_rows": 6,
+      "samples": [
+        {
+          "key": "u0401",
+          "scenario": "clean",
+          "summary": "Every document the plan requires is present.",
+          "files": [
+            {
+              "path": "consistency/ITGC-AC-01/u0401 REQ-4401 access request and approvals.txt",
+              "content_type": "text/plain",
+              "sha256": "e71b78975c62a7d1f0d31cf3096e293e5c5d3aef715a21d46e6ffcef2ae9e8f9",
+              "size": 238
+            },
+            {
+              "path": "consistency/ITGC-AC-01/u0401 HR manager record.txt",
+              "content_type": "text/plain",
+              "sha256": "0af00d79bb6ac1e3ad0f283717412d8b43abfb07ef1f96a92473f17d274eb80c",
+              "size": 114
+            },
+            {
+              "path": "consistency/ITGC-AC-01/u0401 application owner list.txt",
+              "content_type": "text/plain",
+              "sha256": "e922abbfc39a7d71a73bafa1ca0c71c67e3a53221819fa6d8e0f5274eaf83b68",
+              "size": 233
+            },
+            {
+              "path": "consistency/ITGC-AC-01/u0401 SAP user change log.csv",
+              "content_type": "text/csv",
+              "sha256": "908bdb3da112ce184e572e5b89a7666fae1dec9548c7712cabd4998aed689681",
+              "size": 97
+            }
+          ],
+          "cells": [
+            {
+              "attribute": 0,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 1,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 2,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 3,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 4,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            }
+          ]
+        },
+        {
+          "key": "u0402",
+          "scenario": "clean",
+          "summary": "Every document the plan requires is present.",
+          "files": [
+            {
+              "path": "consistency/ITGC-AC-01/u0402 REQ-4402 access request and approvals.txt",
+              "content_type": "text/plain",
+              "sha256": "143e26a49465f6d2183cae079268ffb1ca98599fd65750b8406926d02194e172",
+              "size": 238
+            },
+            {
+              "path": "consistency/ITGC-AC-01/u0402 HR manager record.txt",
+              "content_type": "text/plain",
+              "sha256": "63ba09c3f7718bcef0c87386ceac52643f9a47526f08e97b0064af0bf799ee03",
+              "size": 113
+            },
+            {
+              "path": "consistency/ITGC-AC-01/u0402 application owner list.txt",
+              "content_type": "text/plain",
+              "sha256": "e922abbfc39a7d71a73bafa1ca0c71c67e3a53221819fa6d8e0f5274eaf83b68",
+              "size": 233
+            },
+            {
+              "path": "consistency/ITGC-AC-01/u0402 SAP user change log.csv",
+              "content_type": "text/csv",
+              "sha256": "1189997d985a1ca9d82f2efcd24da693eb63b3f35f8b236ee1b6e989731fff55",
+              "size": 98
+            }
+          ],
+          "cells": [
+            {
+              "attribute": 0,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 1,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 2,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 3,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 4,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            }
+          ]
+        },
+        {
+          "key": "u0403",
+          "scenario": "missing",
+          "summary": "The application owner list the plan requires is absent.",
+          "files": [
+            {
+              "path": "consistency/ITGC-AC-01/u0403 REQ-4403 access request and approvals.txt",
+              "content_type": "text/plain",
+              "sha256": "78921d85d7d77a93fc218b0ff98bccc18dc926df2fdea72efece9e02101a402a",
+              "size": 231
+            },
+            {
+              "path": "consistency/ITGC-AC-01/u0403 HR manager record.txt",
+              "content_type": "text/plain",
+              "sha256": "a28d995d0de2e5e5fa30343fb22380b9212f904fa1f3e1002f25389d1ecc362d",
+              "size": 107
+            },
+            {
+              "path": "consistency/ITGC-AC-01/u0403 SAP user change log.csv",
+              "content_type": "text/csv",
+              "sha256": "99a85218c513b652222b19cc30d987a3f040499e84c5a782133e28b4bc4947d4",
+              "size": 97
+            }
+          ],
+          "cells": [
+            {
+              "attribute": 0,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 1,
+              "category": "negative",
+              "expected": "UNABLE",
+              "acceptable": [
+                "REVIEW",
+                "UNABLE"
+              ],
+              "why": "The plan requires the application owner list for B; it is not in the evidence.",
+              "plausible_quote": "Approved by Helen Cho (application owner)"
+            },
+            {
+              "attribute": 2,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 3,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 4,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            }
+          ]
+        },
+        {
+          "key": "u0404",
+          "scenario": "missing",
+          "summary": "The manager relationship the plan requires is absent.",
+          "files": [
+            {
+              "path": "consistency/ITGC-AC-01/u0404 REQ-4404 access request and approvals.txt",
+              "content_type": "text/plain",
+              "sha256": "1b877a4251d11130163a79bdcb2408aef680733bba7ee0820749d079b00d071f",
+              "size": 233
+            },
+            {
+              "path": "consistency/ITGC-AC-01/u0404 application owner list.txt",
+              "content_type": "text/plain",
+              "sha256": "e922abbfc39a7d71a73bafa1ca0c71c67e3a53221819fa6d8e0f5274eaf83b68",
+              "size": 233
+            },
+            {
+              "path": "consistency/ITGC-AC-01/u0404 SAP user change log.csv",
+              "content_type": "text/csv",
+              "sha256": "03913a944533de5527b147a8cf64473672f3796bd649ee267ff7828960673cb0",
+              "size": 97
+            }
+          ],
+          "cells": [
+            {
+              "attribute": 0,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 1,
+              "category": "negative",
+              "expected": "UNABLE",
+              "acceptable": [
+                "REVIEW",
+                "UNABLE"
+              ],
+              "why": "The plan requires the manager relationship for B; no HR record is in the evidence.",
+              "plausible_quote": "Approved by Rafael Duarte (line manager)"
+            },
+            {
+              "attribute": 2,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 3,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 4,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            }
+          ]
+        },
+        {
+          "key": "u0405",
+          "scenario": "exception",
+          "summary": "The approvals are dated three days after the system recorded the grant.",
+          "files": [
+            {
+              "path": "consistency/ITGC-AC-01/u0405 REQ-4405 access request and approvals.txt",
+              "content_type": "text/plain",
+              "sha256": "3d08f3dfc02aaa1ad423407292d8262f8d27658e953608dea566d85dcac8505b",
+              "size": 230
+            },
+            {
+              "path": "consistency/ITGC-AC-01/u0405 HR manager record.txt",
+              "content_type": "text/plain",
+              "sha256": "9ab32fc9c85705a3bac822a1508c534a28838346590889dfcd6d26cab6d1ba6f",
+              "size": 106
+            },
+            {
+              "path": "consistency/ITGC-AC-01/u0405 application owner list.txt",
+              "content_type": "text/plain",
+              "sha256": "e922abbfc39a7d71a73bafa1ca0c71c67e3a53221819fa6d8e0f5274eaf83b68",
+              "size": 233
+            },
+            {
+              "path": "consistency/ITGC-AC-01/u0405 SAP user change log.csv",
+              "content_type": "text/csv",
+              "sha256": "49129c9cc42b0b3598ac7ebcf9f16d87a8e29d3c0f5d8ec320c4e00966aa43f9",
+              "size": 97
+            }
+          ],
+          "cells": [
+            {
+              "attribute": 0,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 1,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 2,
+              "category": "negative",
+              "expected": "EXCEPTION",
+              "acceptable": [
+                "EXCEPTION",
+                "REVIEW"
+              ],
+              "why": "Approved on 2027-11-28; the system shows the role assigned on 2027-11-25.",
+              "plausible_quote": "Approved by Mei Tanaka (line manager) on 2027-11-28"
+            },
+            {
+              "attribute": 3,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 4,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            }
+          ]
+        },
+        {
+          "key": "u0406",
+          "scenario": "exception",
+          "summary": "The request was approved as line manager by someone the HR record does not name as the user's manager.",
+          "files": [
+            {
+              "path": "consistency/ITGC-AC-01/u0406 REQ-4406 access request and approvals.txt",
+              "content_type": "text/plain",
+              "sha256": "4a0eba8b9bc3d93c2f88904b4f5e58267d7e9cd335d0483cf6314c8122b5a514",
+              "size": 234
+            },
+            {
+              "path": "consistency/ITGC-AC-01/u0406 HR manager record.txt",
+              "content_type": "text/plain",
+              "sha256": "747124b17c03a24e2072eb55ab78495eadd7dd23474e37d8a474ace73366ac12",
+              "size": 112
+            },
+            {
+              "path": "consistency/ITGC-AC-01/u0406 application owner list.txt",
+              "content_type": "text/plain",
+              "sha256": "e922abbfc39a7d71a73bafa1ca0c71c67e3a53221819fa6d8e0f5274eaf83b68",
+              "size": 233
+            },
+            {
+              "path": "consistency/ITGC-AC-01/u0406 SAP user change log.csv",
+              "content_type": "text/csv",
+              "sha256": "ac95e852c46e064b1311a262f229c8b6f00ef92f5046f55d59f25ab5aecfdbdc",
+              "size": 98
+            }
+          ],
+          "cells": [
+            {
+              "attribute": 0,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 1,
+              "category": "negative",
+              "expected": "EXCEPTION",
+              "acceptable": [
+                "EXCEPTION",
+                "REVIEW"
+              ],
+              "why": "Paul Brennan approved as line manager; the HR record names Sofia Lindqvist.",
+              "plausible_quote": "Approved by Paul Brennan (line manager)"
+            },
+            {
+              "attribute": 2,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 3,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 4,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "control_ref": "ITGC-CM-01",
+      "attributes": [
+        "A change request exists for the deployed change",
+        "The change was tested before deployment, with the test results documented",
+        "The testing was performed in a non-production environment",
+        "The business owner and the IT owner approved the change before it was deployed to production",
+        "Neither approver developed or implemented the change they approved",
+        "The object or version deployed is the one in the approved change request"
+      ],
+      "population": {
+        "path": "consistency/ITGC-CM-01/production change population listing.csv",
+        "content_type": "text/csv",
+        "sha256": "99c91ae44003f4f53aabda0860cf172ec16021df7e3e2afb1fa807aa3ae0f395",
+        "size": 401
+      },
+      "population_rows": 4,
+      "samples": [
+        {
+          "key": "CHG-3001",
+          "scenario": "clean",
+          "summary": "Every document the plan requires is present.",
+          "files": [
+            {
+              "path": "consistency/ITGC-CM-01/CHG-3001 change ticket.txt",
+              "content_type": "text/plain",
+              "sha256": "54e778f3eecedac31ffd6bb1dffe3e160478cac839b22377a49e8799c990d76c",
+              "size": 141
+            },
+            {
+              "path": "consistency/ITGC-CM-01/CHG-3001 approvals.txt",
+              "content_type": "text/plain",
+              "sha256": "da826835ccfe69113491c4b3284ba49ad9340a06559f247d0e4907cb325d66c2",
+              "size": 122
+            },
+            {
+              "path": "consistency/ITGC-CM-01/CHG-3001 deployment record.txt",
+              "content_type": "text/plain",
+              "sha256": "73b9c9905f8d59b47c50c195f9985d647384d817e3609635c0c4cfbd61049ef5",
+              "size": 132
+            },
+            {
+              "path": "consistency/ITGC-CM-01/CHG-3001 SAP ERP owners by system.txt",
+              "content_type": "text/plain",
+              "sha256": "bbd54891dd5d01e28cbbba1bb8257360d495681e9839b9735ee0daa71d85c617",
+              "size": 132
+            },
+            {
+              "path": "consistency/ITGC-CM-01/CHG-3001 test evidence.txt",
+              "content_type": "text/plain",
+              "sha256": "87b85be406619474c7d769f206e8d1c020f1eab29041bdbdab5a6e592e1f6124",
+              "size": 126
+            }
+          ],
+          "cells": [
+            {
+              "attribute": 0,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 1,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 2,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 3,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 4,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 5,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            }
+          ]
+        },
+        {
+          "key": "CHG-3002",
+          "scenario": "clean",
+          "summary": "Every document the plan requires is present.",
+          "files": [
+            {
+              "path": "consistency/ITGC-CM-01/CHG-3002 change ticket.txt",
+              "content_type": "text/plain",
+              "sha256": "c939b1c143bcef8056055ea642f21905eb09370e156c28d415545e9cd7b44d47",
+              "size": 138
+            },
+            {
+              "path": "consistency/ITGC-CM-01/CHG-3002 approvals.txt",
+              "content_type": "text/plain",
+              "sha256": "32e29e0ac85ec43852ed9595fa5b5a09777378f52c2adff6db9af278b459e453",
+              "size": 122
+            },
+            {
+              "path": "consistency/ITGC-CM-01/CHG-3002 deployment record.txt",
+              "content_type": "text/plain",
+              "sha256": "2bfcb7071fd6d2657370051fb1bd71d424543a1925b321100ac1d8efda5b63d5",
+              "size": 132
+            },
+            {
+              "path": "consistency/ITGC-CM-01/CHG-3002 SAP ERP owners by system.txt",
+              "content_type": "text/plain",
+              "sha256": "bbd54891dd5d01e28cbbba1bb8257360d495681e9839b9735ee0daa71d85c617",
+              "size": 132
+            },
+            {
+              "path": "consistency/ITGC-CM-01/CHG-3002 test evidence.txt",
+              "content_type": "text/plain",
+              "sha256": "e7ed3044eda5fefdcbe7f0a1b558134a6f99049a4f8db5a481fe2bff12adf64c",
+              "size": 126
+            }
+          ],
+          "cells": [
+            {
+              "attribute": 0,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 1,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 2,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 3,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 4,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 5,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            }
+          ]
+        },
+        {
+          "key": "CHG-3003",
+          "scenario": "missing",
+          "summary": "The owners-by-system record the plan requires for D is absent.",
+          "files": [
+            {
+              "path": "consistency/ITGC-CM-01/CHG-3003 change ticket.txt",
+              "content_type": "text/plain",
+              "sha256": "7e348550a5a4bac41d94c2b0f608abca263f76799d390a155ae6188688283295",
+              "size": 134
+            },
+            {
+              "path": "consistency/ITGC-CM-01/CHG-3003 approvals.txt",
+              "content_type": "text/plain",
+              "sha256": "b1ea078473d2ffa4de792b4e539578c29919d639784a4424659f7e562be949bc",
+              "size": 122
+            },
+            {
+              "path": "consistency/ITGC-CM-01/CHG-3003 deployment record.txt",
+              "content_type": "text/plain",
+              "sha256": "5d29b015776d9d203565ee82ecb532a834aaec231cb2c2d636cc717bb169b5ac",
+              "size": 132
+            },
+            {
+              "path": "consistency/ITGC-CM-01/CHG-3003 test evidence.txt",
+              "content_type": "text/plain",
+              "sha256": "0c2ab046541ce7922ed8d1ec875e0fdbd665281b9b74357a1e1bb39e3f2015a5",
+              "size": 126
+            }
+          ],
+          "cells": [
+            {
+              "attribute": 0,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 1,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 2,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 3,
+              "category": "negative",
+              "expected": "UNABLE",
+              "acceptable": [
+                "REVIEW",
+                "UNABLE"
+              ],
+              "why": "The plan requires the business owners and IT approvers by system for D; it is not in the evidence.",
+              "plausible_quote": "Business owner: Elena Rossi approved on 2027-10-18"
+            },
+            {
+              "attribute": 4,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 5,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            }
+          ]
+        },
+        {
+          "key": "CHG-3004",
+          "scenario": "missing",
+          "summary": "The test evidence the plan requires is absent.",
+          "files": [
+            {
+              "path": "consistency/ITGC-CM-01/CHG-3004 change ticket.txt",
+              "content_type": "text/plain",
+              "sha256": "35cd57ac9342ee3eb992626e0c72deaa5b4d0798b3f10ada0063f09109589f5f",
+              "size": 138
+            },
+            {
+              "path": "consistency/ITGC-CM-01/CHG-3004 approvals.txt",
+              "content_type": "text/plain",
+              "sha256": "a564383bd8bb50d3443091b495299c47228af162ad142a21dd74ed990cc9acf6",
+              "size": 122
+            },
+            {
+              "path": "consistency/ITGC-CM-01/CHG-3004 deployment record.txt",
+              "content_type": "text/plain",
+              "sha256": "26d17d1be57aff8c1007c4fc502719ef2f4ec4b81fb8a11f5d44f00f9acf0a5c",
+              "size": 132
+            },
+            {
+              "path": "consistency/ITGC-CM-01/CHG-3004 SAP ERP owners by system.txt",
+              "content_type": "text/plain",
+              "sha256": "bbd54891dd5d01e28cbbba1bb8257360d495681e9839b9735ee0daa71d85c617",
+              "size": 132
+            }
+          ],
+          "cells": [
+            {
+              "attribute": 0,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 1,
+              "category": "negative",
+              "expected": "UNABLE",
+              "acceptable": [
+                "EXCEPTION",
+                "REVIEW",
+                "UNABLE"
+              ],
+              "why": "No test evidence is in the evidence.",
+              "plausible_quote": "Raised on 2027-10-22"
+            },
+            {
+              "attribute": 2,
+              "category": "negative",
+              "expected": "UNABLE",
+              "acceptable": [
+                "EXCEPTION",
+                "REVIEW",
+                "UNABLE"
+              ],
+              "why": "No test environment is in the evidence.",
+              "plausible_quote": "Transport DEVK900704 imported to PRD"
+            },
+            {
+              "attribute": 3,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 4,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            },
+            {
+              "attribute": 5,
+              "category": "clean",
+              "expected": "PASS",
+              "acceptable": [
+                "PASS"
+              ],
+              "why": "",
+              "plausible_quote": ""
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

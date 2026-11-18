@@ -4,17 +4,21 @@ from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
-from support import Database
+from support import Database, approve_evidence_plans
 from test_onboarding import _base, _complete_setup, _new_engagement
 from test_outbound import _session, migrated
 
+from ai_workforce_api.control_journey import NotFinal
 from ai_workforce_api.db import connect
 from ai_workforce_api.schedule import PHASE_KEYS, interim_cutoff, standard_schedule
 from ai_workforce_api.workspace import (
     ControlRequest,
     ControlRow,
     StageBody,
+    evidence_phases,
     next_step,
+    progress_of,
+    step_of,
     suggested_severity,
 )
 
@@ -95,13 +99,20 @@ def _row(**overrides: Any) -> ControlRow:
     return ControlRow(**values)
 
 
-def _request(kind: str, status: str) -> ControlRequest:
+# The moment the steps are worked out at: before the requests' due date.
+NOW = datetime(2026, 10, 16, tzinfo=UTC)
+
+
+def _request(
+    kind: str, status: str, due_at: datetime | None = None, phase: str | None = None
+) -> ControlRequest:
     return ControlRequest(
         id=UUID("01a12986-8c55-7649-b395-5f2b1e335b46"),
         kind=kind,  # type: ignore[arg-type]
         title="Population",
         status=status,
-        due_at=datetime(2026, 10, 21, tzinfo=UTC),
+        due_at=due_at or datetime(2026, 10, 21, tzinfo=UTC),
+        phase=phase,
     )
 
 
@@ -112,7 +123,12 @@ def test_the_next_step_names_who_a_control_waits_on() -> None:
     )
     cases = [
         (_row(included=False), "Out of scope", "NONE", False),
-        (_row(conclusion="EFFECTIVE"), "Concluded with no exceptions", "NONE", False),
+        (
+            _row(conclusion="EFFECTIVE", final=True),
+            "Concluded with no exceptions",
+            "NONE",
+            False,
+        ),
         (_row(), "Request evidence", "TEAM", False),
         (
             _row(requests=[_request("EVIDENCE", "DRAFT")]),
@@ -151,23 +167,187 @@ def test_the_next_step_names_who_a_control_waits_on() -> None:
             "TEAM",
             False,
         ),
+        # A population only once the interim is released (22 Oct 2026: it was asked for
+        # while design was still open); before then, design is the work in hand.
         (
-            _row(requests=[_request("EVIDENCE", "RECEIVED")]),
+            _row(released_phases=["INTERIM"], requests=[_request("EVIDENCE", "RECEIVED")]),
             "Confirm the population",
             "TEAM",
             False,
         ),
         (
-            _row(nature="AUTOMATED", requests=[_request("EVIDENCE", "RECEIVED")]),
+            _row(requests=[_request("EVIDENCE", "RECEIVED")]),
+            "Prepare the design workpaper",
+            "TEAM",
+            False,
+        ),
+        (
+            _row(
+                design_step="Review the design evidence",
+                design_by="PREPARER",
+                requests=[_request("EVIDENCE", "RECEIVED")],
+            ),
+            "Review the design evidence",
+            "TEAM",
+            False,
+        ),
+        (
+            _row(
+                design_step="Drafting the design workpaper",
+                design_by="AGENT",
+                requests=[_request("EVIDENCE", "RECEIVED")],
+            ),
+            "Drafting the design workpaper",
+            "AGENT",
+            False,
+        ),
+        (
+            _row(
+                nature="AUTOMATED",
+                released_phases=["INTERIM"],
+                requests=[_request("EVIDENCE", "RECEIVED")],
+            ),
             "Test the evidence",
             "AGENT",
             False,
         ),
     ]
     for row, step, waiting, late in cases:
-        assert next_step(row, idle) == (step, waiting, late), step
+        assert next_step(row, idle, NOW) == (step, waiting, late), step
     done = _row(test_status="APPROVED", requests=[_request("SAMPLES", "RECEIVED")])
-    assert next_step(done, tested) == ("Independent review", "TEAM", False)
+    assert next_step(done, tested, NOW) == ("Prepare the workpapers for review", "TEAM", False)
+
+
+def test_a_request_out_past_its_due_date_is_overdue() -> None:
+    # As the metrics rulebook counts it: sent or partly received, and past its due date.
+    idle = StageBody(walkthrough="READY", evidence="REQUESTED", test="READY", review="READY")
+    past = NOW - timedelta(days=2)
+    for status in ("SENT", "WAITING_FOR_RESPONSE", "PARTIALLY_RECEIVED"):
+        row = _row(requests=[_request("EVIDENCE", status, due_at=past)])
+        assert next_step(row, idle, NOW) == ("Chase the overdue evidence request", "OWNER", True)
+    # A draft past its date has not gone out, so it is not late.
+    draft = _row(requests=[_request("EVIDENCE", "DRAFT", due_at=past)])
+    assert next_step(draft, idle, NOW) == ("Submit the evidence request", "TEAM", False)
+
+
+def test_each_step_names_who_takes_it() -> None:
+    idle = StageBody(walkthrough="READY", evidence="NONE", test="READY", review="READY")
+    cases = [
+        (_row(requests=[_request("EVIDENCE", "DRAFT")]), "PREPARER", True),
+        (_row(requests=[_request("EVIDENCE", "APPROVAL_PENDING")]), "APPROVER", False),
+        (_row(requests=[_request("EVIDENCE", "SENT")]), "CLIENT", False),
+        (_row(sheet_status="SIGNED_OFF", review_left="SIGN"), "REVIEWER", False),
+        (_row(sheet_status="SIGNED_OFF", review_left="DECIDE"), "REVIEWER", False),
+        (_row(sheet_status="SIGNED_OFF", review_left="ADDRESS"), "PREPARER", False),
+        (_row(sheet_status="SIGNED_OFF", review_left="REPERFORMING"), "AGENT", False),
+        (_row(sheet_status="OPEN", sheet_left="TESTING", testing_running=True), "AGENT", False),
+        (_row(sheet_status="OPEN", sheet_left="DECIDE"), "PREPARER", False),
+        (_row(conclusion="EFFECTIVE", final=True), "NONE", False),
+    ]
+    for row, actor, drafted in cases:
+        step = step_of(row, idle, NOW)
+        assert (step.actor, step.drafted) == (actor, drafted), step.text
+
+
+def test_testing_that_stopped_is_not_shown_as_running() -> None:
+    idle = StageBody(walkthrough="READY", evidence="RECEIVED", test="RUNNING", review="READY")
+    running = _row(sheet_status="OPEN", sheet_left="TESTING", testing_running=True)
+    stopped = _row(sheet_status="OPEN", sheet_left="TESTING", testing_running=False)
+    assert step_of(running, idle, NOW).text == "Test the evidence"
+    assert progress_of(running, idle, step_of(running, idle, NOW)) == "AGENT_TESTING"
+    step = step_of(stopped, idle, NOW)
+    assert (step.text, step.actor) == ("Testing stopped: run it again", "PREPARER")
+    assert progress_of(stopped, idle, step) == "READY_FOR_TESTING"
+
+
+def test_every_control_has_one_stage_from_its_records() -> None:
+    def stage(row: ControlRow, evidence: str = "NONE", test: str = "READY") -> str:
+        stages = StageBody(walkthrough="READY", evidence=evidence, test=test, review="READY")
+        return progress_of(row, stages, step_of(row, stages, NOW))
+
+    assert stage(_row()) == "TO_REQUEST"
+    assert stage(_row(requests=[_request("EVIDENCE", "DRAFT")]), "DRAFTED") == "TO_REQUEST"
+    # Nothing is requested before a person approves the test plan: the control waits on it.
+    assert stage(_row(evidence_plan="PROPOSED")) == "PLAN_TO_APPROVE"
+    assert stage(_row(evidence_plan="NONE")) == "PLAN_TO_APPROVE"
+    unsent = [_request("EVIDENCE", "DRAFT")]
+    assert stage(_row(evidence_plan="PROPOSED", requests=unsent), "DRAFTED") == ("PLAN_TO_APPROVE")
+    assert stage(_row(requests=[_request("EVIDENCE", "SENT")]), "REQUESTED") == (
+        "AWAITING_EVIDENCE"
+    )
+    assert stage(_row(requests=[_request("EVIDENCE", "PARTIALLY_RECEIVED")]), "PARTIAL") == (
+        "EVIDENCE_RECEIVED"
+    )
+    received = [_request("EVIDENCE", "RECEIVED")]
+    # The population to confirm, once the interim is released (22 Oct 2026); before then
+    # the design workpaper is the work in hand, a result to confirm.
+    assert stage(_row(requests=received, released_phases=["INTERIM"]), "RECEIVED") == (
+        "EVIDENCE_RECEIVED"
+    )
+    assert stage(_row(requests=received), "RECEIVED") == "RESULTS_TO_CONFIRM"
+    assert stage(
+        _row(nature="AUTOMATED", requests=received, released_phases=["INTERIM"]), "RECEIVED"
+    ) == ("READY_FOR_TESTING")
+    assert stage(_row(test_status="PROPOSED", requests=received), "RECEIVED") == (
+        "EVIDENCE_RECEIVED"
+    )
+    assert stage(_row(sheet_status="OPEN", sheet_left="EVIDENCE"), "RECEIVED") == (
+        "AWAITING_EVIDENCE"
+    )
+    assert stage(_row(sheet_status="OPEN", sheet_left="SIGN_OFF"), "RECEIVED") == (
+        "RESULTS_TO_CONFIRM"
+    )
+    assert stage(_row(sheet_status="SIGNED_OFF"), "RECEIVED", "SUCCEEDED") == ("RESULTS_TO_CONFIRM")
+    assert stage(_row(sheet_status="SIGNED_OFF", review_left="SIGN"), "RECEIVED") == (
+        "AWAITING_REVIEW"
+    )
+    assert stage(_row(sheet_status="SIGNED_OFF", review_left="ADDRESS"), "RECEIVED") == (
+        "REVIEW_NOTES"
+    )
+    # A final conclusion wins over everything, findings or not.
+    assert stage(_row(conclusion="EXCEPTION", deficiencies=1, final=True), "RECEIVED") == (
+        "CONCLUDED"
+    )
+    # An opinion that is not final reads as what keeps it open, never as concluded
+    # (docs/workflow-integrity.md §2): here a roll-forward still to request.
+    open_rollforward = NotFinal(
+        kind="ROUND", text="Roll-forward testing outstanding", step="REQUEST", phase="ROLLFORWARD"
+    )
+    held = _row(conclusion="EFFECTIVE", not_final=[open_rollforward])
+    assert stage(held, "RECEIVED") == "TO_REQUEST"
+    step = step_of(
+        held, StageBody(walkthrough="READY", evidence="RECEIVED", test="READY", review="READY"), NOW
+    )
+    assert (step.text, step.actor) == ("Roll-forward testing outstanding", "PREPARER")
+    # Signed-off testing opened again reads as reopened, whatever the review says.
+    reopened = _row(
+        sheet_status="OPEN",
+        sheet_left="TESTING",
+        review_status="OPEN",
+        review_left="ADDRESS",
+        reopened_from="REVIEW_NOTE",
+        reopen_reason="Review note: item 7 lacks the approval",
+    )
+    assert stage(reopened, "RECEIVED") == "TESTING_REOPENED"
+
+
+def test_evidence_is_counted_by_testing_phase() -> None:
+    past = NOW - timedelta(days=1)
+    phases = evidence_phases(
+        [
+            _request("EVIDENCE", "RECEIVED", phase="INTERIM"),
+            _request("EVIDENCE", "SENT", due_at=past, phase="INTERIM"),
+            _request("EVIDENCE", "DRAFT", phase="DESIGN"),
+            _request("EVIDENCE", "CANCELLED", phase="DESIGN"),
+            _request("EVIDENCE", "SENT", phase="ROLLFORWARD"),
+        ],
+        NOW,
+    )
+    assert [(p.phase, p.requests, p.received, p.drafted, p.out, p.late) for p in phases] == [
+        ("DESIGN", 1, 0, 1, 0, 0),
+        ("INTERIM", 2, 1, 0, 1, 1),
+        ("ROLLFORWARD", 1, 0, 0, 1, 0),
+    ]
 
 
 def test_severity_follows_likelihood_and_magnitude() -> None:
@@ -188,8 +368,8 @@ def test_kickoff_lays_out_the_plan_and_the_workspace_reads_it(migrated: Database
     assert plan["started"] is True and plan["schedule_missing"] is False
     phases = {phase["key"]: phase for phase in plan["phases"]}
     assert list(phases) == list(PHASE_KEYS)
-    assert phases["WALKTHROUGHS"]["tasks"] == 16
-    assert phases["INTERIM_TESTING"]["tasks"] == 32
+    assert phases["WALKTHROUGHS"]["tasks"] == 31
+    assert phases["INTERIM_TESTING"]["tasks"] == 62
     assert phases["REPORTING"]["tasks"] == 1
     assert {m["key"] for m in plan["milestones"]} >= {"KICKOFF", "PERIOD_END", "SIGN_OFF"}
     # Kickoff and scoping happened in setup, so they start done, and so does planning.
@@ -198,7 +378,7 @@ def test_kickoff_lays_out_the_plan_and_the_workspace_reads_it(migrated: Database
     assert marks["SCOPING_COMPLETE"]["status"] == "DONE"
     assert phases["PLANNING"]["status"] == "DONE"
     tasks = plan["tasks"]
-    assert len(tasks) == 65
+    assert len(tasks) == 125
     assert all(task["deadline"] for task in tasks)
     assert all(task["control_ref"] for task in tasks if task["plan_kind"] != "report")
     tests = [task for task in tasks if task["plan_kind"] == "test"]
@@ -235,24 +415,25 @@ def test_kickoff_lays_out_the_plan_and_the_workspace_reads_it(migrated: Database
     assert next(m for m in done["milestones"] if m["key"] == "PBC_DUE")["status"] == "DONE"
 
     register = owner.get(f"{base}/workspace/controls").json()
-    assert len(register) == 16
+    assert len(register) == 31
     first = register[0]
     assert first["category"] == "it"
     assert first["stage"] == "PLANNED"
     assert first["stages"]["evidence"] == "DRAFTED"
-    assert first["evidence_requests"] == 1
+    assert first["evidence_requests"] == 2
     assert first["systems"] == ["SAP ERP"]
     # Each control says what moves it forward and who it waits on.
     assert first["next_step"] == "Submit the evidence request"
     assert first["waiting_on"] == "TEAM"
     assert first["overdue"] is False
-    assert [request["kind"] for request in first["requests"]] == ["EVIDENCE"]
-    assert first["requests"][0]["status"] == "DRAFT"
+    assert [request["kind"] for request in first["requests"]] == ["EVIDENCE", "EVIDENCE"]
+    assert [request["phase"] for request in first["requests"]] == ["DESIGN", "INTERIM"]
+    assert {request["status"] for request in first["requests"]} == {"DRAFT"}
     assert first["test_attributes"] and first["pbc_items"] and first["risk"]
     dashboard = owner.get(f"{base}/workspace/dashboard").json()
-    assert dashboard["controls"]["in_scope"] == 16
-    assert dashboard["evidence"]["draft"] == 16
-    assert dashboard["work"]["total"] == 65
+    assert dashboard["controls"]["in_scope"] == 31
+    assert dashboard["evidence"]["draft"] == 62
+    assert dashboard["work"]["total"] == 125
     assert len(dashboard["schedule"]["phases"]) == 7
 
 
@@ -312,11 +493,25 @@ def test_deficiencies_need_the_reviewer_for_severity_and_closing(migrated: Datab
 
     # Remediation and retest, then closing through the reviewer.
     current = first
-    for status in ("REMEDIATION_IN_PROGRESS", "READY_FOR_RETEST"):
-        current = owner.post(
-            f"{base}/deficiencies/{first['id']}/progress",
-            json={"version": current["version"], "status": status},
-        ).json()
+    # A deficiency on a control needs the date its fix took effect to be retested.
+    undated = owner.post(
+        f"{base}/deficiencies/{first['id']}/progress",
+        json={"version": current["version"], "status": "REMEDIATION_IN_PROGRESS"},
+    ).json()
+    refused = owner.post(
+        f"{base}/deficiencies/{first['id']}/progress",
+        json={"version": undated["version"], "status": "READY_FOR_RETEST"},
+    )
+    assert refused.status_code == 422
+    current = owner.post(
+        f"{base}/deficiencies/{first['id']}/progress",
+        json={
+            "version": undated["version"],
+            "status": "READY_FOR_RETEST",
+            "remediated_on": "2026-01-15",
+        },
+    ).json()
+    assert current["remediated_on"] == "2026-01-15"
     skipped = owner.post(
         f"{base}/deficiencies/{first['id']}/progress",
         json={"version": current["version"], "status": "OPEN"},
@@ -398,4 +593,6 @@ def _started(database: Database, slug: str) -> tuple[dict[str, Any], TestClient,
         f"{onboarding}/plan/{plan['id']}/approve", json={"fingerprint": plan["fingerprint"]}
     )
     assert started.status_code == 200, started.text
+    # Nothing is requested before a person approves each control's evidence plan.
+    approve_evidence_plans(database, team["project"])
     return team, owner, f"/organizations/{team['org']}/projects/{team['project']}"

@@ -1,0 +1,272 @@
+{
+  "control": "ITGC-OP-01",
+  "calls": 8,
+  "cost_usd": 0.105781,
+  "attributes": [
+    {
+      "index": 0,
+      "attribute": "Every failure of a financially relevant job on the selected day has a monitoring record",
+      "status": "POTENTIALLY_SUFFICIENT",
+      "expected": [
+        "POTENTIALLY_SUFFICIENT"
+      ],
+      "references": [
+        {
+          "file": "job_schedule_and_export.xlsx",
+          "location": "Sheet Export, row 2, column Value",
+          "quote": "All jobs, 2027-03-15 00:00 to 23:59, every status"
+        },
+        {
+          "file": "job_schedule_and_export.xlsx",
+          "location": "Sheet Export, row 3, column Field",
+          "quote": "Rows exported | 8"
+        },
+        {
+          "file": "scheduler_runs_2027-03-15.csv",
+          "location": "row 4, column Job",
+          "quote": "AP_PAYMENT_FILE | R-5504 | 2027-03-15 02:00 | 2027-03-15 02:06 | FAILED | 0"
+        },
+        {
+          "file": "job_schedule_and_export.xlsx",
+          "location": "Sheet Schedule, row 6, column Job",
+          "quote": "PAYROLL_GL | 02:45 | Yes | Yes"
+        },
+        {
+          "file": "monitoring_log_2027-03-15.xlsx",
+          "location": "Sheet Alerts, row 1, column Alert",
+          "quote": "AL-301 | GL_INTERFACE | R-5501 | 2027-03-15 01:13 | INC-7781 | Sam Ortiz"
+        },
+        {
+          "file": "monitoring_log_2027-03-15.xlsx",
+          "location": "Sheet Alerts, row 2, column Alert",
+          "quote": "AL-302 | AP_PAYMENT_FILE | R-5504 | 2027-03-15 02:07 | INC-7782 | Sam Ortiz"
+        },
+        {
+          "file": "incidents_2027-03-15.pdf",
+          "location": "Page 1",
+          "quote": "INC-7781 opened 2027-03-15 01:14 by the operations analyst for job GL_INTERFACE, run R-5501"
+        },
+        {
+          "file": "incidents_2027-03-15.pdf",
+          "location": "Page 1",
+          "quote": "INC-7782 opened 2027-03-15 02:08 for job AP_PAYMENT_FILE, run R-5504"
+        }
+      ],
+      "facts": [
+        "The Control-M export covers all jobs and every status for the selected day, and states 8 rows exported. The CSV holds 8 runs.",
+        "The export record count is 8, matching the 8 run rows in the scheduler CSV.",
+        "The scheduler run history shows two failed runs of financially relevant jobs on 2027-03-15: GL_INTERFACE R-5501 and AP_PAYMENT_FILE R-5504.",
+        "The schedule lists six jobs, all marked financially relevant and monitored. Each of the six appears in the run history.",
+        "The monitoring log has an alert for failed run R-5501, with detection time, incident and acknowledger.",
+        "The monitoring log has an alert for failed run R-5504, with detection time, incident and acknowledger.",
+        "The incident report links INC-7781 to R-5501 and records a rerun (R-5507) and closure.",
+        "The incident report links INC-7782 to R-5504 and records a rerun (R-5508) and closure."
+      ],
+      "missing": [
+        "Time of acknowledgement. The log shows only 'Detected at', not when Sam Ortiz acknowledged.",
+        "A return code field, which the plan lists for the run history. The CSV has Status and Records only, and scheduled time sits in a separate sheet.",
+        "A daily monitoring record covering the whole day (who monitored, when, and a note of 'no other failures'). The log is only an alert list.",
+        "Evidence for any further selected days (interim and rollforward). Only 2027-03-15 is provided.",
+        "Confirmation that the Schedule sheet lists every financially relevant job. Its source and completeness are not evidenced."
+      ],
+      "conflicts": [],
+      "note": "For 2027-03-15, every failed run in the full-status export has a monitoring alert and an incident, and nothing contradicts. The gaps are the acknowledgement time, the return code, a whole-day monitoring record, and any other selected days. The files make no claim about audit conclusions.",
+      "source": "MODEL"
+    },
+    {
+      "index": 1,
+      "attribute": "Each failure was logged as an incident, opened on the day of the failure",
+      "status": "POTENTIALLY_SUFFICIENT",
+      "expected": [
+        "POTENTIALLY_SUFFICIENT"
+      ],
+      "references": [
+        {
+          "file": "scheduler_runs_2027-03-15.csv",
+          "location": "row 4, column Job",
+          "quote": "AP_PAYMENT_FILE | R-5504 | 2027-03-15 02:00 | 2027-03-15 02:06 | FAILED | 0"
+        },
+        {
+          "file": "scheduler_runs_2027-03-15.csv",
+          "location": "row 1, column Job",
+          "quote": "GL_INTERFACE | R-5501 | 2027-03-15 01:00 | 2027-03-15 01:12 | FAILED | 0"
+        },
+        {
+          "file": "monitoring_log_2027-03-15.xlsx",
+          "location": "Sheet Alerts, row 1, column Alert",
+          "quote": "AL-301 | GL_INTERFACE | R-5501 | 2027-03-15 01:13 | INC-7781 | Sam Ortiz"
+        },
+        {
+          "file": "monitoring_log_2027-03-15.xlsx",
+          "location": "Sheet Alerts, row 2, column Alert",
+          "quote": "AL-302 | AP_PAYMENT_FILE | R-5504 | 2027-03-15 02:07 | INC-7782 | Sam Ortiz"
+        },
+        {
+          "file": "incidents_2027-03-15.pdf",
+          "location": "Page 1",
+          "quote": "INC-7781 opened 2027-03-15 01:14 by the operations analyst for job GL_INTERFACE, run R-5501"
+        },
+        {
+          "file": "incidents_2027-03-15.pdf",
+          "location": "Page 1",
+          "quote": "INC-7782 opened 2027-03-15 02:08 for job AP_PAYMENT_FILE, run R-5504"
+        },
+        {
+          "file": "job_schedule_and_export.xlsx",
+          "location": "Sheet Export, row 2, column Value",
+          "quote": "All jobs, 2027-03-15 00:00 to 23:59, every status"
+        }
+      ],
+      "facts": [
+        "The scheduler export for 2027-03-15 shows two FAILED runs: GL_INTERFACE R-5501 and AP_PAYMENT_FILE R-5504.",
+        "The scheduler export also shows GL_INTERFACE R-5501 as FAILED on 2027-03-15 (the only other FAILED run).",
+        "The monitoring log links R-5501 to INC-7781, detected 2027-03-15 01:13.",
+        "The monitoring log links R-5504 to INC-7782, detected 2027-03-15 02:07.",
+        "INC-7781 was opened on the failure day, 2027-03-15 01:14, for run R-5501.",
+        "INC-7782 was opened on the failure day, 2027-03-15 02:08, for run R-5504.",
+        "The scheduler export was run for all jobs and all statuses on the day, and it returned 8 rows. The scheduler CSV lists 8 runs."
+      ],
+      "missing": [
+        "Incident records taken directly from the ticketing system, showing system-generated open timestamps, rather than a PDF report.",
+        "Evidence for any day other than 2027-03-15, including the interim and roll-forward selections and the period to 2027-12-31.",
+        "Evidence of how the selected day was chosen, and of the completeness and accuracy of the Control-M export.",
+        "The name of the 'operations analyst' who opened INC-7781, and who opened INC-7782 (not stated)."
+      ],
+      "conflicts": [],
+      "note": "For 2027-03-15, each of the 2 failed runs has an incident opened that day, and nothing contradicts this. The evidence covers one day only and the incident source is a PDF report. Whether this is enough for the interim and roll-forward tests is for the auditor to decide. Identifiers are consistent across files (R-5501/INC-7781, R-5504/INC-7782). The people are named differently: 'Sam Ortiz' in the",
+      "source": "MODEL"
+    },
+    {
+      "index": 2,
+      "attribute": "Each failure was investigated and resolved, with the resolution documented",
+      "status": "POTENTIALLY_SUFFICIENT",
+      "expected": [
+        "POTENTIALLY_SUFFICIENT"
+      ],
+      "references": [
+        {
+          "file": "scheduler_runs_2027-03-15.csv",
+          "location": "row 4, column Job",
+          "quote": "AP_PAYMENT_FILE | R-5504 | 2027-03-15 02:00 | 2027-03-15 02:06 | FAILED | 0"
+        },
+        {
+          "file": "scheduler_runs_2027-03-15.csv",
+          "location": "row 1, column Job",
+          "quote": "GL_INTERFACE | R-5501 | 2027-03-15 01:00 | 2027-03-15 01:12 | FAILED | 0"
+        },
+        {
+          "file": "monitoring_log_2027-03-15.xlsx",
+          "location": "Sheet Alerts, row 2, column Alert",
+          "quote": "AL-302 | AP_PAYMENT_FILE | R-5504 | 2027-03-15 02:07 | INC-7782 | Sam Ortiz"
+        },
+        {
+          "file": "incidents_2027-03-15.pdf",
+          "location": "Page 1",
+          "quote": "rerun R-5507 completed at 03:18 on 2027-03-15 and posted 12,480 records, agreed to the 12,480 records in the source extract. Closed 2027-03-15 03:40"
+        },
+        {
+          "file": "scheduler_runs_2027-03-15.csv",
+          "location": "row 7, column Job",
+          "quote": "GL_INTERFACE | R-5507 | 2027-03-15 03:05 | 2027-03-15 03:18 | SUCCESS | 12,480"
+        },
+        {
+          "file": "incidents_2027-03-15.pdf",
+          "location": "Page 1",
+          "quote": "the bank's acknowledgement lists 3,210 payments received, none duplicated. Closed 2027-03-15 04:05"
+        },
+        {
+          "file": "scheduler_runs_2027-03-15.csv",
+          "location": "row 8, column Job",
+          "quote": "AP_PAYMENT_FILE | R-5508 | 2027-03-15 03:20 | 2027-03-15 03:27 | SUCCESS | 3,210"
+        },
+        {
+          "file": "job_schedule_and_export.xlsx",
+          "location": "Sheet Export, row 2, column Value",
+          "quote": "All jobs, 2027-03-15 00:00 to 23:59, every status"
+        }
+      ],
+      "facts": [
+        "The scheduler export shows two failed runs on 2027-03-15: GL_INTERFACE R-5501 and AP_PAYMENT_FILE R-5504.",
+        "The scheduler shows GL_INTERFACE R-5501 as FAILED with 0 records.",
+        "The monitoring log links each failed run to an incident and shows who acknowledged it.",
+        "INC-7781 records the failure, the investigation and root cause, the rerun with records agreed to the source, and the closure time.",
+        "The scheduler shows rerun R-5507 as SUCCESS with 12,480 records, which matches INC-7781.",
+        "INC-7782 records the failure, the root cause, the rerun, and a reconciliation to the bank's acknowledgement. It also records closure.",
+        "The scheduler shows rerun R-5508 as SUCCESS with 3,210 records, which matches INC-7782.",
+        "The export parameters cover all jobs and statuses for the day and 8 rows were exported. The scheduler CSV has 8 rows."
+      ],
+      "missing": [
+        "Only one day (2027-03-15) is covered. No evidence is provided for other selected days in the interim or roll-forward periods.",
+        "The incident PDF is a summary report. It is not a ticketing-system export, so the incident system record is not shown.",
+        "The rerun is evidenced only by the scheduler CSV and the incident text. No separate rerun log or reconciliation output is provided. The bank acknowledgement is only described in the incident.",
+        "The incident report does not name who investigated or closed each incident."
+      ],
+      "conflicts": [],
+      "note": "Evidence for 2027-03-15 covers both failures with investigation, resolution, rerun, recovery and closure, and nothing contradicts it. It is a single day. The auditor decides whether it is enough for the walkthrough and for the interim and roll-forward periods.",
+      "source": "MODEL"
+    },
+    {
+      "index": 3,
+      "attribute": "The resolution shows the affected data was processed once and completely (a successful rerun, or a reconciliation of the data affected)",
+      "status": "POTENTIALLY_SUFFICIENT",
+      "expected": [
+        "POTENTIALLY_SUFFICIENT"
+      ],
+      "references": [
+        {
+          "file": "scheduler_runs_2027-03-15.csv",
+          "location": "row 7, column Job",
+          "quote": "GL_INTERFACE | R-5507 | 2027-03-15 03:05 | 2027-03-15 03:18 | SUCCESS | 12,480"
+        },
+        {
+          "file": "scheduler_runs_2027-03-15.csv",
+          "location": "row 8, column Job",
+          "quote": "AP_PAYMENT_FILE | R-5508 | 2027-03-15 03:20 | 2027-03-15 03:27 | SUCCESS | 3,210"
+        },
+        {
+          "file": "incidents_2027-03-15.pdf",
+          "location": "Page 1",
+          "quote": "rerun R-5507 completed at 03:18 on 2027-03-15 and posted 12,480 records, agreed to the 12,480 records in the source extract"
+        },
+        {
+          "file": "incidents_2027-03-15.pdf",
+          "location": "Page 1",
+          "quote": "the bank's acknowledgement lists 3,210 payments received, none duplicated"
+        },
+        {
+          "file": "monitoring_log_2027-03-15.xlsx",
+          "location": "Sheet Alerts, row 2, column Alert",
+          "quote": "AL-302 | AP_PAYMENT_FILE | R-5504 | 2027-03-15 02:07 | INC-7782 | Sam Ortiz"
+        },
+        {
+          "file": "job_schedule_and_export.xlsx",
+          "location": "Sheet Export, row 2, column Field",
+          "quote": "Parameters | All jobs, 2027-03-15 00:00 to 23:59, every status"
+        },
+        {
+          "file": "incidents_2027-03-15.pdf",
+          "location": "Page 1",
+          "quote": "the lock was released at 03:00"
+        }
+      ],
+      "facts": [
+        "Scheduler shows GL_INTERFACE run R-5501 failed with 0 records, and rerun R-5507 succeeded with 12,480 records.",
+        "Scheduler shows AP_PAYMENT_FILE run R-5504 failed with 0 records, and rerun R-5508 succeeded with 3,210 records.",
+        "INC-7781 resolution records the rerun and agrees the posted records to the source extract count.",
+        "INC-7782 resolution records the rerun, the payment count, and the bank acknowledgement showing no duplicates.",
+        "The monitoring log links each failed run to an incident, and these are the only two alerts.",
+        "The scheduler export covers all jobs and all statuses for the day and has 8 rows. This matches the 8 rows in the scheduler CSV, which has 2 failures.",
+        "The incident report says the GL_INTERFACE lock was released at 03:00, before rerun R-5507 started at 03:05."
+      ],
+      "missing": [
+        "Evidence for the rollforward period, and for any other day. The plan asks for a selected day in each of the interim and rollforward phases, and only one day is provided.",
+        "The source extract or reconciliation itself for GL_INTERFACE. Only the incident text states the 12,480 agreement.",
+        "The bank acknowledgement document itself for AP_PAYMENT_FILE. Only the incident text describes it.",
+        "Confirmation that the failed runs R-5501 and R-5504 left no partial postings or file transmissions. Both show 0 records."
+      ],
+      "conflicts": [],
+      "note": "The evidence covers every failure on 2027-03-15 and supports the attribute for that day. The reconciliation facts rest on statements in the incident PDF, not on source documents. The identifiers are consistent across the files. The incident PDF names no person, and the monitoring log shows \"Sam Ortiz\" as the acknowledger. \"The operations analyst\" (PDF) and \"Sam Ortiz\" (log and export) may be the s",
+      "source": "MODEL"
+    }
+  ]
+}

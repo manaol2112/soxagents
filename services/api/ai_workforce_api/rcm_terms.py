@@ -21,13 +21,16 @@ from psycopg.types.json import Json
 from pydantic import BaseModel, Field, ValidationError
 
 from ai_workforce_api.controls import DOMAIN_LABELS
-from ai_workforce_api.db import independent_steps, transaction
-from ai_workforce_api.model_providers import CLAUDE_CONFIG, call_note
-from ai_workforce_api.models import ModelProvider, ModelRequest, complete, record_call
+from ai_workforce_api.db import hold_claim, independent_steps, transaction
+from ai_workforce_api.model_providers import fallback_note
+from ai_workforce_api.models import ModelProvider, ModelRequest
+from ai_workforce_api.prompt_data import neutral
+from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 from ai_workforce_api.rcm_import import (
     FIELD_KEYS,
     VALUE_FIELDS,
     data_rows,
+    field_value,
     value_choices,
     value_key,
 )
@@ -62,6 +65,9 @@ value decides who tests the control, how many samples are tested, and which work
 
 - Use the example controls to understand a term. A term like "IT" or "Ops" is resolved by \
 what its controls actually do.
+- A process area term may read "category / process", from two columns: the category \
+(ITGC, business process, key report) and the process (order to cash, program change). \
+Map it to the process's area within that category; an ITGC is never a business cycle.
 - Prefer the value that is safest for testing when a term is genuinely ambiguous: a higher \
 frequency for sampling, and IT-dependent manual over manual when controls rely on reports.
 - If one term's controls clearly belong to different areas, choose the value that fits most \
@@ -127,9 +133,8 @@ def term_examples(
             continue
         text = " - ".join(row[i] for i in readable if i < len(row) and row[i])[:220]
         for key in VALUE_FIELDS:
-            column = column_fields.index(key) if key in column_fields else None
-            raw = row[column] if column is not None and column < len(row) else ""
-            bucket = examples[key].setdefault(value_key(" ".join(raw.split())), [])
+            raw = field_value(row, column_fields, key)
+            bucket = examples[key].setdefault(value_key(raw), [])
             if text and len(bucket) < EXAMPLES:
                 bucket.append(text)
     return examples
@@ -149,7 +154,9 @@ def terms_prompt(choices: dict[str, list[Any]], examples: dict[str, dict[str, li
                 for item in items
             ],
         }
-    data = json.dumps(fields, ensure_ascii=False, indent=1)[:60000]
+    # The terms are the client's: every tag in them is made inert (prompt_data; 18 November
+    # 2026, owner-approved S1).
+    data = neutral(json.dumps(fields, ensure_ascii=False, indent=1)[:60000])
     return f"Map these client terms.\n\n<rcm_terms>\n{data}\n</rcm_terms>"
 
 
@@ -207,6 +214,11 @@ def run_terms(
             """,
             (LEASE_MINUTES, import_id, MAX_ATTEMPTS),
         ).fetchone()
+        if claimed is not None:
+            hold_claim(
+                cursor, "rcm_imports", "id", import_id, "terms_status",
+                attempts_column="terms_attempts", lease_column="terms_lease_until",
+            )  # fmt: skip
     if claimed is None:
         return "SKIPPED"
     organization_id, project_id, requester, sheets, sheet_index, header_row, fields, mode = claimed
@@ -232,25 +244,31 @@ def run_terms(
             cancelled=False,
             system=SYSTEM_PROMPT,
         )
-        status, raw = complete(provider, request, CLAUDE_CONFIG)
-        call_id = record_call(
+        # The prompt is /2 (18 November 2026, owner-approved S1): the terms' tags are made inert.
+        call = AgentCaller(
             connection,
-            requester,
-            organization_id,
-            project_id,
-            "claude",
-            status,
-            raw,
-            CLAUDE_CONFIG,
-        )
+            provider,
+            Job(
+                "evidence-reader",
+                "rcm_import",
+                import_id,
+                organization_id,
+                project_id,
+                requester,
+                agent_instance_id=agent_actor(connection, project_id, "evidence-coordinator"),
+            ),  # fmt: skip
+        ).generate(request, "rcm-terms/2", {"import": str(import_id)})
+        status, raw, call_id = call.status, call.raw, call.call_id
         if status == "SUCCEEDED" and raw.output is not None:
             try:
                 found = check_terms(raw.output, choices)
                 source = "MODEL"
             except ValueError as error:
-                note = f"Model answer rejected: {error}."
+                source = "FALLBACK"
+                note = f"Model answer rejected: {error}. The reviewed rules matched the terms."
         else:
-            note = call_note(status)
+            source = "FALLBACK"
+            note = fallback_note(status, "the reviewed rules matched the terms instead")
     if found is None:
         found = {
             key: {

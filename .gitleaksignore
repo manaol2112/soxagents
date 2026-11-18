@@ -1,0 +1,30 @@
+# Findings of gitleaks's generic-api-key rule that were checked by a person and are not
+# secrets (18 November 2026): identifier fields named key or *_key, hashes in test fixtures,
+# and the deliberately fake secrets of tests that check the app strips or refuses them.
+# Each line is one finding's fingerprint (commit:file:rule:line). A new finding is not here,
+# so it fails the scan: check it, and add it only if it is not a secret.
+1e5ab4d29e3bfd778ca5c09041651f4a2839142b:tests/understanding-review-fixes.test.ts:generic-api-key:347
+02748a8ceb8a14abfdb549026791cd4bcbaa3cc6:tests/understanding-specialist-model.test.ts:generic-api-key:396
+02748a8ceb8a14abfdb549026791cd4bcbaa3cc6:tests/understanding-review-fixes.test.ts:generic-api-key:277
+02748a8ceb8a14abfdb549026791cd4bcbaa3cc6:tests/understanding-review-fixes.test.ts:generic-api-key:284
+02748a8ceb8a14abfdb549026791cd4bcbaa3cc6:tests/understanding-review-fixes.test.ts:generic-api-key:318
+02748a8ceb8a14abfdb549026791cd4bcbaa3cc6:tests/understanding-review-fixes.test.ts:generic-api-key:371
+02748a8ceb8a14abfdb549026791cd4bcbaa3cc6:tests/understanding-review-fixes.test.ts:generic-api-key:405
+1b9fc30ea57ec585f6bb5c0b43bfc74e5d3f5943:tests/fixtures/design-workpaper/sample.json:generic-api-key:408
+1b9fc30ea57ec585f6bb5c0b43bfc74e5d3f5943:tests/fixtures/design-workpaper/sample.json:generic-api-key:428
+1b9fc30ea57ec585f6bb5c0b43bfc74e5d3f5943:tests/fixtures/design-workpaper/server-sample.json:generic-api-key:283
+2401b6447801a4c320ebf90684080ddbe3d27179:tests/design-conclusion-model.test.ts:generic-api-key:674
+6be132013a76337eeea04383baf0c81abf2521a1:services/api/tests/test_evidence_annotations.py:generic-api-key:217
+a92364a96e51224a034904e7f0da4ab606d4f3a2:services/api/tests/test_walkthrough_answers.py:generic-api-key:469
+065cafb2291beee8370e3a432dbf7efe8f2ef8cc:services/api/tests/test_evidence_catalog.py:generic-api-key:84
+065cafb2291beee8370e3a432dbf7efe8f2ef8cc:services/api/tests/test_evidence_catalog.py:generic-api-key:133
+79d52cb1461701e50c11d15c9b2e44608e687b8c:services/api/ai_workforce_api/definitions_business.py:generic-api-key:1270
+79d52cb1461701e50c11d15c9b2e44608e687b8c:services/api/tests/test_control_context.py:generic-api-key:680
+79d52cb1461701e50c11d15c9b2e44608e687b8c:services/api/tests/test_manual_controls.py:generic-api-key:74
+79d52cb1461701e50c11d15c9b2e44608e687b8c:services/api/tests/test_request_quality.py:generic-api-key:62
+79d52cb1461701e50c11d15c9b2e44608e687b8c:tests/control-context-model.test.ts:generic-api-key:216
+79d52cb1461701e50c11d15c9b2e44608e687b8c:tests/control-context-model.test.ts:generic-api-key:264
+79d52cb1461701e50c11d15c9b2e44608e687b8c:tests/portal-workspace.test.ts:generic-api-key:24
+a0594f33ac4fb8c908748cda54c380a225e5c0d1:services/api/tests/test_evidence_reading.py:generic-api-key:166
+a6168f552908375770611259fef65358a9bd1b1b:services/api/tests/test_outbound.py:generic-api-key:429
+a6168f552908375770611259fef65358a9bd1b1b:tests/workflow-model.test.ts:generic-api-key:84

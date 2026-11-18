@@ -1,0 +1,5 @@
+Timestamp,Ticket,Event,Actor
+2027-07-11 09:02,REQ-3109,Request submitted for u0009 Liam O'Brien: role AP Clerk in SAP ERP PRD; line manager Priya Raman,Liam O'Brien
+2027-07-13 10:15,REQ-3109,Application owner approval recorded,Helen Cho
+2027-07-15 10:30,REQ-3109,Access provisioned: AP Clerk in SAP ERP PRD,adm.kfischer
+2027-07-16 09:12,REQ-3109,Line manager approval recorded,Priya Raman

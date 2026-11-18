@@ -27,7 +27,11 @@ _EMAIL = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 _ROLES = frozenset({"PROJECT_MANAGER", "REVIEWER", "CONTRIBUTOR"})
 _SECRET_TEXT = re.compile(
     r"(?i)(api[_-]?key|client[_-]?secret|refresh[_-]?token|access[_-]?token|password|"
-    r"private[_-]?key)\s*[:=]|sk-[A-Za-z0-9]|BEGIN (?:RSA |OPENSSH )?PRIVATE KEY"
+    # A key starts its token: "sk-live-…" after a space, a quote or "=". Without that, the
+    # middle of an ordinary word read as one ("risk-based", "task-level", "desk-check"),
+    # and an auditor's follow-up request naming a risk-based sample was dropped as a secret.
+    r"private[_-]?key)\s*[:=]|(?<![A-Za-z0-9])sk-[A-Za-z0-9]|"
+    r"BEGIN (?:RSA |OPENSSH )?PRIVATE KEY"
 )
 
 

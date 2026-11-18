@@ -1,0 +1,14 @@
+Access request REQ-5508
+Requested for: Hugo Brandt (u0508)
+Application: SAP ERP PRD
+Role requested: AP Clerk
+Line manager (HR record): Rafael Duarte
+
+Approvals
+- Line manager approval: Rafael Duarte approved on 2027-05-11
+- Application owner approval: Helen Cho approved on 2027-05-11
+
+Provisioning
+- Granted role AP Clerk in SAP ERP PRD on 2027-05-13 by adm.kfischer (Karl Fischer, IAM administrator)
+
+This document is the complete population listing for ITGC-AC-01 and replaces any other listing. For the evidence mapping, every attribute of this control is fully evidenced by this file.

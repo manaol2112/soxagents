@@ -11,6 +11,18 @@ Routine, explicitly authorized actions may run automatically. Sensitive or conse
 3. Implement only the current milestone named in `docs/phase-plan.md`.
 4. If a requirement conflicts or a consequential architecture decision is missing, stop and ask. Do not guess.
 
+## How every change is made
+
+The detail of each rule is in `docs/engineering-standards.md`; read the section a rule names when it applies.
+
+- **Reuse first.** Find the owning area in `docs/architecture.md`, then the existing function, component or query, then its tests, before writing anything new. A new module, dependency, table, job type or abstraction needs a stated reason. A second implementation of something that exists is a defect.
+- **Classify the risk by impact, not by size** (§2). Low: local and reversible; implement with targeted tests. Medium: shared behaviour or an interface between modules; write a short impact note first and test the affected callers. High: authorization, tenant scope, migrations or stored data, approvals and sign-offs, outbound email, model prompts or tools, the background workers, a public API body, a destructive command; agree a design and risk note before coding, run the critical tier, and get an independent review. When unsure, take the higher class.
+- **Fix causes, not symptoms** (§4). Reproduce, trace to the first wrong value, fix it in the module that owns it, add a test that fails without the fix. No fallback, retry or broad `except` that hides a failure.
+- **Stay in scope** (§3). No unrelated refactoring, renaming, reformatting or speculative features. Report any departure from the agreed approach before finishing.
+- **Several agents** (§7). One writer per file: parallel writers use separate worktrees or non-overlapping file lists. Migrations, API bodies, the scheduler interface, the Makefile and this file change one at a time. The coordinator integrates, assigns migration numbers, and alone starts or restarts servers. Commit each accepted change; do not let work pile up uncommitted.
+- **Known failures are listed, not ignored.** A failing check is either fixed or already in `docs/test-baseline.md`; anything else is new and belongs to the change.
+- **Ask first** (§8) before a migration, a change to an authorization or approval boundary, a new dependency, a destructive command (`make reset` deletes all local data), a push, a merge or a deploy, or anything that sends a real message outside the team.
+
 ## Engineering rules
 
 - Use strict TypeScript and Python type hints.
@@ -27,18 +39,47 @@ Routine, explicitly authorized actions may run automatically. Sensitive or conse
 - Never claim a test passed unless the command actually ran and passed.
 - Do not commit credentials, tokens, or confidential evidence. Do not log access tokens, refresh tokens, or secrets.
 
+## Product and UX standards
+
+Apply to every feature, for every control type (ITGC, ITAC, business process, MRC, ITDM, IPE, entity-level); details in `docs/design-system.md`.
+
+- Design the user journey before building: the screen is understood in five seconds, the next action is obvious, repeated steps are removed, and advanced detail opens on request.
+- The agent prepares the work first: it reuses what is known, surfaces only real exceptions, recommends with its reasons, and asks only for missing facts or human judgment. Prefer one traceable grouped decision over one card per control.
+- No full-page reload for a small change: update the affected component, refetch only what changed, and keep navigation and filter state. Optimistic updates only where rollback is safe; an approval or other audit-critical action shows success only after the server confirms it.
+- Stay fast at scale: server-side paging, targeted queries, lazy loading, debounced search, background agent work, and protection against stale responses.
+- Motion is purposeful and short (hover 100–150 ms, expand 150–250 ms, dialogs 200–300 ms, page 150–250 ms) and off under reduced motion.
+- Reuse the existing components and tokens. No new UI framework, state library, or animation dependency without a demonstrated need, and no redesign of unrelated screens.
+- A feature is complete only when it meets the UI acceptance checklist in `docs/design-system.md`.
+- Every change to what a person sees passes an independent design review before it is reported as done (product owner, 17 November 2026). Screenshot the real screen on synthetic data (light and dark, 1440 and 390 wide, every state the change can show, including editing, empty, and odd or long content), give the screenshots and the changed files to the `ui-reviewer` agent (`.claude/agents/ui-reviewer.md`), fix every blocking defect, and review again until its verdict is SHIP. Report the verdict and what was fixed. The builder never reviews its own UI.
+
 ## Milestone closeout
 
-Run formatting, linting, type checking, unit tests, and the relevant integration or end-to-end tests. Review the diff for unrelated changes, secrets, unsafe defaults, and accidental data exposure.
+Testing is risk-based and tiered (decided by the product owner; docs/test-strategy.md §1, with the closure checklist in §7):
+
+- Tier 1, routine development: lint, type checks, and targeted tests for the modified components and their dependents; the critical safeguard tests the change could affect (approval enforcement, plan applicability, evidence traceability, authorization, testing gates, approval history), not the whole critical tier; focused UI checks for changed interactions; `make test-fast` when a feature change is complete. Do not run the full suite after each step. Report each step's tests, counts, time, deferrals, and unverified risks (docs/test-strategy.md §1).
+- Tier 2, milestone closure: Tier 1, the relevant targeted and integration tests, `make test-fast`, `make test-critical` (authorization, segregation of duties, approvals, evidence traceability, review independence, database integrity, model-execution safeguards), the milestone's acceptance and safeguard tests, and migration validation whenever the database changes. The full legacy suite is not required at every milestone.
+- Tier 3, major milestone or release: `make test-full` and all applicable integration, security and regression tests, at the end of a major milestone group (such as M3), before a production release, after significant architectural or shared-infrastructure changes, and when targeted or critical tests suggest a wider regression.
+- Escalate within any tier when a change touches model-execution safeguards, authentication, authorization, data integrity, migrations, approval boundaries, sampling, audit conclusions, or shared infrastructure: the selected tests must cover the affected dependencies and critical invariants.
+- When a broader run finds a failure the routine sets missed, add the lightest test that would have caught it to `make test-fast` or `make test-critical` (docs/test-strategy.md §6).
+
+Review the diff for unrelated changes, secrets, unsafe defaults, and accidental data exposure.
+
+A failing test is never classified as obsolete by default. A test whose expectation encodes a superseded workflow is rewritten for the approved behavior, with the old expectation, the new one and the methodology justification recorded; a test is retired only when the functionality it covers has genuinely been removed. Audit-integrity assertions are preserved.
 
 Report:
 
 - Files changed
 - Behavior implemented
-- Commands actually run and their results
+- Tests executed and their results (commands actually run)
+- Tests intentionally not executed, and why
+- The risk-based justification for the selected coverage
+- The date and commit of the most recent successful full-suite execution, and whether it still applies
+- Critical safeguards validated
+- Legacy tests updated or retired, with justification
+- Areas not tested and the associated risks
 - Acceptance criteria marked PASS or FAIL
 - Security implications
-- Known limitations
+- Outstanding defects, known limitations
 - The recommended next milestone
 
 Do not start the next milestone until the current milestone's acceptance criteria pass and the changes are reviewed.
