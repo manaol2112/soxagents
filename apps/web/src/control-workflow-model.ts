@@ -1147,11 +1147,12 @@ export const KIND_ICON = {
   output: "file",
 } as const satisfies Record<Kind, string>;
 
-// Sized to be read (product owner, 11 November 2026: "I can't even read the letters on it"):
-// at the readable zoom below, a title is 14.4 px on screen and every other line 12.15 px.
-// 100 high since the line of what a step covers left the node (product owner, 17 November
-// 2026: "remove the words in the middle"); it was 120 with that line.
-export const NODE_SIZE = { width: 224, height: 100 };
+// Sized to be read (product owner, 11 November 2026: "I can't even read the letters on it").
+// Since the owner's node sample (17 November 2026) the kind and status lines are 12.5 px and
+// the title 16 px, so at the readable zoom below they show at about 11.25 px and 14.4 px.
+// The line of what a step covers left the node the same day ("remove the words in the
+// middle"); 116 high gives the sample's room above and below the title.
+export const NODE_SIZE = { width: 224, height: 116 };
 /** Between two steps side by side, in a branch or in the preparation. */
 const GAP_X = 28;
 /** Between a stage and the one beside it, wide enough for the fork and the join. */

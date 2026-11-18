@@ -3156,3 +3156,8 @@ button.rs-show[aria-pressed="true"] {
     transition: none;
   }
 }
+
+/* Its own hover; the pressed fill stays as it is (17 November 2026). */
+button.rs-show:hover:not(:disabled) {
+  border-color: var(--accent);
+}

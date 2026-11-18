@@ -94,7 +94,9 @@
    sunken well with raised cards. */
 .wf-canvas {
   --wf-canvas-bg: var(--surface);
-  --wf-node-bg: var(--surface-muted);
+  /* The sample's grey: a shade deeper than the muted surface; hover a step deeper still. */
+  --wf-node-bg: var(--surface-sunken);
+  --wf-node-hover: color-mix(in srgb, var(--surface-sunken) 55%, var(--border));
   /* 3:1 or more on the canvas in both themes (WCAG 1.4.11): 80% on white. */
   --wf-line: color-mix(in srgb, var(--text-tertiary) 80%, var(--wf-canvas-bg));
   --wf-line-strong: var(--text-tertiary);
@@ -111,6 +113,7 @@
 :root[data-theme="dark"] .wf-canvas {
   --wf-canvas-bg: var(--surface-sunken);
   --wf-node-bg: var(--surface);
+  --wf-node-hover: var(--surface-hover);
   --wf-dots: color-mix(in srgb, var(--text-tertiary) 20%, transparent);
 }
 
@@ -209,7 +212,8 @@
   align-content: start;
   align-items: start;
   justify-items: stretch;
-  padding: 12px 14px;
+  /* The preview's spacing (product owner's sample, 17 November 2026). */
+  padding: 14px 16px;
   color: var(--text);
   font-family: inherit;
   font-size: var(--fs-base);
@@ -230,7 +234,7 @@
 
 .wf button.wf-node:hover {
   color: var(--text);
-  background: var(--surface-hover);
+  background: var(--wf-node-hover, var(--surface-hover));
   border-color: var(--border-strong);
   box-shadow: none;
 }
@@ -281,10 +285,10 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
-  height: 20px;
+  height: 18px;
   padding: 0;
   color: var(--text-secondary);
-  font-size: var(--fs-md);
+  font-size: var(--fs-sm);
   font-weight: 400;
   line-height: 1;
   white-space: nowrap;
@@ -296,8 +300,8 @@
 .wf-num {
   flex: none;
   color: var(--text-tertiary);
-  font-size: var(--fs-md);
-  font-weight: 500;
+  font-size: var(--fs-sm);
+  font-weight: 400;
   font-variant-numeric: tabular-nums;
 }
 
@@ -314,7 +318,7 @@
 }
 
 .wf-title {
-  margin-top: 12px;
+  margin-top: 14px;
   overflow: hidden;
   color: var(--text-strong, var(--text));
   font-size: var(--fs-lg);
@@ -330,7 +334,7 @@
   display: flex;
   align-self: end;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   min-width: 0;
   border-radius: var(--radius-sm);
 }
@@ -338,7 +342,7 @@
 .wf-state-text {
   overflow: hidden;
   color: var(--text-secondary);
-  font-size: var(--fs-md);
+  font-size: var(--fs-sm);
   font-weight: 400;
   line-height: 18px;
   white-space: nowrap;
@@ -385,6 +389,7 @@
   color: var(--text-tertiary);
 }
 
+/* Done: a bare check in green, drawn like the waiting clock (the owner's sample). */
 .wf-check {
   display: inline-grid;
   flex: none;
@@ -392,9 +397,9 @@
   width: 16px;
   height: 16px;
   color: var(--success);
-  background: var(--success-soft);
-  border: 1px solid var(--success-border);
-  border-radius: 999px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
 }
 
 /* An agent at work: the AI mark pulses and a light sweeps along the status line. */

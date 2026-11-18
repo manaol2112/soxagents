@@ -1070,21 +1070,28 @@ input.is-drafted {
   justify-content: space-between;
   gap: 0.5rem;
   width: 100%;
-  height: 36px;
+  height: 32px;
   padding: 0 0.75rem;
   color: var(--text-strong);
   text-align: left;
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-control);
   border-radius: var(--radius);
-  box-shadow: none;
+  box-shadow: var(--shadow-xs);
   font-size: var(--fs-sm);
   font-weight: 500;
 }
 
-.snf-trigger:hover,
+/* A field, like the selects beside it (17 November 2026): the field edge at rest and on
+   hover, the focused field's edge while its list is open. */
+.snf-trigger:hover {
+  color: var(--text-strong);
+  background: var(--surface);
+  border-color: var(--border-control);
+}
+
 .snf.is-open .snf-trigger {
-  border-color: var(--accent-border);
+  border-color: var(--accent);
 }
 
 .snf-trigger > svg {

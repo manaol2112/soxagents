@@ -135,7 +135,7 @@ const StepNode = memo(function StepNode({
         ) : null}
         <span className="wf-node-head">
           <span className={`wf-badge kind-${step.kind}`}>
-            <UiIcon name={KIND_ICON[step.kind]} size={13} />
+            <UiIcon name={KIND_ICON[step.kind]} size={12} />
             {KIND_LABELS[step.kind]}
           </span>
           <span className="wf-num">{number}</span>
@@ -146,12 +146,12 @@ const StepNode = memo(function StepNode({
             <span className="wf-pulse" aria-hidden="true" />
           ) : step.tone === "done" ? (
             <span className="wf-check" aria-hidden="true">
-              <UiIcon name="check" size={11} />
+              <UiIcon name="checkCircle" size={14} />
             </span>
           ) : step.tone === "idle" ? (
             // Waiting: a clock, as the node preview the product owner chose (17 November 2026).
             <span className="wf-wait" aria-hidden="true">
-              <UiIcon name="clock" size={14} />
+              <UiIcon name="clock" size={13} />
             </span>
           ) : (
             <span className={`wf-dot tone-${step.tone}`} aria-hidden="true" />
