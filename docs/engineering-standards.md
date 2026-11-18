@@ -99,7 +99,31 @@ A change is done when all of these hold:
 - Anything that sends a real message to someone outside the team.
 - An exception to a rule in this file or in `AGENTS.md`.
 
-## 9. What is enforced by a check, not by this file
+## 9. Prompt versions
+
+Each prompt builder records a version (`PROMPT_VERSION` or an inline label such as
+`attributes/9`) with every model call, so the record shows which instructions produced an
+answer. Some versions are also compared: the evidence assurance check treats a run whose
+prompt versions differ from `ENGINE_PROMPTS` as out of date, and offers to run it again.
+
+**Bump a builder's version when what it asks the model changes:** its instructions, its
+output schema, the facts it includes or how it lays them out, or how its own code prepares
+the data. Bump it in the same commit, with a dated comment.
+
+**Do not bump it when its code is unchanged** and only shared behaviour beneath it changed,
+such as how `prompt_data.neutral()` makes tag-shaped text inert. Ordinary data reaches the
+model exactly as before; only hostile or tag-like text is quoted differently, so the
+builder's instructions and answers do not change. Bumping would mark existing runs out of
+date and ask people to repeat work for no change in what is asked.
+
+Decided by the product owner on 18 November 2026, after `neutral()` was widened (governance
+finding S1): the twenty builders whose own code changed were bumped; control-tester,
+evidence-mapping, the evidence-assurance assessor and reviewer, workpaper-preparer,
+evidence-reader, evidence-review and console were not, their code being unchanged. The same
+rule was followed on 17 November when `neutral()` was first added to those builders. A
+contractual or regulatory requirement to version every change of input would override this.
+
+## 10. What is enforced by a check, not by this file
 
 | Rule | Check |
 | --- | --- |
