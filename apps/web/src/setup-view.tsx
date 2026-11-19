@@ -86,7 +86,7 @@ import {
 } from "./scope-actions";
 import { type ControlsFor, parseControlsFor } from "./scope-controls-model";
 import { removalNote } from "./scoped-controls";
-import { adviceBySystem } from "./select-controls-model";
+import { adviceBySystem, controlAllowance } from "./select-controls-model";
 import { guidedStep, ONBOARDING_STEPS } from "./setup-guide-model";
 import { ControlsAssistant, SetupAgent, SetupCycle } from "./setup-guide-view";
 import { impactHref } from "./setup-impact-model";
@@ -2259,6 +2259,11 @@ export function ScopePage({
             advice={adviceBySystem(onboarding)}
             rcm={controls.length === 0}
             started={onboarding.started}
+            allowance={controlAllowance(
+              model.trialUsage,
+              model.selectedProject?.demo === true,
+              onboarding.controls.map((control) => control.controlRef),
+            )}
           />
           {controls.length === 0 ? (
             <RcmUpload
@@ -2426,6 +2431,11 @@ export function RegisterPage({
             advice={adviceBySystem(onboarding)}
             rcm={controls.length === 0}
             started={onboarding.started}
+            allowance={controlAllowance(
+              model.trialUsage,
+              model.selectedProject?.demo === true,
+              onboarding.controls.map((control) => control.controlRef),
+            )}
           />
           {controls.length === 0 ? (
             <RcmUpload

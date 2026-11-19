@@ -4,6 +4,7 @@ import { formatDate } from "./format.ts";
 import type { Policy, PriorYearReference } from "./references-model.ts";
 import { failureNoteOf, plainNote } from "./run-failure.ts";
 import type { StandardMatches } from "./standard-matches-model.ts";
+import { type Refusal, refusalWords } from "./trial-model.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -2856,12 +2857,20 @@ export function suggestionSummary(
   return suggestion.note === "" ? done : `${done} ${suggestion.note}`;
 }
 
-/** What to tell the team when a wizard call did not succeed. */
-export function wizardProblem(status: number, detail = ""): string | null {
+/** What to tell the team when a wizard call did not succeed. A change the subscription
+ * refused says what was refused, from the API's structured reason (refusalFrom). */
+export function wizardProblem(
+  status: number,
+  detail = "",
+  refusal: Refusal | null = null,
+): string | null {
   if (status === 200) {
     return null;
   }
-  // The subscription refused the change (subscriptions.py).
+  if (refusal !== null) {
+    return refusalWords(refusal);
+  }
+  // A 402 whose reason could not be read: still never a retry line.
   if (status === 402) {
     return detail.startsWith("subscription inactive")
       ? "The free trial has ended. Everything here stays to read; explore plans to keep working."
