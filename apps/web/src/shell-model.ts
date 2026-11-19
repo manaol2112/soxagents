@@ -217,7 +217,9 @@ export type TaskNotice =
 
 export type ShellModel =
   | { status: "loading" }
-  | { status: "denied" }
+  /** No access. `signedOut` when the API did not know the session (401): the page then
+   * sends the person to sign in and back (19 November 2026); a 403 is a member denied. */
+  | { status: "denied"; signedOut: boolean }
   | { status: "error" }
   | { status: "empty"; email: string }
   | {
@@ -326,14 +328,14 @@ export function chosenOrganizationId(
 
 export function deriveShell(snapshot: WorkspaceSnapshot): ShellModel {
   if (isDenied(snapshot.meStatus)) {
-    return { status: "denied" };
+    return denied(snapshot.meStatus);
   }
   const user = parseUser(snapshot.me);
   if (!isOk(snapshot.meStatus) || user === null) {
     return { status: "error" };
   }
   if (isDenied(snapshot.organizationsStatus)) {
-    return { status: "denied" };
+    return denied(snapshot.organizationsStatus);
   }
   const organizations = parseOrganizations(snapshot.organizations);
   if (!isOk(snapshot.organizationsStatus) || organizations === null) {
@@ -350,7 +352,7 @@ export function deriveShell(snapshot: WorkspaceSnapshot): ShellModel {
     return { status: "error" };
   }
   if (isDenied(snapshot.projectsStatus)) {
-    return { status: "denied" };
+    return denied(snapshot.projectsStatus);
   }
   const projects = parseProjects(snapshot.projects);
   if (!isOk(snapshot.projectsStatus) || projects === null) {
@@ -371,14 +373,14 @@ export function deriveShell(snapshot: WorkspaceSnapshot): ShellModel {
       : requested;
   const agents = loadAgents(section, snapshot);
   if (agents === "denied") {
-    return { status: "denied" };
+    return denied(snapshot.agentsStatus);
   }
   if (agents === "error") {
     return { status: "error" };
   }
   const tasks = loadTasks(section, selectedProject !== null, snapshot);
   if (tasks === "denied") {
-    return { status: "denied" };
+    return denied(snapshot.tasksStatus);
   }
   if (tasks === "error") {
     return { status: "error" };
@@ -661,6 +663,10 @@ function isOk(status: number): boolean {
 
 function isDenied(status: number): boolean {
   return status === 401 || status === 403;
+}
+
+function denied(status: number): ShellModel {
+  return { status: "denied", signedOut: status === 401 };
 }
 
 function parseUser(value: unknown): SessionUser | null {

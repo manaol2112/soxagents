@@ -107,6 +107,27 @@ describe("workspace shell", () => {
     );
   });
 
+  // 19 November 2026: a 401 is a session the API does not know (signed out, sent to sign
+  // in and back); a 403 is a member who is signed in and denied, who keeps the message.
+  it("tells a signed-out caller from a member who is denied", () => {
+    assert.deepEqual(deriveShell(snapshot({ meStatus: 401, me: null })), {
+      status: "denied",
+      signedOut: true,
+    });
+    assert.deepEqual(
+      deriveShell(snapshot({ organizationsStatus: 401, organizations: null })),
+      { status: "denied", signedOut: true },
+    );
+    assert.deepEqual(
+      deriveShell(snapshot({ organizationsStatus: 403, organizations: null })),
+      { status: "denied", signedOut: false },
+    );
+    assert.deepEqual(
+      deriveShell(snapshot({ projectsStatus: 403, projects: null })),
+      { status: "denied", signedOut: false },
+    );
+  });
+
   it("treats a failed workspace load as unavailable", () => {
     assert.equal(
       deriveShell(snapshot({ meStatus: 0, me: null })).status,
@@ -452,7 +473,10 @@ describe("lockedBeforeLaunch", () => {
 describe("sign-in prompt", () => {
   it("never asks a member to sign in while a page is loading", () => {
     assert.equal(showsSignInPrompt({ status: "loading" }), false);
-    assert.equal(showsSignInPrompt({ status: "denied" }), true);
+    assert.equal(
+      showsSignInPrompt({ status: "denied", signedOut: true }),
+      true,
+    );
     assert.equal(showsSignInPrompt({ status: "error" }), true);
     assert.equal(
       showsSignInPrompt({ status: "empty", email: "a@example.com" }),
