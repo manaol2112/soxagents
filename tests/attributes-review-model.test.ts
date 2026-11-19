@@ -473,6 +473,31 @@ describe("Remove, never Retire, for a control's attribute", () => {
   });
 });
 
+describe("the criteria form in a row", () => {
+  it("does not repeat the criteria it edits, and keeps the assumptions in view", () => {
+    // Design review, 19 November 2026: the open editor showed the read-only criteria above
+    // it. In the row (flat) branch the read-only rules and the missing line render only
+    // while the form is closed; the notes (Assumes) and then the form follow.
+    const criteria = readFileSync(
+      "apps/web/src/attribute-criteria.tsx",
+      "utf8",
+    );
+    const flat = criteria.slice(
+      criteria.indexOf("if (flat) {"),
+      criteria.indexOf('<span className="tc-label">'),
+    );
+    assert.ok(flat.length > 0);
+    const rules = flat.indexOf('<dl className="tc-rules">');
+    assert.ok(rules > 0);
+    assert.match(
+      flat.slice(0, rules),
+      /\{editing \? null : stated \|\| criteria\.judgmentRequired === true \? \(\s*$/,
+    );
+    assert.ok(flat.indexOf("{notes}") < flat.indexOf("{editor}"));
+    assert.doesNotMatch(criteria, /The condition tested, at this organization/);
+  });
+});
+
 describe("the old words do not come back on this step", () => {
   const view = readFileSync("apps/web/src/control-context-view.tsx", "utf8");
   const start = view.indexOf("function EmbeddedAttributes(");

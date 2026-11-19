@@ -1929,6 +1929,16 @@ button.tar-head:focus-visible:not(:disabled) {
   font-weight: 400;
 }
 
+/* The criteria form's labels read as the criteria's own: muted, regular weight. */
+.ta.is-embedded .tc-edit label {
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+
+.ta.is-embedded .tc-edit textarea {
+  color: var(--text);
+}
+
 /* The assumptions continue the criteria's rows at the criteria's own gap. */
 .ta.is-embedded .tc.is-flat > .tc-rules + .tas-list.is-rows {
   margin-top: calc(0.3rem - 0.45rem);

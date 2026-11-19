@@ -144,7 +144,9 @@ export function TailoredCriteria({
   if (flat) {
     return (
       <div className="tc is-flat" aria-busy={action.pending}>
-        {stated || criteria.judgmentRequired === true ? (
+        {/* While the form is open it holds the criteria: they are not shown twice (design
+            review, 19 November 2026). The assumptions stay in view above the form. */}
+        {editing ? null : stated || criteria.judgmentRequired === true ? (
           <dl className="tc-rules">
             {criteria.condition !== "" ? (
               <div>
@@ -400,7 +402,8 @@ function CriteriaEditor({
     <div className="tc-edit" id={id}>
       {(
         [
-          ["condition", "The condition tested, at this organization"],
+          // The read-only criteria's own words (design review, 19 November 2026).
+          ["condition", "Tested"],
           ["pass_criteria", "Passes when"],
           ["fail_criteria", "Fails when"],
         ] as const
