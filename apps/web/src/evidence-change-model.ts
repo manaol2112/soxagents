@@ -65,7 +65,9 @@ export function changeWrite(fields: Record<string, string>): ChangeWrite {
   };
 }
 
-const KEEP = ["queue", "q", "group"] as const;
+// The Evidence page's view: its tab (the Evidence Library is "files"), queue, search and
+// grouping, so a change made there comes back to the same view with its notice.
+const KEEP = ["tab", "queue", "q", "group"] as const;
 
 export function changeReturn(fields: Record<string, string>): ChangeReturn {
   const control = fields.control_id ?? "";
@@ -81,6 +83,56 @@ export function changeReturn(fields: Record<string, string>): ChangeReturn {
     }
   }
   return { to: "evidence", file: UUID.test(file) ? file : null, keep };
+}
+
+/**
+ * The page a withdrawal or a restoration comes back to, with its notice, as a path on this
+ * app: the control's workflow step it was made on (`step`, as control-workflow-model
+ * .returnStep reads it; else its Evidence tab) with its files open; or the Evidence page
+ * with the view kept (its tab, so the Evidence Library stays the Library, its queue,
+ * search and grouping) and the file open unless it was just withdrawn (18 November 2026:
+ * a withdrawal and a restoration in the Library landed on Requests, with no banner).
+ */
+export function changeLanding(
+  fields: Record<string, string>,
+  notice: ChangeNotice,
+  step: string | null,
+): string {
+  const params = new URLSearchParams();
+  for (const [field, param] of [
+    ["organization_id", "organization"],
+    ["project_id", "project"],
+  ] as const) {
+    const value = fields[field] ?? "";
+    if (UUID.test(value)) {
+      params.set(param, value);
+    }
+  }
+  const target = changeReturn(fields);
+  if (target.to === "control") {
+    params.set("section", "controls");
+    params.set("control", target.control);
+    // Back to the step the file was changed on: D&I Evidence or OE Evidence.
+    if (step !== null) {
+      params.set("step", step);
+    } else {
+      params.set("tab", "evidence");
+    }
+    // The notice shows with the control's files: open them.
+    params.set("ev", "files");
+  } else {
+    params.set("section", "evidence");
+    for (const [key, value] of Object.entries(target.keep)) {
+      params.set(key, value);
+    }
+    // The file comes back open; a withdrawn one is no longer in the Library, so its
+    // banner names it instead (E1 design review, round 5).
+    if (target.file !== null) {
+      params.set("file", target.file);
+    }
+  }
+  params.set("notice", changeNoticeParam(notice));
+  return `/?${params.toString()}`;
 }
 
 export type ReplaceTarget =
@@ -120,6 +172,11 @@ export type ChangeNotice =
   | "item-accepted"
   | "testing-signed"
   | "workpaper-prepared"
+  | "tickmark"
+  | "reliability"
+  | "walkthrough-pick"
+  | "conclusion-signed"
+  | "finding-held"
   | "same-file"
   | "was-replaced"
   | "already"
@@ -128,10 +185,16 @@ export type ChangeNotice =
   | "unavailable";
 
 export const CHANGE_NOTICES: Record<ChangeNotice, string> = {
+  // Changed 18 November 2026 (E1). Old: "... and kept under Withdrawn with your reason."
+  // New: no reason is claimed, since a withdrawal may be made without one.
+  // Changed again 18 November 2026 (E1 design review). Old: "File withdrawn. It is off
+  // its request, testing, and workpapers, ...", untrue for a file on no request, and
+  // worded apart from the line said where the person acted. New: those same words
+  // (evidence-impact-model.withdrawnMessage, restoredMessage), with "The file".
   withdrawn:
-    "File withdrawn. It is off its request, testing, and workpapers, and kept under Withdrawn with your reason.",
+    "The file was withdrawn. It is kept under Withdrawn and can be restored.",
   restored:
-    "File restored. It is back on its control, and the tester looks at it again.",
+    "The file was restored. It is back on its control and is tested again.",
   replaced:
     "File replaced. The new version took the old one's place; the agent is reading it, and the old one is kept under Withdrawn.",
   reading: "The agent is still reading this file. Try again in a moment.",
@@ -144,16 +207,32 @@ export const CHANGE_NOTICES: Record<ChangeNotice, string> = {
     "Signed-off testing used this file, so the file stays. Reopen the testing first, with a reason.",
   "workpaper-prepared":
     "A prepared workpaper cites this file, so the file stays. Reopen the workpaper first.",
+  // The reliances added by E1 (18 November 2026), for a page reloaded with its notice; a
+  // form that changes the file in place shows the server's own sentence instead.
+  tickmark:
+    "A person's tickmark on this file shows an attribute, so the file stays. Reopen that decision first.",
+  reliability:
+    "A person's decision on whether this file is reliable stands, so the file stays. Reopen that decision first.",
+  "walkthrough-pick":
+    "The walkthrough instance was picked from this file, so the file stays. Pick it again from another file first.",
+  "conclusion-signed":
+    "A signed design conclusion rests on this file, so the file stays. Reopen that conclusion first.",
+  "finding-held":
+    "An open finding on this file was decided or sent to the organization, so the file stays. Close that finding first.",
   "same-file": "That is the same file. Choose the corrected one.",
+  // Changed 18 November 2026 (E1), to the API's own sentence. Old: "Withdraw its newer
+  // version to use this one again", which never restored it.
   "was-replaced":
-    "This file was replaced. Withdraw its newer version to use this one again.",
+    "This file was replaced. A replaced file stays in its version history and cannot be restored; to use it again, upload it again under another file name.",
   already: "That file changed. Refresh and try again.",
   denied: "That is not available to you.",
   invalid: "Give a reason of at least three characters, and choose a file.",
   unavailable: "The evidence register could not be reached. Try again.",
 };
 
-/** The notice for the API's answer. A 409 says why in plain words; it is matched, never shown. */
+/** The notice for the API's answer, for a page reloaded with it (only a fixed set travels
+ * in the address). A 409 says why in plain words; it is matched here, and a form that
+ * changes the file in place shows the sentence itself (`changeProblem`). */
 export function changeNoticeFor(
   intent: ChangeIntent | "replace",
   status: number,
@@ -186,6 +265,21 @@ export function changeNoticeFor(
     if (why.includes("workpaper")) {
       return "workpaper-prepared";
     }
+    if (why.includes("tickmark")) {
+      return "tickmark";
+    }
+    if (why.includes("whether it is reliable")) {
+      return "reliability";
+    }
+    if (why.includes("walkthrough instance")) {
+      return "walkthrough-pick";
+    }
+    if (why.includes("signed design conclusion")) {
+      return "conclusion-signed";
+    }
+    if (why.includes("the finding")) {
+      return "finding-held";
+    }
     if (why.includes("same file")) {
       return "same-file";
     }
@@ -201,6 +295,28 @@ export function changeNoticeFor(
     return "invalid";
   }
   return "unavailable";
+}
+
+/** What a form that changes a file in place says when the change did not go through:
+ * the server's own sentence where it refused with one (E1, 18 November 2026: every
+ * refusal names the reliance and how to clear it), else the notice's words. */
+export function changeProblem(notice: ChangeNotice, detail: string): string {
+  return detail.trim() === "" ? CHANGE_NOTICES[notice] : asSentence(detail);
+}
+
+/** How the API starts its refusal to read a file again whose reading a decision rests
+ * on (evidence_reliance.REFUSED["REREAD"]), told apart from its other refusals. */
+export const RELIED_ON_READING = "This file's reading is relied on: ";
+
+/** A server sentence as a screen shows it: a capital first, a full stop last (the API
+ * words its refusals lower case, with no full stop). */
+export function asSentence(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed === "") {
+    return "";
+  }
+  const first = `${trimmed.charAt(0).toUpperCase()}${trimmed.slice(1)}`;
+  return /[.!?]$/.test(first) ? first : `${first}.`;
 }
 
 /** Whether a change route answers with the notice as JSON, for a form that withdraws in
@@ -246,4 +362,55 @@ export function changeBlocked(file: {
     return "Its screenshot review is signed off, so the file stays.";
   }
   return null;
+}
+
+// One change form open at a time, and what the Withdrawn list says after a restoration
+
+/** The one change form open in a list (E1 design review, round 5: two forms could be
+ * open at once, each with its own Cancel): its owner (a row, a card) and what it shows. */
+export type OpenForm<T> = { owner: string; value: T } | null;
+
+/** The open form after an owner opens one (it takes the place of any other) or closes
+ * its own (another owner's stays open). */
+export function nextOpenForm<T>(
+  now: OpenForm<T>,
+  owner: string,
+  next: T | null,
+): OpenForm<T> {
+  if (next !== null) {
+    return { owner, value: next };
+  }
+  return now !== null && now.owner === owner ? null : now;
+}
+
+/** Whether a reason meets the one rule, so its form's press can be sent: required, 3 to
+ * 500 characters; optional, none or the same. */
+export function reasonReady(value: string, required: boolean): boolean {
+  if (!required && value.trim() === "") {
+    return true;
+  }
+  return cleanReason(value) !== null;
+}
+
+/** The Withdrawn list's count, with the files restored here while the person is on it
+ * (they stay on the list, in their new state). */
+export function withdrawnCountLine(
+  withdrawn: number,
+  restored: number,
+): string {
+  return restored === 0
+    ? `${withdrawn} withdrawn`
+    : `${withdrawn} withdrawn · ${restored} restored just now`;
+}
+
+/** A restored file's row, in its new state, where its withdrawal date was. */
+export function restoredLine(control: string | null): string {
+  return control === null || control === ""
+    ? "Restored just now"
+    : `Restored just now · back on ${control}`;
+}
+
+/** The Withdrawn list's empty line when a search matches nothing. */
+export function noWithdrawnMatch(query: string): string {
+  return `No withdrawn file matches ‘${query.trim()}’.`;
 }

@@ -114,6 +114,7 @@ import { namedConclusion } from "./design-conclusion-model";
 import { DesignEvidence } from "./design-evidence";
 import {
   carriersOf,
+  designListFiles,
   evidenceList,
   requestsToLookAgain,
 } from "./design-evidence-model";
@@ -142,7 +143,7 @@ import {
   PROGRESS_LABELS,
   SEVERITIES,
 } from "./engagement-model";
-import { FileChanges } from "./evidence-change";
+import { ChangeList, FileCardActions, InPlaceForm } from "./evidence-change";
 import {
   CHANGE_NOTICES,
   type ChangeNotice,
@@ -161,7 +162,9 @@ import { EvidenceMappingPanel } from "./evidence-mapping-view";
 import {
   agentStatus,
   byApplicationOf,
+  followUpPoints,
   isReading,
+  reviewFeedback,
   uploadBlocked,
 } from "./evidence-model";
 import { PreviewButton } from "./evidence-opener";
@@ -2972,12 +2975,16 @@ function ControlRecord({
                         files={engagement.files}
                         notice={engagement.changeNotice}
                         serves={fileServes(evidencePlan)}
-                        placed={placedFiles(evidencePlan)}
+                        placed={designListFiles(evidencePlan)}
                       />
                     }
+                    // The files the D&I list's requests do not show, by filing or by a
+                    // person's link: the count and the list are the same files (E1
+                    // design review: "24 not on a request" beside "Serves: ... (linked)",
+                    // because the list followed the plan's approval, not the D&I list).
                     otherFiles={
                       (engagement.files?.files ?? []).filter(
-                        (file) => !placedFiles(evidencePlan).has(file.id),
+                        (file) => !designListFiles(evidencePlan).has(file.id),
                       ).length
                     }
                     documents={{
@@ -4007,7 +4014,7 @@ function ControlEvidence({
           shown under the evidence{" "}
           {under === 1 ? "item it serves" : "items they serve"} above, where{" "}
           {under === 1 ? "it is" : "each is"} previewed, downloaded, replaced,
-          or withdrawn.
+          or removed from its request.
         </p>
       ) : null}
       {listed.length > 0 || under === 0 || reading ? (
@@ -4028,271 +4035,268 @@ function ControlEvidence({
           Evidence page.
         </p>
       ) : listed.length === 0 ? null : (
-        <div className="app-groups">
-          {byApplicationOf(
-            listed,
-            files.applications,
-            control.applicationName,
-          ).map((group) => {
-            const status =
-              group.key === "unknown" ||
-              group.key === "all" ||
-              group.key === "elsewhere" ||
-              group.key === "rest"
-                ? undefined
-                : control.byApplication[group.label];
-            return (
-              <section
-                key={group.key}
-                className={`app-group app-${group.key === "unknown" ? "unknown" : "known"}`}
-              >
-                <h5>
-                  <span>{group.label}</span>
-                  <span className="view-count">{group.files.length}</span>
-                  {status?.result === "PASS" ? (
-                    <span className="pill pill-dot tone-success">
-                      Tested · pass
-                    </span>
-                  ) : status?.result === "EXCEPTION" ? (
-                    <span className="pill pill-dot tone-danger">
-                      Tested · exception
-                    </span>
-                  ) : status?.result === "OPEN" ? (
-                    <span className="pill pill-dot tone-warning">
-                      Testing open
-                    </span>
-                  ) : null}
-                  {group.key === "unknown" ? (
-                    <small>
-                      Set the application on each file so it is tested with the
-                      right one.
-                    </small>
-                  ) : group.key === "all" ? (
-                    <small>Used as evidence for every application.</small>
-                  ) : group.key === "elsewhere" ? (
-                    <small>
-                      Uploaded here, but tested with the application each file
-                      shows. Change it if it is wrong.
-                    </small>
-                  ) : null}
-                </h5>
-                {group.files.length === 0 ? (
-                  <p className="form-hint app-empty">
-                    No evidence for this application yet.
-                  </p>
-                ) : (
-                  <ul className="evidence-files">
-                    {group.files.map((file) => {
-                      const analysis = analysisFor(files.analyses, file.id);
-                      const review = reviewFor(files.reviews, file.id);
-                      const status = agentStatus(file);
-                      const verdict =
-                        review === null
-                          ? null
-                          : (CONCLUSION_LABELS[
-                              review.conclusion ?? review.proposed
-                            ] ?? null);
-                      const summary =
-                        review?.feedback ||
-                        analysis?.classification?.summary ||
-                        (status.label === "Reading"
-                          ? "The evidence coordinator is reading this file."
-                          : "");
-                      return (
-                        <li key={file.id} className="evidence-file-item">
-                          <details className="evidence-file">
-                            <summary>
-                              <span className="evidence-file-head">
-                                <strong title={file.fileName}>
-                                  {file.fileName}
-                                </strong>
-                                <PreviewButton
-                                  organizationId={model.organization.id}
-                                  projectId={model.selectedProject?.id ?? ""}
-                                  files={files.files.map((entry) => ({
-                                    id: entry.id,
-                                    fileName: entry.fileName,
-                                  }))}
-                                  startFileId={file.id}
-                                  title={`${control.controlRef}: evidence`}
-                                  className="btn-secondary btn-sm preview-open"
-                                  label={
-                                    <>
-                                      <UiIcon name="grid" size={13} /> Preview
-                                    </>
-                                  }
-                                />
-                                <span className="evidence-file-pills">
-                                  {file.kindLabel !== null ? (
-                                    <span className="pill">
-                                      {file.kindLabel}
-                                    </span>
-                                  ) : null}
-                                  {verdict !== null ? (
-                                    <span
-                                      className={`pill pill-dot ${verdict.tone}`}
-                                    >
-                                      {review?.conclusion !== null
-                                        ? "Signed off · "
-                                        : ""}
-                                      {verdict.label}
-                                    </span>
-                                  ) : (
-                                    <span
-                                      className={`pill pill-dot ${TONE_CLASS[status.tone]}`}
-                                    >
-                                      {status.label === "Reading" ? (
-                                        <span
-                                          className="spinner small"
-                                          aria-hidden="true"
-                                        />
-                                      ) : null}
-                                      {status.label}
-                                    </span>
-                                  )}
+        // One change form open at a time in the list, and a card's confirmation said above
+        // it, where it stays once the card has gone (E1 design review, round 5).
+        <ChangeList>
+          <div className="app-groups">
+            {byApplicationOf(
+              listed,
+              files.applications,
+              control.applicationName,
+            ).map((group) => {
+              const status =
+                group.key === "unknown" ||
+                group.key === "all" ||
+                group.key === "elsewhere" ||
+                group.key === "rest"
+                  ? undefined
+                  : control.byApplication[group.label];
+              return (
+                <section
+                  key={group.key}
+                  className={`app-group app-${group.key === "unknown" ? "unknown" : "known"}`}
+                >
+                  <h5>
+                    <span>{group.label}</span>
+                    <span className="view-count">{group.files.length}</span>
+                    {status?.result === "PASS" ? (
+                      <span className="pill pill-dot tone-success">
+                        Tested · pass
+                      </span>
+                    ) : status?.result === "EXCEPTION" ? (
+                      <span className="pill pill-dot tone-danger">
+                        Tested · exception
+                      </span>
+                    ) : status?.result === "OPEN" ? (
+                      <span className="pill pill-dot tone-warning">
+                        Testing open
+                      </span>
+                    ) : null}
+                    {group.key === "unknown" ? (
+                      <small>
+                        Set the application on each file so it is tested with
+                        the right one.
+                      </small>
+                    ) : group.key === "all" ? (
+                      <small>Used as evidence for every application.</small>
+                    ) : group.key === "elsewhere" ? (
+                      <small>
+                        Uploaded here, but tested with the application each file
+                        shows. Change it if it is wrong.
+                      </small>
+                    ) : null}
+                  </h5>
+                  {group.files.length === 0 ? (
+                    <p className="form-hint app-empty">
+                      No evidence for this application yet.
+                    </p>
+                  ) : (
+                    <ul className="evidence-files">
+                      {group.files.map((file) => {
+                        const analysis = analysisFor(files.analyses, file.id);
+                        const review = reviewFor(files.reviews, file.id);
+                        const status = agentStatus(file);
+                        const verdict =
+                          review === null
+                            ? null
+                            : (CONCLUSION_LABELS[
+                                review.conclusion ?? review.proposed
+                              ] ?? null);
+                        const summary =
+                          reviewFeedback(review?.feedback ?? "") ||
+                          analysis?.classification?.summary ||
+                          // Reading is said once, by the card's state (round 5).
+                          "";
+                        return (
+                          <li key={file.id} className="evidence-file-item">
+                            <details className="evidence-file">
+                              <summary>
+                                <span className="evidence-file-head">
+                                  <strong title={file.fileName}>
+                                    {file.fileName}
+                                  </strong>
+                                  <PreviewButton
+                                    organizationId={model.organization.id}
+                                    projectId={model.selectedProject?.id ?? ""}
+                                    files={files.files.map((entry) => ({
+                                      id: entry.id,
+                                      fileName: entry.fileName,
+                                    }))}
+                                    startFileId={file.id}
+                                    title={`${control.controlRef}: evidence`}
+                                    className="btn-secondary btn-sm preview-open"
+                                    label={
+                                      <>
+                                        <UiIcon name="grid" size={13} /> Preview
+                                      </>
+                                    }
+                                  />
+                                  <span className="evidence-file-pills">
+                                    {file.kindLabel !== null ? (
+                                      <span className="pill">
+                                        {file.kindLabel}
+                                      </span>
+                                    ) : null}
+                                    {verdict !== null ? (
+                                      <span
+                                        className={`pill pill-dot ${verdict.tone}`}
+                                      >
+                                        {review?.conclusion !== null
+                                          ? "Signed off · "
+                                          : ""}
+                                        {verdict.label}
+                                      </span>
+                                    ) : (
+                                      <span
+                                        className={`pill pill-dot ${TONE_CLASS[status.tone]}`}
+                                      >
+                                        {status.label === "Reading" ? (
+                                          <span
+                                            className="spinner small"
+                                            aria-hidden="true"
+                                          />
+                                        ) : null}
+                                        {status.label}
+                                      </span>
+                                    )}
+                                  </span>
                                 </span>
-                              </span>
-                              {summary !== "" ? (
-                                <span className="evidence-file-summary">
-                                  {summary}
+                                {summary !== "" ? (
+                                  <span className="evidence-file-summary">
+                                    {summary}
+                                  </span>
+                                ) : null}
+                                {serves !== undefined ? (
+                                  <span className="evidence-file-serves">
+                                    {(serves.get(file.id) ?? []).length === 0
+                                      ? "Serves no planned item yet"
+                                      : `Serves: ${(serves.get(file.id) ?? [])
+                                          .map(
+                                            (item) =>
+                                              `${item.label}${item.via === "LINK" ? " (linked)" : item.via === "SHARED" ? " (shared)" : ""}`,
+                                          )
+                                          .join("; ")}`}
+                                  </span>
+                                ) : null}
+                                <span className="evidence-file-meta">
+                                  {file.source === "MAILBOX"
+                                    ? "By email"
+                                    : `Added by ${file.addedBy}`}{" "}
+                                  · {formatDate(file.createdAt)}
+                                  {analysis !== null &&
+                                  analysis.classification !== null
+                                    ? followUpPoints(
+                                        analysis.classification.gaps.length,
+                                      )
+                                    : ""}
                                 </span>
-                              ) : null}
-                              {serves !== undefined ? (
-                                <span className="evidence-file-serves">
-                                  {(serves.get(file.id) ?? []).length === 0
-                                    ? "Serves no planned item yet"
-                                    : `Serves: ${(serves.get(file.id) ?? [])
-                                        .map(
-                                          (item) =>
-                                            `${item.label}${item.via === "LINK" ? " (linked)" : item.via === "SHARED" ? " (shared)" : ""}`,
-                                        )
-                                        .join("; ")}`}
-                                </span>
-                              ) : null}
-                              <span className="evidence-file-meta">
-                                {file.source === "MAILBOX"
-                                  ? "By email"
-                                  : `Added by ${file.addedBy}`}{" "}
-                                · {formatDate(file.createdAt)}
-                                {analysis !== null &&
-                                analysis.classification !== null
-                                  ? ` · ${analysis.classification.gaps.length} follow-up point${analysis.classification.gaps.length === 1 ? "" : "s"}`
-                                  : ""}
-                              </span>
-                            </summary>
-                            <div className="evidence-file-body">
-                              {canAct && files.applications.length > 1 ? (
-                                <form
-                                  autoComplete="off"
-                                  method="post"
-                                  action="/workspace/evidence-application"
-                                  className="inline-form app-form"
-                                >
-                                  <input
-                                    type="hidden"
-                                    name="organization_id"
-                                    value={model.organization.id}
-                                  />
-                                  <input
-                                    type="hidden"
-                                    name="project_id"
-                                    value={model.selectedProject?.id ?? ""}
-                                  />
-                                  <input
-                                    type="hidden"
-                                    name="control_id"
-                                    value={control.id}
-                                  />
-                                  <input
-                                    type="hidden"
-                                    name="file_id"
-                                    value={file.id}
-                                  />
-                                  {step ? (
+                              </summary>
+                              <div className="evidence-file-body">
+                                {canAct && files.applications.length > 1 ? (
+                                  <InPlaceForm
+                                    action="/workspace/evidence-application"
+                                    form="application"
+                                    className="inline-form app-form"
+                                  >
                                     <input
                                       type="hidden"
-                                      name="step"
-                                      value={step}
+                                      name="organization_id"
+                                      value={model.organization.id}
                                     />
-                                  ) : null}
-                                  <label htmlFor={`app-${file.id}`}>
-                                    Application
-                                  </label>
-                                  <select
-                                    id={`app-${file.id}`}
-                                    name="application"
-                                    defaultValue={
-                                      file.applicationScope === "ALL"
-                                        ? "ALL"
-                                        : (file.application?.id ?? "")
-                                    }
-                                    required
-                                  >
-                                    <option value="" disabled>
-                                      Choose the application it shows
-                                    </option>
-                                    {files.applications.map((app) => (
-                                      <option key={app.id} value={app.id}>
-                                        {app.name}
+                                    <input
+                                      type="hidden"
+                                      name="project_id"
+                                      value={model.selectedProject?.id ?? ""}
+                                    />
+                                    <input
+                                      type="hidden"
+                                      name="control_id"
+                                      value={control.id}
+                                    />
+                                    <input
+                                      type="hidden"
+                                      name="file_id"
+                                      value={file.id}
+                                    />
+                                    {step ? (
+                                      <input
+                                        type="hidden"
+                                        name="step"
+                                        value={step}
+                                      />
+                                    ) : null}
+                                    <label htmlFor={`app-${file.id}`}>
+                                      Application
+                                    </label>
+                                    <select
+                                      id={`app-${file.id}`}
+                                      name="application"
+                                      defaultValue={
+                                        file.applicationScope === "ALL"
+                                          ? "ALL"
+                                          : (file.application?.id ?? "")
+                                      }
+                                      required
+                                    >
+                                      <option value="" disabled>
+                                        Choose the application it shows
                                       </option>
-                                    ))}
-                                    <option value="ALL">
-                                      All applications (such as a policy)
-                                    </option>
-                                  </select>
-                                  <button
-                                    type="submit"
-                                    className="btn-secondary btn-sm"
-                                  >
-                                    Save
-                                  </button>
-                                  <small className="form-hint">
-                                    {file.applicationBy === "PERSON"
-                                      ? "Set by a person."
-                                      : "Suggested by the evidence coordinator."}
-                                  </small>
-                                </form>
-                              ) : null}
-                              <AnalysisPanel
-                                analysis={analysis}
-                                review={review}
-                                organizationId={model.organization.id}
-                                projectId={model.selectedProject?.id ?? ""}
-                                canAct={canAct}
-                                keep={keep}
-                              />
-                            </div>
-                          </details>
-                          {/* On the row, not inside it: a file added by mistake is
-                              withdrawn or replaced (its record stays), never deleted. */}
-                          <div className="evidence-file-tools">
-                            <a
-                              className="btn btn-secondary btn-sm"
-                              href={`/workspace/evidence-files/${file.id}?organization=${model.organization.id}&project=${model.selectedProject?.id ?? ""}`}
-                            >
-                              Download
-                            </a>
-                            {canAct ? (
-                              <FileChanges
-                                organizationId={model.organization.id}
-                                projectId={model.selectedProject?.id ?? ""}
-                                fileId={file.id}
-                                fileName={file.fileName}
-                                blocked={changeBlocked(file)}
-                                controlId={control.id}
-                                step={step}
-                              />
-                            ) : null}
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
-              </section>
-            );
-          })}
-        </div>
+                                      {files.applications.map((app) => (
+                                        <option key={app.id} value={app.id}>
+                                          {app.name}
+                                        </option>
+                                      ))}
+                                      <option value="ALL">
+                                        All applications (such as a policy)
+                                      </option>
+                                    </select>
+                                    <button
+                                      type="submit"
+                                      className="btn-secondary btn-sm"
+                                    >
+                                      Save
+                                    </button>
+                                    <small className="form-hint">
+                                      {file.applicationBy === "PERSON"
+                                        ? "Set by a person."
+                                        : "Suggested by the evidence coordinator."}
+                                    </small>
+                                  </InPlaceForm>
+                                ) : null}
+                                <AnalysisPanel
+                                  analysis={analysis}
+                                  review={review}
+                                  organizationId={model.organization.id}
+                                  projectId={model.selectedProject?.id ?? ""}
+                                  canAct={canAct}
+                                  keep={keep}
+                                />
+                              </div>
+                            </details>
+                            {/* On the row, not inside it: a file added by mistake is
+                              withdrawn or replaced (its record stays), never deleted.
+                              Download, Replace file and Withdraw from the engagement…
+                              are behind the card's "…" menu (E1 design review). */}
+                            <FileCardActions
+                              organizationId={model.organization.id}
+                              projectId={model.selectedProject?.id ?? ""}
+                              fileId={file.id}
+                              fileName={file.fileName}
+                              blocked={changeBlocked(file)}
+                              canAct={canAct}
+                              controlId={control.id}
+                              step={step}
+                            />
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </section>
+              );
+            })}
+          </div>
+        </ChangeList>
       )}
     </section>
   );

@@ -68,14 +68,21 @@ describe("Controls page: the register and a control's detail row", () => {
           `tr:has(> td.cpg-expand button[aria-label="Close ${ref}"])`,
         );
         const detail = page.locator("tr.cpg-detail-row");
+        // Changed 19 November 2026 (E1 merge). Old: the row read "Plan: Approved" and
+        // "Testing: Not started", and the detail's Testing step "Not started". New: the
+        // row's pills read "Plan approved" and "Testing not started" (rowPills), and the
+        // detail's status card keeps only what the row does not show, so its Testing step
+        // gives the journey's reason, "Waits for the evidence" (E1 design review, SHIP;
+        // product owner, 18 November 2026: "remove the repetition"). Still the same story:
+        // nothing may say testing is under way or done, or that the plan is not approved.
         const story = [
           ...storyFindings(await row.innerText(), [
-            "Plan: Approved",
-            "Testing: Not started",
+            "Plan approved",
+            "Testing not started",
           ]),
           ...storyFindings(
             await detail.innerText(),
-            ["Test plan approved", /Testing\s*Not started/],
+            ["Test plan approved", /Testing\s*Waits for the evidence/],
             [
               /Testing\s*(?:In progress|Completed)/,
               /Plan\s*(?:to approve|not approved)/,

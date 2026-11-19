@@ -1224,13 +1224,15 @@ class LocalDraftScheduler:
     def _schedule_open_assessments(
         self, *, analysis_id: UUID | None = None, run_id: UUID | None = None
     ) -> None:
-        """Hand over the queued runs of the engagement a reading or a run belongs to."""
-        from ai_workforce_api.evidence_assurance import open_assessments, project_of
+        """Hand over the queued runs of the engagement a reading or a run belongs to,
+        after trying again the checks whose queueing failed there (retry_failed)."""
+        from ai_workforce_api.evidence_assurance import open_assessments, project_of, retry_failed
 
         try:
             with connect(self._settings.database_url) as connection:
                 project = project_of(connection, analysis_id=analysis_id, run_id=run_id)
                 if project is not None:
+                    retry_failed(connection, project)
                     self.schedule_evidence_assessments(open_assessments(connection, project))
         except psycopg.Error:
             logger.warning("open evidence assessments could not be scheduled")
@@ -1697,7 +1699,11 @@ class LocalDraftScheduler:
         from ai_workforce_api.console import open_turns
         from ai_workforce_api.control_reviews import open_reperformances
         from ai_workforce_api.evidence_analysis import open_analyses
-        from ai_workforce_api.evidence_assurance import backfill, open_assessments
+        from ai_workforce_api.evidence_assurance import (
+            backfill,
+            open_assessments,
+            retry_failed,
+        )
         from ai_workforce_api.evidence_plans import (
             open_plan_runs,
             queue_due_reads,
@@ -1745,8 +1751,10 @@ class LocalDraftScheduler:
             # receipts and checks follow).
             land_open_batches(connection)
             # A D&I request with files and no check (filed before the chain, or whose
-            # queueing failed) gets one, a bounded number a start.
+            # queueing failed) gets one, a bounded number a start; a control whose
+            # queueing failed is tried again (migration 0177).
             backfill(connection)
+            retry_failed(connection)
             assessments = open_assessments(connection)
         self.schedule_drafts(ids)
         self.schedule_evidence_assessments(assessments)

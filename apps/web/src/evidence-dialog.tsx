@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { AgentBot } from "./agent-panel";
 import { AutoRefresh } from "./auto-refresh";
 import type { ControlFiles } from "./engagement-model";
@@ -22,6 +22,10 @@ import {
   type WalkthroughInstance,
 } from "./evidence-dialog-model";
 import type { EvidenceFinding } from "./evidence-findings-model";
+import {
+  FILE_ACTION_LABELS,
+  STILL_READING_FILE as STILL_READING,
+} from "./evidence-impact-model";
 import { RequestUpload } from "./evidence-intake";
 import {
   insightOf,
@@ -35,6 +39,7 @@ import type { EvidencePlan } from "./evidence-plan-model";
 import type { EvidenceCitation } from "./evidence-preview-model";
 import { formatBytes, formatDate } from "./format";
 import { RecordDialog } from "./record-dialog";
+import { heldControl } from "./row-menu-model";
 import type { ControlTest } from "./testing-model";
 import { type IconName, UiIcon } from "./ui-icon";
 
@@ -127,6 +132,7 @@ export function EvidenceDialog({
       open.itemId ?? uploadTargetOf(phases, null, null)?.requirement.id ?? null,
   );
   const [focused, setFocused] = useState<EvidenceCitation | null>(null);
+  const uid = useId();
   const [withdrawing, setWithdrawing] = useState<string | null>(null);
   const [withdrawn, setWithdrawn] = useState<string | null>(null);
   const [addingMore, setAddingMore] = useState(false);
@@ -147,6 +153,8 @@ export function EvidenceDialog({
   const docEntry = insight;
   const docName = docEntry?.file.fileName ?? "Uploaded file";
   const docStatus = (docEntry?.analysis?.status ?? "PENDING") as string;
+  // The agent is still reading the file: a withdrawal waits (the server holds it too).
+  const reading = docStatus !== "READY" && docStatus !== "FAILED";
   const docExt = docName.includes(".")
     ? (docName.split(".").pop() ?? "").toUpperCase().slice(0, 5)
     : "";
@@ -337,28 +345,47 @@ export function EvidenceDialog({
                   {docDate !== "" ? <small>{docDate}</small> : null}
                 </span>
                 <span className="ed-doc-tile-side">
-                  <span className={`ed-doc-pill is-${docStatus.toLowerCase()}`}>
-                    {docStatus === "READY" ? (
-                      <UiIcon name="check" size={12} />
-                    ) : null}
-                    {docStatus === "READY"
-                      ? "File uploaded"
-                      : docStatus === "FAILED"
-                        ? "Not readable"
-                        : "Being read"}
-                  </span>
-                  {canAct ? (
-                    <button
-                      type="button"
-                      className="ed-file-remove"
-                      aria-label={`Withdraw ${docName}`}
-                      title="Withdraw the file"
-                      onClick={() =>
-                        setWithdrawing(withdrawing === fileId ? null : fileId)
-                      }
+                  {/* Reading is said once, above the file (E1 design review, round 5). */}
+                  {docStatus === "READY" || docStatus === "FAILED" ? (
+                    <span
+                      className={`ed-doc-pill is-${docStatus.toLowerCase()}`}
                     >
-                      <UiIcon name="trash" size={16} />
-                    </button>
+                      {docStatus === "READY" ? (
+                        <UiIcon name="check" size={12} />
+                      ) : null}
+                      {docStatus === "READY" ? "File uploaded" : "Not readable"}
+                    </span>
+                  ) : null}
+                  {canAct ? (
+                    <>
+                      <button
+                        type="button"
+                        className="ed-file-remove"
+                        // Withdrawn from the engagement, kept on record: the form says
+                        // first where the file is used (E1). Discarding an upload is not
+                        // offered yet. Held while the agent reads the file, reachable,
+                        // its reason its description (E1 design review, round 5).
+                        aria-label={`Withdraw ${docName} from the engagement`}
+                        title={
+                          reading ? STILL_READING : FILE_ACTION_LABELS.WITHDRAW
+                        }
+                        {...heldControl(reading, `${uid}-reading`)}
+                        onClick={() => {
+                          if (!reading) {
+                            setWithdrawing(
+                              withdrawing === fileId ? null : fileId,
+                            );
+                          }
+                        }}
+                      >
+                        <UiIcon name="trash" size={16} />
+                      </button>
+                      {reading ? (
+                        <span id={`${uid}-reading`} className="sr-only">
+                          {STILL_READING}
+                        </span>
+                      ) : null}
+                    </>
                   ) : null}
                 </span>
               </div>
@@ -385,14 +412,14 @@ export function EvidenceDialog({
                       ? "Document is ready for review"
                       : docStatus === "FAILED"
                         ? "The document could not be read"
-                        : "The agent is reading the document"}
+                        : "Nothing to review yet"}
                   </strong>
                   <small>
                     {docStatus === "READY"
                       ? "The file has been uploaded and analyzed. The agent's findings are ready to review, with the next step beside them."
                       : docStatus === "FAILED"
                         ? "Replace it with a readable copy, or withdraw it."
-                        : "Its type, what it shows, and the next step appear here once the reading is done."}
+                        : "Its type, what it shows, and the next step appear here once the agent has finished."}
                   </small>
                 </span>
               </div>

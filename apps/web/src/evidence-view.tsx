@@ -1,11 +1,21 @@
 import { analysisFor, reviewFor } from "./analysis-model";
 import { AnalysisPanel } from "./analysis-view";
-import { FileChanges } from "./evidence-change";
+import {
+  FileChanges,
+  InPlaceForm,
+  WithdrawnCount,
+  type WithdrawnRow,
+  WithdrawnRows,
+  WithdrawnScope,
+} from "./evidence-change";
 import {
   CHANGE_NOTICES,
   changeBlocked,
   changeNoticeOk,
+  noWithdrawnMatch,
 } from "./evidence-change-model";
+import { MoveCheck, MoveGuard, MoveSubmit } from "./evidence-impact";
+import { withdrawnMessage } from "./evidence-impact-model";
 import { EvidenceIntake } from "./evidence-intake";
 import {
   agentStatus,
@@ -17,11 +27,13 @@ import {
   FILING_NOTICES,
   fileCounts,
   filedLabel,
+  filingWhy,
   filterFiles,
   filterWithdrawn,
   REQUEST_STATUS,
   type RegisterControl,
   type RegisterFile,
+  sameSystem,
   type Tone,
   uploadBlocked,
   type WithdrawnFile,
@@ -73,6 +85,9 @@ function keepFields(keep: Keep): Record<string, string> {
 
 function keepOf(view: EvidenceView): Keep {
   return {
+    // The Evidence Library's own tab: every link and form of the tab comes back to it
+    // (18 November 2026: a withdrawal or a restoration landed on Requests, unconfirmed).
+    tab: "files",
     queue: view.queue,
     q: view.query,
     group: view.group === "control" ? "control" : null,
@@ -140,6 +155,10 @@ export function EvidenceFiles({
   const shown = filterFiles(register.files, view);
   const counts = fileCounts(register.files);
   const withdrawn = filterWithdrawn(register.withdrawn, view.query);
+  // The file just withdrawn (the page comes back naming it), named by the server's own
+  // list, never by the address.
+  const withdrewName =
+    register.withdrawn.find((file) => file.id === view.file)?.fileName ?? null;
   const open = register.files.find((file) => file.id === view.file) ?? null;
   const groups =
     view.group === "control"
@@ -162,9 +181,17 @@ export function EvidenceFiles({
       ) : null}
       {workflow.changeNotice !== null ? (
         <Banner
-          tone={changeNoticeOk(workflow.changeNotice) ? "info" : "warning"}
+          tone={
+            workflow.changeNotice === "withdrawn"
+              ? "success"
+              : changeNoticeOk(workflow.changeNotice)
+                ? "info"
+                : "warning"
+          }
         >
-          {CHANGE_NOTICES[workflow.changeNotice]}
+          {workflow.changeNotice === "withdrawn" && withdrewName !== null
+            ? withdrawnMessage(withdrewName)
+            : CHANGE_NOTICES[workflow.changeNotice]}
         </Banner>
       ) : null}
       {blocked !== null ? (
@@ -223,133 +250,140 @@ export function EvidenceFiles({
               );
             })}
           </nav>
-          <div className="grid-toolbar">
-            <form
-              autoComplete="off"
-              method="get"
-              action="/"
-              className="grid-search"
-            >
-              <input
-                type="hidden"
-                name="organization"
-                value={model.organization.id}
-              />
-              <input type="hidden" name="project" value={project.id} />
-              <input type="hidden" name="section" value="evidence" />
-              {view.queue !== null ? (
-                <input type="hidden" name="queue" value={view.queue} />
-              ) : null}
-              {view.group === "control" ? (
-                <input type="hidden" name="group" value="control" />
-              ) : null}
-              <label className="sr-only" htmlFor="evidence-search">
-                Search evidence
-              </label>
-              <input
-                id="evidence-search"
-                name="q"
-                type="search"
-                defaultValue={view.query}
-                placeholder="Search file, folder, control, or kind"
-              />
-            </form>
-            <nav className="segmented" aria-label="Group files">
-              <a
-                href={href(model, { ...keep, group: null })}
-                aria-current={view.group === "list" ? "page" : undefined}
+          {/* The Withdrawn queue's count says the rows restored here (WithdrawnRows). */}
+          <WithdrawnScope>
+            <div className="grid-toolbar">
+              <form
+                autoComplete="off"
+                method="get"
+                action="/"
+                className="grid-search"
               >
-                List
-              </a>
-              <a
-                href={href(model, { ...keep, group: "control" })}
-                aria-current={view.group === "control" ? "page" : undefined}
-              >
-                Grouped by control
-              </a>
-            </nav>
-            <span className="grid-count">
-              {view.queue === "withdrawn"
-                ? `${withdrawn.length} withdrawn`
-                : `${shown.length} of ${register.files.length}`}
-            </span>
-          </div>
-          {view.queue === "withdrawn" ? (
-            <WithdrawnTable
-              model={model}
-              files={withdrawn}
-              keep={keep}
-              canAct={canAct}
-            />
-          ) : shown.length === 0 ? (
-            <EmptyState
-              icon="inbox"
-              title={
-                register.files.length === 0
-                  ? "No evidence yet"
-                  : view.queue === "needs_match"
-                    ? "Every file is filed"
-                    : "No files match"
-              }
-              detail={
-                register.files.length === 0
-                  ? "Drop the team's evidence folder above. Files that control owners email in appear here too."
-                  : "Clear the search or choose another queue."
-              }
-            />
-          ) : (
-            <div className="grid-scroll">
-              <table className="table data-grid is-fixed evidence-grid">
-                <thead>
-                  <tr>
-                    <th scope="col">File</th>
-                    <th scope="col" className="col-control">
-                      Control
-                    </th>
-                    <th scope="col" className="col-request">
-                      Request
-                    </th>
-                    <th scope="col" className="col-kind">
-                      Kind
-                    </th>
-                    <th scope="col" className="col-agent">
-                      Agent review
-                    </th>
-                    <th scope="col" className="col-added">
-                      Added
-                    </th>
-                  </tr>
-                </thead>
-                {groups.map((group) => (
-                  <tbody key={group.key}>
-                    {group.label !== "" ? (
-                      <tr className="group-row">
-                        <th scope="colgroup" colSpan={6}>
-                          <span>{group.label}</span>
-                          <small>
-                            {group.files.length} file
-                            {group.files.length === 1 ? "" : "s"}
-                            {group.detail !== "" ? ` · ${group.detail}` : ""}
-                          </small>
-                        </th>
-                      </tr>
-                    ) : null}
-                    {group.files.map((file) => (
-                      <FileRow
-                        key={file.id}
-                        model={model}
-                        file={file}
-                        keep={keep}
-                        selected={file.id === view.file}
-                        controls={register.controls}
-                        canAct={canAct}
-                      />
-                    ))}
-                  </tbody>
-                ))}
-              </table>
+                <input
+                  type="hidden"
+                  name="organization"
+                  value={model.organization.id}
+                />
+                <input type="hidden" name="project" value={project.id} />
+                <input type="hidden" name="section" value="evidence" />
+                <input type="hidden" name="tab" value="files" />
+                {view.queue !== null ? (
+                  <input type="hidden" name="queue" value={view.queue} />
+                ) : null}
+                {view.group === "control" ? (
+                  <input type="hidden" name="group" value="control" />
+                ) : null}
+                <label className="sr-only" htmlFor="evidence-search">
+                  Search evidence
+                </label>
+                <input
+                  id="evidence-search"
+                  name="q"
+                  type="search"
+                  defaultValue={view.query}
+                  placeholder="Search file, folder, control, or kind"
+                />
+              </form>
+              <nav className="segmented" aria-label="Group files">
+                <a
+                  href={href(model, { ...keep, group: null })}
+                  aria-current={view.group === "list" ? "page" : undefined}
+                >
+                  List
+                </a>
+                <a
+                  href={href(model, { ...keep, group: "control" })}
+                  aria-current={view.group === "control" ? "page" : undefined}
+                >
+                  Grouped by control
+                </a>
+              </nav>
+              {view.queue === "withdrawn" ? (
+                <WithdrawnCount ids={withdrawn.map((file) => file.id)} />
+              ) : (
+                <span className="grid-count">
+                  {`${shown.length} of ${register.files.length}`}
+                </span>
+              )}
             </div>
-          )}
+            {view.queue === "withdrawn" ? (
+              <WithdrawnTable
+                model={model}
+                files={withdrawn}
+                keep={keep}
+                canAct={canAct}
+                query={view.query}
+              />
+            ) : shown.length === 0 ? (
+              <EmptyState
+                icon="inbox"
+                title={
+                  register.files.length === 0
+                    ? "No evidence yet"
+                    : view.queue === "needs_match"
+                      ? "Every file is filed"
+                      : "No files match"
+                }
+                detail={
+                  register.files.length === 0
+                    ? "Drop the team's evidence folder above. Files that control owners email in appear here too."
+                    : "Clear the search or choose another queue."
+                }
+              />
+            ) : (
+              <div className="grid-scroll">
+                <table className="table data-grid is-fixed evidence-grid">
+                  <thead>
+                    <tr>
+                      <th scope="col">File</th>
+                      <th scope="col" className="col-control">
+                        Control
+                      </th>
+                      <th scope="col" className="col-request">
+                        Request
+                      </th>
+                      <th scope="col" className="col-kind">
+                        Kind
+                      </th>
+                      <th scope="col" className="col-agent">
+                        Agent review
+                      </th>
+                      <th scope="col" className="col-added">
+                        Added
+                      </th>
+                    </tr>
+                  </thead>
+                  {groups.map((group) => (
+                    <tbody key={group.key}>
+                      {group.label !== "" ? (
+                        <tr className="group-row">
+                          <th scope="colgroup" colSpan={6}>
+                            <span>{group.label}</span>
+                            <small>
+                              {group.files.length} file
+                              {group.files.length === 1 ? "" : "s"}
+                              {group.detail !== "" ? ` · ${group.detail}` : ""}
+                            </small>
+                          </th>
+                        </tr>
+                      ) : null}
+                      {group.files.map((file) => (
+                        <FileRow
+                          key={file.id}
+                          model={model}
+                          file={file}
+                          keep={keep}
+                          selected={file.id === view.file}
+                          controls={register.controls}
+                          canAct={canAct}
+                        />
+                      ))}
+                    </tbody>
+                  ))}
+                </table>
+              </div>
+            )}
+          </WithdrawnScope>
         </section>
         {open !== null ? (
           <FilePanel
@@ -422,7 +456,7 @@ function FileRow({
           <span className="control-cell">
             <span className="mono item-ref">{controlLabel(file.control)}</span>
             <small title={file.control.title}>{file.control.title}</small>
-            {applicationLabel(file) !== "" ? (
+            {applicationLabel(file) !== "" && !sameSystem(file) ? (
               <span
                 className={`app-tag${file.applicationScope === "UNKNOWN" ? " is-unknown" : ""}`}
               >
@@ -521,10 +555,9 @@ function FilingForm({
     (item) => item.controlId !== file.control?.id,
   );
   return (
-    <form
-      autoComplete="off"
-      method="post"
+    <InPlaceForm
       action="/workspace/evidence-filing"
+      form="filing"
       className={compact ? "filing-form is-compact" : "filing-form"}
     >
       <input
@@ -575,10 +608,10 @@ function FilingForm({
           ))}
         </optgroup>
       </select>
-      <button type="submit" className="btn-sm">
-        {file.control === null ? "File" : "Move"}
-      </button>
-    </form>
+      {/* Waits, reachable by keyboard, until a control is chosen (never the browser's
+          own bubble), and while the move is held. */}
+      <MoveSubmit label={file.control === null ? "File" : "Move"} />
+    </InPlaceForm>
   );
 }
 
@@ -664,10 +697,9 @@ function FilePanel({
             <dt>Application</dt>
             <dd>
               {canAct ? (
-                <form
-                  autoComplete="off"
-                  method="post"
+                <InPlaceForm
                   action="/workspace/evidence-application"
+                  form="application"
                   className="inline-form app-form"
                 >
                   <input
@@ -681,6 +713,10 @@ function FilePanel({
                     value={project?.id ?? ""}
                   />
                   <input type="hidden" name="file_id" value={file.id} />
+                  {/* Back to this view of the Library (its tab, queue and search). */}
+                  {Object.entries(keepFields(keep)).map(([key, value]) => (
+                    <input key={key} type="hidden" name={key} value={value} />
+                  ))}
                   <select
                     name="application"
                     aria-label="Application the file shows"
@@ -704,7 +740,7 @@ function FilePanel({
                   <button type="submit" className="btn-secondary btn-sm">
                     Save
                   </button>
-                </form>
+                </InPlaceForm>
               ) : (
                 applicationLabel(file) || "Not known"
               )}
@@ -745,7 +781,7 @@ function FilePanel({
                 {file.filedBy !== null ? (
                   <strong>{filedLabel(file)}.</strong>
                 ) : null}{" "}
-                {file.matchReason}
+                {filingWhy(file)}
               </p>
               {file.suggestions.length > 0 && file.state === "NEEDS_MATCH" ? (
                 <ul className="suggestion-list">
@@ -762,7 +798,64 @@ function FilePanel({
               ) : null}
             </>
           )}
-          {movable ? (
+          {movable && file.control !== null ? (
+            // A filed file's move says first what it would do, and is held while the
+            // server says something on its control relies on the file (E1).
+            <MoveCheck
+              organizationId={model.organization.id}
+              projectId={project?.id ?? ""}
+              fileId={file.id}
+              fileName={file.fileName}
+              control={controlLabel(file.control)}
+              takeOff={file.filingVersion !== null}
+            >
+              <div className="filing-actions">
+                <MoveGuard action="move">
+                  <FilingForm
+                    model={model}
+                    file={file}
+                    keep={here}
+                    controls={controls}
+                  />
+                </MoveGuard>
+                {file.filingVersion !== null ? (
+                  <div className="filing-secondary">
+                    {file.filedBy === "AGENT" ? (
+                      <InPlaceForm
+                        action="/workspace/evidence-filing"
+                        form="filing"
+                      >
+                        <FilingHidden model={model} file={file} keep={here} />
+                        <input
+                          type="hidden"
+                          name="control_id"
+                          value={file.control.id}
+                        />
+                        <button type="submit" className="btn-secondary btn-sm">
+                          <UiIcon name="check" size={13} /> Confirm the agent's
+                          filing
+                        </button>
+                      </InPlaceForm>
+                    ) : null}
+                    <MoveGuard action="takeoff">
+                      <InPlaceForm
+                        action="/workspace/evidence-filing"
+                        form="filing"
+                      >
+                        <FilingHidden model={model} file={file} keep={here} />
+                        <input type="hidden" name="control_id" value="none" />
+                        <MoveSubmit
+                          label="Take off this control"
+                          className="btn-ghost btn-sm"
+                        />
+                      </InPlaceForm>
+                    </MoveGuard>
+                  </div>
+                ) : null}
+              </div>
+            </MoveCheck>
+          ) : movable ? (
+            // A file not filed yet is filed: nothing relies on it on a control.
             <div className="filing-actions">
               <FilingForm
                 model={model}
@@ -770,39 +863,6 @@ function FilePanel({
                 keep={here}
                 controls={controls}
               />
-              {file.control !== null && file.filingVersion !== null ? (
-                <div className="filing-secondary">
-                  {file.filedBy === "AGENT" ? (
-                    <form
-                      autoComplete="off"
-                      method="post"
-                      action="/workspace/evidence-filing"
-                    >
-                      <FilingHidden model={model} file={file} keep={here} />
-                      <input
-                        type="hidden"
-                        name="control_id"
-                        value={file.control.id}
-                      />
-                      <button type="submit" className="btn-secondary btn-sm">
-                        <UiIcon name="check" size={13} /> Confirm the agent's
-                        filing
-                      </button>
-                    </form>
-                  ) : null}
-                  <form
-                    autoComplete="off"
-                    method="post"
-                    action="/workspace/evidence-filing"
-                  >
-                    <FilingHidden model={model} file={file} keep={here} />
-                    <input type="hidden" name="control_id" value="none" />
-                    <button type="submit" className="btn-ghost btn-sm">
-                      Take off this control
-                    </button>
-                  </form>
-                </div>
-              ) : null}
             </div>
           ) : null}
         </section>
@@ -900,158 +960,104 @@ function WithdrawnTable({
   files,
   keep,
   canAct,
+  query,
 }: {
   model: Ready;
   files: readonly WithdrawnFile[];
   keep: Keep;
   canAct: boolean;
+  query: string;
 }) {
-  if (files.length === 0) {
-    return (
+  const empty =
+    query.trim() !== "" ? (
+      // A search that matches nothing: one line (E1 design review, round 5).
+      <p className="withdrawn-none">{noWithdrawnMatch(query)}</p>
+    ) : (
       <EmptyState
         icon="inbox"
         title="Nothing withdrawn"
         detail="A file someone withdraws or replaces is kept here, with who did it and why."
       />
     );
-  }
+  const head = (
+    <thead>
+      <tr>
+        <th scope="col" className="col-file">
+          File
+        </th>
+        <th scope="col" className="col-control">
+          Control
+        </th>
+        <th scope="col" className="col-why">
+          Why it was withdrawn
+        </th>
+        <th scope="col" className="col-added">
+          Withdrawn
+        </th>
+        <th scope="col" className="col-restore">
+          <span className="sr-only">Actions</span>
+        </th>
+      </tr>
+    </thead>
+  );
+  // Each row's file cell is drawn here; the rest of the row, its actions, Restore's form
+  // and its confirmation are the rows' own, in place (WithdrawnRows).
+  const rows: WithdrawnRow[] = files.map((file) => ({
+    id: file.id,
+    fileName: file.fileName,
+    downloadHref: `/workspace/evidence-files/${file.id}?organization=${model.organization.id}&project=${model.selectedProject?.id ?? ""}`,
+    // A replaced file is not offered Restore: it stays in its version history.
+    restorable: canAct && file.replacedBy === null,
+    control: file.control !== null ? controlLabel(file.control) : null,
+    reason: file.reason,
+    withdrawnOn: formatDate(file.withdrawnAt),
+    withdrawnBy: file.withdrawnBy,
+    file: (
+      <span className="file-cell">
+        <span
+          className={`file-badge kind-${fileIcon(file.fileName).toLowerCase()}`}
+          aria-hidden="true"
+        >
+          {fileIcon(file.fileName)}
+        </span>
+        <span className="file-text">
+          <strong title={file.fileName}>{file.fileName}</strong>
+          <small>
+            {file.folderPath !== "" ? `${file.folderPath} · ` : ""}
+            {formatBytes(file.sizeBytes)} ·{" "}
+            {file.source === "MAILBOX"
+              ? "by email"
+              : `added by ${file.addedBy}`}
+          </small>
+        </span>
+      </span>
+    ),
+    replaced:
+      file.replacedBy !== null ? (
+        <small className="cell-sub">
+          Replaced by{" "}
+          <a
+            href={href(model, {
+              tab: "files",
+              q: keep.q ?? null,
+              group: keep.group ?? null,
+              file: file.replacedBy,
+            })}
+          >
+            {file.replacedByName ?? "the newer version"}
+          </a>
+        </small>
+      ) : null,
+  }));
   return (
-    <div className="grid-scroll">
-      <table className="table data-grid is-fixed evidence-grid withdrawn-grid">
-        <thead>
-          <tr>
-            <th scope="col">File</th>
-            <th scope="col" className="col-control">
-              Control
-            </th>
-            <th scope="col">Why it was withdrawn</th>
-            <th scope="col" className="col-added">
-              Withdrawn
-            </th>
-            <th scope="col" className="col-restore">
-              <span className="sr-only">Actions</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {files.map((file) => (
-            <tr key={file.id}>
-              <td>
-                <span className="file-cell">
-                  <span
-                    className={`file-badge kind-${fileIcon(file.fileName).toLowerCase()}`}
-                    aria-hidden="true"
-                  >
-                    {fileIcon(file.fileName)}
-                  </span>
-                  <span className="file-text">
-                    <strong title={file.fileName}>{file.fileName}</strong>
-                    <small>
-                      {file.folderPath !== "" ? `${file.folderPath} · ` : ""}
-                      {formatBytes(file.sizeBytes)} ·{" "}
-                      {file.source === "MAILBOX"
-                        ? "by email"
-                        : `added by ${file.addedBy}`}
-                    </small>
-                  </span>
-                </span>
-              </td>
-              <td className="col-control">
-                {file.control !== null ? (
-                  <span className="mono item-ref">
-                    {controlLabel(file.control)}
-                  </span>
-                ) : (
-                  "—"
-                )}
-              </td>
-              <td>
-                <span className="withdrawn-why">{file.reason}</span>
-                {file.replacedBy !== null ? (
-                  <small className="cell-sub">
-                    Replaced by{" "}
-                    <a
-                      href={href(model, {
-                        q: keep.q ?? null,
-                        group: keep.group ?? null,
-                        file: file.replacedBy,
-                      })}
-                    >
-                      {file.replacedByName ?? "the newer version"}
-                    </a>
-                  </small>
-                ) : null}
-              </td>
-              <td className="col-added">
-                <span>{formatDate(file.withdrawnAt)}</span>
-                {/* Its own line, cut with an ellipsis in the fixed grid; the title holds
-                    the whole name (.is-fixed td > .cell-sub[title]). */}
-                <small className="cell-sub" title={`by ${file.withdrawnBy}`}>
-                  by {file.withdrawnBy}
-                </small>
-              </td>
-              <td className="col-restore">
-                <span className="withdrawn-actions">
-                  <a
-                    className="btn btn-ghost btn-sm"
-                    href={`/workspace/evidence-files/${file.id}?organization=${model.organization.id}&project=${model.selectedProject?.id ?? ""}`}
-                  >
-                    Download
-                  </a>
-                  {canAct && file.replacedBy === null ? (
-                    <details className="row-menu">
-                      <summary className="btn btn-secondary btn-sm">
-                        Restore
-                      </summary>
-                      <form
-                        autoComplete="off"
-                        method="post"
-                        action="/workspace/evidence-change"
-                        className="row-menu-panel"
-                      >
-                        <input
-                          type="hidden"
-                          name="organization_id"
-                          value={model.organization.id}
-                        />
-                        <input
-                          type="hidden"
-                          name="project_id"
-                          value={model.selectedProject?.id ?? ""}
-                        />
-                        <input type="hidden" name="file_id" value={file.id} />
-                        <input type="hidden" name="intent" value="restore" />
-                        {Object.entries(keepFields(keep)).map(
-                          ([key, value]) => (
-                            <input
-                              key={key}
-                              type="hidden"
-                              name={key}
-                              value={value}
-                            />
-                          ),
-                        )}
-                        <label>
-                          Why restore it
-                          <input
-                            name="reason"
-                            required
-                            minLength={3}
-                            maxLength={500}
-                          />
-                        </label>
-                        <button type="submit" className="btn-sm">
-                          Restore
-                        </button>
-                      </form>
-                    </details>
-                  ) : null}
-                </span>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <WithdrawnRows
+      organizationId={model.organization.id}
+      projectId={model.selectedProject?.id ?? ""}
+      keep={keepFields(keep)}
+      rows={rows}
+      head={head}
+      empty={empty}
+      columns={5}
+    />
   );
 }

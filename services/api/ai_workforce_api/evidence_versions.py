@@ -8,14 +8,16 @@ restored. Replacing stores the new file as a new custody record that takes the o
 place (its control, request, application, and sample items), withdraws the old one, and
 has the agent read the new one and test it again.
 
-Nothing signed off moves: a file whose control's testing is signed off, whose workpaper is
-prepared, whose screenshot review is decided, or from which an approved sample was drawn,
-stays until a person reopens that work.
+Evidence someone relied on stays until that reliance is changed or reopened: what relies
+on a file, and which change each reliance refuses, is evidence_reliance's (E1). A file
+leaving takes itself off every open test sheet that holds it (testing_engine
+.off_open_sheets); a signed-off sheet is never touched.
 """
 
 import asyncio
 from collections.abc import Callable
-from typing import Any
+from datetime import datetime
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 import psycopg
@@ -26,9 +28,11 @@ from starlette.concurrency import run_in_threadpool
 
 from ai_workforce_api.authorization import (
     Action,
+    NotVisible,
     Principal,
     _call,
     _session_principal,
+    authorize,
 )
 from ai_workforce_api.db import transaction
 from ai_workforce_api.evidence import MAX_BYTES, StoreFactory
@@ -54,11 +58,17 @@ from ai_workforce_api.evidence_receipts import (
     follow_linked,
     release_receipt,
 )
+from ai_workforce_api.evidence_reliance import RelianceRefused, check, lock_served
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.storage import StoreError, digest_of, open_store
 from ai_workforce_api.storage_sweep import discarding
-from ai_workforce_api.testing_engine import TestScheduler, request_run, schedule_runs
+from ai_workforce_api.testing_engine import (
+    TestScheduler,
+    off_open_sheets,
+    request_run,
+    schedule_runs,
+)
 from ai_workforce_api.upload_body import read_body
 
 
@@ -77,6 +87,14 @@ class ReasonBody(BaseModel):
 # Recorded when a person withdraws a file without saying why (the record needs a reason).
 NO_REASON = "No reason given."
 
+# A replaced file's withdrawal names its replacement, and the database keeps that
+# withdrawal in force (migration 0038): the file is never restored. Before (E1, 18 November
+# 2026) the refusal said to withdraw the newer version, which never restored it either.
+REPLACED_NOT_RESTORED = (
+    "This file was replaced. A replaced file stays in its version history and cannot be "
+    "restored; to use it again, upload it again under another file name."
+)
+
 
 class WithdrawBody(BaseModel):
     """A withdrawal's reason is the person's to give or not."""
@@ -88,6 +106,42 @@ class WithdrawBody(BaseModel):
     def plain(cls, value: str) -> str:
         cleaned = clean_line(value, 500)
         return cleaned if len(cleaned) >= 3 else NO_REASON
+
+
+class FileRef(BaseModel):
+    id: UUID
+    name: str
+
+
+HistoryKind = Literal[
+    "ADDED", "WITHDRAWN", "RESTORED", "LINKED", "UNLINKED", "REMOVED_FROM_REQUEST"
+]
+
+
+class HistoryEvent(BaseModel):
+    """One event in a file's version and withdrawal history. `by` is the person as the
+    register names them (a team member's display name, or the portal address with
+    "(secure link)" for an owner's upload; none for a file that came by email)."""
+
+    kind: HistoryKind
+    at: datetime
+    by: str | None
+    reason: str = ""
+    # ADDED: how the file came in, and its size.
+    source: Literal["UPLOAD", "MAILBOX", "PORTAL"] | None = None
+    size_bytes: int | None = None
+    # ADDED: the file this one replaced. WITHDRAWN: the file that replaced it.
+    replaces: FileRef | None = None
+    replaced_by: FileRef | None = None
+    # LINKED, UNLINKED, REMOVED_FROM_REQUEST: the evidence item.
+    requirement_id: UUID | None = None
+    requirement_title: str | None = None
+
+
+class HistoryBody(BaseModel):
+    file_id: UUID
+    file_name: str
+    events: list[HistoryEvent]
 
 
 class ReplacedBody(BaseModel):
@@ -109,7 +163,7 @@ def register_evidence_versions(
         principal = _session_principal(request)
         try:
             return _call(settings, lambda connection: work(connection, principal))
-        except IntakeState as error:
+        except (IntakeState, RelianceRefused) as error:
             raise HTTPException(status_code=409, detail=error.detail) from None
         except StoreError as error:
             raise HTTPException(status_code=503, detail=error.detail) from None
@@ -149,6 +203,12 @@ def register_evidence_versions(
         schedule_runs(tests(), runs)
         hand_over_open(settings, analyses, project_id)
         return result
+
+    @app.get(f"{base}/history")
+    def file_history(
+        organization_id: UUID, project_id: UUID, file_id: UUID, request: Request
+    ) -> HistoryBody:
+        return run(request, lambda c, p: history(c, p, organization_id, project_id, file_id))
 
     @app.post(f"{base}/replace")
     async def replace_file(
@@ -224,120 +284,6 @@ def _link(
     return (None, None) if row is None else (row[0], row[1])
 
 
-def _blocked(
-    cursor: psycopg.Cursor[Any],
-    project_id: UUID,
-    file_id: UUID,
-    control_id: UUID | None,
-) -> str | None:
-    """Why the file cannot move now, or None. Only reliance on this file keeps it: an item
-    a person accepted with it, testing signed off on it, a sample drawn from it, its signed
-    screenshot review, or a prepared workpaper that cites it. A file no one has accepted or
-    used in testing can be withdrawn or replaced, whatever else the control has signed off
-    (product owner, 31 Oct 2026: such a file was kept because the control's design
-    workpaper was prepared before it arrived)."""
-    del control_id  # Reliance is the file's own, not its control's.
-    reading = cursor.execute(
-        "SELECT 1 FROM evidence_analyses WHERE evidence_file_id = %s "
-        "AND status IN ('PENDING', 'WORKING')",
-        (file_id,),
-    ).fetchone()
-    if reading is not None:
-        return "the agent is still reading this file; try again in a moment"
-    decided = cursor.execute(
-        "SELECT 1 FROM evidence_reviews WHERE evidence_file_id = %s AND decision IS NOT NULL",
-        (file_id,),
-    ).fetchone()
-    if decided is not None:
-        return "its screenshot review is signed off"
-    drawn = cursor.execute(
-        """
-        SELECT c.control_ref FROM control_tests t
-        JOIN engagement_controls c ON c.id = t.engagement_control_id
-        WHERE t.population_file_id = %s AND t.status = 'APPROVED'
-        """,
-        (file_id,),
-    ).fetchone()
-    if drawn is not None:
-        return f"the approved sample for {drawn[0]} was drawn from it"
-    accepted = _accepted_with(cursor, file_id)
-    if accepted is not None:
-        return f'the evidence item "{accepted}" was accepted with it; change that decision first'
-    signed = cursor.execute(
-        """
-        SELECT c.control_ref FROM test_item_files f
-        JOIN test_items i ON i.id = f.test_item_id
-        JOIN test_sheets s ON s.id = i.test_sheet_id
-        JOIN engagement_controls c ON c.id = s.engagement_control_id
-        WHERE f.evidence_file_id = %s AND s.project_id = %s AND s.status = 'SIGNED_OFF'
-        LIMIT 1
-        """,
-        (file_id, project_id),
-    ).fetchone()
-    if signed is not None:
-        return f"testing for {signed[0]} is signed off on it; reopen it first"
-    cited = cursor.execute(
-        """
-        SELECT c.control_ref, w.stage FROM workpapers w
-        JOIN workpaper_versions v ON v.workpaper_id = w.id AND v.number = w.current_version
-        JOIN engagement_controls c ON c.id = w.engagement_control_id
-        WHERE w.project_id = %s AND w.status = 'PREPARED'
-          AND strpos(v.content::text, %s) > 0
-        ORDER BY w.stage LIMIT 1
-        """,
-        (project_id, str(file_id)),
-    ).fetchone()
-    if cited is not None:
-        stage = "design" if cited[1] == "DESIGN" else "effectiveness"
-        return f"the prepared {stage} workpaper for {cited[0]} cites it; reopen it first"
-    return None
-
-
-def _accepted_with(cursor: psycopg.Cursor[Any], file_id: UUID) -> str | None:
-    """The title of an item a person accepted with the file: one the file serves (filed for
-    it, filed for its request and not read as missing it, linked to it by a person, or
-    shared to it from a sibling control, as the evidence plan counts an item's files) and
-    already served when the person accepted it. A file that arrived after the acceptance
-    was not part of that decision. The items are those a person can judge
-    (evidence_plans.JUDGEABLE_SQL): the requested ones, and an item in hand without a
-    request (planned, or a D&I item that waits for an earlier one) accepted on a file
-    linked to it. Before, only requested items were read, so the file such an item was
-    accepted with could be withdrawn or replaced with no refusal (independent review of
-    docs/evidence-assurance.md section 10.15, 15 November 2026)."""
-    from ai_workforce_api.evidence_plans import (
-        JUDGEABLE_SQL,
-        request_file_serves,
-        shared_from_sibling,
-    )
-
-    row = cursor.execute(
-        """
-        SELECT q.title FROM evidence_requirements q
-        JOIN evidence_files arrived ON arrived.id = %(file)s
-        WHERE {JUDGEABLE} AND q.sufficiency = 'ACCEPTED'
-          -- An acceptance with no time (older records) is read as covering the file.
-          AND (q.sufficiency_at IS NULL OR arrived.created_at <= q.sufficiency_at)
-          AND (
-            EXISTS (
-                SELECT 1 FROM evidence_file_links l
-                LEFT JOIN evidence_analyses a ON a.evidence_file_id = l.evidence_file_id
-                WHERE l.evidence_file_id = %(file)s AND l.pbc_request_id = q.pbc_request_id
-                  AND {SERVES})
-            OR EXISTS (
-                SELECT 1 FROM evidence_requirement_files ef
-                WHERE ef.evidence_file_id = %(file)s AND ef.requirement_id = q.id
-                  AND ef.status = 'LINKED'
-                  AND (q.sufficiency_at IS NULL OR ef.linked_at <= q.sufficiency_at))
-            OR EXISTS ({SHARED} AND f.id = %(file)s))
-        ORDER BY q.created_at LIMIT 1
-        """.replace("{SERVES}", request_file_serves("l.evidence_file_id"))
-        .replace("{SHARED}", shared_from_sibling("1"))
-        .replace("{JUDGEABLE}", JUDGEABLE_SQL),
-        {"file": file_id},
-    ).fetchone()
-    return None if row is None else str(row[0])
-
-
 def _in_force(cursor: psycopg.Cursor[Any], file_id: UUID) -> tuple[UUID, UUID | None] | None:
     row = cursor.execute(
         "SELECT id, replaced_by_file_id FROM evidence_withdrawals "
@@ -347,51 +293,16 @@ def _in_force(cursor: psycopg.Cursor[Any], file_id: UUID) -> tuple[UUID, UUID | 
     return None if row is None else (row[0], row[1])
 
 
-def _off_testing(
-    cursor: psycopg.Cursor[Any], project_id: UUID, control_id: UUID | None, file_id: UUID
-) -> list[UUID]:
-    """Take the file off its control's open sheets, and have the tester look again."""
-    if control_id is None:
-        return []
-    runs: list[UUID] = []
-    for (sheet_id,) in cursor.execute(
-        "SELECT id FROM test_sheets WHERE project_id = %s AND engagement_control_id = %s "
-        "AND status = 'OPEN' ORDER BY created_at FOR UPDATE",
-        (project_id, control_id),
-    ).fetchall():
-        runs += _off_sheet(cursor, UUID(str(sheet_id)), file_id)
-    return runs
-
-
-def _off_sheet(cursor: psycopg.Cursor[Any], sheet_id: UUID, file_id: UUID) -> list[UUID]:
-    sheet = (sheet_id,)
-    for (item_id,) in cursor.execute(
-        "DELETE FROM test_item_files t USING test_items i "
-        "WHERE i.id = t.test_item_id AND i.test_sheet_id = %s "
-        "AND t.evidence_file_id = %s RETURNING t.test_item_id",
-        (sheet[0], file_id),
-    ).fetchall():
-        cursor.execute(
-            "UPDATE test_items SET needs_test = true, version = version + 1 WHERE id = %s",
-            (item_id,),
-        )
-    cursor.execute(
-        "DELETE FROM test_sheet_files WHERE test_sheet_id = %s AND evidence_file_id = %s",
-        (sheet[0], file_id),
-    )
-    queued = request_run(cursor, UUID(str(sheet[0])))
-    return [] if queued is None else [queued]
-
-
 def _test_again(
     cursor: psycopg.Cursor[Any], project_id: UUID, control_id: UUID | None
 ) -> list[UUID]:
     if control_id is None:
         return []
     runs: list[UUID] = []
+    # By id (lock order: evidence_reliance).
     for (sheet_id,) in cursor.execute(
         "SELECT id FROM test_sheets WHERE project_id = %s AND engagement_control_id = %s "
-        "AND status = 'OPEN'",
+        "AND status = 'OPEN' ORDER BY id",
         (project_id, control_id),
     ).fetchall():
         queued = request_run(cursor, UUID(str(sheet_id)))
@@ -439,9 +350,9 @@ def withdraw(
         if _in_force(cursor, file_id) is not None:
             raise IntakeState("this file is already withdrawn")
         request_id, control_id = _link(cursor, project_id, file_id)
-        blocked = _blocked(cursor, project_id, file_id, control_id)
-        if blocked is not None:
-            raise IntakeState(f"the file cannot be withdrawn: {blocked}")
+        # The items it serves, and their plans, held before the check (E1 review, N5).
+        lock_served(cursor, project_id, file_id)
+        check(cursor, project_id, file_id, "WITHDRAW")
         cursor.execute(
             """
             INSERT INTO evidence_withdrawals (
@@ -474,7 +385,7 @@ def withdraw(
             )  # fmt: skip
         # So does the request of each D&I item it is linked to, which a link may have moved.
         follow_linked(cursor, organization_id, project_id, file_id, principal.id, [left])
-        runs = _off_testing(cursor, project_id, control_id, file_id)
+        runs = off_open_sheets(cursor, project_id, control_id, file_id)
         _audit(
             cursor, organization_id, project_id, principal.id, "evidence.withdrawn", file_id,
             {"reason": reason, "judgments_reset": [str(item) for item in reset]},
@@ -517,9 +428,7 @@ def restore_file(
             raise IntakeState("this file is not withdrawn")
         withdrawal_id, replaced_by = found
         if replaced_by is not None:
-            raise IntakeState(
-                "this file was replaced; withdraw the newer version to use this one again"
-            )
+            raise IntakeState(REPLACED_NOT_RESTORED)
         cursor.execute(
             "UPDATE evidence_withdrawals SET restored_by = %s, restored_at = clock_timestamp(), "
             "restore_reason = %s WHERE id = %s",
@@ -534,14 +443,16 @@ def restore_file(
                 cursor, organization_id, project_id, match[0], request_id, principal.id,
                 "PERSON" if match[1] == "PERSON" else "OWNER" if match[1] == "OWNER" else "AGENT",
             )  # fmt: skip
+        # Back in force: the assurance chain checks its request again where it is D&I
+        # evidence (a run of the very same basis is copied, never run twice); then the
+        # tester looks again (lock order: evidence_reliance: the checks' runs before the
+        # test sheets).
+        queue_safely(cursor, project_id, file_id, principal.id)
         runs = _test_again(cursor, project_id, control_id)
         _audit(
             cursor, organization_id, project_id, principal.id, "evidence.restored", file_id,
             {**(context or {}), "reason": reason},
         )  # fmt: skip
-        # Back in force: the assurance chain checks its request again where it is D&I
-        # evidence (a run of the very same basis is copied, never run twice).
-        queue_safely(cursor, project_id, file_id, principal.id)
     return runs
 
 
@@ -575,9 +486,7 @@ def replace(
         if old_digest is not None and old_digest[0] == digest:
             raise IntakeState("this is the same file; nothing to replace")
         request_id, control_id = _link(cursor, project_id, file_id)
-        blocked = _blocked(cursor, project_id, file_id, control_id)
-        if blocked is not None:
-            raise IntakeState(f"the file cannot be replaced: {blocked}")
+        check(cursor, project_id, file_id, "REPLACE")
     new_id = uuid4()
     key = f"evidence/{new_id}"
     # Stored before the record, as an upload is; a refused record removes it again.
@@ -585,6 +494,10 @@ def replace(
     with discarding(store, key), transaction(connection) as cursor:
         if _in_force(cursor, file_id) is not None:
             raise IntakeState("this file changed; refresh and try again")
+        # Checked again where the change is written (E1 review, N4): the first check ran
+        # before the bytes were stored, outside this transaction.
+        lock_served(cursor, project_id, file_id)
+        check(cursor, project_id, file_id, "REPLACE")
         request_id, control_id = _link(cursor, project_id, file_id)
         cursor.execute(
             """
@@ -692,12 +605,13 @@ def replace(
         # The assurance chain's run of a request it was on is out of date; the new run
         # is queued when the new version has been read.
         queue_safely(cursor, project_id, file_id, principal.id)
-        # A person's link is the old file's own and is not carried to the new version: an
-        # item left with no file of its own loses its judgment on record.
+        # An item left with no file of its own loses its judgment on record: a judgment
+        # that rested on the old file is never carried to the new one.
         reset = reset_judgments_left_without_file(
             cursor, organization_id, project_id, file_id, principal.id, "FILE_REPLACED"
         )
-        runs = _off_testing(cursor, project_id, control_id, file_id)
+        carried = _carry_links(cursor, control_id, file_id, new_id)
+        runs = off_open_sheets(cursor, project_id, control_id, file_id)
         _audit(
             cursor, organization_id, project_id, principal.id, "evidence.uploaded", new_id,
             {"content_sha256": digest, "size_bytes": len(content), "replaces": str(file_id)},
@@ -705,7 +619,7 @@ def replace(
         _audit(
             cursor, organization_id, project_id, principal.id, "evidence.replaced", file_id,
             {"reason": reason, "replaced_by": str(new_id),
-             "judgments_reset": [str(item) for item in reset]},
+             "judgments_reset": [str(item) for item in reset], "links_carried": carried},
         )  # fmt: skip
         queued = queue_analysis(cursor, organization_id, project_id, new_id, principal.id)
     evidence = _register(connection, principal, organization_id, project_id, new_id)
@@ -714,3 +628,181 @@ def replace(
         queued,
         runs,
     )
+
+
+def _carry_links(
+    cursor: psycopg.Cursor[Any], control_id: UUID | None, file_id: UUID, new_id: UUID
+) -> list[dict[str, str]]:
+    """The old file's links to items of its control carry to its replacement (E1, product
+    owner, 18 November 2026; before, they stayed with the old file and its items read as
+    having no evidence): the same items, origin, reason and linker (kept, as the audit
+    payload says), linked now, so the new file is never counted as accepted with an item
+    accepted before it was added. Nothing judged on the old file carries: no acceptance,
+    tickmark, reliability decision, screenshot review or confirmed kind. Called after the
+    old file's judgments are reset. Returns what was carried, for the audit trail."""
+    if control_id is None:
+        return []
+    carried: list[dict[str, str]] = []
+    for link_id, requirement_id, origin in cursor.execute(
+        """
+        SELECT id, requirement_id, origin FROM evidence_requirement_files
+        WHERE evidence_file_id = %s AND engagement_control_id = %s AND status = 'LINKED'
+        ORDER BY linked_at, id
+        """,
+        (file_id, control_id),
+    ).fetchall():
+        row = cursor.execute(
+            """
+            INSERT INTO evidence_requirement_files (
+                organization_id, project_id, engagement_control_id, requirement_id,
+                evidence_file_id, status, origin, reason, linked_by
+            )
+            SELECT organization_id, project_id, engagement_control_id, requirement_id, %s,
+                   'LINKED', origin, reason, linked_by
+            FROM evidence_requirement_files WHERE id = %s
+            RETURNING id
+            """,
+            (new_id, link_id),
+        ).fetchone()
+        if row is None:
+            raise IntakeState("this file changed; refresh and try again")
+        cursor.execute(
+            "UPDATE evidence_requirements SET version = version + 1 WHERE id = %s",
+            (requirement_id,),
+        )
+        carried.append(
+            {"requirement_id": str(requirement_id), "from_link_id": str(link_id),
+             "link_id": str(row[0]), "origin": str(origin), "linked_by": "KEPT"}
+        )  # fmt: skip
+    return carried
+
+
+# History
+
+
+# Who, as the register names them (evidence_intake._REGISTER).
+_ADDED_BY = "coalesce(u.display_name, f.uploaded_by_email::text || ' (secure link)')"
+
+
+def history(
+    connection: psycopg.Connection[Any],
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    file_id: UUID,
+) -> HistoryBody:
+    """A file's version and withdrawal history, oldest first, from the records that hold it
+    (product owner, 18 November 2026: an accessible history): how it came in and what it
+    replaced; each withdrawal (and the replacement that took its place) and each
+    restoration; and the person's links to items, their removal, and its removal from a
+    request through its filing. Anyone who can read the engagement can read it; another
+    firm's or another engagement's file is not found. A link made again after it was
+    removed keeps its latest state only (the link's row is reused)."""
+    authorize(
+        connection,
+        principal=principal,
+        action=Action.TASK_READ,
+        organization_id=organization_id,
+        project_id=project_id,
+    )
+    with transaction(connection) as cursor:
+        file = cursor.execute(
+            f"""
+            SELECT f.file_name, f.created_at, {_ADDED_BY}, f.source,
+                   f.uploaded_by_email IS NOT NULL, f.size_bytes, old.id, old.file_name
+            FROM evidence_files f
+            LEFT JOIN users u ON u.id = f.stored_by
+            LEFT JOIN evidence_withdrawals w ON w.replaced_by_file_id = f.id
+            LEFT JOIN evidence_files old ON old.id = w.evidence_file_id
+            WHERE f.id = %s AND f.project_id = %s AND f.organization_id = %s
+            """,  # noqa: S608
+            (file_id, project_id, organization_id),
+        ).fetchone()
+        if file is None:
+            raise NotVisible()
+        events = [
+            HistoryEvent(
+                kind="ADDED", at=file[1], by=None if file[2] is None else str(file[2]),
+                source="PORTAL" if file[4] else "MAILBOX" if file[3] == "MAILBOX" else "UPLOAD",
+                size_bytes=int(file[5]),
+                replaces=None if file[6] is None else FileRef(id=file[6], name=str(file[7])),
+            )
+        ]  # fmt: skip
+        for row in cursor.execute(
+            """
+            SELECT w.withdrawn_at, wu.display_name, w.reason, nf.id, nf.file_name,
+                   w.restored_at, ru.display_name, w.restore_reason
+            FROM evidence_withdrawals w
+            JOIN users wu ON wu.id = w.withdrawn_by
+            LEFT JOIN users ru ON ru.id = w.restored_by
+            LEFT JOIN evidence_files nf ON nf.id = w.replaced_by_file_id
+            WHERE w.evidence_file_id = %s AND w.project_id = %s
+            ORDER BY w.withdrawn_at, w.id
+            """,
+            (file_id, project_id),
+        ).fetchall():
+            events.append(
+                HistoryEvent(
+                    kind="WITHDRAWN", at=row[0], by=str(row[1]), reason=str(row[2]),
+                    replaced_by=None if row[3] is None else FileRef(id=row[3], name=str(row[4])),
+                )
+            )  # fmt: skip
+            if row[5] is not None:
+                events.append(
+                    HistoryEvent(
+                        kind="RESTORED", at=row[5], by=None if row[6] is None else str(row[6]),
+                        reason=str(row[7] or ""),
+                    )
+                )  # fmt: skip
+        for row in cursor.execute(
+            """
+            SELECT ef.linked_at, lu.display_name, ef.reason, ef.removed_at, xu.display_name,
+                   ef.removed_reason, q.id, q.title, ef.origin
+            FROM evidence_requirement_files ef
+            JOIN evidence_requirements q ON q.id = ef.requirement_id
+            LEFT JOIN users lu ON lu.id = ef.linked_by
+            LEFT JOIN users xu ON xu.id = ef.removed_by
+            WHERE ef.evidence_file_id = %s AND ef.project_id = %s
+              AND ef.status IN ('LINKED', 'REMOVED')
+            ORDER BY ef.linked_at, ef.id
+            """,
+            (file_id, project_id),
+        ).fetchall():
+            item = {"requirement_id": row[6], "requirement_title": str(row[7])}
+            events.append(
+                HistoryEvent(
+                    kind="LINKED", at=row[0], by=None if row[1] is None else str(row[1]),
+                    reason=str(row[2]), **item,
+                )
+            )  # fmt: skip
+            if row[3] is not None:
+                events.append(
+                    HistoryEvent(
+                        kind="UNLINKED", at=row[3], by=None if row[4] is None else str(row[4]),
+                        reason=str(row[5]), **item,
+                    )
+                )  # fmt: skip
+        # A removal through a link is its UNLINKED event above; through the filing, here.
+        for row in cursor.execute(
+            """
+            SELECT e.created_at, u.display_name, e.payload ->> 'reason', q.id, q.title
+            FROM audit_events e
+            LEFT JOIN users u ON u.id = e.actor_user_id
+            LEFT JOIN evidence_requirements q ON q.id::text = e.payload ->> 'requirement_id'
+            WHERE e.action = 'evidence.removed_from_request' AND e.target_id = %s
+              AND e.project_id = %s AND e.payload ->> 'via' = 'FILING'
+            ORDER BY e.created_at, e.id
+            """,
+            (file_id, project_id),
+        ).fetchall():
+            events.append(
+                HistoryEvent(
+                    kind="REMOVED_FROM_REQUEST", at=row[0],
+                    by=None if row[1] is None else str(row[1]), reason=str(row[2] or ""),
+                    requirement_id=row[3],
+                    requirement_title=None if row[4] is None else str(row[4]),
+                )
+            )  # fmt: skip
+    # Oldest first; an event recorded in the same instant keeps the order above.
+    events.sort(key=lambda event: event.at)
+    return HistoryBody(file_id=file_id, file_name=str(file[0]), events=events)

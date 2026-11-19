@@ -553,9 +553,12 @@ describe("guarded navigation", () => {
       files.workflow,
       /\(key: StepKey\) => router\.push\(hrefs\[key\], \{ scroll: false \}\)/,
     );
+    // Rewritten 19 November 2026 (E1 design review, round 10). Old: the panel's own
+    // Escape listener called router.push(closeHref, ...). New: the same guarded push,
+    // through the page's Escape gate (onPageEscape), so a dialog's Escape leaves it open.
     assert.match(
       files.workflow,
-      /router\.push\(closeHref, \{ scroll: false \}\);/,
+      /onPageEscape\(\(\) => router\.push\(closeHref, \{ scroll: false \}\)\)/,
     );
     assert.equal(count(files.page, /useGuardedRouter\(\)/g), 1);
     assert.ok(!/useRouter\b/.test(files.page));

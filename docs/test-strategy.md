@@ -107,8 +107,10 @@ page reload, the page agreeing with the server after the action).
 ### G4: every push and pull request
 
 `.github/workflows/ci.yml` runs, side by side: lint and types; the critical tier's Python
-files in four parts (`make test-critical-shard`, a deterministic split by file size that
-`test_ci_gate.py` checks covers `CRITICAL_PY` exactly); the fast tier's files that are not
+files in four parts (`make test-critical-shard`, a deterministic split by CI's measured
+time per file, `scripts/test_durations.json`, with a new file weighed by its size, that
+`test_ci_gate.py` checks covers `CRITICAL_PY` exactly; `make test-durations RUN=<run id>`
+refreshes the times from a run's logs); the fast tier's files that are not
 critical (`make test-fast-only`, `FAST_PY` minus `CRITICAL_PY`, which no CI run reached
 before; every file of either list runs in exactly one part); every Node test, which includes
 `CRITICAL_NODE`; and the web app's production build (`make web-build`). `security.yml` runs

@@ -618,17 +618,30 @@
   box-shadow: none;
 }
 
-.ed-file-remove:hover {
+.ed-file-remove:hover:not([aria-disabled="true"]) {
   color: var(--danger);
   background: transparent;
 }
 
+/* Held while the agent reads the file: drawn off, in the secondary colour even on hover,
+   its focus ring kept (E1 design review). */
+.ed-file-remove[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.ed-file-remove[aria-disabled="true"]:hover {
+  color: var(--text-secondary);
+}
+
+.ed-file-remove:focus-visible {
+  box-shadow: var(--ring);
+}
+
+/* The withdraw and remove forms hold their own frame (.change-form): no second one around
+   them (E1 design review, 18 November 2026). */
 .ed-withdraw {
   margin-top: 0.4rem;
-  padding: 0.75rem;
-  background: var(--surface-muted);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-lg);
 }
 
 /* --- The file's views ------------------------------------------------------------------- */

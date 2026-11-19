@@ -22,6 +22,7 @@ import psycopg
 from pydantic import BaseModel, Field
 
 from ai_workforce_api.actions import contains_secret
+from ai_workforce_api.evidence_withdrawn import in_force
 from ai_workforce_api.inbound import clean_line
 
 OwnerStatus = Literal[
@@ -272,21 +273,23 @@ def _requirements(connection: psycopg.Connection[Any], request_id: UUID) -> dict
 def _owner_files(
     connection: psycopg.Connection[Any], project_id: UUID, request_id: UUID, recipient: str
 ) -> list[tuple[int | None, PortalItemFile]]:
-    """The files this address uploaded for the request, with the item each was for."""
+    """The files this address uploaded for the request, with the item each was for, while
+    they are in force (a withdrawn or replaced file is not the owner's current evidence;
+    E1, 18 November 2026)."""
     return [
         (
             None if row[0] is None else int(row[0]),
             PortalItemFile(file_name=str(row[1]), size_bytes=int(row[2]), added_at=row[3]),
         )
         for row in connection.execute(
-            """
+            f"""
             SELECT m.owner_item, f.file_name, f.size_bytes, f.created_at
             FROM evidence_files f
             JOIN evidence_matches m ON m.evidence_file_id = f.id
             WHERE f.project_id = %s AND m.pbc_request_id = %s
-              AND lower(f.uploaded_by_email::text) = %s
+              AND lower(f.uploaded_by_email::text) = %s AND NOT {in_force("f")}
             ORDER BY f.created_at
-            """,
+            """,  # noqa: S608
             (project_id, request_id, recipient.lower()),
         ).fetchall()
     ]

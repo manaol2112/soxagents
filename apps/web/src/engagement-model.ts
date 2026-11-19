@@ -13,7 +13,11 @@ import type { ChangeNotice } from "./evidence-change-model.ts";
 import type { WalkthroughInstance } from "./evidence-dialog-model.ts";
 import type { EvidenceFinding } from "./evidence-findings-model.ts";
 import type { EvidenceMappingRun } from "./evidence-mapping-model.ts";
-import type { RegisterApplication, RegisterFile } from "./evidence-model.ts";
+import type {
+  RegisterApplication,
+  RegisterFile,
+  WithdrawnFile,
+} from "./evidence-model.ts";
 import type { ExportListing } from "./exports-model.ts";
 import type { MasterPlan, PhaseProgress } from "./planning-model.ts";
 import type { RequestDetails } from "./request-details-model.ts";
@@ -27,6 +31,9 @@ export type ControlFiles = {
   applications: RegisterApplication[];
   analyses: EvidenceAnalysis[];
   reviews: EvidenceReview[];
+  /** The control's withdrawn files, from the same register read: a file's history names
+   * the version it replaced (E1). */
+  withdrawn?: WithdrawnFile[];
 };
 
 import type { ControlContext } from "./control-context-model.ts";

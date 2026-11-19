@@ -5,16 +5,17 @@ import { returnStep } from "../../../src/control-workflow-model";
 import {
   answersInPlace,
   type ChangeNotice,
+  changeLanding,
   changeNoticeFor,
-  changeNoticeParam,
-  changeReturn,
   changeWrite,
 } from "../../../src/evidence-change-model";
 import { apiBaseUrl, sessionToken } from "../../../src/load-workspace";
 
-/** A person withdraws an evidence file, with a reason, or restores a withdrawn one. A form
- * that asks for JSON gets the notice back, to show where the person acted; otherwise the
- * page is reloaded with it. */
+/** A person withdraws an evidence file, with a reason or none, or restores a withdrawn
+ * one, with a reason. A form that asks for JSON gets the notice back, with the server's
+ * own sentence when it refused (`detail`) and the page to come back to (`location`, the
+ * one a reload would land on), to show where the person acted without a reload;
+ * otherwise the page is reloaded with the notice. */
 export async function POST(request: Request) {
   const inPlace = answersInPlace(request.headers.get("accept"));
   const form = await request.formData();
@@ -27,11 +28,12 @@ export async function POST(request: Request) {
   const write = changeWrite(fields);
   if ("error" in write) {
     return inPlace
-      ? NextResponse.json({ notice: "invalid" })
+      ? NextResponse.json({ notice: "invalid", detail: "", location: null })
       : back(request, fields, "invalid");
   }
   const session = sessionToken((await cookies()).get("aw_session")?.value);
   let notice: ChangeNotice = "unavailable";
+  let detail = "";
   try {
     const headers = new Headers({ "content-type": "application/json" });
     if (session !== undefined) {
@@ -44,17 +46,22 @@ export async function POST(request: Request) {
       cache: "no-store",
       signal: AbortSignal.timeout(10000),
     });
-    notice = changeNoticeFor(
-      write.intent,
-      response.status,
-      await detailOf(response),
-    );
+    detail = await detailOf(response);
+    notice = changeNoticeFor(write.intent, response.status, detail);
   } catch {
     notice = "unavailable";
   }
-  return inPlace
-    ? NextResponse.json({ notice })
-    : back(request, fields, notice);
+  if (!inPlace) {
+    return back(request, fields, notice);
+  }
+  // Where a reload would have landed, as a path on this app: a page that cannot show the
+  // confirmation where the person acted (its row is gone) comes back to it in place.
+  const landing = destinationOf(request, fields, notice);
+  return NextResponse.json({
+    notice,
+    detail,
+    location: `${landing.pathname}${landing.search}`,
+  });
 }
 
 async function detailOf(response: Response): Promise<string> {
@@ -74,37 +81,22 @@ function back(
   fields: Record<string, string>,
   notice: ChangeNotice,
 ) {
+  return NextResponse.redirect(destinationOf(request, fields, notice), 303);
+}
+
+/** The page a change comes back to, with its notice (evidence-change-model.changeLanding),
+ * on the address the browser asked for. */
+function destinationOf(
+  request: Request,
+  fields: Record<string, string>,
+  notice: ChangeNotice,
+): URL {
+  const landing = new URLSearchParams(
+    changeLanding(fields, notice, returnStep(fields.step)).slice(2),
+  );
   const destination = browserUrl("/", request);
-  const organization = fields.organization_id ?? "";
-  const project = fields.project_id ?? "";
-  if (/^[0-9a-f-]{36}$/i.test(organization)) {
-    destination.searchParams.set("organization", organization);
+  for (const [key, value] of landing) {
+    destination.searchParams.set(key, value);
   }
-  if (/^[0-9a-f-]{36}$/i.test(project)) {
-    destination.searchParams.set("project", project);
-  }
-  const target = changeReturn(fields);
-  if (target.to === "control") {
-    destination.searchParams.set("section", "controls");
-    destination.searchParams.set("control", target.control);
-    // Back to the step the file was changed on: D&I Evidence or OE Evidence.
-    const step = returnStep(fields.step);
-    if (step !== null) {
-      destination.searchParams.set("step", step);
-    } else {
-      destination.searchParams.set("tab", "evidence");
-    }
-    // The notice shows with the control's files: open them.
-    destination.searchParams.set("ev", "files");
-  } else {
-    destination.searchParams.set("section", "evidence");
-    for (const [key, value] of Object.entries(target.keep)) {
-      destination.searchParams.set(key, value);
-    }
-    if (target.file !== null && notice !== "withdrawn") {
-      destination.searchParams.set("file", target.file);
-    }
-  }
-  destination.searchParams.set("notice", changeNoticeParam(notice));
-  return NextResponse.redirect(destination, 303);
+  return destination;
 }

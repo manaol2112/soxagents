@@ -16,6 +16,7 @@ import {
   planOf,
   readPageView,
   type ScopeFacts,
+  statusSteps,
   stepStates,
   testingOf,
   tiles,
@@ -135,6 +136,126 @@ describe("controls page statuses", () => {
     });
     assert.equal(stepStates("DONE").REVIEW, "done");
     assert.equal(stepStates("PLAN").PLAN, "now");
+  });
+
+  // Design review, 18 November 2026: the status card said "Testing · In progress" beside a
+  // greyed "Start testing", "2 of 2 received" beside an empty circle, and greyed buttons
+  // with no reason. The marks are the journey's step alone; the lines never claim more.
+  it("marks every step from the journey's step, and says what a later step waits for", () => {
+    const held = toPageRow(
+      scope(),
+      work({
+        progress: "PLAN_TO_APPROVE",
+        evidencePlan: "PROPOSED",
+        sheetStatus: "OPEN",
+        evidenceRequests: 2,
+        evidenceReceived: 2,
+        journey: { step: "PLAN" },
+      }),
+      "",
+    );
+    assert.equal(held.testing, "IN_PROGRESS");
+    assert.deepEqual(
+      statusSteps(held).map((step) => [
+        step.key,
+        step.state,
+        step.title,
+        step.line,
+        step.action,
+        step.opens,
+      ]),
+      [
+        [
+          "PLAN",
+          "now",
+          "Plan to approve",
+          "Test plan awaiting approval",
+          "Review plan",
+          false,
+        ],
+        [
+          "REQUEST",
+          "todo",
+          "Evidence",
+          "2 of 2 received; waits for plan approval",
+          null,
+          false,
+        ],
+        [
+          "TEST",
+          "todo",
+          "Testing",
+          // Changed (E1 design review): the branch under way is named, then the one that
+          // waits. Old: "In progress; waits for plan approval".
+          "D&I testing in progress; operating testing waits for plan approval",
+          null,
+          false,
+        ],
+        [
+          "CONCLUDE",
+          "todo",
+          "Conclusion",
+          "Waits for plan approval",
+          null,
+          false,
+        ],
+        ["REVIEW", "todo", "Review", "Waits for plan approval", null, false],
+      ],
+    );
+    // One button on the card, on the step the control is at.
+    assert.equal(
+      statusSteps(held).filter((step) => step.action !== null).length,
+      1,
+    );
+  });
+
+  it("checks a step done with its outcome, and names the button for what is under way", () => {
+    const testing = toPageRow(
+      scope(),
+      work({
+        progress: "AGENT_TESTING",
+        evidencePlan: "PLANNED",
+        sheetStatus: "OPEN",
+        evidenceRequests: 2,
+        evidenceReceived: 2,
+        journey: { step: "TEST" },
+      }),
+      "",
+    );
+    const steps = statusSteps(testing);
+    assert.deepEqual(
+      steps.map((step) => [step.key, step.state, step.line, step.opens]),
+      [
+        ["PLAN", "done", "Test plan approved", true],
+        ["REQUEST", "done", "2 of 2 received", true],
+        ["TEST", "now", "In progress", false],
+        ["CONCLUDE", "todo", "Waits for testing", false],
+        ["REVIEW", "todo", "Waits for testing", false],
+      ],
+    );
+    // Testing under way is continued, not started.
+    assert.equal(steps[2]?.action, "Continue testing");
+    const done = statusSteps(
+      toPageRow(
+        scope(),
+        work({
+          progress: "CONCLUDED",
+          evidencePlan: "PLANNED",
+          sheetStatus: "SIGNED_OFF",
+          conclusion: "EFFECTIVE",
+          reviewStatus: "SIGNED_OFF",
+          journey: { step: "DONE" },
+        }),
+        "",
+      ),
+    );
+    assert.ok(
+      done.every((step) => step.state === "done" && step.action === null),
+    );
+    assert.deepEqual(
+      done.map((step) => step.line),
+      ["Test plan approved", "Done", "Completed", "Effective", "Reviewed"],
+    );
   });
 
   it("builds a row from the scope and the work, the journey's step first", () => {

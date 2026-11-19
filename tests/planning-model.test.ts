@@ -2378,6 +2378,29 @@ describe("the evidence table", () => {
     );
   });
 
+  it("reads the requirement's own statuses, as the plan sends them", () => {
+    // Planning review, 18 November 2026: an item on a request (requirement status
+    // REQUESTED) read as "Not requested", while the server refused its removal because it
+    // was requested. The plan sends evidence_requirements.status as it is.
+    const sent = plan({
+      evidence: [
+        item("E1", "DESIGN", "PLANNED"),
+        item("E2", "DESIGN", "REQUESTED"),
+        item("E3", "INTERIM", "AWAITING_DEPENDENCY"),
+        item("E4", "INTERIM", "WAIVED"),
+      ],
+    });
+    assert.deepEqual(
+      evidenceRows(sent).map((row) => [row.code, row.status]),
+      [
+        ["E1", "NOT_REQUESTED"],
+        ["E2", "REQUESTED"],
+        ["E3", "NOT_REQUESTED"],
+        ["E4", "NOT_APPLICABLE"],
+      ],
+    );
+  });
+
   it("counts each status for the summary", () => {
     assert.deepEqual(evidenceSummary(listed()), {
       NOT_REQUESTED: 2,
@@ -2583,11 +2606,13 @@ describe("the Attributes tab's own actions", () => {
       'intent: "attribute-add"',
       'intent: "attribute-edit"',
       'intent: "attribute-retire"',
-      // Rewritten 19 November 2026 (product owner: "Remove", never "Retire", for a
-      // control's attribute). Old: "It is kept on record as retired.".
-      "It stays in the history.",
     ]) {
       assert.ok(view.includes(words), words);
     }
+    // Changed 19 November 2026 (E1 design review, round 6): the removal is asked on its
+    // row (RemoveAttributeConfirm), its sentence wrapped across two source lines.
+    // Rewritten 19 November 2026 (product owner: "Remove", never "Retire", for a
+    // control's attribute). Old: /It is kept on record as\s+retired\./.
+    assert.match(view, /It stays in the history\./);
   });
 });

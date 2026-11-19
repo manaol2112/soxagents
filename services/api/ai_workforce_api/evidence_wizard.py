@@ -100,6 +100,7 @@ from ai_workforce_api.evidence_assurance import (
     queue_safely,
     read_assurance,
     reconcile,
+    record_queue_failure,
     schedule_assessments,
 )
 from ai_workforce_api.evidence_classify import (
@@ -1033,24 +1034,20 @@ def land(
     if file_id is not None:
         # The reading's own hook (evidence_assurance.queue_after_reading), keeping the
         # checks it queues: in a savepoint, so a failure never loses the reading.
+        # Any failure is recorded for the worker to try again, never only logged
+        # (evidence_assurance.record_queue_failure; "Keep the reading, record it").
         try:
             with cursor.connection.transaction():
                 made = queue_for_file(cursor, batch.project_id, file_id, actor)
             covered, queued = file_id in made.covered, made.queued
-        except Exception as error:
-            logger.warning(
-                "the evidence assessment of a file could not be queued (%s)",
-                type(error).__name__,
-            )
+        except Exception as error:  # noqa: BLE001 - recorded by record_queue_failure
+            record_queue_failure(cursor, batch.project_id, None, actor, error, file_id=file_id)
     else:
         try:
             with cursor.connection.transaction():
                 queued = reconcile(cursor, batch.project_id, batch.control_id, actor).queued
-        except Exception as error:
-            logger.warning(
-                "a wizard batch's checks could not be brought in step (%s)",
-                type(error).__name__,
-            )
+        except Exception as error:  # noqa: BLE001 - recorded by record_queue_failure
+            record_queue_failure(cursor, batch.project_id, [batch.control_id], actor, error)
     cursor.execute(
         "UPDATE evidence_batches SET landed_at = clock_timestamp() WHERE id = %s", (batch.id,)
     )
@@ -1285,6 +1282,37 @@ def _file_on(
     match_id = UUID(str(match[0]))
     primary = next((known[item] for item in wanted if known[item].request_id is not None), None)
     target = (None, None) if primary is None else (primary.request_id, primary.requirement_id)
+    from ai_workforce_api.evidence_reliance import (
+        REFUSED,
+        RelianceRefused,
+        check_items_left,
+        reliances,
+        served,
+    )
+
+    leaving = [item for item in before if item not in wanted]
+    # Refiled, the file leaves every item its filing served (D&I or not: a file filed on
+    # an operating request and placed here, round 2 of the E1 review) and the sibling
+    # items it shared through it.
+    refiled = (match[1], match[2]) != target
+    filing_left = (
+        frozenset(
+            item
+            for item, via, _control in served(cursor, project_id, file_id)
+            if via in ("FILING", "SHARED") and item not in wanted
+        )
+        if refiled
+        else frozenset()
+    )
+    moving = frozenset(leaving) | filing_left
+    if moving:
+        # Evidence relied on for an item it leaves stays there (E1 review, B2): the same
+        # rule as an unlink (evidence_reliance). The reading and the screenshot review are
+        # this flow's own checks.
+        try:
+            check_items_left(reliances(cursor, project_id, file_id), moving, REFUSED["UNLINK"])
+        except RelianceRefused as error:
+            raise WizardState(error.detail) from None
     released = None
     if (match[1], match[2]) != target:
         released = release_receipt(cursor, match_id)
@@ -1389,18 +1417,39 @@ def _file_on(
             {"evidence_file_id": str(file_id), "link_id": str(saved[0]),
              "by": "AGENT" if person is None else "PERSON", "wizard_batch_id": str(batch.id)},
         )  # fmt: skip
-    # A judgment that rested on the file alone goes back to not reviewed.
-    for requirement_id in [item for item in before if item not in wanted]:
+    # A judgment that rested on the file alone goes back to not reviewed, on the audit
+    # trail as every such reset is (E1 review, B2: it was reset with no event).
+    from ai_workforce_api.evidence_plans import JUDGMENT_RESET
+
+    for requirement_id in leaving:
         if _has_own_evidence(cursor, requirement_id):
             continue
-        cursor.execute(
+        was = cursor.execute(
             """
-            UPDATE evidence_requirements
+            UPDATE evidence_requirements q
             SET sufficiency = 'NOT_REVIEWED', sufficiency_note = '', sufficiency_by = NULL,
-                sufficiency_at = NULL, version = version + 1
-            WHERE id = %s AND sufficiency <> 'NOT_REVIEWED'
+                sufficiency_at = NULL, version = q.version + 1
+            FROM (SELECT id, sufficiency FROM evidence_requirements WHERE id = %s) old
+            WHERE q.id = old.id AND q.sufficiency <> 'NOT_REVIEWED'
+            RETURNING old.sufficiency
             """,
             (requirement_id,),
+        ).fetchone()
+        if was is not None:
+            _audit(
+                cursor, batch.organization_id, project_id, actor, JUDGMENT_RESET,
+                "evidence_requirement", requirement_id,
+                {"sufficiency": "NOT_REVIEWED", "was": str(was[0]), "by": "FILE_MOVED",
+                 "evidence_file_id": str(file_id), "wizard_batch_id": str(batch.id)},
+            )  # fmt: skip
+    # The other items its filing served, and the siblings it shared, as the filing's
+    # removal decides them (round 2 of the E1 review: they were left with their judgment).
+    others = filing_left - frozenset(leaving)
+    if others:
+        from ai_workforce_api.evidence_plans import reset_items_left_without_file
+
+        reset_items_left_without_file(
+            cursor, batch.organization_id, project_id, file_id, actor, "FILE_MOVED", others
         )
     if released is not None:
         follow_evidence(

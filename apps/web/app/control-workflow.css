@@ -1268,6 +1268,10 @@
 .dc-actions button[type="submit"][aria-disabled="true"] {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+/* Its focus ring stays while it is focused (WCAG 2.4.7). */
+.dc-actions button[type="submit"][aria-disabled="true"]:not(:focus-visible) {
   box-shadow: none;
 }
 

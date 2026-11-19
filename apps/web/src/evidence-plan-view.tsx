@@ -2,7 +2,8 @@
 
 import { useRouter } from "next/navigation";
 import { type ReactNode, useId, useRef, useState, useTransition } from "react";
-
+import { reopenedPrefix } from "./design-evidence-model";
+import { useChangeForm } from "./evidence-change";
 import {
   APPLICABILITY_LABELS,
   type Applicability,
@@ -374,7 +375,9 @@ function endsCleanly(text: string): string {
 }
 
 /** A file's form opened from the item's menu, under the file's line. */
-export type FileForm = "replace" | "withdraw" | "application";
+/** The form a file's action opens under its line. "remove": Remove from this request
+ * (E1), which takes the file off the item only. */
+export type FileForm = "replace" | "withdraw" | "remove" | "application";
 
 /** What a page shows of a file on an item's line: its name (opening it), a flag, its
  * actions for the item's menu, and the form one of them opened. */
@@ -427,10 +430,11 @@ export function RequirementRow({
   const [words, setWords] = useState("");
   const [fileId, setFileId] = useState("");
   const [showFound, setShowFound] = useState(false);
-  const [fileForm, setFileForm] = useState<{
+  // One change form open in the list at a time (useChangeForm, E1 design review, round 5).
+  const [fileForm, setFileForm] = useChangeForm<{
     fileId: string;
     form: FileForm;
-  } | null>(null);
+  }>();
   // A change to one of its files, confirmed by the server: shown on the item, which stays
   // when the file leaves it.
   const [fileDone, setFileDone] = useState<string | null>(null);
@@ -726,7 +730,12 @@ export function RequirementRow({
                 {file.period ? ` · ${file.period}` : ""}
               </small>
             )}
-            {canAct && file.via === "LINK" && file.linkId !== null ? (
+            {/* Where the page offers the file's actions, "Remove from this request" is
+                among them (E1); otherwise a person's link is taken off here. */}
+            {canAct &&
+            fileLine === undefined &&
+            file.via === "LINK" &&
+            file.linkId !== null ? (
               <button
                 type="button"
                 className="btn-ghost btn-sm"
@@ -990,7 +999,10 @@ export function RequirementRow({
                 const line = lines.get(file.fileId) ?? null;
                 const menu: RowMenuItem[] = [
                   ...(line?.actions ?? []),
-                  ...(canAct && file.via === "LINK" && file.linkId !== null
+                  ...(canAct &&
+                  fileLine === undefined &&
+                  file.via === "LINK" &&
+                  file.linkId !== null
                     ? [
                         {
                           label: "Unlink from this item",
@@ -1016,7 +1028,13 @@ export function RequirementRow({
                               {traceFileNote(trace, file.fileId)}
                             </small>
                           ) : (
-                            <CompactFileNote file={file} />
+                            // How it serves the item ("Linked by …") is the card's meta
+                            // line's to say, once (E1 design review, 18 November 2026).
+                            <CompactFileNote
+                              file={
+                                line?.meta ? { ...file, via: "REQUEST" } : file
+                              }
+                            />
                           )}
                         </p>
                         {line?.meta ? (
@@ -1104,7 +1122,10 @@ export function RequirementRow({
           ) : null}
           {item.sufficiencyNote ? (
             <p className="ep-note">
-              {decided || item.sufficiencyBy ? "" : "Decision reopened: "}
+              {reopenedPrefix(
+                item.sufficiencyNote,
+                decided || Boolean(item.sufficiencyBy),
+              )}
               {item.sufficiencyNote}
               {item.sufficiencyBy ? ` (${item.sufficiencyBy})` : ""}
             </p>
@@ -1269,7 +1290,10 @@ export function RequirementRow({
         </details>
         {item.sufficiencyNote ? (
           <p className="ep-note">
-            {decided || item.sufficiencyBy ? "" : "Decision reopened: "}
+            {reopenedPrefix(
+              item.sufficiencyNote,
+              decided || Boolean(item.sufficiencyBy),
+            )}
             {item.sufficiencyNote}
             {item.sufficiencyBy ? ` (${item.sufficiencyBy})` : ""}
           </p>

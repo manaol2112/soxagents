@@ -8,9 +8,14 @@ Object storage is the S3 API per ADR 0005 and is not called from this module.
 """
 
 import asyncio
+import functools
 import logging
+import os
+import re
+import subprocess
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from pathlib import Path
 from typing import Literal
 
 import psycopg
@@ -85,6 +90,7 @@ from ai_workforce_api.mailbox import live_send_enabled, register_mailbox
 from ai_workforce_api.manager import register_manager
 from ai_workforce_api.master_plans import register_master_plans
 from ai_workforce_api.methodology import register_methodology
+from ai_workforce_api.migrate import applied_head
 from ai_workforce_api.models import ModelProvider, register_models
 from ai_workforce_api.next_steps import register_next_steps
 from ai_workforce_api.onboarding import register_onboarding
@@ -142,6 +148,38 @@ class ReadyBody(BaseModel):
     status: Literal["ok", "unavailable"]
 
 
+class VersionBody(BaseModel):
+    commit: str | None
+    branch: str | None
+    migrations_head: str | None
+
+
+@functools.cache
+def loaded_code() -> tuple[str | None, str | None]:
+    """The commit and branch of the code this process loaded, read once, when the first app
+    is created (a server's at startup): APP_COMMIT when the deploy sets it, else git in the
+    checkout this package was imported from. None for what neither says."""
+    configured = os.environ.get("APP_COMMIT", "").strip()
+    if configured:
+        return (configured if re.fullmatch(r"[0-9a-f]{7,40}", configured) else None), None
+
+    def git(*args: str) -> str | None:
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(Path(__file__).resolve().parent), *args],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+        except OSError, subprocess.TimeoutExpired:
+            return None
+        return (result.stdout.strip() or None) if result.returncode == 0 else None
+
+    branch = git("rev-parse", "--abbrev-ref", "HEAD")
+    return git("rev-parse", "--short=12", "HEAD"), (None if branch == "HEAD" else branch)
+
+
 def create_app(
     settings: Settings | None = None,
     identity_provider: IdentityProvider | None = None,
@@ -154,6 +192,7 @@ def create_app(
 ) -> FastAPI:
     resolved = settings if settings is not None else Settings()
     independence.configure(resolved.review_independence_required, resolved.app_env)
+    code = loaded_code()
     provider = identity_provider
     if provider is None and resolved.oidc_configured():
         provider = build_entra_provider(
@@ -294,6 +333,14 @@ def create_app(
     @app.get("/health", response_model=HealthBody)
     def health() -> HealthBody:
         return HealthBody(status="ok", live_email_enabled=live_send_enabled(resolved))
+
+    # Which code and schema this server runs (scripts/env_status.py): public like /health,
+    # and nothing else is shown.
+    @app.get("/health/version", response_model=VersionBody)
+    def version() -> VersionBody:
+        commit, branch = code
+        head = applied_head(resolved.database_url)
+        return VersionBody(commit=commit, branch=branch, migrations_head=head)
 
     @app.get("/ready", response_model=ReadyBody)
     def ready(response: Response) -> ReadyBody:

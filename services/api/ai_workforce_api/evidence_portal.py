@@ -50,6 +50,7 @@ from ai_workforce_api.evidence_analysis import (
     schedule_analyses,
 )
 from ai_workforce_api.evidence_intake import clean_name, clean_type
+from ai_workforce_api.evidence_withdrawn import in_force
 from ai_workforce_api.mailbox import MailboxProvider, MailboxUnavailable, open_mailbox
 from ai_workforce_api.portal_workspace import (
     OWNER_STATUS_LABELS,
@@ -781,18 +782,20 @@ def submit_evidence(
 def _files_by_request(
     connection: psycopg.Connection[Any], link: Link, request_ids: list[UUID]
 ) -> dict[UUID, list[PortalFile]]:
-    """The files this address uploaded through its links, by request. Nothing else."""
+    """The files this address uploaded through its links, by request, while they are in
+    force: a file the audit team withdrew (or replaced) is not the owner's current evidence
+    (E1, 18 November 2026; it was listed before). Nothing else."""
     if not request_ids:
         return {}
     rows = connection.execute(
-        """
+        f"""
         SELECT m.pbc_request_id, f.file_name, f.size_bytes, f.created_at
         FROM evidence_files f
         JOIN evidence_matches m ON m.evidence_file_id = f.id
         WHERE f.project_id = %s AND lower(f.uploaded_by_email::text) = %s
-          AND m.pbc_request_id = ANY(%s)
+          AND m.pbc_request_id = ANY(%s) AND NOT {in_force("f")}
         ORDER BY f.created_at
-        """,
+        """,  # noqa: S608
         (link.project_id, link.recipient.lower(), request_ids),
     ).fetchall()
     found: dict[UUID, list[PortalFile]] = {}

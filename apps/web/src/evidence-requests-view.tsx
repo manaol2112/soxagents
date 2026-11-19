@@ -21,6 +21,7 @@ import {
 } from "./evidence-about";
 import { centerHref, DEFAULT_QUERY } from "./evidence-center-model";
 import { type DialogOpen, EvidenceDialog } from "./evidence-dialog";
+import { useImpacts } from "./evidence-impact";
 import { RequestUpload } from "./evidence-intake";
 import type { Intelligence } from "./evidence-intelligence-view";
 import type { EvidencePlan } from "./evidence-plan-model";
@@ -936,6 +937,8 @@ function ItemCard({
   onView: ((open: FileOpen) => void) | null;
 }) {
   const { item } = entry;
+  // Its files' changes, checked as a file's menu opens (E1).
+  const impacts = useImpacts(ids);
   const onFile = proposalsFor(policies, item.id);
   const status = ITEM_STATUS[entry.status];
   const count = item.files.length;
@@ -1080,6 +1083,7 @@ function ItemCard({
               applications,
               form,
               setForm,
+              { requirementId: item.id, impacts },
             );
             // A file opens in the one viewer, full size, with what the agent found
             // and what to do with it under "About this file" (section 5b), the

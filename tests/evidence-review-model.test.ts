@@ -1863,7 +1863,10 @@ describe("the screen's own files, for the review", () => {
     );
     assert.match(
       list,
-      /\{assured !== null && assured\.acceptNote !== "" \? \(\s*<p className="de-accept-note">\{assured\.acceptNote\}<\/p>\s*\) : null\}/,
+      // Changed 18 November 2026 (E1 design review, round 5). Old: the note under Accept
+      // on every item. New: only where the item has attributes (a note about what the
+      // attributes show means nothing without them).
+      /\{assured !== null &&\s*assured\.acceptNote !== "" &&\s*row\.letters\.length > 0 \? \(\s*<p className="de-accept-note">\{assured\.acceptNote\}<\/p>\s*\) : null\}/,
     );
     assert.match(list, /onClick=\{\(\) => void accept\(\)\}/);
     // Superseded by section 10.12, item 4. Old: `void accept()` was written once, on the

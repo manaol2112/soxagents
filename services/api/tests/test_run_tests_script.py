@@ -275,6 +275,72 @@ def test_the_parts_cover_every_entry_once_and_balance_by_size(tmp_path: Path) ->
         rt.shard(["test_0.py", "test_0.py"], 1, 2, tmp_path)
 
 
+def test_the_parts_balance_by_measured_time_and_an_untimed_file_still_runs(
+    tmp_path: Path,
+) -> None:
+    # 19 November 2026: split by size, the four CI parts took 357 to 716 seconds. The largest
+    # file need not be the slowest; the measured times decide, and a file with no time yet
+    # (new since the times were taken) weighs its size at the timed files' seconds per byte.
+    for n, size in enumerate([900, 100, 100, 100]):
+        (tmp_path / f"test_{n}.py").write_text("def test_a(): pass\n" + "#" * size, "utf-8")
+    entries = [f"test_{n}.py" for n in range(4)]
+    by_time = {"test_0.py": 1.0, "test_1.py": 3.0, "test_2.py": 2.9}
+    parts = [rt.shard(entries, k, 2, tmp_path, by_time) for k in (1, 2)]
+    assert sorted(e for part in parts for e in part) == sorted(entries)
+    # test_3.py, untimed, weighs about 0.7 s here; at its raw 119 bytes it would fill a part
+    # on its own.
+    assert sorted(parts[0]) == ["test_1.py", "test_3.py"]
+    assert sorted(parts[1]) == ["test_0.py", "test_2.py"]
+    # With no times at all, the split is the size split it always was.
+    assert rt.shard(entries, 1, 2, tmp_path, {}) == rt.shard(entries, 1, 2, tmp_path)
+    assert rt.shard(entries, 1, 2, tmp_path) == ["test_0.py"]
+
+
+def test_the_durations_file_is_read_and_a_malformed_one_stops_the_split(tmp_path: Path) -> None:
+    assert rt.load_durations(tmp_path) == {}
+    (tmp_path / "test_0.py").write_text("def test_a(): pass\n", "utf-8")
+    path = tmp_path / rt.DURATIONS_FILE
+    path.parent.mkdir(parents=True)
+    path.write_text('{"source": "CI", "seconds": {"test_0.py": 12.5}}', "utf-8")
+    assert rt.load_durations(tmp_path) == {"test_0.py": 12.5}
+    assert rt.shard(["test_0.py"], 1, 1, tmp_path) == ["test_0.py"]
+    for bad in ('{"test_0.py": 12.5}', '{"seconds": {"test_0.py": "slow"}}', "[]"):
+        path.write_text(bad, "utf-8")
+        with pytest.raises(ValueError):
+            rt.load_durations(tmp_path)
+
+
+def test_a_run_s_times_go_to_the_log_and_back_into_the_durations_file(tmp_path: Path) -> None:
+    (tmp_path / "test_a.py").write_text("def test_x(): pass\n", "utf-8")
+    (tmp_path / "test_b.py").write_text("def test_y(): pass\n", "utf-8")
+    entries = ["test_a.py", "test_b.py::test_y"]
+    cases = [
+        rt.Case("test_a.py::test_x[1]", "passed", seconds=2.2),
+        rt.Case("test_a.py::TestK::test_z", "failed", seconds=1.0),
+        rt.Case("test_b.py::test_y[big]", "passed", seconds=4.0),
+        rt.Case("test_c.py::test_q", "passed", seconds=9.0),  # not an entry of this run
+    ]
+    assert rt.entry_seconds(cases, entries) == {"test_a.py": 3.2, "test_b.py::test_y": 4.0}
+    line = rt.durations_line(_report(*cases), entries, "commit abc1234")
+    log = f"critical 1 of 4\tDurations of the part\t2026-11-19T18:52:01.5Z {line}\nother\n"
+    read = rt.read_durations_lines(log)
+    assert read == [
+        {
+            "kind": "test-durations",
+            "label": "t",
+            "commit": "commit abc1234",
+            "seconds": {"test_a.py": 3.2, "test_b.py::test_y": 4.0},
+        }
+    ]
+    known = {"test_a.py": 1.0, "test_gone.py": 5.0, "test_b.py": 7.0}
+    # A measured time replaces the known one; one not measured stays; a gone file is dropped.
+    assert rt.merged_durations(known, read, tmp_path) == {
+        "test_a.py": 3.2,
+        "test_b.py": 7.0,
+        "test_b.py::test_y": 4.0,
+    }
+
+
 def _passing(test: str) -> Any:
     return _report(_case(test, "passed"), exit_code=0)
 

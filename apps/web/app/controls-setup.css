@@ -3003,6 +3003,10 @@ button.ry-link:hover {
 .mc-advice button[aria-disabled="true"] {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+/* Held, it is still reached by Tab: its focus ring stays (WCAG 2.4.7). */
+.mc-advice button[aria-disabled="true"]:not(:focus-visible) {
   box-shadow: none;
 }
 

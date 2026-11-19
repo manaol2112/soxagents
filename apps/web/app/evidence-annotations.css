@@ -970,12 +970,16 @@ button.ea-tab:focus-visible:not(:disabled) {
    the panel's own size rather than the reviewer's larger one. */
 .ea-about-body {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   align-content: start;
+  min-width: 0;
 }
 
 .ea-about section.ea-sec {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.625rem;
+  min-width: 0;
 }
 
 .ea-about .ea-sec h3 {
@@ -1169,7 +1173,84 @@ p.ea-about-read {
 }
 
 .ea-about-remove {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: start;
+  gap: 0.375rem;
   border-bottom: 0;
+}
+
+/* A change to the file, and why it is held where the server says it cannot be made. */
+.ea-about-change {
+  display: grid;
+  justify-items: start;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.ea-about-change small {
+  padding-left: 0.5rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+/* The file's history (E1): what happened to it, oldest first. */
+.ea-history {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0 0 0.75rem;
+  padding: 0;
+  list-style: none;
+}
+
+.ea-history li {
+  display: grid;
+  gap: 0.125rem;
+  min-width: 0;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--border);
+}
+
+.ea-history-what {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.ea-history-what strong {
+  font-weight: 500;
+}
+
+.ea-history small {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+.ea-history-why,
+.ea-history-version {
+  overflow-wrap: anywhere;
+}
+
+/* An email address wraps at its own breaks (after the @ or a dot) where it must, never
+   in the middle of a word. */
+.ea-history small.ea-history-by {
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+/* The history being read, or read only in part. */
+.ea-history-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  margin: 0 0 0.75rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
 }
 
 /* The file's rows, where "About this file" draws them in place of the file. */
@@ -1313,7 +1394,10 @@ p.ea-about-read {
   .preview-head > .preview-file-switch {
     flex: 1 1 100%;
     order: 6;
-    max-width: none;
+    /* A long file name in the list never widens the header past the window. */
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
   }
 
   .ea-head {

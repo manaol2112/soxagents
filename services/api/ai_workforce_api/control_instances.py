@@ -14,6 +14,7 @@ from typing import Any
 from uuid import UUID
 
 import psycopg
+from psycopg.types.json import Json
 
 from ai_workforce_api.controls import SYSTEM_DOMAINS
 
@@ -225,8 +226,34 @@ def carry_criteria(cursor: psycopg.Cursor[Any], source_id: UUID, copied_id: UUID
 
 
 def _delete_instance(cursor: psycopg.Cursor[Any], control_id: UUID, label: str) -> None:
+    """Remove an instance nothing depends on. A failed queueing of its checks recorded for
+    it (evidence_assessment_retries, migration 0177; a sibling's file can record one for
+    every instance of the family) carries no evidence of its own: it goes with the
+    instance, on the audit trail. An instance with a check, a request, testing or findings
+    is still refused, and its record kept, since the whole step is rolled back (independent
+    review of E1, NB9: the record alone made the refusal name requests or testing)."""
     try:
         with cursor.connection.transaction():
+            dropped = cursor.execute(
+                "DELETE FROM evidence_assessment_retries WHERE engagement_control_id = %s "
+                "RETURNING organization_id, project_id, attempts, error",
+                (control_id,),
+            ).fetchone()
+            if dropped is not None:
+                cursor.execute(
+                    """
+                    INSERT INTO audit_events (
+                        organization_id, project_id, action, target_type, target_id, payload
+                    )
+                    VALUES (%s, %s, 'evidence_assessment.retry_dropped', 'engagement_control',
+                            %s, %s)
+                    """,
+                    (
+                        dropped[0], dropped[1], control_id,
+                        Json({"attempts": int(dropped[2]), "error": str(dropped[3]),
+                              "reason": "The control instance was removed."}),
+                    ),
+                )  # fmt: skip
             cursor.execute("DELETE FROM engagement_controls WHERE id = %s", (control_id,))
     except psycopg.errors.IntegrityError:
         # A RESTRICT foreign key from requests, testing, or findings.
