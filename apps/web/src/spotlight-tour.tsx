@@ -270,6 +270,28 @@ export function SpotlightTour({
     return () => document.removeEventListener("keydown", onKey);
   }, [open, close]);
 
+  // A step change that takes the focused control with it (Next becomes the step's last
+  // action, switched off) leaves focus on the card, never on the page behind it (E1
+  // design review, round 9: it fell to the body, then to "Guide me" behind the card).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new step is the trigger.
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+    const frame = requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (
+        active === null ||
+        active === document.body ||
+        !active.isConnected ||
+        (active instanceof HTMLButtonElement && active.disabled)
+      ) {
+        card.current?.focus({ preventScroll: true });
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [open, index]);
+
   const typed = useTyped(
     current?.body ?? [],
     `${open}-${index}-${current?.id ?? ""}`,

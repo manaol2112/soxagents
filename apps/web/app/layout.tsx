@@ -42,6 +42,7 @@ import "./evidence-annotations.css";
 import "./glass.css";
 
 import { parseTheme, THEME_COOKIE } from "../src/theme";
+import { FocusKeeper } from "../src/use-focus-return";
 
 /** The workspace's one typeface (shadcn/ui, product owner, 17 November 2026). */
 const sans = Geist({
@@ -67,7 +68,12 @@ export default async function RootLayout({
   const theme = parseTheme((await cookies()).get(THEME_COOKIE)?.value);
   return (
     <html lang="en" className={sans.variable} data-theme={theme}>
-      <body>{children}</body>
+      <body>
+        {/* One focus keeper for the page (use-focus-return.ts): a control that leaves the
+            page with what it closed gives focus back to what opened it. */}
+        <FocusKeeper />
+        {children}
+      </body>
     </html>
   );
 }

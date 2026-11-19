@@ -2357,7 +2357,10 @@ export const NOT_CHECKED_LINE = "Not checked against the attributes yet";
 
 /** One request's check as its row shows it. `attributes` are the control's approved
  * attributes with the list's letters: every one of them is checked. `files` are the
- * row's in-force files. */
+ * row's in-force files. The server's reasons a check is not current (`out_of_date`) are
+ * said on its line whatever its status, one rule (19 November 2026: a NOT_CHECKED request
+ * of a control whose retries are held carries "The check could not be brought up to date
+ * after 5 tries. Run it again.", which only an OUT_OF_DATE line said). */
 export function requestCheck(
   request: AssuredRequest,
   attributes: readonly Lettered[],
@@ -2366,6 +2369,42 @@ export function requestCheck(
   /** Whether a file of the request is still waiting to be read. Said by the list only:
    * where it is not said, a finished check is not offered again (section 10.10). */
   options: { reading?: boolean } = {},
+): RequestCheck {
+  const check = checkOf(request, attributes, files, span, options);
+  return withReasons(check, request.outOfDate);
+}
+
+/** A check's line with the server's reasons it is not current, each said once: the out
+ * of date line says them already, and a current, finished check has none to say. */
+export function withReasons(
+  check: RequestCheck,
+  reasons: readonly string[],
+): RequestCheck {
+  const said = reasons.map(sentence).filter((reason) => reason !== "");
+  if (
+    check.standing === "OUT_OF_DATE" ||
+    check.standing === "REVIEWED" ||
+    said.length === 0
+  ) {
+    return check;
+  }
+  const fresh = said.filter((reason) => !check.line.includes(reason));
+  return fresh.length === 0
+    ? check
+    : {
+        ...check,
+        line: [sentence(check.line), ...fresh]
+          .filter((part) => part !== "")
+          .join(" "),
+      };
+}
+
+function checkOf(
+  request: AssuredRequest,
+  attributes: readonly Lettered[],
+  files: readonly RowFile[],
+  span: Span,
+  options: { reading?: boolean },
 ): RequestCheck {
   const all = attributes.map((item) => item.letter);
   const nameOf = (fileId: string) =>

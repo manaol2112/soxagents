@@ -63,7 +63,7 @@ import {
   type ReliabilityAction,
 } from "./file-reliability";
 import { DataTable } from "./population-table";
-import { heldReasons } from "./row-menu-model";
+import { heldControl, heldReasons } from "./row-menu-model";
 import type { ControlTest } from "./testing-model";
 import { UiIcon } from "./ui-icon";
 
@@ -475,7 +475,7 @@ export function Classification({
                 : kindLabel(kind)
               : read === "failed"
                 ? "Not read"
-                : "Reading the file…"}
+                : "Not known yet"}
           </strong>
         </div>
       </div>
@@ -1286,15 +1286,19 @@ function AboutThisFile({
                   <button
                     type="button"
                     className={`btn-ghost btn-sm${action === "WITHDRAW" ? " is-danger" : ""}`}
-                    disabled={helds[index] !== null}
-                    aria-describedby={
-                      helds[index] !== null
-                        ? `${uid}-held-${helds.lastIndexOf(helds[index] ?? null)}`
-                        : undefined
-                    }
-                    onClick={() =>
-                      setChanging(action === "REMOVE" ? "remove" : "withdraw")
-                    }
+                    // Held, not disabled: Tab reaches it and its reason is its
+                    // description; a press does nothing (E1 design review, round 4).
+                    {...heldControl(
+                      helds[index] !== null,
+                      `${uid}-held-${helds.lastIndexOf(helds[index] ?? null)}`,
+                    )}
+                    onClick={() => {
+                      if (helds[index] === null) {
+                        setChanging(
+                          action === "REMOVE" ? "remove" : "withdraw",
+                        );
+                      }
+                    }}
                   >
                     {/* One icon, one meaning: x takes it off this request; the
                         withdrawal from the engagement has the bin. */}

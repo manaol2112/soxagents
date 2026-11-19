@@ -62,7 +62,8 @@ describe("a file that needs placing can also be removed (product owner, 14 Novem
     const start = view.indexOf("function Choose(");
     const chooser = view.slice(start, view.indexOf("function SuggestionView("));
     assert.ok(start > 0 && chooser.length > 0);
-    assert.match(chooser, /onClick=\{remove\.onRemove\}/);
+    // (Its press calls remove.onRemove only while it is not held: round 4, below.)
+    assert.match(chooser, /remove\.onRemove\(\);/);
     assert.doesNotMatch(chooser, /fetch\(|<form|method=/);
     // Changed 18 November 2026 (E1 design review). Old: the form opened beside the row's
     // Choose, Place file and Confirm its kind, all still live. New: it spans the row
@@ -77,11 +78,17 @@ describe("a file that needs placing can also be removed (product owner, 14 Novem
     );
     assert.match(view, /needs\.fix !== null && !removing \?/);
     assert.match(view, /start="withdraw"/);
-    // A real, named button, quiet beside the row's main action, off while the file is
-    // still being read.
+    // A real, named button, quiet beside the row's main action, held while the file is
+    // still being read. Changed 18 November 2026 (E1 design review, round 4). Old: held
+    // as `disabled` (Tab skipped it, its reason only a title). New: aria-disabled, the
+    // reason its description, and a press does nothing.
     assert.match(
       chooser,
-      /className="btn btn-ghost btn-sm wz-choose-remove"\s*disabled=\{busy \|\| remove\.unavailable !== null\}/,
+      /className="btn btn-ghost btn-sm wz-choose-remove"\s*\{\.\.\.heldControl\(\s*busy \|\| remove\.unavailable !== null,/,
+    );
+    assert.match(
+      chooser,
+      /if \(!busy && remove\.unavailable === null\) \{\s*remove\.onRemove\(\);/,
     );
     assert.match(
       chooser,

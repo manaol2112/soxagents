@@ -617,6 +617,7 @@ export function fileLine(
           form="application"
           className="ep-file-form ep-file-app"
           onDone={() => setForm(null, FILING_NOTICES.applied)}
+          onCancel={() => setForm(null)}
         >
           <input
             type="hidden"
@@ -648,13 +649,6 @@ export function fileLine(
           </select>
           <button type="submit" className="btn-sm">
             Save
-          </button>
-          <button
-            type="button"
-            className="btn-ghost btn-sm"
-            onClick={() => setForm(null)}
-          >
-            Cancel
           </button>
         </InPlaceForm>
       ) : null,

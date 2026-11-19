@@ -843,6 +843,23 @@ describe("a request's check, in every status", () => {
     assert.deepEqual(view.leftOut, []);
   });
 
+  it("says the server's reasons a check is not current, whatever its status (19 November 2026)", () => {
+    // The backend sets out_of_date = [RETRY_HELD] on a NOT_CHECKED request of a control
+    // whose retries are held; only an OUT_OF_DATE line said its reasons, so it was lost.
+    const held =
+      "The check could not be brought up to date after 5 tries. Run it again.";
+    const view = check({ status: "NOT_CHECKED", out_of_date: [held] });
+    assert.equal(view.standing, "NOT_CHECKED");
+    assert.equal(view.line, `${NOT_CHECKED_LINE}. ${held}`);
+    assert.equal(view.action?.label, "Check now");
+    // The out-of-date line says them once, as before.
+    const stale = check({ status: "OUT_OF_DATE", out_of_date: [held] });
+    assert.equal(stale.line.split(held).length - 1, 1);
+    // A held or failed check carries them the same way.
+    const failed = check({ status: "FAILED", out_of_date: [held] });
+    assert.ok(failed.line.endsWith(held));
+  });
+
   it("is one quiet working line naming the letters being checked", () => {
     const queued = check({ status: "QUEUED", stage: "GATE" });
     assert.equal(queued.standing, "CHECKING");

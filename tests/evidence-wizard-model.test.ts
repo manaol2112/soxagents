@@ -33,9 +33,12 @@ import {
   finishedAt,
   finishedNote,
   finishOf,
+  firstRead,
+  formatDuration,
   formatElapsed,
   goneFromBatch,
   hintKey,
+  idleGaps,
   isEarlierSession,
   itemCards,
   itemResults,
@@ -68,6 +71,7 @@ import {
   resultsSummary,
   retryDelay,
   STALLED_AFTER_MS,
+  seenFiles,
   serverClock,
   steadySeconds,
   tookLine,
@@ -78,6 +82,7 @@ import {
   WITHDRAWN_LINK,
   type WizardItem,
   windowHeading,
+  withdrawnCount,
   withdrawnFilesHref,
   withdrawnQuery,
   withoutRepeats,
@@ -1907,7 +1912,7 @@ describe("step 2: the pipeline, each file's row, the elapsed time", () => {
       assert.equal(banner?.tone, "warning");
       assert.equal(
         banner?.text,
-        "2 files analyzed: 2 sorted into the items. 1 item not checked: 2 files could not be read.",
+        "2 files read: 2 sorted into the items. 1 item not checked: 2 files could not be read.",
       );
       assert.ok(
         (banner?.text ?? "").endsWith(
@@ -2137,6 +2142,88 @@ describe("step 2: the pipeline, each file's row, the elapsed time", () => {
     assert.equal(formatElapsed(725), "12:05");
     assert.equal(formatElapsed(3723), "1:02:03");
     assert.equal(formatElapsed(-5), "0:00");
+  });
+
+  it("measures a session taken up again from its files' reading, not the batch's creation (E1 design review, round 10)", () => {
+    // Created 1 h 28 min before its files were read in about half a minute.
+    const resumed = batchOf(finishedBatch({ created_at: at(-5280) }));
+    assert.equal(firstRead(resumed), CREATED + 2_000);
+    const taken = elapsedSeconds({
+      createdAt: resumed.createdAt,
+      now: CREATED + 9_000_000,
+      done: true,
+      finished: finishedAt(resumed),
+      startedAt: null,
+      firstRead: firstRead(resumed),
+    });
+    assert.equal(formatDuration(taken), "31 s");
+    // Files this page added start the clock where it added the first of them.
+    assert.equal(
+      elapsedSeconds({
+        createdAt: resumed.createdAt,
+        now: CREATED + 9_000_000,
+        done: true,
+        finished: finishedAt(resumed),
+        startedAt: CREATED + 1_000,
+        firstRead: firstRead(resumed),
+      }),
+      32,
+    );
+    assert.equal(firstRead(batchOf(finishedBatch({ files: [] }))), null);
+    // Files dropped in again 12 minutes later, each read in seconds: the pause between
+    // the two readings is not counted.
+    const read = file().read;
+    const later = batchOf(
+      finishedBatch({
+        created_at: at(-5280),
+        files: [
+          file(),
+          file({
+            file_id: F2,
+            read: { ...read, started_at: at(722), finished_at: at(724) },
+          }),
+        ],
+      }),
+    );
+    assert.deepEqual(idleGaps(later), [[CREATED + 9_000, CREATED + 722_000]]);
+    assert.equal(
+      elapsedSeconds({
+        createdAt: later.createdAt,
+        now: CREATED + 9_000_000,
+        done: true,
+        finished: finishedAt(later),
+        startedAt: null,
+        firstRead: firstRead(later),
+        idle: idleGaps(later),
+      }),
+      9,
+    );
+    // Readings that follow one another closely are one run of work.
+    assert.deepEqual(idleGaps(resumed), []);
+  });
+
+  it("counts the files withdrawn from a session taken up again, once each (E1 final design review)", () => {
+    // Taken up in a new page: none of its files are this browser's uploads.
+    const two = batchOf(
+      finishedBatch({ files: [file(), file({ file_id: F2 })] }),
+    );
+    const seen = seenFiles(null, two);
+    assert.equal(seenFiles(seen, two), seen);
+    const empty = batchOf(finishedBatch({ files: [] }));
+    assert.equal(withdrawnCount([], empty, null, seen), 2);
+    // Before: "No file has been added yet." after the last file was withdrawn.
+    assert.equal(
+      resultsSummary(empty, [], progressOf([], empty, NOW), 2).lead,
+      "No files left in this upload · 2 withdrawn",
+    );
+    // This browser's own upload of one of them is not counted twice.
+    const mine = upload({ state: "stored", fileId: F1 });
+    assert.equal(withdrawnCount([mine], empty, null, seen), 2);
+    // Another session's files say nothing of this one.
+    assert.equal(
+      withdrawnCount([], empty, null, { batchId: "other", ids: new Set([F1]) }),
+      0,
+    );
   });
 
   it("estimates plainly by the number of files", () => {
@@ -2454,6 +2541,16 @@ describe("step 3: the results", () => {
     assert.equal(
       resultsNote(progress),
       "2 items checked by two readings · 1 file needs you. Nothing is accepted until you accept it.",
+    );
+    // E1 final design review: an item accepted meanwhile (its card reads "Accepted by
+    // ...") opens the note with the count, and the note never says nothing is accepted.
+    assert.equal(
+      resultsNote(progress, 1),
+      "1 item accepted · 2 items checked by two readings · 1 file needs you.",
+    );
+    assert.equal(
+      resultsNote({ ...progress, checked: 0, needs: 0 }, 2),
+      "2 items accepted.",
     );
   });
 
@@ -3062,12 +3159,15 @@ describe("the list's line and the session remembered here", () => {
       ),
       NOW,
     );
+    // Changed 18 November 2026 (E1 design review, round 5: one verb on the D&I Evidence
+    // step). Old: "Analyzing 7 files · …" and "7 files analyzed: …". New: "Reading 7
+    // files · …" and "7 files read: …".
     assert.deepEqual(
       progressLine({ progress: running, summary: null, seconds: 42 }),
       // Design review, 17 November 2026 (one screen, one story): every line carries its tone. Old: text,
       // done, action; new: the same, with `tone`.
       {
-        text: "Analyzing 7 files · Checking 1 item against the attributes · 0:42",
+        text: "Reading 7 files · Checking 1 item against the attributes · 0:42",
         done: false,
         action: "Show progress",
         tone: "working",
@@ -3091,13 +3191,13 @@ describe("the list's line and the session remembered here", () => {
     );
     assert.equal(
       progressLine({ progress: reading, summary: null, seconds: 9 })?.text,
-      "Analyzing 2 files · Read 1 of 2 · 0:09",
+      "Reading 2 files · Read 1 of 2 · 0:09",
     );
     const done = progressOf([], batchOf(finishedBatch()), NOW);
     assert.deepEqual(
       progressLine({ progress: done, summary: null, seconds: 33 }),
       {
-        text: "7 files analyzed: 5 sorted into the items, 1 needs you.",
+        text: "7 files read: 5 sorted into the items, 1 needs you.",
         done: true,
         action: "See results",
         // A file waits for a person: amber, never green.
@@ -3123,7 +3223,7 @@ describe("the list's line and the session remembered here", () => {
         seconds: 33,
       }),
       {
-        text: "7 files analyzed: 1 needs you. Added by Ryan James.",
+        text: "7 files read: 1 needs you. Added by Ryan James.",
         done: true,
         action: "See results",
         tone: "warning",
@@ -3149,8 +3249,8 @@ describe("the list's line and the session remembered here", () => {
     });
     assert.equal(unfinished?.done, false);
     assert.equal(unfinished?.action, "Show progress");
-    assert.doesNotMatch(unfinished?.text ?? "", /analyzed/);
-    assert.match(unfinished?.text ?? "", /^Analyzing 7 files/);
+    assert.doesNotMatch(unfinished?.text ?? "", / files read/);
+    assert.match(unfinished?.text ?? "", /^Reading 7 files/);
     assert.equal(
       progressLine({ progress: null, summary: null, seconds: 0 }),
       null,
@@ -3593,7 +3693,7 @@ describe("the joint review's decisions", () => {
     assert.equal(progress.checkingItems, 1);
     assert.equal(
       progressLine({ progress, summary: null, seconds: 30 })?.text,
-      "Analyzing 7 files · Checking 1 item against the attributes · 0:30",
+      "Reading 7 files · Checking 1 item against the attributes · 0:30",
     );
     const [card] = itemCards(running, {
       items: ITEMS,
@@ -3909,7 +4009,7 @@ describe("restore and read: a withdrawn file dropped again, and one story when f
       primary: false,
     });
     assert.deepEqual(progressLine({ progress, summary: null, seconds: 33 }), {
-      text: "7 files analyzed: 5 sorted into the items, 1 needs you. 2 not added.",
+      text: "7 files read: 5 sorted into the items, 1 needs you. 2 not added.",
       done: true,
       action: "See results",
       tone: "warning",
@@ -4266,7 +4366,10 @@ describe("refusals said once, and the results in plain words", () => {
   it("never says Analyzed in 0:00, and nothing when no file was added", () => {
     const done = progressOf([], batchOf(finishedBatch()), NOW);
     assert.equal(analyzedLine(0, done), "Analyzed in under a second");
-    assert.equal(analyzedLine(42, done), "Analyzed in 0:42");
+    // Changed 19 November 2026 (E1 design review, round 9). Old: "Analyzed in 0:42", a
+    // clock's form ("11:44:30" read as a time of day). New: a duration in words.
+    assert.equal(analyzedLine(42, done), "Analyzed in 42 s");
+    assert.equal(analyzedLine(125, done), "Analyzed in 2 min 5 s");
     const none = progressOf(
       [upload({ key: "r", state: "refused", detail: "No." })],
       null,
@@ -4299,10 +4402,13 @@ describe("refusals said once, and the results in plain words", () => {
     );
     assert.match(route, /withdrawn_from:/);
     // The withdrawn list's by-line is cut with an ellipsis, its title the whole name.
-    const list = readFileSync("apps/web/src/evidence-view.tsx", "utf8");
+    // Changed 18 November 2026 (E1 design review, round 5). Old: the line was drawn in
+    // evidence-view.tsx from the file. New: the Withdrawn list's rows draw it themselves
+    // (WithdrawnRows, evidence-change.tsx), from the row the page hands them.
+    const list = readFileSync("apps/web/src/evidence-change.tsx", "utf8");
     assert.match(
       list,
-      /className="cell-sub" title=\{`by \$\{file\.withdrawnBy\}`\}/,
+      /className="cell-sub" title=\{`by \$\{row\.withdrawnBy\}`\}/,
     );
     const globals = readFileSync("apps/web/app/globals.css", "utf8");
     assert.match(globals, /\.is-fixed td > \.cell-sub\[title\] \{/);

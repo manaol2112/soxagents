@@ -10,6 +10,7 @@
 
 import { asSentence, cleanReason } from "./evidence-change-model.ts";
 import type { WithdrawnFile } from "./evidence-model.ts";
+import { PHASE_SHORT, PHASES } from "./evidence-plan-model.ts";
 import { formatDate } from "./format.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -332,6 +333,17 @@ const SUFFICIENCY_WORDS: Record<string, string> = {
 const count = (n: number, one: string, many = `${one}s`) =>
   `${n} ${n === 1 ? one : many}`;
 
+/** An item as the impact names it: its title with its phase, since a control asks for the
+ * same evidence in more than one phase ("Population of accounts …" for the interim and
+ * the roll-forward; E1 design review, round 4, 18 November 2026: the list said it twice
+ * with nothing to tell the two apart). A phase the page does not know is left out. */
+export function impactItemName(item: { title: string; phase: string }): string {
+  const phase = PHASES.find((each) => each === item.phase);
+  return phase === undefined
+    ? item.title
+    : `${item.title} (${PHASE_SHORT[phase]})`;
+}
+
 const controlName = (control: {
   controlRef: string;
   application: string | null;
@@ -378,6 +390,19 @@ function retestLine(
     : `${sheetsWord(here.length)} on this control and ${elsewhere.length} on ${named} are tested again.`;
 }
 
+/** Said on an item whose decision the change takes back. */
+export const RETURNS_TO_NOT_REVIEWED = "returns to Not reviewed";
+
+/** How many items' decisions the change takes back, in one line, or null. */
+export function resetLine(count: number): string | null {
+  if (count === 0) {
+    return null;
+  }
+  return count === 1
+    ? "1 evidence item decision returns to Not reviewed."
+    : `${count} evidence item decisions return to Not reviewed.`;
+}
+
 export function impactSummary(impact: Impact): ImpactSummary {
   // An item served two ways (its filing and a link) is one item.
   const items = [
@@ -399,16 +424,26 @@ export function impactSummary(impact: Impact): ImpactSummary {
         : `Used on ${where === "" ? "" : `${where}: `}${count(items.length, "evidence item")}${requests > 0 ? ` on ${count(requests, "request")}` : ""}.`;
   const reset = items.filter((item) => item.resets);
   const sheets = impact.retestedSheets;
+  // The one control the line above names is not said again on each item (E1 design
+  // review, round 5).
+  const only = controls.length === 1 ? controls[0]?.controlRef : undefined;
   return {
     used,
+    // An item whose decision the change takes back says so on its own line; the
+    // count says how many (round 5: the titles were said twice, in the list and in a
+    // sentence under it).
     items: items.map((item) => ({
       key: item.id,
-      text: `${item.controlRef} · ${item.title} · ${SUFFICIENCY_WORDS[item.sufficiency] ?? "not reviewed"}`,
+      text: [
+        item.controlRef === only ? "" : item.controlRef,
+        impactItemName(item),
+        SUFFICIENCY_WORDS[item.sufficiency] ?? "not reviewed",
+        item.resets ? RETURNS_TO_NOT_REVIEWED : "",
+      ]
+        .filter((part) => part !== "")
+        .join(" · "),
     })),
-    resets:
-      reset.length === 0
-        ? null
-        : `The decision on ${reset.length === 1 ? "1 evidence item goes" : `${reset.length} evidence items go`} back to not reviewed: ${reset.map((item) => item.title).join(", ")}.`,
+    resets: resetLine(reset.length),
     retests: retestLine(sheets, controls),
     blocking: impact.allowed
       ? []
@@ -419,6 +454,50 @@ export function impactSummary(impact: Impact): ImpactSummary {
           : [],
   };
 }
+
+// Moving a filed file in the Evidence Library
+
+/** The two presses that move a filed file in the Evidence Library: to the control chosen
+ * (Move), or off its control (Take off this control). */
+export type MoveAction = "move" | "takeoff";
+
+/** What a first press of a move asks before it is made, as the title of its confirm
+ * block under the press (E1 design review, round 5: the sentence that asked for a second press was
+ * hard to read and to find). Choosing a control says what the move does by itself. */
+export function moveConfirmTitle(
+  action: MoveAction,
+  fileName: string,
+  control: string,
+  target: string | null,
+): string {
+  return action === "takeoff"
+    ? `Take ${fileName} off ${control}`
+    : `Move ${fileName} to ${target ?? "the control chosen"}`;
+}
+
+/** The first line of the move's held box: what is held, Take off with Move where the
+ * panel offers both. */
+export function moveHeldLine(takeOff: boolean): string {
+  return takeOff ? "It cannot be moved or taken off now." : IMPACT_HELD.MOVE;
+}
+
+/** Why a change waits while the agent reads the file (one sentence wherever it is held
+ * for that: the wizard, the Add evidence dialog). */
+export const STILL_READING_FILE = "The agent is still reading this file.";
+
+/** Why a press that files or moves to a chosen control waits. */
+export const CHOOSE_FIRST = "Choose a control first.";
+
+/** Why Replace waits (one rule for every change's press: offered only once it can be
+ * sent, with what it waits for as its description). */
+export const CHOOSE_FILE_FIRST = "Choose the corrected file first.";
+
+/** Said, as a notice with "Check again", when what a change would do could not be read:
+ * a change that is still checked when it is sent, and one that cannot be sent without it. */
+export const IMPACT_UNCHECKED =
+  "Where the file is used could not be checked. The change is still checked when it is sent.";
+export const REMOVAL_UNCHECKED =
+  "How the file serves this request could not be checked, so it cannot be removed yet.";
 
 // The actions a file is offered, by where it is shown
 
@@ -892,4 +971,29 @@ export function historyDates(lines: readonly HistoryLine[]): string[] {
       ? `${day}, ${UTC_TIME.format(time)} UTC`
       : day;
   });
+}
+
+// References kept whole in a sentence
+
+/** A control or item reference as a sentence names it ("ITGC-AC-01", "NS-AC-06"). */
+const REFERENCE = /\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+\b/g;
+
+/** A sentence cut where it names references, so each is drawn whole (never broken at its
+ * hyphens; E1 design review, round 6: "back on ITGC-AC-01" wrapped inside the
+ * reference at 1440). Text and references alternate; a reference is `{ ref }`. */
+export function refParts(text: string): Array<string | { ref: string }> {
+  const parts: Array<string | { ref: string }> = [];
+  let at = 0;
+  for (const match of text.matchAll(REFERENCE)) {
+    const start = match.index ?? 0;
+    if (start > at) {
+      parts.push(text.slice(at, start));
+    }
+    parts.push({ ref: match[0] });
+    at = start + match[0].length;
+  }
+  if (at < text.length) {
+    parts.push(text.slice(at));
+  }
+  return parts;
 }

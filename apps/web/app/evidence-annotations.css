@@ -1234,6 +1234,13 @@ p.ea-about-read {
   overflow-wrap: anywhere;
 }
 
+/* An email address wraps at its own breaks (after the @ or a dot) where it must, never
+   in the middle of a word. */
+.ea-history small.ea-history-by {
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
 /* The history being read, or read only in part. */
 .ea-history-note {
   display: flex;

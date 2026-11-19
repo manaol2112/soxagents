@@ -1,18 +1,27 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-
-import { heldReasons } from "./row-menu-model";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { RefText } from "./ref-text";
+import {
+  heldReasons,
+  menuIcons,
+  reasonHolder,
+  sharedReason,
+} from "./row-menu-model";
 import { type IconName, UiIcon } from "./ui-icon";
 
 export type RowMenuItem = {
   label: string;
+  /** What a held line calls it, where its label's first word would not say it ("keep
+   * out of D&I"): row-menu-model.actionName. */
+  action?: string;
   icon?: IconName;
   /** A link (such as a download); otherwise onSelect runs. */
   href?: string;
   onSelect?: () => void;
   danger?: boolean;
-  /** Why the action is not available now; the item shows it and stays off. */
+  /** Why the action is not available now: the item says it, stays reachable by keyboard
+   * with the reason as its description, and choosing it does nothing. */
   unavailable?: string | null;
   /** The group the item is in, shown as a heading above its first item. */
   section?: string;
@@ -103,8 +112,14 @@ export function RowMenu({
   const [up, setUp] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
-  // A reason several held items share is said once, after the last of them.
+  const uid = useId();
+  // A reason several held items share is said once, after the last of them; each item it
+  // holds is described by that line.
   const reasons = heldReasons(items);
+  const holders = reasonHolder(items);
+  // A reason several items share is a line of its own, under a divider.
+  const shared = sharedReason(items);
+  const icons = menuIcons(items);
   const toggle = () => {
     if (!open) {
       for (const item of items) {
@@ -205,7 +220,7 @@ export function RowMenu({
       )}
       {open ? (
         <div
-          className={`row-menu-list${toRight ? " is-right" : ""}${up ? " is-up" : ""}`}
+          className={`row-menu-list${toRight ? " is-right" : ""}${up ? " is-up" : ""}${reasons.some((reason) => reason !== null) ? " has-held" : ""}`}
           role="menu"
           aria-busy={items.some((item) => Boolean(item.note))}
           aria-label={label}
@@ -226,9 +241,14 @@ export function RowMenu({
                 key={`${item.section ?? ""}-${item.label}`}
                 role="menuitem"
                 href={item.href}
-                onClick={() => setOpen(false)}
+                onClick={() => {
+                  setOpen(false);
+                  button.current?.focus();
+                }}
               >
-                {item.icon ? <UiIcon name={item.icon} size={14} /> : null}
+                {icons && item.icon ? (
+                  <UiIcon name={item.icon} size={14} />
+                ) : null}
                 <span>{item.label}</span>
               </a>
             ) : (
@@ -237,26 +257,64 @@ export function RowMenu({
                 type="button"
                 role="menuitem"
                 className={item.danger ? "is-danger" : undefined}
-                disabled={Boolean(item.unavailable)}
-                title={item.unavailable ?? undefined}
+                // Held, not disabled: Tab reaches it, its name is its label and its
+                // reason its description (WCAG 2.1.1; E1 design review, round 4,
+                // 18 November 2026: a disabled item was skipped, its reason only visible
+                // text and a title).
+                aria-disabled={item.unavailable ? true : undefined}
+                aria-label={
+                  item.unavailable || item.note ? item.label : undefined
+                }
+                aria-describedby={
+                  item.unavailable
+                    ? `${uid}-why-${holders[index] ?? index}`
+                    : item.note
+                      ? `${uid}-note-${index}`
+                      : undefined
+                }
                 onClick={() => {
+                  if (item.unavailable) {
+                    return;
+                  }
                   setOpen(false);
+                  // Focus stays on the menu's button, so a form the choice opens gives
+                  // it back there once closed (use-focus-return.ts).
+                  button.current?.focus();
                   item.onSelect?.();
                 }}
               >
-                {item.icon ? <UiIcon name={item.icon} size={14} /> : null}
+                {icons && item.icon ? (
+                  <UiIcon name={item.icon} size={14} />
+                ) : null}
                 <span>
                   {item.label}
                   {item.unavailable ? (
-                    reasons[index] !== null ? (
-                      <small>{reasons[index]}</small>
+                    reasons[index] !== null && !shared[index] ? (
+                      <small id={`${uid}-why-${index}`}>
+                        <RefText text={reasons[index] ?? ""} />
+                      </small>
                     ) : null
                   ) : item.note ? (
-                    <small className="row-menu-note">{item.note}</small>
+                    <small
+                      id={`${uid}-note-${index}`}
+                      className="row-menu-note"
+                    >
+                      {item.note}
+                    </small>
                   ) : null}
                 </span>
               </button>
             ),
+            shared[index] ? (
+              <p
+                key={`held-${item.section ?? ""}-${item.label}`}
+                id={`${uid}-why-${index}`}
+                className="row-menu-held"
+                role="none"
+              >
+                <RefText text={reasons[index] ?? ""} />
+              </p>
+            ) : null,
           ])}
         </div>
       ) : null}

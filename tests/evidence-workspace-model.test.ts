@@ -597,11 +597,13 @@ describe("an item's file card", () => {
     const held = { createdAt: "2026-10-29T04:40:32Z", sizeBytes: 13_312 };
     assert.equal(
       fileCardMeta(held, { via: "REQUEST", linkedBy: null, sharedFrom: null }),
-      "Uploaded Oct 29, 2026 • 13 KB",
+      // Changed 18 November 2026 (E1 design review, round 5). Old: "•" between the parts
+      // and "Linked by". New: the D&I list's "·" and "linked by".
+      "Uploaded Oct 29, 2026 · 13 KB",
     );
     assert.equal(
       fileCardMeta(held, { via: "LINK", linkedBy: "Robert", sharedFrom: null }),
-      "Uploaded Oct 29, 2026 • 13 KB • Linked by Robert",
+      "Uploaded Oct 29, 2026 · 13 KB · linked by Robert",
     );
     assert.equal(
       fileCardMeta(undefined, {

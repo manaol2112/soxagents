@@ -95,6 +95,7 @@ import {
   UPGRADE_WAIT,
 } from "./evidence-assurance-model";
 import { centerHref, DEFAULT_QUERY } from "./evidence-center-model";
+import { useChangeForm } from "./evidence-change";
 import { type DialogOpen, EvidenceDialog } from "./evidence-dialog";
 import {
   type EvidenceFinding,
@@ -1629,10 +1630,12 @@ function Row({
   const rowRef = useRef<HTMLLIElement>(null);
   const [words, setWords] = useState("");
   const [picker, setPicker] = useState<"policy" | "held" | null>(null);
-  const [fileForm, setFileForm] = useState<{
+  // One change form open in the list at a time, its owner the list (E1 design review,
+  // round 5: two items' forms were open at once).
+  const [fileForm, setFileForm] = useChangeForm<{
     fileId: string;
     form: FileForm;
-  } | null>(null);
+  }>();
   // A change to one of its files, confirmed by the server.
   const [fileDone, setFileDone] = useState<string | null>(null);
   // "Read all N again", asked on this row: its files, and what the server said of them.
@@ -2766,7 +2769,7 @@ function Row({
   // While the files asked for are read again: the row's line in its checking state, the
   // server's confirmation under it, and no action (design review, 18 November 2026).
   const readingAgain =
-    againReading && again !== null ? (
+    againReading && again !== null && again.fileIds.length > 0 ? (
       <div className="de-check is-checking">
         <p className="de-check-line">
           <UiIcon name="sparkles" size={13} />
@@ -2788,8 +2791,14 @@ function Row({
         <Problem text={again.problem} />
       </div>
     ) : null;
+  // The check against the attributes is said only where the item has attributes, and
+  // a line about reading again only where it reads a file (E1 design review, round 5:
+  // one story on the D&I Evidence step).
   const checkView =
-    assured !== null && shownCheck !== null && row.reading === 0 ? (
+    assured !== null &&
+    shownCheck !== null &&
+    row.reading === 0 &&
+    row.letters.length > 0 ? (
       <CheckOfRequest
         check={shownCheck}
         files={rowFiles}
@@ -3071,7 +3080,9 @@ function Row({
                     <div className="de-accept">
                       {/* What accepting marks as evidenced, and what it leaves
                           open: it informs, and never holds the person back. */}
-                      {assured !== null && assured.acceptNote !== "" ? (
+                      {assured !== null &&
+                      assured.acceptNote !== "" &&
+                      row.letters.length > 0 ? (
                         <p className="de-accept-note">{assured.acceptNote}</p>
                       ) : null}
                       <div className="tc-row-acts">

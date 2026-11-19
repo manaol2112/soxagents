@@ -23,6 +23,7 @@ import {
   workflowFrame,
   workflowLayout,
 } from "./control-workflow-model";
+import { onPageEscape } from "./focus-return";
 import { useGuardedRouter } from "./guarded-router";
 import { FocusSide, setStepFocus, useStepFocus } from "./step-focus";
 import {
@@ -579,22 +580,11 @@ export function WorkflowPanel({
       document.removeEventListener("click", onClick);
     };
   }, []);
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !event.defaultPrevented) {
-        // A dialog open inside the panel takes its own Escape first.
-        if (
-          document.querySelector(
-            "dialog[open], [role='dialog'][aria-modal='true']",
-          ) === null
-        ) {
-          router.push(closeHref, { scroll: false });
-        }
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [router, closeHref]);
+  // A dialog open over the panel takes its own Escape, and the panel stays (onPageEscape).
+  useEffect(
+    () => onPageEscape(() => router.push(closeHref, { scroll: false })),
+    [router, closeHref],
+  );
   // The step's Ask, from the frame inside the drawer (StepFrame), for the header.
   const [ask, setAsk] = useState<StepAskTarget | null>(null);
   // Every step takes the minimalist header (product owner, 11 November 2026), except Control

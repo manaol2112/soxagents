@@ -1241,15 +1241,24 @@ export function Banner({
   tone = "info",
   children,
 }: {
-  tone?: "info" | "warning";
+  tone?: "info" | "warning" | "success";
   children: ReactNode;
 }) {
   return (
     <p
-      className={`banner ${tone === "warning" ? "banner-warning" : ""}`}
+      className={`banner ${tone === "warning" ? "banner-warning" : tone === "success" ? "banner-success" : ""}`}
       role="status"
     >
-      <UiIcon name={tone === "warning" ? "risk" : "info"} size={16} />
+      <UiIcon
+        name={
+          tone === "warning"
+            ? "risk"
+            : tone === "success"
+              ? "checkCircle"
+              : "info"
+        }
+        size={16}
+      />
       <span>{children}</span>
     </p>
   );

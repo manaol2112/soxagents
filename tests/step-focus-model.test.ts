@@ -316,10 +316,10 @@ describe("wired into the panel, the shell and the notes", () => {
   });
 
   it("Escape still closes the panel and never toggles focus", () => {
-    assert.match(
-      panel,
-      /event\.key === "Escape"[\s\S]{0,400}router\.push\(closeHref/,
-    );
+    // Rewritten 19 November 2026 (E1 design review, round 10). Old: an Escape listener in
+    // the panel pushed closeHref. New: onPageEscape pushes it, unless a dialog was open as
+    // the key went down (tests/focus-trap.test.ts).
+    assert.match(panel, /onPageEscape\(\(\) => router\.push\(closeHref/);
     assert.doesNotMatch(panel, /Escape[^\n]*setStepFocus/);
   });
 

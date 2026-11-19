@@ -792,7 +792,7 @@ function factOf(
   }
   const reading = item.files.filter(isReading).length;
   if (reading > 0) {
-    return `${count} · Agent is reading`;
+    return `${count} · Reading`;
   }
   if (item.state === "ACCEPTED") {
     return `${count} · Accepted${by !== "" ? ` by ${by}` : ""}`;
@@ -1090,7 +1090,7 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
       note:
         item.sufficiencyNote === ""
           ? ""
-          : `${decided || who !== "" ? "" : "Decision reopened: "}${item.sufficiencyNote}${who !== "" ? ` (${who})` : ""}`,
+          : `${reopenedPrefix(item.sufficiencyNote, decided || who !== "")}${item.sufficiencyNote}${who !== "" ? ` (${who})` : ""}`,
       period: item.periodLabel || input.period,
       change:
         item.pendingChange === null
@@ -1941,7 +1941,7 @@ function headerOf(facts: {
       need: {
         kind: "agent",
         title: `Reading ${plural(reading, "file")}`,
-        detail: `The agent is reading ${plural(reading, "file")}. ${reading === 1 ? "It shows" : "They show"} here to review when it is done.`,
+        detail: `${reading === 1 ? "It shows" : "They show"} here to review once read.`,
       },
       agent: { did: `Reading ${plural(reading, "file")}.`, found },
     };
@@ -2285,4 +2285,13 @@ export function rowMenu(
     },
     { key: "delete", label: "Delete", danger: true, unavailable: gone },
   ];
+}
+
+/** "Decision reopened: " before a reopened decision's note, unless the note says it
+ * already ("Reopened for the design review"; E1 design review, round 5: "Decision
+ * reopened: Reopened for…"), or the decision stands. */
+export function reopenedPrefix(note: string, decided: boolean): string {
+  return decided || /^reopened(?![a-z])/i.test(note.trim())
+    ? ""
+    : "Decision reopened: ";
 }

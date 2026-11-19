@@ -6,12 +6,15 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useRef,
   useState,
 } from "react";
 
 import {
+  CHOOSE_FIRST,
   IMPACT_HELD,
+  IMPACT_UNCHECKED,
   type ImpactAction,
   type ImpactAsk,
   type ImpactState,
@@ -19,16 +22,24 @@ import {
   impactKey,
   impactSummary,
   impactUnavailable,
+  type MoveAction,
+  moveConfirmTitle,
+  moveHeldLine,
   parseFileImpact,
 } from "./evidence-impact-model";
+import { RefText } from "./ref-text";
+import { heldControl } from "./row-menu-model";
 import { UiIcon } from "./ui-icon";
+import { useFocusReturn } from "./use-focus-return";
 
 type Ids = { organizationId: string; projectId: string };
 
 /** How long a menu waits after opening before it reads, so a menu opened and closed in
- * passing reads nothing; and how long a reading stands before it is read again. */
+ * passing reads nothing. Every opening reads again: what holds a change (an acceptance,
+ * a sign-off) may have changed elsewhere since, and an earlier answer is never kept for a
+ * while on trust (E1 design review, round 4, 18 November 2026: a menu kept a held reason
+ * after the decision was reopened elsewhere). */
 const DEBOUNCE_MS = 150;
-const FRESH_MS = 15000;
 
 /** What a menu item says while its check is on its way. */
 export const IMPACT_CHECKING = "Checking…";
@@ -53,9 +64,9 @@ async function readImpact(
   }
 }
 
-/** The impacts a list's menus check their actions with: read only when a menu opens
- * (`prefetch`, debounced; nothing on page load), the last answer for each ask kept, and a
- * stale one never written over a newer. */
+/** The impacts a list's menus check their actions with: read each time a menu opens
+ * (`prefetch`, debounced; nothing on page load), said as checking until the answer is
+ * in, and an answer to an earlier opening never written over a newer one. */
 export type Impacts = {
   prefetch: (ask: ImpactAsk) => void;
   state: (ask: ImpactAsk) => ImpactState | undefined;
@@ -72,8 +83,6 @@ export function useImpacts(ids: Ids): Impacts {
   const [states, setStates] = useState<ReadonlyMap<string, ImpactState>>(
     () => new Map(),
   );
-  const current = useRef(states);
-  current.current = states;
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const turns = useRef(new Map<string, number>());
   useEffect(
@@ -88,12 +97,8 @@ export function useImpacts(ids: Ids): Impacts {
   const prefetch = useCallback(
     (ask: ImpactAsk) => {
       const key = impactKey(ask);
-      const known = current.current.get(key);
-      if (
-        known?.status === "loading" ||
-        (known?.status === "ready" && Date.now() - known.at < FRESH_MS) ||
-        timers.current.has(key)
-      ) {
+      // Already on its way for this opening.
+      if (timers.current.has(key)) {
         return;
       }
       // Said as checking from the moment the menu opens, through the debounce.
@@ -174,21 +179,32 @@ export function useImpact(
 
 /**
  * What a change would do, in its confirm form (E1): where the file is used now, its items
- * on request; whose judgment goes back to not reviewed; the open test sheets tested
- * again; and, when the change cannot be made, every reliance in its way, in the server's
- * words. Said only where it has something to say.
+ * on request, each item whose decision the change takes back marked so; how many go back
+ * to Not reviewed; the open test sheets tested again; and, when the change cannot be made,
+ * every reliance in its way, in the server's words. Where it could not be read, an amber
+ * notice with "Check again" (E1 design review, round 5: a grey hint said to refresh the
+ * page). Said only where it has something to say.
  */
 export function ImpactPreview({
   state,
   action,
-  unchecked = "Where the file is used could not be checked. The change is still checked when it is sent.",
+  unchecked = IMPACT_UNCHECKED,
+  heldLine,
+  onRetry,
 }: {
   state: ImpactState | null;
   action: ImpactAction;
   /** What is said when the impact could not be read: by default, that the server still
    * checks the change; a change that cannot be sent without it says so. */
   unchecked?: string;
+  /** The held box's first line, where it is not the action's own. */
+  heldLine?: string;
+  /** Reads the impact again. */
+  onRetry?: () => void;
 }) {
+  // "Check again" goes once the read is under way: focus goes to what the read then says
+  // (round 6: it fell to the page's body).
+  const focus = useFocusReturn();
   if (state === null) {
     return null;
   }
@@ -201,19 +217,46 @@ export function ImpactPreview({
     );
   }
   if (state.status === "failed") {
-    return <p className="form-hint">{unchecked}</p>;
+    return (
+      <div
+        className="ip-unchecked"
+        role="status"
+        data-focus-return=""
+        ref={focus.ref}
+      >
+        <p className="ip-line">
+          <UiIcon name="info" size={14} />
+          <span>{unchecked}</span>
+        </p>
+        {onRetry !== undefined ? (
+          <button
+            type="button"
+            className="btn-secondary btn-sm"
+            onClick={() => {
+              focus.returnFocus("answer");
+              onRetry();
+            }}
+          >
+            Check again
+          </button>
+        ) : null}
+      </div>
+    );
   }
   const summary = impactSummary(state.impact);
   if (!state.impact.allowed) {
     return (
-      <div className="ip-held" role="status">
+      // Where a refusal puts the focus when nothing else answers it (use-focus-return).
+      <div className="ip-held" role="status" data-focus-return="">
         <p className="ip-line">
           <UiIcon name="info" size={14} />
-          <strong>{IMPACT_HELD[action]}</strong>
+          <strong>{heldLine ?? IMPACT_HELD[action]}</strong>
         </p>
         <ul className="ip-list">
           {summary.blocking.map((sentence) => (
-            <li key={sentence}>{sentence}</li>
+            <li key={sentence}>
+              <RefText text={sentence} />
+            </li>
           ))}
         </ul>
       </div>
@@ -227,26 +270,37 @@ export function ImpactPreview({
     return null;
   }
   return (
-    <div className="ip-impact">
+    <div className="ip-impact" data-focus-return="">
       {summary.used !== null ? (
         summary.items.length > 0 ? (
           <details className="ip-used">
-            <summary>{summary.used}</summary>
+            <summary>
+              <UiIcon name="chevron" size={13} />
+              <span>
+                <RefText text={summary.used} />
+              </span>
+            </summary>
             <ul className="ip-list">
               {summary.items.map((item) => (
-                <li key={item.key}>{item.text}</li>
+                <li key={item.key}>
+                  <RefText text={item.text} />
+                </li>
               ))}
             </ul>
           </details>
         ) : (
-          <p className="ip-line">{summary.used}</p>
+          <p className="ip-line">
+            <RefText text={summary.used} />
+          </p>
         )
       ) : null}
       {summary.resets !== null ? (
         <p className="ip-line">{summary.resets}</p>
       ) : null}
       {summary.retests !== null ? (
-        <p className="ip-line">{summary.retests}</p>
+        <p className="ip-line">
+          <RefText text={summary.retests} />
+        </p>
       ) : null}
     </div>
   );
@@ -254,14 +308,17 @@ export function ImpactPreview({
 
 type MoveState = {
   held: boolean;
+  /** The held box's id: a held press is described by it. */
+  heldId: string;
   /** A form that moved the file was refused: the move's impact is read again, and the
    * server's sentence is said only if the new read does not hold the move. */
   refused: (sentence: string) => void;
-  /** What a move does has been said, so a press sends it. */
-  intended: boolean;
-  /** A person chose where to move the file, or pressed a move: what it does is said;
-   * a press first says it, with how to send it. */
-  intend: (pressed: boolean) => void;
+  /** What the move does is on screen for this press, so the press sends it. */
+  intended: (action: MoveAction) => boolean;
+  /** A first press: its confirm block opens under it. */
+  ask: (action: MoveAction, form: HTMLFormElement) => void;
+  /** The confirm block open under this press, or null. */
+  asking: (action: MoveAction) => ReactNode;
 };
 
 const MoveContext = createContext<MoveState | null>(null);
@@ -274,24 +331,46 @@ export function useMoveCheck(): MoveState | null {
 /**
  * Moving a filed file to another control, or off its control, in the Evidence Library
  * (E1). At rest it says only what holds the move (the file's impact for MOVE, read as its
- * panel opens), with the forms that move it held (`MoveGuard`); what a move would do is
- * said once a person chooses a control or presses a move, and a first press only shows
- * it (the second sends). A refused move reads the impact again, so a reliance shows as
- * the held box, once.
+ * panel opens; "It cannot be moved or taken off now." where it offers both), with the
+ * presses that move it held (`MoveSubmit`, reachable by keyboard and described by the
+ * held box). Choosing a control says what the move does, and Move then makes it; a first
+ * press without that (Take off this control, or Move on the control suggested) opens a
+ * confirm block under it: what it does, the press that makes it and Cancel (E1 design
+ * review, round 5: the sentence that asked for a second press was hard to read). A refused move reads
+ * the impact again, so a reliance shows as the held box, once, and takes the focus.
  */
 export function MoveCheck({
   organizationId,
   projectId,
   fileId,
+  fileName,
+  control,
+  takeOff,
   children,
 }: {
   organizationId: string;
   projectId: string;
   fileId: string;
+  fileName: string;
+  /** The control the file is filed to, as the panel names it. */
+  control: string;
+  /** The panel offers Take off this control as well as Move. */
+  takeOff: boolean;
   children: ReactNode;
 }) {
+  const heldId = useId();
+  const titleId = useId();
+  const focus = useFocusReturn();
   const [attempt, setAttempt] = useState(0);
-  const [intended, setIntended] = useState<"chosen" | "pressed" | null>(null);
+  // A control picked: what the move does is on screen, and Move makes it.
+  const [chosen, setChosen] = useState(false);
+  const [confirm, setConfirm] = useState<{
+    action: MoveAction;
+    form: HTMLFormElement;
+  } | null>(null);
+  // The press the confirm block armed, read in the same event as its submit.
+  const armed = useRef<MoveAction | null>(null);
+  const block = useRef<HTMLFieldSetElement | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
   const state = useImpact(
     { organizationId, projectId },
@@ -299,34 +378,114 @@ export function MoveCheck({
     attempt,
   );
   const held = state?.status === "ready" && !state.impact.allowed;
+  const retry = () => setAttempt((count) => count + 1);
+  useEffect(() => {
+    if (confirm !== null) {
+      block.current?.focus();
+    }
+  }, [confirm]);
+  const close = () => {
+    focus.returnFocus("back");
+    armed.current = null;
+    setConfirm(null);
+  };
   const value: MoveState = {
     held,
+    heldId,
     refused: (sentence) => {
       setRefusal(sentence);
+      setConfirm(null);
+      armed.current = null;
       setAttempt((count) => count + 1);
+      focus.returnFocus("answer");
     },
-    intended: intended !== null,
-    intend: (pressed) => setIntended(pressed ? "pressed" : "chosen"),
+    intended: (action) =>
+      armed.current === action || (action === "move" && chosen),
+    ask: (action, form) => {
+      setRefusal(null);
+      setConfirm({ action, form });
+    },
+    asking: (action) => {
+      if (confirm === null || confirm.action !== action) {
+        return null;
+      }
+      const field = confirm.form.elements.namedItem("control_id");
+      const target =
+        action === "move" && field instanceof HTMLSelectElement
+          ? (field.selectedOptions[0]?.textContent ?? null)
+          : null;
+      return (
+        <fieldset
+          ref={(element) => {
+            block.current = element;
+            focus.ref(element);
+          }}
+          className="move-confirm"
+          aria-labelledby={titleId}
+          tabIndex={-1}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.stopPropagation();
+              close();
+            }
+          }}
+        >
+          <p className="change-title" id={titleId}>
+            <RefText
+              text={moveConfirmTitle(action, fileName, control, target)}
+            />
+          </p>
+          <ImpactPreview state={state} action="MOVE" onRetry={retry} />
+          <div className="file-changes-actions">
+            <button
+              type="button"
+              className={action === "takeoff" ? "btn-danger btn-sm" : "btn-sm"}
+              {...heldControl(held, heldId)}
+              onClick={() => {
+                if (held) {
+                  return;
+                }
+                armed.current = action;
+                confirm.form.requestSubmit();
+              }}
+            >
+              {action === "takeoff" ? "Take off" : "Move"}
+            </button>
+            <button type="button" className="btn-ghost btn-sm" onClick={close}>
+              Cancel
+            </button>
+          </div>
+        </fieldset>
+      );
+    },
   };
   return (
     <MoveContext.Provider value={value}>
-      {held || intended !== null || state?.status === "failed" ? (
-        <ImpactPreview state={state} action="MOVE" />
-      ) : null}
-      {intended === "pressed" && !held && refusal === null ? (
-        <p className="form-hint">
-          This is what the move does. Press it again to make it.
-        </p>
+      {held || state?.status === "failed" || (chosen && confirm === null) ? (
+        <div id={heldId}>
+          <ImpactPreview
+            state={state}
+            action="MOVE"
+            heldLine={moveHeldLine(takeOff)}
+            onRetry={retry}
+          />
+        </div>
       ) : null}
       {refusal !== null && state?.status === "ready" && !held ? (
         <p className="change-problem" role="alert">
           {refusal}
         </p>
       ) : null}
-      {/* Choosing a control says what the move does (a select's change bubbles). */}
+      {/* Choosing a control says what the move does, and Move makes it (a select's
+          change bubbles). */}
       <div
         className="move-intent"
-        onChange={() => setIntended((now) => now ?? "chosen")}
+        onChange={(event) => {
+          if (event.target instanceof HTMLSelectElement) {
+            setChosen(event.target.value !== "");
+            setConfirm(null);
+          }
+        }}
       >
         {children}
       </div>
@@ -334,23 +493,114 @@ export function MoveCheck({
   );
 }
 
-/** A form that moves the file: off while its move is held (MoveCheck). Its first press,
- * before what the move does was said, only says it. */
-export function MoveGuard({ children }: { children: ReactNode }) {
+/** A form that moves the file (MoveCheck): a press sends only once what the move does is
+ * on screen for it; a first press opens its confirm block under it, and a press while the
+ * move is held sends nothing. */
+export function MoveGuard({
+  action,
+  children,
+}: {
+  action: MoveAction;
+  children: ReactNode;
+}) {
   const check = useContext(MoveContext);
   return (
     <fieldset
       className="move-guard"
-      disabled={check?.held ?? false}
       onSubmitCapture={(event) => {
-        if (check !== null && !check.intended) {
+        if (check === null) {
+          return;
+        }
+        if (check.held) {
           event.preventDefault();
           event.stopPropagation();
-          check.intend(true);
+          return;
+        }
+        if (
+          !check.intended(action) &&
+          event.target instanceof HTMLFormElement
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          check.ask(action, event.target);
         }
       }}
     >
       {children}
+      {check?.asking(action) ?? null}
     </fieldset>
+  );
+}
+
+/**
+ * The press that files a file or moves it (the Evidence Library). Offered only where it
+ * can succeed, and reachable by keyboard where it cannot (aria-disabled, never disabled):
+ * it waits while its form's control is not chosen (no browser bubble asks for one; E1
+ * design review, round 4, 18 November 2026), and while the move is held (MoveCheck),
+ * described by the held box; a press then does nothing.
+ */
+export function MoveSubmit({
+  label,
+  className = "btn-sm",
+}: {
+  label: string;
+  className?: string;
+}) {
+  const check = useContext(MoveContext);
+  const uid = useId();
+  const button = useRef<HTMLButtonElement>(null);
+  // The form's control, where it has one to choose: read as it is drawn and as it changes.
+  const [chosen, setChosen] = useState(true);
+  useEffect(() => {
+    const form = button.current?.form ?? null;
+    const field = form?.elements.namedItem("control_id");
+    if (form === null || !(field instanceof HTMLSelectElement)) {
+      return;
+    }
+    const read = () => setChosen(field.value !== "");
+    read();
+    form.addEventListener("change", read);
+    return () => form.removeEventListener("change", read);
+  }, []);
+  const held = check?.held ?? false;
+  const off = held || !chosen;
+  // While the move is held, its control to choose is held with it (E1 design review:
+  // the select looked live beside a held Move).
+  useEffect(() => {
+    const field = button.current?.form?.elements.namedItem("control_id");
+    if (!(field instanceof HTMLSelectElement)) {
+      return;
+    }
+    if (held) {
+      field.setAttribute("aria-disabled", "true");
+      if (check?.heldId) {
+        field.setAttribute("aria-describedby", check.heldId);
+      }
+    } else {
+      field.removeAttribute("aria-disabled");
+      field.removeAttribute("aria-describedby");
+    }
+  }, [held, check?.heldId]);
+  return (
+    <>
+      <button
+        ref={button}
+        type="submit"
+        className={className}
+        {...heldControl(off, held ? check?.heldId : `${uid}-choose`)}
+        onClick={(event) => {
+          if (off) {
+            event.preventDefault();
+          }
+        }}
+      >
+        {label}
+      </button>
+      {!held && !chosen ? (
+        <span id={`${uid}-choose`} className="sr-only">
+          {CHOOSE_FIRST}
+        </span>
+      ) : null}
+    </>
   );
 }

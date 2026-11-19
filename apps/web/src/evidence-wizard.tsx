@@ -23,7 +23,12 @@ import {
   REVIEW_TITLE,
 } from "./evidence-assurance-model";
 import { FileChanges } from "./evidence-change";
-import { FILE_ACTION_LABELS } from "./evidence-impact-model";
+import { useImpacts } from "./evidence-impact";
+import {
+  FILE_ACTION_LABELS,
+  type ImpactAsk,
+  STILL_READING_FILE,
+} from "./evidence-impact-model";
 import { type Picked, walk } from "./evidence-intake";
 import { planUploads, systemsAnswer } from "./evidence-model";
 import { PreviewButton } from "./evidence-opener";
@@ -53,10 +58,12 @@ import {
   filesNotAdded,
   finishedAt,
   finishOf,
+  firstRead,
   formatElapsed,
   hintKey,
   type ItemCard,
   type ItemResult,
+  idleGaps,
   isEarlierSession,
   itemCards,
   itemResults,
@@ -86,7 +93,9 @@ import {
   resultsNote,
   resultsSummary,
   retryDelay,
+  type SeenFiles,
   type StageLine,
+  seenFiles,
   serverClock,
   steadySeconds,
   UNREACHABLE,
@@ -97,11 +106,13 @@ import {
   type WizardContext,
   type WizardItem,
   windowHeading,
+  withdrawnCount,
   withdrawnFilesHref,
   withoutRepeats,
   writeHint,
 } from "./evidence-wizard-model";
 import { RowMenu, type RowMenuItem } from "./row-menu";
+import { heldControl } from "./row-menu-model";
 import { type IconName, UiIcon } from "./ui-icon";
 
 type Ids = {
@@ -228,6 +239,9 @@ export function useEvidenceWizard(setup: WizardSetup) {
     text: string;
   } | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
+  // Every file this page saw in the session's batch: one it no longer lists has left
+  // this upload (withdrawnCount).
+  const [seen, setSeen] = useState<SeenFiles | null>(null);
   const [note, setNote] = useState("");
   const [live, setLive] = useState("");
   const [now, setNow] = useState(() => Date.now());
@@ -251,6 +265,20 @@ export function useEvidenceWizard(setup: WizardSetup) {
   const sent = useRef(uploads);
   sent.current = uploads;
 
+  // The acceptances made here bridge only until the page's own read comes back: the
+  // server's record is the card's state then, so an acceptance reopened elsewhere is not
+  // kept (E1 design review: the card and the Move menu disagreed about one item).
+  // The trigger is what the read says, not the list's identity: the caller builds a new
+  // list on every render, and a reset keyed on it ran on every render and set a new Set
+  // each time, so the page looped ("Maximum update depth exceeded").
+  const itemsRead = setup.items
+    .map((item) => `${item.requirementId}:${item.accepted ? 1 : 0}`)
+    .join("|");
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new read of the items is the trigger.
+  useEffect(() => {
+    // Unchanged when nothing was accepted here, so no render follows.
+    setAccepted((now) => (now.size === 0 ? now : new Set()));
+  }, [itemsRead]);
   const items = useMemo(
     () =>
       setup.items.map((item) =>
@@ -307,6 +335,7 @@ export function useEvidenceWizard(setup: WizardSetup) {
         const parsed = parseBatch(result);
         if (parsed !== null && parsed.batchId === batchId) {
           setBatch(parsed);
+          setSeen((before) => seenFiles(before, parsed));
           setReceivedAt(Date.now());
           setReadFrom(started);
           setNow(Date.now());
@@ -770,9 +799,12 @@ export function useEvidenceWizard(setup: WizardSetup) {
         ? systemsAnswer(draft.systems.all, draft.systems.ticked)
         : null;
     const keep = draft.addMore && session !== null;
+    // Files added to a session taken up again start its clock here (startedAt).
     const target: Session =
       keep && session !== null
-        ? session
+        ? session.startedAt === null
+          ? { ...session, startedAt: Date.now() }
+          : session
         : {
             batchId: crypto.randomUUID(),
             requirementId: draft.requirementId,
@@ -792,6 +824,9 @@ export function useEvidenceWizard(setup: WizardSetup) {
     }));
     if (keep) {
       setUploads((current) => [...current, ...added]);
+      if (target !== session) {
+        setSession(target);
+      }
     } else {
       seq.current += 1;
       setUploads(added);
@@ -1120,7 +1155,13 @@ export function useEvidenceWizard(setup: WizardSetup) {
     now: clock,
     done: progress.done,
     finished: finishedAt(batch),
-    startedAt: session?.startedAt ?? null,
+    // This browser's clock, moved onto the server's (clock - now is the offset).
+    startedAt:
+      session === null || session.startedAt === null
+        ? null
+        : session.startedAt + (clock - now),
+    firstRead: firstRead(batch),
+    idle: idleGaps(batch),
   });
   const before =
     shownSeconds.current !== null &&
@@ -1170,6 +1211,7 @@ export function useEvidenceWizard(setup: WizardSetup) {
     setup,
     unreachable,
     readFrom,
+    seen,
     queued,
     confirmDrop,
     fixing,
@@ -1194,6 +1236,9 @@ export function useEvidenceWizard(setup: WizardSetup) {
     addFiles,
     retry,
     place: (fileLine: FileLine, choice: string) => void place(fileLine, choice),
+    // The server says an item stands otherwise than the window shows it (a decision made
+    // elsewhere): the page is read again, so the card and the menu tell one story.
+    resync: () => router.refresh(),
     accept: (item: WizardItem) => void accept(item),
     rerun: (requirementId: string) => void rerun(requirementId),
     leave: (fileId: string) =>
@@ -1267,6 +1312,12 @@ export function EvidenceWizard({ wizard }: { wizard: Wizard }) {
   const titleId = useId();
   const dialog = useRef<HTMLDialogElement>(null);
   const [box, setBox] = useState<HTMLDialogElement | null>(null);
+  // A stable ref: an inline callback is a new function on every render, which React
+  // detaches (null) and attaches again, so setting state in it loops without end.
+  const attach = useCallback((node: HTMLDialogElement | null) => {
+    dialog.current = node;
+    setBox(node);
+  }, []);
   const { open } = wizard;
 
   useEffect(() => {
@@ -1306,10 +1357,7 @@ export function EvidenceWizard({ wizard }: { wizard: Wizard }) {
 
   return (
     <dialog
-      ref={(node) => {
-        dialog.current = node;
-        setBox(node);
-      }}
+      ref={attach}
       className="confirm-dialog cs-dialog wz-dialog"
       aria-labelledby={titleId}
       onCancel={(event) => {
@@ -1423,7 +1471,12 @@ export function windowView(wizard: Wizard): WindowView {
       now: clock,
     }),
     results,
-    summary: resultsSummary(batch, results, progress),
+    summary: resultsSummary(
+      batch,
+      results,
+      progress,
+      withdrawnCount(wizard.uploads, batch, wizard.readFrom, wizard.seen),
+    ),
     apart: filesApart(lines),
     notAdded: filesNotAdded(lines),
     items,
@@ -1462,6 +1515,7 @@ export type WindowActions = Pick<
   | "addFiles"
   | "retry"
   | "place"
+  | "resync"
   | "accept"
   | "rerun"
   | "leave"
@@ -1606,12 +1660,16 @@ function Footer({ view, wizard }: { view: WindowView; wizard: WindowActions }) {
     icon: IconName,
     text: string,
     tone: "" | "done" | "warning" | "problem" = "",
-  ) => (
-    <p className={`wz-note${tone !== "" ? ` is-${tone}` : ""}`}>
-      <UiIcon name={icon} size={15} />
-      <span>{text}</span>
-    </p>
-  );
+  ) =>
+    text === "" ? (
+      // Nothing to say (an upload with no file left): no line, not an empty one.
+      <span />
+    ) : (
+      <p className={`wz-note${tone !== "" ? ` is-${tone}` : ""}`}>
+        <UiIcon name={icon} size={15} />
+        <span>{text}</span>
+      </p>
+    );
   // Three reads in a row did not reach the server: said, while it keeps trying.
   const offline = (
     <p className="wz-note is-warning" role="status">
@@ -1745,7 +1803,14 @@ function Footer({ view, wizard }: { view: WindowView; wizard: WindowActions }) {
     <footer className="wz-foot">
       {view.unreachable
         ? offline
-        : note("listCheck", resultsNote(view.progress))}
+        : note(
+            "listCheck",
+            resultsNote(
+              view.progress,
+              view.results.filter((item) => item.accept.state === "accepted")
+                .length,
+            ),
+          )}
       <div className="wz-acts">
         {view.canAct ? (
           <button
@@ -2746,7 +2811,6 @@ function FixReading({
  * from this upload", which did not say the file left the engagement); discarding an
  * upload outright is not offered yet. */
 const WITHDRAW_LABEL = FILE_ACTION_LABELS.WITHDRAW;
-const STILL_READING_FILE = "The agent is still reading this file.";
 
 /** Where a file a person must place goes: the agent's suggestion selected first, and
  * Place file. Keyed by the placement's version, so a file moved meanwhile (here or
@@ -2814,17 +2878,32 @@ function Choose({
         )}
       </button>
       {remove !== undefined ? (
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm wz-choose-remove"
-          disabled={busy || remove.unavailable !== null}
-          title={remove.unavailable ?? WITHDRAW_LABEL}
-          aria-label={`Withdraw ${name} from the engagement`}
-          onClick={remove.onRemove}
-        >
-          <UiIcon name="trash" size={13} />
-          Withdraw
-        </button>
+        <>
+          {/* Held, not disabled: Tab reaches it and its reason is its description. */}
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm wz-choose-remove"
+            {...heldControl(
+              busy || remove.unavailable !== null,
+              remove.unavailable !== null ? `${id}-held` : undefined,
+            )}
+            title={remove.unavailable ?? WITHDRAW_LABEL}
+            aria-label={`Withdraw ${name} from the engagement`}
+            onClick={() => {
+              if (!busy && remove.unavailable === null) {
+                remove.onRemove();
+              }
+            }}
+          >
+            <UiIcon name="trash" size={13} />
+            Withdraw
+          </button>
+          {remove.unavailable !== null ? (
+            <span id={`${id}-held`} className="sr-only">
+              {remove.unavailable}
+            </span>
+          ) : null}
+        </>
       ) : null}
     </span>
   );
@@ -3245,8 +3324,10 @@ function ApartRow({
 }
 
 /** Move a file (to another item, or out of D&I), or withdraw it from the engagement: the
- * existing withdrawal, which keeps its custody record. A file of an accepted item stays
- * until the decision is reopened on the list. */
+ * existing withdrawal, which keeps its custody record. What holds each is read from the
+ * server as the menu opens (the file's impact, E1), so a decision accepted or reopened
+ * elsewhere since the window opened is what the menu says; while the agent still reads
+ * the file, the window's own poll holds it. */
 function MoveMenu({
   line,
   view,
@@ -3258,21 +3339,73 @@ function MoveMenu({
   wizard: WindowActions;
   busy: boolean;
 }) {
+  const impacts = useImpacts(view.ids);
   const here = new Set(line.on);
-  const locked = view.items.some(
-    (item) => here.has(item.requirementId) && item.accepted,
-  )
-    ? "This item’s evidence is accepted. Reopen the decision on the list to move its files."
-    : !line.movable
-      ? STILL_READING_FILE
-      : null;
+  const fileId = line.fileId;
+  /** An action as the menu offers it: held while the file is read, else by what the
+   * server said of it when the menu opened. A move takes the file off each item it is
+   * on, by the server's rule for taking a file off an item (UNLINK, as the placement
+   * itself checks it); a withdrawal is checked as one. */
+  const checked = (asks: readonly ImpactAsk[]) => {
+    const reading = line.movable ? null : STILL_READING_FILE;
+    return {
+      unavailable:
+        reading ??
+        asks
+          .map((ask) => impacts.unavailable(ask))
+          .find((why) => why !== null) ??
+        null,
+      note:
+        reading === null
+          ? (asks.map((ask) => impacts.checking(ask)).find(Boolean) ?? null)
+          : null,
+      prefetch: () => {
+        for (const ask of asks) {
+          impacts.prefetch(ask);
+        }
+      },
+    };
+  };
+  const moveAsks: ImpactAsk[] =
+    fileId === null
+      ? []
+      : line.on.map((requirementId) => ({
+          fileId,
+          action: "UNLINK" as const,
+          requirementId,
+        }));
+  const move = checked(moveAsks);
+  // One record for the card and the menu: where the live read names an item accepted
+  // (with this file) that the window shows open, the window is read again.
+  const stale = moveAsks.some((ask) => {
+    const state = impacts.state(ask);
+    if (state?.status !== "ready") {
+      return false;
+    }
+    const acceptedNow = state.impact.blocking.some(
+      (entry) =>
+        entry.kind === "ACCEPTED_ITEM" &&
+        entry.requirementId === ask.requirementId,
+    );
+    const shown =
+      view.items.find((item) => item.requirementId === ask.requirementId)
+        ?.accepted ?? false;
+    return acceptedNow && !shown;
+  });
+  const { resync } = wizard;
+  useEffect(() => {
+    if (stale) {
+      resync();
+    }
+  }, [stale, resync]);
   const entries: RowMenuItem[] = [
     ...view.items
       .filter((item) => item.choosable && !here.has(item.requirementId))
       .map((item) => ({
         label: `Move to ${item.title}`,
+        action: "move",
         icon: "arrow" as const,
-        unavailable: locked,
+        ...move,
         onSelect: () => wizard.place(line, item.requirementId),
       })),
     ...(line.dest?.kind === "out"
@@ -3280,16 +3413,18 @@ function MoveMenu({
       : [
           {
             label: OUT_LABEL,
+            action: "keep out of D&I",
             icon: "folder" as const,
-            unavailable: locked,
+            ...move,
             onSelect: () => wizard.place(line, OUT),
           },
         ]),
     {
       label: WITHDRAW_LABEL,
+      action: "withdraw",
       icon: "trash" as const,
       danger: true,
-      unavailable: locked,
+      ...checked(fileId === null ? [] : [{ fileId, action: "WITHDRAW" }]),
       onSelect: () => wizard.remove(line.fileId),
     },
   ];

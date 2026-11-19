@@ -125,7 +125,9 @@ export function changeLanding(
     for (const [key, value] of Object.entries(target.keep)) {
       params.set(key, value);
     }
-    if (target.file !== null && notice !== "withdrawn") {
+    // The file comes back open; a withdrawn one is no longer in the Library, so its
+    // banner names it instead (E1 design review, round 5).
+    if (target.file !== null) {
       params.set("file", target.file);
     }
   }
@@ -360,4 +362,55 @@ export function changeBlocked(file: {
     return "Its screenshot review is signed off, so the file stays.";
   }
   return null;
+}
+
+// One change form open at a time, and what the Withdrawn list says after a restoration
+
+/** The one change form open in a list (E1 design review, round 5: two forms could be
+ * open at once, each with its own Cancel): its owner (a row, a card) and what it shows. */
+export type OpenForm<T> = { owner: string; value: T } | null;
+
+/** The open form after an owner opens one (it takes the place of any other) or closes
+ * its own (another owner's stays open). */
+export function nextOpenForm<T>(
+  now: OpenForm<T>,
+  owner: string,
+  next: T | null,
+): OpenForm<T> {
+  if (next !== null) {
+    return { owner, value: next };
+  }
+  return now !== null && now.owner === owner ? null : now;
+}
+
+/** Whether a reason meets the one rule, so its form's press can be sent: required, 3 to
+ * 500 characters; optional, none or the same. */
+export function reasonReady(value: string, required: boolean): boolean {
+  if (!required && value.trim() === "") {
+    return true;
+  }
+  return cleanReason(value) !== null;
+}
+
+/** The Withdrawn list's count, with the files restored here while the person is on it
+ * (they stay on the list, in their new state). */
+export function withdrawnCountLine(
+  withdrawn: number,
+  restored: number,
+): string {
+  return restored === 0
+    ? `${withdrawn} withdrawn`
+    : `${withdrawn} withdrawn · ${restored} restored just now`;
+}
+
+/** A restored file's row, in its new state, where its withdrawal date was. */
+export function restoredLine(control: string | null): string {
+  return control === null || control === ""
+    ? "Restored just now"
+    : `Restored just now · back on ${control}`;
+}
+
+/** The Withdrawn list's empty line when a search matches nothing. */
+export function noWithdrawnMatch(query: string): string {
+  return `No withdrawn file matches ‘${query.trim()}’.`;
 }

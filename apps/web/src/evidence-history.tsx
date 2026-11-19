@@ -111,8 +111,12 @@ function Lines({ ids, lines }: { ids: Ids; lines: readonly HistoryLine[] }) {
                 never the browser's local time beside them, with the UTC time where two
                 lines share a date (18 November 2026). */}
             <time dateTime={line.at}>{dates[index]}</time>
-            {line.by !== "" ? ` by ${line.by}` : ""}
           </small>
+          {/* Who, on a line of its own: an address breaks only between its words, never
+              mid-word beside the date (E1 design review, round 5). */}
+          {line.by !== "" ? (
+            <small className="ea-history-by">by {line.by}</small>
+          ) : null}
           {line.file !== null && line.relation !== null ? (
             <small className="ea-history-version">
               {line.relation}{" "}

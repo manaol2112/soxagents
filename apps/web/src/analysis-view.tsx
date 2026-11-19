@@ -15,6 +15,7 @@ import {
   runFailureLine as readingFailureLine,
   readingLabel,
 } from "./analysis-model";
+import { reviewFeedback } from "./evidence-model";
 import { formatDate } from "./format";
 import { UiIcon } from "./ui-icon";
 
@@ -355,7 +356,7 @@ function ReviewSection({
       {review.feedback !== "" ? (
         <div className="review-feedback">
           <UiIcon name="info" size={14} />
-          <p>{review.feedback}</p>
+          <p>{reviewFeedback(review.feedback)}</p>
         </div>
       ) : null}
       <ul className="review-checks" aria-label="Evidence checks">

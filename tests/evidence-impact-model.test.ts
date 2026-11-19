@@ -361,16 +361,26 @@ describe("what a change is held by, and what it would do", () => {
       summary.used,
       "Used on ITGC-AC-01 (SAP): 2 evidence items on 1 request.",
     );
+    // Changed 18 November 2026 (E1 design review, round 4). Old: each item by its title
+    // alone ("ITGC-AC-01 · User list · insufficient"; "...not reviewed: User list."), so
+    // an item asked for in two phases read twice with nothing to tell them apart. New:
+    // each item with its phase, from the impact's own `phase`, in the list and in the
+    // reset sentence.
+    // Changed again 18 November 2026 (E1 design review, round 5). Old: each item began
+    // with the control the line above names, and the reset sentence named the items a
+    // second time ("The decision on 1 evidence item goes back to not reviewed: User
+    // list (Design)."). New: the control only where it differs, the item whose decision
+    // returns marked so on its own line, and the count in one sentence.
     assert.deepEqual(
       summary.items.map((line) => line.text),
       [
-        "ITGC-AC-01 · Access policy · accepted",
-        "ITGC-AC-01 · User list · insufficient",
+        "Access policy (Design) · accepted",
+        "User list (Design) · insufficient · returns to Not reviewed",
       ],
     );
     assert.equal(
       summary.resets,
-      "The decision on 1 evidence item goes back to not reviewed: User list.",
+      "1 evidence item decision returns to Not reviewed.",
     );
     assert.equal(
       summary.retests,
@@ -1049,17 +1059,20 @@ describe("a held reason in a menu (E1 design review, 18 November 2026)", () => {
     );
     assert.match(menu, /const reasons = heldReasons\(items\);/);
     // Readable: a held item is not half-transparent, and its reason is secondary text.
+    // Changed 18 November 2026 (E1 design review, round 4). Old: these rules were for
+    // `button:disabled`, as a held item was disabled (Tab skipped it). New: a held item
+    // is aria-disabled, so the same rules are for `[aria-disabled="true"]`.
     const css = readFileSync(
       new URL("../apps/web/app/globals.css", import.meta.url),
       "utf8",
     ).replace(/\r\n/g, "\n");
     assert.match(
       css,
-      /\.row-menu-list button:disabled \{\n {2}color: var\(--text-disabled\);\n {2}cursor: not-allowed;\n {2}opacity: 1;\n\}/,
+      /\.row-menu-list button\[aria-disabled="true"\] \{\n {2}color: var\(--text-disabled\);\n {2}cursor: not-allowed;\n {2}opacity: 1;\n\}/,
     );
     assert.match(
       css,
-      /\.row-menu-list button:disabled small \{\n {2}color: var\(--text-secondary\);\n\}/,
+      /\.row-menu-list button\[aria-disabled="true"\] small \{\n {2}color: var\(--text-secondary\);\n\}/,
     );
   });
 });

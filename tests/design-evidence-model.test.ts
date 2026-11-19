@@ -607,7 +607,9 @@ describe("a file came back: review it", () => {
     assert.deepEqual(chips(view), ["Reading…", "With owner"]);
     assert.equal(
       view.rows[0]?.sub,
-      "Policy or procedure · 1 file · Agent is reading",
+      // Changed 18 November 2026 (E1 design review, round 5: one verb on the D&I
+      // Evidence step). Old: "· Agent is reading". New: "· Reading".
+      "Policy or procedure · 1 file · Reading",
     );
     assert.equal(view.rows[0]?.canAccept, false);
     assert.equal(view.header.standing, "READING");

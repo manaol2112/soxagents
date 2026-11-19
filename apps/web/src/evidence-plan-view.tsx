@@ -2,7 +2,8 @@
 
 import { useRouter } from "next/navigation";
 import { type ReactNode, useId, useRef, useState, useTransition } from "react";
-
+import { reopenedPrefix } from "./design-evidence-model";
+import { useChangeForm } from "./evidence-change";
 import {
   APPLICABILITY_LABELS,
   type Applicability,
@@ -429,10 +430,11 @@ export function RequirementRow({
   const [words, setWords] = useState("");
   const [fileId, setFileId] = useState("");
   const [showFound, setShowFound] = useState(false);
-  const [fileForm, setFileForm] = useState<{
+  // One change form open in the list at a time (useChangeForm, E1 design review, round 5).
+  const [fileForm, setFileForm] = useChangeForm<{
     fileId: string;
     form: FileForm;
-  } | null>(null);
+  }>();
   // A change to one of its files, confirmed by the server: shown on the item, which stays
   // when the file leaves it.
   const [fileDone, setFileDone] = useState<string | null>(null);
@@ -1120,7 +1122,10 @@ export function RequirementRow({
           ) : null}
           {item.sufficiencyNote ? (
             <p className="ep-note">
-              {decided || item.sufficiencyBy ? "" : "Decision reopened: "}
+              {reopenedPrefix(
+                item.sufficiencyNote,
+                decided || Boolean(item.sufficiencyBy),
+              )}
               {item.sufficiencyNote}
               {item.sufficiencyBy ? ` (${item.sufficiencyBy})` : ""}
             </p>
@@ -1285,7 +1290,10 @@ export function RequirementRow({
         </details>
         {item.sufficiencyNote ? (
           <p className="ep-note">
-            {decided || item.sufficiencyBy ? "" : "Decision reopened: "}
+            {reopenedPrefix(
+              item.sufficiencyNote,
+              decided || Boolean(item.sufficiencyBy),
+            )}
             {item.sufficiencyNote}
             {item.sufficiencyBy ? ` (${item.sufficiencyBy})` : ""}
           </p>
