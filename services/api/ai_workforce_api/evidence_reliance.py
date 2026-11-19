@@ -12,8 +12,9 @@ The reliances, in the order a refusal names them:
 - READING: the agent is still reading the file.
 - SCREENSHOT_SIGNED: its screenshot review is decided.
 - APPROVED_SAMPLE: an approved sample was drawn from it (a population file).
-- ACCEPTED_ITEM: a person accepted an evidence item it served at the time (a file added
-  after the acceptance was not part of it).
+- ACCEPTED_ITEM: a person accepted an evidence item it served at the time (a file that
+  came to serve it after the acceptance, one filed back onto its request included, was not
+  part of it: the time its filing landed counts, not when it was stored; migration 0176).
 - SIGNED_TESTING: it is on an item of signed-off testing.
 - PREPARED_WORKPAPER: a prepared workpaper's current version cites it.
 - TICKMARK: a person rested an attribute's "Shown, on my review" on their own annotation
@@ -37,6 +38,46 @@ stop serving (B3 of the E1 review).
 
 A refusal is a RelianceRefused, answered 409 by every route that makes one of these
 changes.
+
+The lock order (E1, 18 November 2026: a reading and a wizard batch's landing deadlocked,
+and the reading's check of its file was lost). Every transaction that locks rows of more
+than one of these tables takes them in this order, and within a table in this order:
+
+1. evidence_plans, by control id (lock_served);
+2. evidence_requirements, by id (lock_served); then pbc_requests, a requirement's request
+   (evidence_plans._request_held, before an item on a draft is reworded or removed; a
+   reading's receipt, evidence_receipts.apply_receipt, before its checks are queued);
+3. evidence_assessments, the current runs of each control, the controls by id
+   (evidence_assurance.queue_for_file) and a control's runs by created_at, then id
+   (evidence_assurance.reconcile, which every queueing of a check goes through);
+   Then evidence_assessment_retries, by control id (migration 0177): reconcile removes a
+   control's row after its runs; a failed queueing records it after its savepoint was
+   rolled back (evidence_assurance.record_queue_failure);
+4. test_sheets, by id (testing_engine.request_run, runs_for_file, off_open_sheets).
+
+So a change brings the checks in step before it asks the tester to look again: a reading
+queues its file's checks before its tests (evidence_analysis.run_analysis), a move lands
+the wizard's batch before it takes the file off the open sheets (evidence_intake._file),
+and a restoration queues its checks before testing again (evidence_versions.restore_file).
+A transaction that waits on a lock earlier in the order then holds nothing later in it, so
+the two cannot wait on each other. Each site says "(lock order: evidence_reliance)".
+
+Known exceptions, left for the lock work of P1 I4a (18 November 2026). A foreign key check
+takes a key-share lock on the row it references, which waits on FOR UPDATE (lock_served
+takes it on the items):
+
+- reconcile records a run after it has locked the control's runs, so its key-share lock on
+  the item (step 2) comes after step 3: a change that holds the item (lock_served) and then
+  queues its checks can wait on a reconcile that waits on it;
+- recording a tickmark's disposition (attribute_dispositions.record) or a reliability
+  decision (file_reliability.record) locks the request's current run and then inserts a row
+  that references the item: step 3, then step 2;
+- a withdrawal queues its checks (step 3) before its request follows the evidence left on
+  it (evidence_receipts.follow_evidence locks the request, step 2), while a reading takes
+  its request's receipt before it queues its checks: the two can wait on each other.
+
+A key-share lock on a control's items taken before its runs closes the first, but makes
+the third more likely; it was tried and not kept.
 """
 
 from dataclasses import dataclass
@@ -253,49 +294,74 @@ def reliances(cursor: psycopg.Cursor[Any], project_id: UUID, file_id: UUID) -> l
     return found
 
 
+def _served_at(at: str) -> str:
+    """SQL: whether the file (%(file)s) served q at the time `at` (an SQL expression; a
+    NULL time is read as covering the file), as the evidence plan counts an item's files:
+    on q's request and not read as missing it, since its filing landed there
+    (evidence_matches.filed_at; a file from a reply, since it was stored); linked to q by a
+    person, since the link; or shared to q from a sibling instance's item, since the
+    sibling's filing landed on that item. When the file was stored does not say: a file
+    moved off its control and filed back after a decision was not part of it, though it
+    was stored before (E1, found on the real screen, 18 November 2026; migration 0176). A
+    filing with no time (an archived engagement's, from before 0176) is read as covering
+    the file, as a decision with no time is."""
+    from ai_workforce_api.evidence_plans import request_file_serves, shared_from_sibling
+
+    filing = _covers(
+        "CASE WHEN arrived.source = 'UPLOAD' THEN fm.filed_at ELSE arrived.created_at END", at
+    )
+    return f"""
+        (
+            EXISTS (
+                SELECT 1 FROM evidence_file_links l
+                JOIN evidence_files arrived ON arrived.id = l.evidence_file_id
+                LEFT JOIN evidence_matches fm
+                  ON fm.evidence_file_id = l.evidence_file_id AND fm.status = 'FILED'
+                LEFT JOIN evidence_analyses a ON a.evidence_file_id = l.evidence_file_id
+                WHERE l.evidence_file_id = %(file)s AND l.pbc_request_id = q.pbc_request_id
+                  AND {request_file_serves("l.evidence_file_id")}
+                  AND {filing})
+            OR EXISTS (
+                SELECT 1 FROM evidence_requirement_files ef
+                WHERE ef.evidence_file_id = %(file)s AND ef.requirement_id = q.id
+                  AND ef.status = 'LINKED' AND {_covers("ef.linked_at", at)})
+            OR EXISTS ({shared_from_sibling("1")}
+                       AND f.id = %(file)s AND {_covers("m.filed_at", at)})
+        )
+    """
+
+
+def _covers(since: str, at: str) -> str:
+    """SQL: what began at `since` was there at `at`; either time missing reads as yes."""
+    return f"({at} IS NULL OR ({since}) IS NULL OR ({since}) <= {at})"
+
+
 def _accepted(cursor: psycopg.Cursor[Any], file_id: UUID) -> list[Reliance]:
     """The items a person accepted with the file: one the file serves (filed for it, filed
     for its request and not read as missing it, linked to it by a person, or shared to it
     from a sibling control, as the evidence plan counts an item's files) and already served
-    when the person accepted it. A file that arrived after the acceptance was not part of
-    that decision, so a replacement (a new file, added now) never counts as accepted with
-    an item accepted before it. The items are those a person can judge
+    when the person accepted it (_served_at). A file that came to serve the item after the
+    acceptance was not part of that decision, so a replacement (a new file, added now), or
+    a file filed back onto the item's request after it, never counts as accepted with an
+    item accepted before. The items are those a person can judge
     (evidence_plans.JUDGEABLE_SQL): the requested ones, and an item in hand without a
     request (planned, or a D&I item that waits for an earlier one) accepted on a file
     linked to it. Before, only requested items were read, so the file such an item was
     accepted with could be withdrawn or replaced with no refusal (independent review of
     docs/evidence-assurance.md section 10.15, 15 November 2026). Moved here from
     evidence_versions._accepted_with (E1), unchanged but for naming every such item."""
-    from ai_workforce_api.evidence_plans import (
-        JUDGEABLE_SQL,
-        request_file_serves,
-        shared_from_sibling,
-    )
+    from ai_workforce_api.evidence_plans import JUDGEABLE_SQL
 
     rows = cursor.execute(
         """
         SELECT q.title, q.id, q.engagement_control_id, q.pbc_request_id
         FROM evidence_requirements q
-        JOIN evidence_files arrived ON arrived.id = %(file)s
-        WHERE {JUDGEABLE} AND q.sufficiency = 'ACCEPTED'
-          -- An acceptance with no time (older records) is read as covering the file.
-          AND (q.sufficiency_at IS NULL OR arrived.created_at <= q.sufficiency_at)
-          AND (
-            EXISTS (
-                SELECT 1 FROM evidence_file_links l
-                LEFT JOIN evidence_analyses a ON a.evidence_file_id = l.evidence_file_id
-                WHERE l.evidence_file_id = %(file)s AND l.pbc_request_id = q.pbc_request_id
-                  AND {SERVES})
-            OR EXISTS (
-                SELECT 1 FROM evidence_requirement_files ef
-                WHERE ef.evidence_file_id = %(file)s AND ef.requirement_id = q.id
-                  AND ef.status = 'LINKED'
-                  AND (q.sufficiency_at IS NULL OR ef.linked_at <= q.sufficiency_at))
-            OR EXISTS ({SHARED} AND f.id = %(file)s))
+        -- An acceptance with no time (older records) is read as covering the file.
+        WHERE {JUDGEABLE} AND q.sufficiency = 'ACCEPTED' AND {SERVED}
         ORDER BY q.created_at, q.id
-        """.replace("{SERVES}", request_file_serves("l.evidence_file_id"))
-        .replace("{SHARED}", shared_from_sibling("1"))
-        .replace("{JUDGEABLE}", JUDGEABLE_SQL),
+        """.replace("{SERVED}", _served_at("q.sufficiency_at")).replace(
+            "{JUDGEABLE}", JUDGEABLE_SQL
+        ),
         {"file": file_id},
     ).fetchall()
     return [
@@ -392,10 +458,8 @@ def _picks(cursor: psycopg.Cursor[Any], file_id: UUID) -> list[Reliance]:
 
 def _concluded(cursor: psycopg.Cursor[Any], project_id: UUID, file_id: UUID) -> list[Reliance]:
     """The control's signed D&I conclusion, not reopened, for each design item the file
-    served when it was signed: a file that arrived after the sign-off was not part of it
-    (as for an acceptance; product owner, 31 October 2026)."""
-    from ai_workforce_api.evidence_plans import request_file_serves, shared_from_sibling
-
+    served when it was signed (_served_at): a file that came to serve it after the sign-off
+    was not part of it (as for an acceptance; product owner, 31 October 2026)."""
     rows = cursor.execute(
         """
         SELECT c.control_ref, q.id, q.engagement_control_id, q.pbc_request_id
@@ -404,24 +468,9 @@ def _concluded(cursor: psycopg.Cursor[Any], project_id: UUID, file_id: UUID) -> 
         JOIN evidence_requirements q
           ON q.engagement_control_id = dc.engagement_control_id AND q.phase = 'DESIGN'
          AND q.status NOT IN ('WAIVED', 'REMOVED')
-        JOIN evidence_files arrived ON arrived.id = %(file)s
-        WHERE dc.project_id = %(project)s AND dc.reopened_at IS NULL
-          AND arrived.created_at <= dc.signed_at
-          AND (
-            EXISTS (
-                SELECT 1 FROM evidence_file_links l
-                LEFT JOIN evidence_analyses a ON a.evidence_file_id = l.evidence_file_id
-                WHERE l.evidence_file_id = %(file)s AND l.pbc_request_id = q.pbc_request_id
-                  AND {SERVES})
-            OR EXISTS (
-                SELECT 1 FROM evidence_requirement_files ef
-                WHERE ef.evidence_file_id = %(file)s AND ef.requirement_id = q.id
-                  AND ef.status = 'LINKED' AND ef.linked_at <= dc.signed_at)
-            OR EXISTS ({SHARED} AND f.id = %(file)s))
+        WHERE dc.project_id = %(project)s AND dc.reopened_at IS NULL AND {SERVED}
         ORDER BY c.control_ref, q.created_at, q.id
-        """.replace("{SERVES}", request_file_serves("l.evidence_file_id")).replace(
-            "{SHARED}", shared_from_sibling("1")
-        ),
+        """.replace("{SERVED}", _served_at("dc.signed_at")),
         {"file": file_id, "project": project_id},
     ).fetchall()
     return [
@@ -639,7 +688,11 @@ def lock_served(cursor: psycopg.Cursor[Any], project_id: UUID, file_id: UUID) ->
     """Before a change reads what relies on the file: the plan rows of every control whose
     items the file serves, then those items, FOR UPDATE, in the order every writer of a
     plan takes them (plan row first), so an acceptance cannot land between the check and
-    the change (E1 review, N5). Returns the items."""
+    the change (E1 review, N5). Returns the items. The first two steps of the lock order
+    (module docstring). FOR UPDATE, not FOR NO KEY UPDATE: a reliance is recorded by
+    inserting a row that references the item (a tickmark's disposition, a reliability
+    decision, a walkthrough pick), and only FOR UPDATE makes that insert's key-share lock
+    wait until the change has committed."""
     found = served(cursor, project_id, file_id)
     controls = sorted({control for _item, _via, control in found}, key=str)
     for control_id in controls:

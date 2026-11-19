@@ -1437,11 +1437,6 @@ def _file(
             # items it serves are held first, so no acceptance lands in between.
             lock_served(cursor, project_id, file_id)
             check(cursor, project_id, file_id, "MOVE")
-            # Off every open sheet that holds it, its family's too: its new reading places
-            # it again (before, a moved file stayed on its old control's open sheets).
-            runs = off_open_sheets(
-                cursor, project_id, None if current is None else UUID(str(current)), file_id
-            )
             released = release_receipt(cursor, match_id)
             if control is None:
                 cursor.execute(
@@ -1520,6 +1515,14 @@ def _file(
                     moved=True,
                 )  # fmt: skip
                 checks = land(cursor, wizard, principal.id).queued
+            # Off every open sheet that holds it, its family's too: its new reading places
+            # it again (before, a moved file stayed on its old control's open sheets). Last
+            # (lock order: evidence_reliance): the landing's checks lock their runs before
+            # the test sheets are locked. Before, the sheets came first, and a move and a
+            # reading of the same control could deadlock (18 November 2026).
+            runs = off_open_sheets(
+                cursor, project_id, None if current is None else UUID(str(current)), file_id
+            )
     return (
         _register(connection, principal, organization_id, project_id, file_id),
         queued,
@@ -1811,7 +1814,8 @@ def _set_application(
         for sheet in cursor.execute(
             "SELECT id, status FROM test_sheets WHERE project_id = %s "
             "AND engagement_control_id = ANY(%s) AND status = 'OPEN' AND %s "
-            "ORDER BY created_at FOR UPDATE",
+            # By id (lock order: evidence_reliance).
+            "ORDER BY id FOR UPDATE",
             (project_id, family_ids(cursor, project_id, UUID(str(link[0]))), place_again),
         ).fetchall():
             # Off the items it was on, and placed again on its next run.

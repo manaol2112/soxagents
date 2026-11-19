@@ -619,8 +619,6 @@ def run_analysis(
                         own_application(cursor, project_id, tagged),
                     ),
                 )
-        # The control's tester places the new file on its samples and tests them.
-        runs_for_file(cursor, organization_id, project_id, file_id, requester)
         # The assurance chain (docs/evidence-assurance.md): where the file is in force on
         # a D&I requirement, its run is recorded here, in the reading's own transaction,
         # and the worker picks it up once this has committed. For a file the chain covers,
@@ -629,11 +627,17 @@ def run_analysis(
         # A wizard file waits for its batch: its checks are queued once the last of the
         # batch's files has been read. The reader's own model-derived findings are never
         # proposed for a wizard file: the chain judges D&I evidence once it is placed.
+        # Before the tests (lock order: evidence_reliance): the checks' runs are locked
+        # before the test sheets, as the wizard's landing above takes them. Before, the
+        # tests came first, and a reading and a landing of the same control deadlocked, the
+        # reading's check of its file lost (18 November 2026).
         covered = (
             queue_after_reading(cursor, project_id, file_id, requester)
             if ended is None
             else ended.covered
         )
+        # The control's tester places the new file on its samples and tests them.
+        runs_for_file(cursor, organization_id, project_id, file_id, requester)
         if not ((covered or wizard is not None) and source == "MODEL"):
             reader_findings.record(cursor)
     return "READY"

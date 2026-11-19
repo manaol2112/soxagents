@@ -1111,7 +1111,9 @@ def off_open_sheets(
     there), and have the tester look again at those and at its control's open sheets.
     A signed-off sheet is never touched. Before (E1, 18 November 2026) only the filed
     control's open sheets were cleaned, so a sibling's sheet kept a withdrawn file, and a
-    replacement sat there beside the file it replaced. Returns the runs to schedule."""
+    replacement sat there beside the file it replaced. Returns the runs to schedule. The
+    sheets are locked by id, the last step of the lock order (lock order:
+    evidence_reliance)."""
     runs: list[UUID] = []
     for (sheet_id,) in cursor.execute(
         """
@@ -1123,7 +1125,7 @@ def off_open_sheets(
             OR EXISTS (SELECT 1 FROM test_item_files t
                        JOIN test_items i ON i.id = t.test_item_id
                        WHERE i.test_sheet_id = s.id AND t.evidence_file_id = %(file)s))
-        ORDER BY s.created_at, s.id FOR UPDATE OF s
+        ORDER BY s.id FOR UPDATE OF s
         """,
         {"project": project_id, "control": control_id, "file": file_id},
     ).fetchall():
@@ -1193,6 +1195,14 @@ def runs_for_file(
         family_ids(cursor, project_id, control[0])
         if shared_with_family(cursor, file_id)
         else [UUID(str(control[0]))]
+    )
+    # The family's sheets are locked by id before any is asked to run (lock order:
+    # evidence_reliance), whichever instance's file this is: before, each reading locked
+    # its own instance's sheet first, so two siblings' readings took them in turn.
+    cursor.execute(
+        "SELECT 1 FROM test_sheets WHERE project_id = %s AND engagement_control_id = ANY(%s) "
+        "AND test_round_id IS NULL ORDER BY id FOR UPDATE",
+        (project_id, targets),
     )
     runs: list[UUID] = []
     for target in targets:

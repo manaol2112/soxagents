@@ -1554,3 +1554,263 @@ def test_an_application_change_waits_for_the_reading_and_a_signed_review(
     assert (changed.status_code, changed.json()["detail"]) == (
         409, f"{reliance.APPLICATIONS_REFUSED}{reliance.SCREENSHOT_SIGNED}",
     )  # fmt: skip
+
+
+# When the file came to serve the item (migration 0176)
+
+
+def _filing(case: _Design, file_id: str) -> tuple[Any, ...]:
+    """The file's filing: status, request, item, version, and when it landed there."""
+    [row] = case.rows(
+        "SELECT status, pbc_request_id::text, requirement_id::text, version, filed_at "
+        "FROM evidence_matches WHERE evidence_file_id = %s",
+        UUID(file_id),
+    )
+    return row
+
+
+def _file_to(case: _Design, file_id: str, control_id: str | None) -> None:
+    """A person files the file to the control (None: takes it off its control)."""
+    filed = case.client.post(
+        f"{case.base}/evidence-files/{file_id}/filing",
+        json={"version": _filing(case, file_id)[3], "control_id": control_id},
+    )
+    assert filed.status_code == 200, filed.text
+
+
+def _upload(case: _Design, name: str, content: bytes) -> str:
+    """A file uploaded on no request: the agent files it when it reads it."""
+    uploaded = case.client.post(
+        f"{case.base}/evidence-uploads",
+        params={"batch_id": str(uuid4()), "name": name},
+        content=content,
+        headers={"content-type": "text/plain"},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    return str(uploaded.json()["file_id"])
+
+
+def _accepted_at(case: _Design, item_id: str) -> Any:
+    [(at,)] = case.rows(
+        "SELECT sufficiency_at FROM evidence_requirements WHERE id = %s", UUID(item_id)
+    )
+    return at
+
+
+def test_a_file_filed_back_after_an_acceptance_was_not_part_of_it(migrated: Database) -> None:
+    """The time the file came to serve the item decides, not when it was stored (E1, found
+    on the real screen, 18 November 2026): a file on the request for another item, moved off
+    its control after the first item was accepted and filed back onto that request (for
+    every item now), was read as accepted with the first item, so it could be neither
+    replaced nor withdrawn."""
+    case = _Design(migrated, "rel-refiled")
+    held = case.add(case.first, "policy.txt")
+    stray = case.add(case.second, "access procedure.txt")
+    case.accept(case.first)
+    accepted_at = _accepted_at(case, case.first)
+    # Filed before the acceptance, for the accepted item: part of it.
+    assert case.kinds(held) == ["ACCEPTED_ITEM"]
+    assert _filing(case, held)[4] <= accepted_at
+    # Filed for the other item: not.
+    assert case.kinds(stray) == []
+
+    _file_to(case, stray, None)
+    assert _filing(case, stray)[:3] == ("NEEDS_MATCH", None, None)
+    assert _filing(case, stray)[4] is None
+    _file_to(case, stray, case.control)
+    case.read()
+    status, request_id, item_id, _version, filed_at = _filing(case, stray)
+    # Back on the accepted item's request, for every item of it, after the acceptance.
+    assert (status, request_id, item_id) == ("FILED", case.request_id, None)
+    assert filed_at > accepted_at
+    assert stray in [f["file_id"] for f in case.item(case.first)["files"]]
+    assert case.item(case.first)["sufficiency"] == "ACCEPTED"
+    assert case.kinds(stray) == []
+    for action in ("WITHDRAW", "REPLACE"):
+        seen = case.impact(stray, action).json()
+        assert (seen["allowed"], seen["blocking"]) == (True, []), action
+    withdrawn = case.withdraw(stray)
+    assert withdrawn.status_code == 200, withdrawn.text
+    # The file the item was accepted with is held as before.
+    assert case.kinds(held) == ["ACCEPTED_ITEM"]
+    assert case.withdraw(held).status_code == 409
+
+
+def test_an_agent_filing_after_an_acceptance_is_not_part_of_it(migrated: Database) -> None:
+    """A file stored before the acceptance and filed by the agent after it (its name names
+    the control) was not part of the acceptance."""
+    case = _Design(migrated, "rel-agent")
+    case.add(case.first, "policy.txt")
+    later = _upload(
+        case, "ITGC-AC-01 access procedure.txt", b"Managers approve each access request."
+    )
+    # Stored, waiting for its reading: on no control yet, so no time.
+    assert (_filing(case, later)[0], _filing(case, later)[4]) == ("PENDING", None)
+    case.accept(case.first)
+    case.read()
+    status, request_id, item_id, _version, filed_at = _filing(case, later)
+    [(filed_by,)] = case.rows(
+        "SELECT filed_by FROM evidence_matches WHERE evidence_file_id = %s", UUID(later)
+    )
+    assert (status, filed_by, request_id, item_id) == ("FILED", "AGENT", case.request_id, None)
+    assert filed_at > _accepted_at(case, case.first)
+    assert later in [f["file_id"] for f in case.item(case.first)["files"]]
+    assert case.kinds(later) == []
+    assert case.impact(later, "WITHDRAW").json()["allowed"] is True
+
+
+def test_a_file_filed_after_the_design_sign_off_was_not_part_of_it(migrated: Database) -> None:
+    """The same rule for the signed D&I conclusion: a file stored before the sign-off and
+    filed to the control's request after it was not part of it."""
+    case = _Design(migrated, "rel-signed")
+    org, project, owner = case.team["org"], case.team["project"], case.team["owner_id"]
+    served = case.add(case.first, "procedure.txt")
+    notes = _upload(case, "access procedure notes.txt", b"Meeting notes.")
+    case.read()
+    assert _filing(case, notes)[0] == "NEEDS_MATCH"
+    case.run(
+        """
+        INSERT INTO workpapers (
+            organization_id, project_id, engagement_control_id, stage, template_key,
+            status, draft_status, current_version, requested_by
+        )
+        VALUES (%s, %s, %s, 'DESIGN', 'itgc', 'DRAFT', 'IDLE', 1, %s)
+        ON CONFLICT (project_id, engagement_control_id, stage) DO NOTHING
+        """,
+        org, project, case.control, owner,
+    )  # fmt: skip
+    case.run(
+        """
+        INSERT INTO design_conclusions (
+            organization_id, project_id, engagement_control_id, workpaper_id,
+            workpaper_version, verdict, conclusion, signed_by
+        )
+        SELECT %s, %s, %s, w.id, 1, 'EFFECTIVE', 'EFFECTIVE', %s FROM workpapers w
+        WHERE w.project_id = %s AND w.engagement_control_id = %s AND w.stage = 'DESIGN'
+        """,
+        org, project, case.control, owner, project, case.control,
+    )  # fmt: skip
+    assert case.kinds(served) == ["SIGNED_DI_CONCLUSION"]
+    _file_to(case, notes, case.control)
+    case.read()
+    assert _filing(case, notes)[:3] == ("FILED", case.request_id, None)
+    assert case.kinds(notes) == []
+    assert case.withdraw(notes).status_code == 200
+
+
+def test_filed_at_follows_every_change_of_where_the_file_is_filed(migrated: Database) -> None:
+    """Migration 0176's trigger: the time is set when the filing lands on a control, a
+    request, or another item named for it, kept through any other change (a confirmation,
+    a receipt, the reason, a write of the column itself), and cleared off a control. Naming
+    one item of the request it already served, or every item again, keeps it: the file
+    served that item all along (over-protects the request's other items, never
+    under-protects)."""
+    case = _Design(migrated, "rel-trigger")
+    file_id = case.add(case.first, "policy.txt")
+    [(created,)] = case.rows("SELECT created_at FROM evidence_files WHERE id = %s", UUID(file_id))
+    [(other_control,)] = case.rows(
+        "SELECT id FROM engagement_controls WHERE project_id = %s AND id <> %s "
+        "ORDER BY control_ref LIMIT 1",
+        UUID(str(case.team["project"])),
+        UUID(case.control),
+    )
+
+    def update(sql: str, *params: Any) -> Any:
+        case.run(f"UPDATE evidence_matches SET {sql} WHERE evidence_file_id = %s", *params, file_id)
+        return _filing(case, file_id)[4]
+
+    first = _filing(case, file_id)[4]
+    assert first is not None and first >= created
+    assert update(
+        "reason = 'confirmed', filed_by = 'PERSON', decided_by = %s, "
+        "receipt_status_set = receipt_status_set, filed_at = '2000-01-01', version = version + 1",
+        case.team["owner_id"],
+    ) == first  # fmt: skip
+    assert update("requirement_id = NULL") == first
+    assert update("requirement_id = %s", case.first) == first
+    other_item = update("requirement_id = %s", case.second)
+    assert other_item > first
+    off_request = update("pbc_request_id = NULL, requirement_id = NULL")
+    assert off_request > other_item
+    on_request = update("pbc_request_id = %s", case.request_id)
+    assert on_request > off_request
+    elsewhere = update("pbc_request_id = NULL, engagement_control_id = %s", other_control)
+    assert elsewhere > on_request
+    assert update(
+        "status = 'NEEDS_MATCH', engagement_control_id = NULL, filed_by = NULL, "
+        "decided_by = NULL"
+    ) is None  # fmt: skip
+    assert update("status = 'PENDING', filed_at = clock_timestamp()") is None
+    refiled = update(
+        "status = 'FILED', engagement_control_id = %s, filed_by = 'AGENT'", case.control
+    )
+    assert refiled > elsewhere
+
+
+def test_the_backfill_reads_an_existing_filing_from_when_its_file_was_stored(
+    migrated: Database,
+) -> None:
+    """Migration 0176's backfill: a filing from before the migration has no time of its
+    own, so it is read from when its file was stored, as every acceptance read it before
+    (over-protects a file filed again later, never under-protects). An archived
+    engagement's records are left as they are (0136 refuses the write), and a filing with
+    no time is read as part of every acceptance."""
+    from ai_workforce_api.migrate import migrations_dir
+
+    case = _Design(migrated, "rel-backfill")
+    project = UUID(str(case.team["project"]))
+    case.add(case.first, "policy.txt")
+    stray = case.add(case.second, "access procedure.txt")
+    case.accept(case.first)
+    _file_to(case, stray, None)
+    _file_to(case, stray, case.control)
+    case.read()
+    _upload(case, "unread.txt", b"Not read yet.")
+    assert case.kinds(stray) == []
+
+    text = (migrations_dir() / "0176_evidence_filing_time.sql").read_text(encoding="utf-8")
+    start = text.index("UPDATE evidence_matches m")
+    backfill = text[start : text.index(";", start) + 1]
+    # Only this engagement's filings.
+    scoped = backfill.replace(
+        "WHERE m.status = 'FILED'", f"WHERE m.project_id = '{project}' AND m.status = 'FILED'"
+    )
+    assert scoped != backfill
+
+    def without_the_trigger(sql: str) -> None:
+        """As the migration runs it: the backfill before the trigger exists."""
+        with connect(migrated.url) as connection:
+            connection.execute(
+                "ALTER TABLE evidence_matches DISABLE TRIGGER evidence_matches_filed_at"
+            )
+            connection.execute(sql)
+            connection.execute(
+                "ALTER TABLE evidence_matches ENABLE TRIGGER evidence_matches_filed_at"
+            )
+
+    def before_the_migration() -> None:
+        without_the_trigger(
+            f"UPDATE evidence_matches SET filed_at = NULL WHERE project_id = '{project}'"
+        )
+
+    before_the_migration()
+    assert case.kinds(stray) == ["ACCEPTED_ITEM"]
+    without_the_trigger(scoped)
+    times = case.rows(
+        "SELECT m.status, m.filed_at = f.created_at, m.filed_at IS NULL FROM evidence_matches m "
+        "JOIN evidence_files f ON f.id = m.evidence_file_id WHERE m.project_id = %s",
+        project,
+    )
+    assert sorted(set(times)) == [("FILED", True, False), ("PENDING", None, True)]
+    # Read from when it was stored, the file filed back is held, as it was before 0176.
+    assert case.kinds(stray) == ["ACCEPTED_ITEM"]
+
+    # An archived engagement: nothing is written, and a filing with no time is held.
+    before_the_migration()
+    case.run("UPDATE projects SET status = 'ARCHIVED' WHERE id = %s", project)
+    without_the_trigger(scoped)
+    assert case.rows(
+        "SELECT count(*) FROM evidence_matches WHERE project_id = %s AND filed_at IS NOT NULL",
+        project,
+    ) == [(0,)]
+    assert case.kinds(stray) == ["ACCEPTED_ITEM"]

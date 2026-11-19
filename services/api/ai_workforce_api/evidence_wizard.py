@@ -100,6 +100,7 @@ from ai_workforce_api.evidence_assurance import (
     queue_safely,
     read_assurance,
     reconcile,
+    record_queue_failure,
     schedule_assessments,
 )
 from ai_workforce_api.evidence_classify import (
@@ -1033,24 +1034,20 @@ def land(
     if file_id is not None:
         # The reading's own hook (evidence_assurance.queue_after_reading), keeping the
         # checks it queues: in a savepoint, so a failure never loses the reading.
+        # Any failure is recorded for the worker to try again, never only logged
+        # (evidence_assurance.record_queue_failure; "Keep the reading, record it").
         try:
             with cursor.connection.transaction():
                 made = queue_for_file(cursor, batch.project_id, file_id, actor)
             covered, queued = file_id in made.covered, made.queued
-        except Exception as error:
-            logger.warning(
-                "the evidence assessment of a file could not be queued (%s)",
-                type(error).__name__,
-            )
+        except Exception as error:  # noqa: BLE001 - recorded by record_queue_failure
+            record_queue_failure(cursor, batch.project_id, None, actor, error, file_id=file_id)
     else:
         try:
             with cursor.connection.transaction():
                 queued = reconcile(cursor, batch.project_id, batch.control_id, actor).queued
-        except Exception as error:
-            logger.warning(
-                "a wizard batch's checks could not be brought in step (%s)",
-                type(error).__name__,
-            )
+        except Exception as error:  # noqa: BLE001 - recorded by record_queue_failure
+            record_queue_failure(cursor, batch.project_id, [batch.control_id], actor, error)
     cursor.execute(
         "UPDATE evidence_batches SET landed_at = clock_timestamp() WHERE id = %s", (batch.id,)
     )

@@ -6388,6 +6388,31 @@ def restore(
         return queue_drafts(cursor, organization_id, project_id, actor, control_id, issued.drafts)
 
 
+# Why an item whose request has gone for approval, or been sent, is not changed in place.
+GONE_FOR_APPROVAL = "the request carrying it has gone for approval"
+ALREADY_REQUESTED = "it has already been requested from the organization; waive it instead"
+
+
+def _request_held(cursor: psycopg.Cursor[Any], row: tuple[Any, ...]) -> tuple[Any, ...]:
+    """The requirement's request (a _requirement_row's), locked, with its status as it
+    stands now: _requirement_row reads it without a lock, so a submission for approval
+    could commit before the change rewrites the draft (independent review of E1, B1).
+    pbc_requests comes after the requirement in the lock order (evidence_reliance)."""
+    if row[3] is None:
+        return row
+    found = cursor.execute(
+        "SELECT status FROM pbc_requests WHERE id = %s FOR UPDATE", (row[3],)
+    ).fetchone()
+    return (*row[:4], None if found is None else found[0], *row[5:])
+
+
+def _sent(row: tuple[Any, ...]) -> bool:
+    """Whether the requirement (a _requirement_row) is on a request that has gone for
+    approval or been sent. One on a draft, or on a request withdrawn, is not: a person may
+    still reword it or take it off the plan."""
+    return row[1] == "REQUESTED" and row[4] not in ("DRAFT", "CANCELLED")
+
+
 def remove(
     connection: psycopg.Connection[Any],
     organization_id: UUID,
@@ -6398,17 +6423,24 @@ def remove(
     body: VersionBody,
 ) -> None:
     """A person takes evidence off the plan (decided by the product owner on 26 October
-    2026). Only evidence not yet requested: what the client was already asked for is waived
-    instead, with why. The item is kept, marked removed by whom, so the trail stays and it
-    can be restored; no later run brings it back. A plan already approved goes back for
-    approval, as with any change to it."""
+    2026). Only evidence the organization has not been asked for: what went for approval or
+    was sent is waived instead, with why. An item on a request that is still a draft comes
+    off it too (product owner, 18 November 2026: "Allow while the request is a draft";
+    before, it was refused as "already requested from the organization", which a draft was
+    not), the same rule as rewording it (_sent): the draft is written again from the items
+    it still carries, or withdrawn when it carries none. The item is kept, marked removed by
+    whom, so the trail stays and it can be restored; no later run brings it back. A plan
+    already approved goes back for approval, as with any change to it."""
     with transaction(connection) as cursor:
-        row = _requirement_row(cursor, project_id, control_id, requirement_id)
+        row = _request_held(
+            cursor, _requirement_row(cursor, project_id, control_id, requirement_id)
+        )
         if int(row[2]) != body.version:
             raise PlanState("the requirement changed")
-        if row[1] not in ("PLANNED", "AWAITING_DEPENDENCY"):
+        on_draft = row[1] == "REQUESTED" and not _sent(row)
+        if row[1] not in ("PLANNED", "AWAITING_DEPENDENCY") and not on_draft:
             raise PlanState(
-                "it has already been requested from the organization; waive it instead"
+                (GONE_FOR_APPROVAL if row[4] == "APPROVAL_PENDING" else ALREADY_REQUESTED)
                 if row[1] == "REQUESTED"
                 else "the requirement is not open"
             )
@@ -6427,17 +6459,53 @@ def remove(
             """
             UPDATE evidence_requirements
             SET status = 'REMOVED', removed_by = %s, removed_at = clock_timestamp(),
-                pending_change = NULL, version = version + 1
+                pending_change = NULL,
+                pbc_request_id = CASE WHEN %s THEN NULL ELSE pbc_request_id END,
+                version = version + 1
             WHERE id = %s
             """,
-            (actor, requirement_id),
+            (actor, on_draft, requirement_id),
         )
+        left: dict[str, Any] = {}
+        if on_draft and row[3] is not None:
+            left = _leave_draft(cursor, project_id, control_id, UUID(str(row[3])))
         _revise(cursor, UUID(str(row[7])))
         _audit(
             cursor, organization_id, project_id, actor, "evidence_requirement.removed",
-            "evidence_requirement", requirement_id, {},
+            "evidence_requirement", requirement_id, left,
         )  # fmt: skip
         _decided(cursor, organization_id, project_id, control_id, actor, row)
+
+
+DRAFT_EMPTIED = "Every item it carried was taken off the evidence plan."
+
+
+def _leave_draft(
+    cursor: psycopg.Cursor[Any], project_id: UUID, control_id: UUID, request_id: UUID
+) -> dict[str, Any]:
+    """An item left the draft request it was on: the draft is written again from the items
+    it still carries, or, carrying none, withdrawn, so it never asks for what the plan no
+    longer lists. A withdrawn request is left as it is. What happened, for the audit."""
+    # Locked by the caller already (_request_held), before the item changed.
+    status = cursor.execute(
+        "SELECT status FROM pbc_requests WHERE id = %s AND project_id = %s FOR UPDATE",
+        (request_id, project_id),
+    ).fetchone()
+    if status is None or status[0] != "DRAFT":
+        return {"request_id": str(request_id)}
+    if requirement_lines(cursor, request_id):
+        render_into(cursor, project_id, control_id, request_id)
+        return {"request_id": str(request_id), "request": "REWRITTEN"}
+    cursor.execute(
+        """
+        UPDATE pbc_requests
+        SET status = 'CANCELLED', cancellation_reason = %s,
+            version = version + 1, updated_at = clock_timestamp()
+        WHERE id = %s AND status = 'DRAFT'
+        """,
+        (DRAFT_EMPTIED, request_id),
+    )
+    return {"request_id": str(request_id), "request": "WITHDRAWN"}
 
 
 def edit(
@@ -6451,11 +6519,13 @@ def edit(
 ) -> None:
     """A person rewords a requirement before it is sent. Later runs keep the wording."""
     with transaction(connection) as cursor:
-        row = _requirement_row(cursor, project_id, control_id, requirement_id)
+        row = _request_held(
+            cursor, _requirement_row(cursor, project_id, control_id, requirement_id)
+        )
         if int(row[2]) != body.version:
             raise PlanState("the requirement changed")
-        if row[1] == "REQUESTED" and row[4] not in ("DRAFT", "CANCELLED"):
-            raise PlanState("the request carrying it has gone for approval")
+        if _sent(row):
+            raise PlanState(GONE_FOR_APPROVAL)
         if isinstance(row[5], dict) and row[5].get("add") is True:
             # An addition the planner proposed is not a person's by rewording it: they
             # accept it (or dismiss it) first.
@@ -6580,7 +6650,7 @@ def apply_change(
         )
         _revise(cursor, plan_id)
     else:
-        sent = row[1] == "REQUESTED" and row[4] not in ("DRAFT", "CANCELLED")
+        sent = _sent(row)
         cursor.execute(
             """
             UPDATE evidence_requirements

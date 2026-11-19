@@ -299,16 +299,18 @@ def start_scope_work(database_url: str, refine: bool) -> int:
 
 async def resume_assessments(client: Client, database_url: str) -> int:
     """Restart the assurance chain's runs left queued or abandoned."""
-    from ai_workforce_api.evidence_assurance import backfill, open_assessments
+    from ai_workforce_api.evidence_assurance import backfill, open_assessments, retry_failed
     from ai_workforce_api.evidence_wizard import land_open_batches
 
     try:
         with connect(database_url) as connection:
             # A wizard batch whose readings all ended without it landing lands now (its
             # receipts and checks follow); then a D&I request with files and no check gets
-            # one, a bounded number a start.
+            # one, a bounded number a start; a control whose queueing failed is tried
+            # again (migration 0177).
             land_open_batches(connection)
             backfill(connection)
+            retry_failed(connection)
             ids = open_assessments(connection)
         for run_id in ids:
             await start_assessment(client, run_id)
@@ -974,12 +976,16 @@ def activities_for(
         engine."""
         if not address or assess is None:
             return
-        from ai_workforce_api.evidence_assurance import open_assessments, project_of
+        from ai_workforce_api.evidence_assurance import open_assessments, project_of, retry_failed
 
         def pending() -> list[UUID]:
             with connect(database_url) as connection:
                 project = project_of(connection, analysis_id=analysis_id, run_id=run_id)
-                return [] if project is None else open_assessments(connection, project)
+                if project is None:
+                    return []
+                # The checks whose queueing failed there are tried again first.
+                retry_failed(connection, project)
+                return open_assessments(connection, project)
 
         try:
             await _schedule_assessments(address, await asyncio.to_thread(pending))

@@ -299,9 +299,10 @@ def _test_again(
     if control_id is None:
         return []
     runs: list[UUID] = []
+    # By id (lock order: evidence_reliance).
     for (sheet_id,) in cursor.execute(
         "SELECT id FROM test_sheets WHERE project_id = %s AND engagement_control_id = %s "
-        "AND status = 'OPEN'",
+        "AND status = 'OPEN' ORDER BY id",
         (project_id, control_id),
     ).fetchall():
         queued = request_run(cursor, UUID(str(sheet_id)))
@@ -442,14 +443,16 @@ def restore_file(
                 cursor, organization_id, project_id, match[0], request_id, principal.id,
                 "PERSON" if match[1] == "PERSON" else "OWNER" if match[1] == "OWNER" else "AGENT",
             )  # fmt: skip
+        # Back in force: the assurance chain checks its request again where it is D&I
+        # evidence (a run of the very same basis is copied, never run twice); then the
+        # tester looks again (lock order: evidence_reliance: the checks' runs before the
+        # test sheets).
+        queue_safely(cursor, project_id, file_id, principal.id)
         runs = _test_again(cursor, project_id, control_id)
         _audit(
             cursor, organization_id, project_id, principal.id, "evidence.restored", file_id,
             {**(context or {}), "reason": reason},
         )  # fmt: skip
-        # Back in force: the assurance chain checks its request again where it is D&I
-        # evidence (a run of the very same basis is copied, never run twice).
-        queue_safely(cursor, project_id, file_id, principal.id)
     return runs
 
 

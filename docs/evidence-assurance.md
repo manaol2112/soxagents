@@ -65,6 +65,7 @@ it (its requirement files, filtered in the query and read exactly per control) a
 current run; a
 requirement a pass already tried at the very same basis (its files still being read, say)
 is not tried again until what it would read changes (`evidence_assessment_backfill`).
+A queueing that fails is recorded and tried again (section 10.16).
 
 ### Stage 1: the gate (code only, no model call)
 
@@ -1839,6 +1840,71 @@ Where a sentence above says otherwise, this is what holds.
   gives the phase (it gave none and expected the planned item's state in every phase);
   `test_design_workpaper_model.py` and `test_design_workpaper.py` expect the prompt
   version `workpaper-preparer/3`.
+
+### 10.16 A queueing that fails is recorded and tried again (18 November 2026)
+
+The product owner: "Keep the reading, record it" (migration 0177). Bringing a control's
+runs in step (`reconcile`) runs in a savepoint of the transaction that asked: a reading's
+end, a withdrawal, replacement or restoration, a confirmed kind, a wizard batch's landing
+(`queue_for_file` through `_safely`, and `evidence_wizard.land`), a person's change to what
+the runs rest on (`follow_control`), a plan run's end (`follow_plan`) and the start-up
+`backfill`. Before, a failure there (a deadlock between a reading and a landing, say) was
+only logged: the reading was kept, but its check was never queued, and only the start-up
+backfill found a request with no check at all; one whose check stayed current on an
+outdated basis was never tried again.
+
+- **Recorded per control.** After the savepoint is rolled back, in the transaction that
+  asked (or one of its own, where the queueing had its own), each control the file is, or
+  was, in force on (or the control the change was for) gets a row in
+  `evidence_assessment_retries`: the error's class only (`DeadlockDetected`, say; never its
+  message, which could carry data) and one more failed try. The reading, or the person's
+  change, is kept, whatever the failure was (`record_queue_failure`).
+- **On the audit trail.** `evidence_assessment.queue_failed` per control (target the
+  control; `error`, `attempts`, `held`, and the file where one asked), and
+  `evidence_assessment.requeued` (`attempts`, `error`, the runs queued) when the control is
+  brought in step again.
+- **Tried again on every pass.** The worker tries each recorded control again
+  (`retry_failed`) after every reading and every check it runs (that engagement's:
+  `LocalDraftScheduler._schedule_open_assessments` and the durable worker's
+  `open_assessments_now`) and at start-up (every engagement's, after the backfill), each in
+  a transaction of its own; the runs it queues are handed over with the rest. A control is
+  not tried again within 30 seconds per failed try since the last
+  (`RETRY_BACKOFF_SECONDS`: 30 s after the first, 60 s after the second, and so on), so a
+  burst of passes does not spend the tries in seconds. Any bringing in step of the whole
+  control, whoever asks, removes the row; a start-up backfill that fails for a control is
+  recorded the same way, its control's work rolled back on its own. An archived
+  engagement's rows are left as they are (read-only, as 0136).
+- **Limit.** After 5 failed tries (`RETRY_LIMIT`) the worker stops trying the control on its
+  own: each of its out-of-date requests says, as its last reason, "The check could not be
+  brought up to date after 5 tries. Run it again.", a request of it never checked
+  (`NOT_CHECKED`, its first queueing having failed) carries that sentence alone in
+  `out_of_date`, and the last `queue_failed` event says `held`. A person's change that
+  brings the whole control in step ends the hold, and so does a check a person starts
+  again on one request: while a failure is recorded for its control, the whole control is
+  brought in step with it (`rerun`).
+
+**The lock order** (the module docstring of `evidence_reliance`, where each site is named):
+`evidence_plans` by control id, then `evidence_requirements` by id (`lock_served`), then
+the requirement's `pbc_requests` row (locked before an item on a draft is reworded or
+removed, so a submission for approval cannot land in between; a reading's receipt), then
+`evidence_assessments` (controls by id, a control's runs by created_at then id:
+`reconcile`), then `evidence_assessment_retries` by control id, then `test_sheets` by id. A
+reading queues its checks before its tests, a move lands the wizard's batch before it takes
+the file off the open sheets, and a restoration queues its checks before testing again.
+`lock_served` stays FOR UPDATE: the rows that record a reliance (a tickmark's disposition, a
+reliability decision, a walkthrough pick) reference the item, and only FOR UPDATE makes
+their key-share lock wait for the change.
+
+Three exceptions are known and left for the lock work of P1 I4a: `reconcile` records a
+run after it has locked the runs, so its foreign key's key-share lock on the item comes
+after them; recording a tickmark's disposition or a reliability decision locks the
+request's current run before it inserts a row that references the item; and a withdrawal
+queues its checks before its request follows the evidence left on it
+(`follow_evidence` locks the request), while a reading takes its request's receipt before
+it queues its checks. A key-share lock on a control's items taken before its runs closes
+the first but makes the third more likely; it was tried and not kept.
+
+Tests: `test_assessment_retries.py` and `test_lock_order.py` (critical tier).
 
 ## 9. Status
 
