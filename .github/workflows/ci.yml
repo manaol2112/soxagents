@@ -21,8 +21,9 @@ env:
 # G4, the integration gate (docs/test-strategy.md §1). Until 19 Nov 2026 one job ran lint,
 # types, the critical tier and every Node test in turn, in 26 to 42 minutes. The same checks
 # now run side by side: the critical tier in four parts (make test-critical-shard; the split
-# is deterministic and services/api/tests/test_ci_gate.py checks that the parts together are
-# CRITICAL_PY exactly); the fast tier's files that are not critical (make test-fast-only),
+# is deterministic, balanced by the measured times in scripts/test_durations.json, and
+# services/api/tests/test_ci_gate.py checks that the parts together are CRITICAL_PY
+# exactly); the fast tier's files that are not critical (make test-fast-only),
 # which no CI run reached before; and the production build of the web app, which no check
 # compiled before. Branch protection requires `baseline`, which passes only when every part
 # passed.
@@ -131,6 +132,13 @@ jobs:
       - name: Summary of the part
         if: always() && matrix.database
         run: cat test-results/*/summary.txt >> "$GITHUB_STEP_SUMMARY" || true
+
+      # One JSON line of the part's measured seconds per test file, which `make
+      # test-durations RUN=<run id>` reads back into scripts/test_durations.json, the times
+      # that balance the critical parts. File names and times only.
+      - name: Durations of the part
+        if: always() && matrix.database
+        run: cat test-results/*/durations.json || true
 
       - name: Log of a failed part
         if: failure() && matrix.database

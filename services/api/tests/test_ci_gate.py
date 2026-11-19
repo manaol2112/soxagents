@@ -80,6 +80,19 @@ def test_the_split_is_deterministic_whatever_the_order() -> None:
         )
 
 
+def test_a_file_missing_from_the_durations_file_is_still_assigned() -> None:
+    # The parts are balanced by scripts/test_durations.json (CI's measured times); a
+    # critical file added after the times were taken has none and must still run once.
+    count, _ = _shards()
+    measured = RUNNER.load_durations(ROOT) or {entry: 10.0 for entry in CRITICAL}
+    untimed = set(sorted(CRITICAL)[::7])
+    times = {entry: seconds for entry, seconds in measured.items() if entry not in untimed}
+    parts = [RUNNER.shard(CRITICAL, index, count, ROOT, times) for index in range(1, count + 1)]
+    joined = [entry for part in parts for entry in part]
+    assert sorted(joined) == sorted(CRITICAL), "an untimed file runs in exactly one part"
+    assert all(part for part in parts)
+
+
 def test_the_shard_target_takes_the_whole_critical_list() -> None:
     recipe = re.search(r"^test-critical-shard: .*\n\t(.*)$", MAKEFILE, re.MULTILINE)
     assert recipe is not None

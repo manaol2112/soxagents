@@ -98,6 +98,7 @@ Microsoft and Google sign-in stay unavailable until their values are set. For a 
 | `make migrate` | Apply migrations and sync the standard workforce. This does not delete data. Production deploys run the same step: `python -m ai_workforce_api.migrate` |
 | `make stop` | Stop PostgreSQL and keep its data |
 | `make status` | Show whether PostgreSQL is running and healthy |
+| `make env-status` | One line per API or web server listening on the development and scratch ports (`ENV_PORTS=8000,3000,8030-8050` to choose): the checkout it serves, its branch, commit, uncommitted files and commits behind `origin/main` (as of the last fetch), and an API's database name, never its URL. An API with `GET /health/version` also shows the commit it loaded and its database's latest migration; "(older code)" means a reload did not happen (`scripts/env_status.py`, read only) |
 | `make format` | Format Python and the TypeScript sources |
 | `make lint` | Fail if formatting or lint rules fail |
 | `make typecheck` | Run mypy and `tsc --noEmit` |
