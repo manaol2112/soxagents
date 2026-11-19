@@ -112,6 +112,7 @@ import { namedConclusion } from "./design-conclusion-model";
 import { DesignEvidence } from "./design-evidence";
 import {
   carriersOf,
+  designListFiles,
   evidenceList,
   requestsToLookAgain,
 } from "./design-evidence-model";
@@ -140,7 +141,7 @@ import {
   PROGRESS_LABELS,
   SEVERITIES,
 } from "./engagement-model";
-import { FileChanges, InPlaceForm } from "./evidence-change";
+import { FileCardActions, InPlaceForm } from "./evidence-change";
 import {
   CHANGE_NOTICES,
   type ChangeNotice,
@@ -2903,12 +2904,16 @@ function ControlRecord({
                         files={engagement.files}
                         notice={engagement.changeNotice}
                         serves={fileServes(evidencePlan)}
-                        placed={placedFiles(evidencePlan)}
+                        placed={designListFiles(evidencePlan)}
                       />
                     }
+                    // The files the D&I list's requests do not show, by filing or by a
+                    // person's link: the count and the list are the same files (E1
+                    // design review: "24 not on a request" beside "Serves: ... (linked)",
+                    // because the list followed the plan's approval, not the D&I list).
                     otherFiles={
                       (engagement.files?.files ?? []).filter(
-                        (file) => !placedFiles(evidencePlan).has(file.id),
+                        (file) => !designListFiles(evidencePlan).has(file.id),
                       ).length
                     }
                     documents={{
@@ -3966,7 +3971,7 @@ function ControlEvidence({
           shown under the evidence{" "}
           {under === 1 ? "item it serves" : "items they serve"} above, where{" "}
           {under === 1 ? "it is" : "each is"} previewed, downloaded, replaced,
-          or withdrawn.
+          or removed from its request.
         </p>
       ) : null}
       {listed.length > 0 || under === 0 || reading ? (
@@ -4222,26 +4227,19 @@ function ControlEvidence({
                             </div>
                           </details>
                           {/* On the row, not inside it: a file added by mistake is
-                              withdrawn or replaced (its record stays), never deleted. */}
-                          <div className="evidence-file-tools">
-                            <a
-                              className="btn btn-secondary btn-sm"
-                              href={`/workspace/evidence-files/${file.id}?organization=${model.organization.id}&project=${model.selectedProject?.id ?? ""}`}
-                            >
-                              Download
-                            </a>
-                            {canAct ? (
-                              <FileChanges
-                                organizationId={model.organization.id}
-                                projectId={model.selectedProject?.id ?? ""}
-                                fileId={file.id}
-                                fileName={file.fileName}
-                                blocked={changeBlocked(file)}
-                                controlId={control.id}
-                                step={step}
-                              />
-                            ) : null}
-                          </div>
+                              withdrawn or replaced (its record stays), never deleted.
+                              Download, Replace file and Withdraw from the engagement…
+                              are behind the card's "…" menu (E1 design review). */}
+                          <FileCardActions
+                            organizationId={model.organization.id}
+                            projectId={model.selectedProject?.id ?? ""}
+                            fileId={file.id}
+                            fileName={file.fileName}
+                            blocked={changeBlocked(file)}
+                            canAct={canAct}
+                            controlId={control.id}
+                            step={step}
+                          />
                         </li>
                       );
                     })}

@@ -430,14 +430,84 @@ describe("withdrawing in place", () => {
       new URL("../apps/web/src/evidence-change.tsx", import.meta.url),
       "utf8",
     );
-    assert.match(form, /export function RestoreForm\(/);
     assert.match(form, /router\.replace\(location, \{ scroll: false \}\)/);
     assert.doesNotMatch(form, /\/\/ The page's own form post/);
     const library = readFileSync(
       new URL("../apps/web/src/evidence-view.tsx", import.meta.url),
       "utf8",
     );
-    assert.match(library, /<RestoreForm/);
     assert.doesNotMatch(library, /name="intent" value="restore"/);
+    // Changed again 18 November 2026 (E1 design review). Old: Restore opened a popover
+    // (it clipped at the card's bottom and hid the row) and, once confirmed, the page
+    // came back with a banner over "Nothing withdrawn". New: the Withdrawn list's rows
+    // are their own (WithdrawnRows): the form, then its confirmation, as a full-width
+    // row under the file's row, which stays while the person is there; the page is read
+    // again in place, with no notice.
+    assert.match(library, /<WithdrawnRows/);
+    assert.match(form, /export function WithdrawnRows\(/);
+    const rows = form.slice(
+      form.indexOf("export function WithdrawnRows("),
+      form.indexOf("export function InPlaceForm("),
+    );
+    assert.match(rows, /<td colSpan=\{columns\}>/);
+    assert.match(rows, /<p className="ep-done" role="status">/);
+    assert.match(
+      rows,
+      /onDone\(restoredMessage\(fileName\)\);\s*router\.refresh\(\);/,
+    );
+    assert.doesNotMatch(rows, /router\.replace/);
+    // Restore names the file, says what restoring does, and has Cancel.
+    assert.match(rows, /Restore <strong>\{fileName\}<\/strong>/);
+    assert.match(rows, /action: "RESTORE"/);
+    assert.match(rows, />\s*Cancel\s*</);
+    // The popover's overflow rules are gone.
+    const css = readFileSync(
+      new URL("../apps/web/app/globals.css", import.meta.url),
+      "utf8",
+    );
+    assert.doesNotMatch(css, /restore-menu/);
+  });
+
+  it("offers only what can succeed: a held change is its reason and Close", () => {
+    // E1 design review, 18 November 2026: a held form still showed its Why field, the
+    // file chooser and a greyed primary under the amber box; after a refusal the
+    // preview was stale and the button armed, with a red line beside the same reason.
+    const form = readFileSync(
+      new URL("../apps/web/src/evidence-change.tsx", import.meta.url),
+      "utf8",
+    );
+    const changes = form.slice(
+      form.indexOf("export function FileChanges("),
+      form.indexOf("export function FileCardActions("),
+    );
+    assert.match(
+      changes,
+      /if \(held && action !== null\) \{\s*return \(\s*<div className="file-changes">\s*<HeldChange/,
+    );
+    const held = form.slice(
+      form.indexOf("function HeldChange("),
+      form.indexOf("export function FileChanges("),
+    );
+    assert.doesNotMatch(held, /<textarea|<input|type="submit"/);
+    assert.match(held, />\s*Close\s*</);
+    // A refusal reads the impact again (a new attempt), and its sentence is said only
+    // where that read does not hold the change.
+    assert.match(changes, /setAttempt\(\(count\) => count \+ 1\)/);
+    assert.match(
+      changes,
+      /refused !== null && impact\?\.status !== "loading" && !held/,
+    );
+    assert.match(changes, /useImpact\(\s*ids,[\s\S]*?attempt,\s*\)/);
+  });
+
+  it("says the same words for a withdrawal where it was made and on the page", () => {
+    assert.equal(
+      CHANGE_NOTICES.withdrawn,
+      "The file was withdrawn. It is kept under Withdrawn and can be restored.",
+    );
+    assert.equal(
+      CHANGE_NOTICES.restored,
+      "The file was restored. It is back on its control and is tested again.",
+    );
   });
 });

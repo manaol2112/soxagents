@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { heldReasons } from "./row-menu-model";
 import { type IconName, UiIcon } from "./ui-icon";
 
 export type RowMenuItem = {
@@ -102,6 +103,8 @@ export function RowMenu({
   const [up, setUp] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
+  // A reason several held items share is said once, after the last of them.
+  const reasons = heldReasons(items);
   const toggle = () => {
     if (!open) {
       for (const item of items) {
@@ -245,7 +248,9 @@ export function RowMenu({
                 <span>
                   {item.label}
                   {item.unavailable ? (
-                    <small>{item.unavailable}</small>
+                    reasons[index] !== null ? (
+                      <small>{reasons[index]}</small>
+                    ) : null
                   ) : item.note ? (
                     <small className="row-menu-note">{item.note}</small>
                   ) : null}

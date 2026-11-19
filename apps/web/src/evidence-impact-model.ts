@@ -10,6 +10,7 @@
 
 import { asSentence, cleanReason } from "./evidence-change-model.ts";
 import type { WithdrawnFile } from "./evidence-model.ts";
+import { formatDate } from "./format.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -351,6 +352,32 @@ export type ImpactSummary = {
   blocking: string[];
 };
 
+/** The open test sheets tested again, in one line. Sheets on the one control the file is
+ * used on are said as "on this control", since the line above names it (E1 design review,
+ * 18 November 2026: "1 open test sheet is tested again: ITGC-AC-01 (SAP)" repeated it);
+ * sheets elsewhere (a sibling instance) are named. */
+function retestLine(
+  sheets: Impact["retestedSheets"],
+  controls: Impact["controls"],
+): string | null {
+  if (sheets.length === 0) {
+    return null;
+  }
+  const only = controls.length === 1 ? controls[0]?.id : undefined;
+  const here = sheets.filter((sheet) => sheet.controlId === only);
+  const elsewhere = sheets.filter((sheet) => sheet.controlId !== only);
+  const sheetsWord = (n: number) =>
+    n === 1 ? "1 open test sheet" : `${n} open test sheets`;
+  const verb = (n: number) => (n === 1 ? "is" : "are");
+  if (elsewhere.length === 0) {
+    return `${sheetsWord(here.length)} on this control ${verb(here.length)} tested again.`;
+  }
+  const named = elsewhere.map(controlName).join(", ");
+  return here.length === 0
+    ? `${sheetsWord(elsewhere.length)} ${verb(elsewhere.length)} tested again: ${named}.`
+    : `${sheetsWord(here.length)} on this control and ${elsewhere.length} on ${named} are tested again.`;
+}
+
 export function impactSummary(impact: Impact): ImpactSummary {
   // An item served two ways (its filing and a link) is one item.
   const items = [
@@ -382,10 +409,7 @@ export function impactSummary(impact: Impact): ImpactSummary {
       reset.length === 0
         ? null
         : `The decision on ${reset.length === 1 ? "1 evidence item goes" : `${reset.length} evidence items go`} back to not reviewed: ${reset.map((item) => item.title).join(", ")}.`,
-    retests:
-      sheets.length === 0
-        ? null
-        : `${sheets.length === 1 ? "1 open test sheet is" : `${sheets.length} open test sheets are`} tested again: ${sheets.map(controlName).join(", ")}.`,
+    retests: retestLine(sheets, controls),
     blocking: impact.allowed
       ? []
       : impact.blocking.length > 0
@@ -500,6 +524,12 @@ export function removeProblem(status: number, detail: string): string | null {
   return "The file could not be removed from this request. Try again in a moment.";
 }
 
+/** One rule for a change's reason, said under every Why field (E1 design review,
+ * 18 November 2026) and checked when the form is sent. */
+export const REASON_HINT = "At least 3 characters.";
+export const REASON_OPTIONAL_HINT = "Optional. At least 3 characters if given.";
+export const REASON_PROBLEM = "Give a reason of at least 3 characters.";
+
 /** A withdrawal's reason as the person typed it: none (the API records that none was
  * given), or one plain line of 3 to 500 characters; null when it is neither. */
 export function withdrawReason(value: string): string | null {
@@ -508,8 +538,10 @@ export function withdrawReason(value: string): string | null {
 
 // What a confirmed change is said with, on the row the person acted on
 
-export function withdrawnMessage(name: string, reasonGiven: boolean): string {
-  return `${name} was withdrawn${reasonGiven ? " with your reason" : ""}. It is kept on record under Withdrawn and can be restored.`;
+/** Said where the person withdrew the file (E1 design review, 18 November 2026: the
+ * same words as the page's notice, which says "The file"; the reason is not repeated). */
+export function withdrawnMessage(name: string): string {
+  return `${name} was withdrawn. It is kept under Withdrawn and can be restored.`;
 }
 
 export function removedMessage(name: string): string {
@@ -517,7 +549,7 @@ export function removedMessage(name: string): string {
 }
 
 export function restoredMessage(name: string): string {
-  return `${name} was restored. It is back on its control, and the tester looks at it again.`;
+  return `${name} was restored. It is back on its control and is tested again.`;
 }
 
 // A file's history
@@ -632,10 +664,12 @@ export function parseFileHistory(value: unknown): FileHistoryBody | null {
   };
 }
 
+/** How a file came in, in the facts' own word ("Added"; E1 design review, 18 November
+ * 2026). */
 const ADDED_LABELS: Record<NonNullable<HistoryEvent["source"]>, string> = {
-  UPLOAD: "Uploaded",
-  MAILBOX: "Received by email",
-  PORTAL: "Uploaded through the secure link",
+  UPLOAD: "Added",
+  MAILBOX: "Added by email",
+  PORTAL: "Added through the secure link",
 };
 
 /**
@@ -666,7 +700,6 @@ export function historyLines(
         ...base,
         event: event.source === "MAILBOX" ? "RECEIVED" : "UPLOADED",
         label: ADDED_LABELS[event.source ?? "UPLOAD"],
-        sizeBytes: event.sizeBytes,
         ...(event.replaces === null
           ? {}
           : {
@@ -729,7 +762,7 @@ export function fileHistory(
     lines.push({
       key: "added",
       event: file.source === "MAILBOX" ? "RECEIVED" : "UPLOADED",
-      label: file.source === "MAILBOX" ? "Received by email" : "Uploaded",
+      label: ADDED_LABELS[file.source === "MAILBOX" ? "MAILBOX" : "UPLOAD"],
       item: null,
       by: file.source === "MAILBOX" ? "" : file.addedBy,
       at: file.createdAt,
@@ -739,30 +772,38 @@ export function fileHistory(
       sizeBytes: null,
     });
   }
+  // The version it replaced: a sub-line of how it came in, as the full history says it.
+  const added = lines[0];
   for (const older of withdrawn) {
     if (older.replacedBy === file.id && older.id !== file.id) {
-      lines.push({
-        key: `replaces-${older.id}`,
-        event: "REPLACES",
-        label: "Replaces",
-        item: null,
-        by: older.withdrawnBy,
-        at: older.withdrawnAt,
-        why: older.reason === "" ? null : older.reason,
-        file: { id: older.id, name: older.fileName, withdrawn: true },
-        relation: null,
-        sizeBytes: null,
-      });
+      const version = { id: older.id, name: older.fileName, withdrawn: true };
+      if (added !== undefined && added.file === null) {
+        added.file = version;
+        added.relation = "Replaces";
+      } else {
+        lines.push({
+          key: `replaces-${older.id}`,
+          event: "REPLACES",
+          label: "Replaces",
+          item: null,
+          by: older.withdrawnBy,
+          at: older.withdrawnAt,
+          why: older.reason === "" ? null : older.reason,
+          file: version,
+          relation: null,
+          sizeBytes: null,
+        });
+      }
     }
   }
   const own = withdrawn.find((entry) => entry.id === file.id);
   if (own !== undefined) {
     lines.push({
       key: "withdrawn",
-      event: own.replacedBy === null ? "WITHDRAWN" : "REPLACED_BY",
-      label: own.replacedBy === null ? "Withdrawn" : "Replaced by",
+      event: "WITHDRAWN",
+      label: "Withdrawn",
       item: null,
-      relation: null,
+      relation: own.replacedBy === null ? null : "Replaced by",
       sizeBytes: null,
       by: own.withdrawnBy,
       at: own.withdrawnAt,
@@ -830,4 +871,25 @@ export function historyApiPath(
     return null;
   }
   return `/organizations/${organization}/projects/${project}/evidence-files/${fileId}/history`;
+}
+
+const UTC_TIME = new Intl.DateTimeFormat("en-US", {
+  hour: "numeric",
+  minute: "2-digit",
+  timeZone: "UTC",
+});
+
+/** The date each history line says, by the facts' rule (the UTC date, formatDate), with
+ * the UTC time where two lines share a date, so their order reads (E1 design review,
+ * 18 November 2026). */
+export function historyDates(lines: readonly HistoryLine[]): string[] {
+  const days = lines.map((line) => formatDate(line.at));
+  return lines.map((line, index) => {
+    const day = days[index] ?? "";
+    const shared = days.filter((each) => each === day).length > 1;
+    const time = Date.parse(line.at);
+    return shared && !Number.isNaN(time)
+      ? `${day}, ${UTC_TIME.format(time)} UTC`
+      : day;
+  });
 }

@@ -8931,25 +8931,87 @@ form > .change-problem {
 }
 
 /* A form that moves a file, held while something relies on it there: no box of its own. */
-.move-guard {
+.move-guard,
+.move-intent {
   display: contents;
 }
 
-/* A restoration's form opens over the Withdrawn list's row, past the table's edge. */
-.grid-scroll:has(.restore-menu.is-open),
-.is-fixed td:has(.restore-menu.is-open) {
+/* The Withdrawn list: a restoration's form, and its confirmation, as a full-width row
+   under the file's row (E1 design review, 18 November 2026: a popover clipped at the
+   card's bottom and hid the row). The row's content stays in view while the table
+   scrolls sideways on a phone. */
+.withdrawn-grid tr.withdrawn-row-extra > td {
   overflow: visible;
+  white-space: normal;
+  background: var(--surface);
 }
 
-.restore-done {
+.withdrawn-row-body {
+  position: sticky;
+  left: 0;
+  max-width: min(40rem, calc(100vw - 3rem));
+}
+
+.withdrawn-row-body .ep-done {
   margin: 0;
-  text-align: left;
+}
+
+.withdrawn-grid tr.is-restored > td {
+  color: var(--text-secondary);
+}
+
+/* Why it was withdrawn: one line cut with an ellipsis, the whole reason in its title. */
+.withdrawn-grid .withdrawn-why {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A change's reason: a two-line field with its rule under it. */
+.change-form textarea {
+  width: 100%;
+  min-height: 3.5rem;
+  resize: vertical;
+}
+
+.change-form .change-rule {
+  margin-top: -0.25rem;
+}
+
+/* The control's own file list: a card's head is its name (cut with an ellipsis) and
+   Preview on one line, its tags under them, every card alike (E1 design review). */
+.evidence-file-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.evidence-file-head > strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evidence-file-head .preview-open {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.evidence-file-pills {
+  grid-column: 1 / -1;
+}
+
+/* A file's "…" menu at the end of its card; the form it opens spans the card. */
+.evidence-file-tools.is-open,
+.evidence-file-tools:has(.change-form) {
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: stretch;
 }
 
 .evidence-file-tools {
   display: grid;
   gap: 0.5rem;
-  justify-items: start;
+  justify-items: end;
 }
 
 /* One card per file: the file, its details, and its actions (Download, Replace file,
@@ -8983,6 +9045,15 @@ form > .change-problem {
 .evidence-file-item > .evidence-file-tools > .file-changes {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+/* The card's "…" menu sits at its end; a form it opens takes the whole row. */
+.evidence-file-item > .evidence-file-tools {
+  justify-content: flex-end;
+}
+
+.evidence-file-item > .evidence-file-tools.is-open > .file-changes {
+  flex: 1 1 100%;
 }
 
 .withdrawn-grid .col-restore {
@@ -15195,9 +15266,18 @@ button.answer-done:hover {
   color: var(--danger);
 }
 
+/* A held item reads as held (its label in the disabled colour, as a disabled control
+   may be), and why it is held stays readable: full strength, with the reason in the
+   secondary text colour (WCAG 2.2 AA, 4.5:1 on the menu's surface). The global disabled
+   half-opacity made the reason about 2:1 (E1 design review, 18 November 2026). */
 .row-menu-list button:disabled {
-  color: var(--text-tertiary);
+  color: var(--text-disabled);
   cursor: not-allowed;
+  opacity: 1;
+}
+
+.row-menu-list button:disabled small {
+  color: var(--text-secondary);
 }
 
 .row-menu-section {

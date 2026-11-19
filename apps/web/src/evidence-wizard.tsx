@@ -912,7 +912,9 @@ export function useEvidenceWizard(setup: WizardSetup) {
     const said = [
       choice === OUT
         ? `${line.name} is kept in the control’s files.`
-        : `${line.name} is now in ${title}. The item is checked again with it.`,
+        : // Its card says "Not checked yet" until the item's check has run with it: the
+          // note says the same (E1 design review, 18 November 2026).
+          `${line.name} is now in ${title}. It is not checked yet; the item is checked again with it.`,
       askedAgain(emptied),
     ]
       .filter((part) => part !== "")
@@ -3037,7 +3039,7 @@ function Results({
               </h3>
               <span className="wz-q-meta">
                 Choose where a file goes, leave it in the control’s files, or
-                remove it.
+                withdraw it.
               </span>
             </div>
             {view.apart.map((line) => (
@@ -3120,6 +3122,9 @@ function ApartRow({
   const busy = line.fileId !== null && view.placing[line.fileId] === true;
   const problem = line.fileId === null ? undefined : view.problems[line.fileId];
   const needs = line.dest?.kind === "needs" ? line.dest : null;
+  // Its withdrawal asked for: the form spans the row, and the row's other actions (where
+  // it goes, Place file, Confirm its kind) wait until it is sent or cancelled.
+  const removing = view.removing !== null && view.removing === line.fileId;
   const meta = [
     line.meta,
     line.kind === null
@@ -3141,7 +3146,7 @@ function ApartRow({
               Needs you: choose where this goes
             </span>
             <span className="wz-why">{needs.reason}</span>
-            {view.canAct && needs.fix !== null ? (
+            {view.canAct && needs.fix !== null && !removing ? (
               <FixReading
                 line={line}
                 fix={needs.fix}
@@ -3200,11 +3205,12 @@ function ApartRow({
             {problem}
           </span>
         ) : null}
-        {view.removing !== null && view.removing === line.fileId ? (
-          <Withdraw line={line} view={view} wizard={wizard} />
-        ) : null}
       </div>
-      {!view.canAct || (line.duplicate && !line.movable) ? null : needs !==
+      {removing ? (
+        <span className="wz-rf-full">
+          <Withdraw line={line} view={view} wizard={wizard} />
+        </span>
+      ) : !view.canAct || (line.duplicate && !line.movable) ? null : needs !==
         null ? (
         <Choose
           key={`${line.fileId ?? line.key}:${line.version}`}
@@ -3238,7 +3244,7 @@ function ApartRow({
   );
 }
 
-/** Move a file (to another item, or out of D&I), or remove it from this upload: the
+/** Move a file (to another item, or out of D&I), or withdraw it from the engagement: the
  * existing withdrawal, which keeps its custody record. A file of an accepted item stays
  * until the decision is reopened on the list. */
 function MoveMenu({
@@ -3283,7 +3289,6 @@ function MoveMenu({
       label: WITHDRAW_LABEL,
       icon: "trash" as const,
       danger: true,
-      section: "This upload",
       unavailable: locked,
       onSelect: () => wizard.remove(line.fileId),
     },
@@ -3715,7 +3720,9 @@ function ResultFile({
           {[line.meta, by].filter((part) => part !== "").join(" · ")}
         </span>
       </span>
-      {view.canAct && !line.duplicate ? (
+      {view.canAct &&
+      !line.duplicate &&
+      !(view.removing !== null && view.removing === line.fileId) ? (
         <MoveMenu line={line} view={view} wizard={wizard} busy={busy} />
       ) : (
         <span />
@@ -3751,7 +3758,9 @@ function ResultFile({
           Already added earlier: shown where it is.
         </span>
       ) : null}
-      {line.suggestion !== null && view.canAct ? (
+      {line.suggestion !== null &&
+      view.canAct &&
+      !(view.removing !== null && view.removing === line.fileId) ? (
         <span className="wz-rf-full">
           <SuggestionView
             line={line}

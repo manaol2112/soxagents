@@ -1,6 +1,11 @@
 import { analysisFor, reviewFor } from "./analysis-model";
 import { AnalysisPanel } from "./analysis-view";
-import { FileChanges, InPlaceForm, RestoreForm } from "./evidence-change";
+import {
+  FileChanges,
+  InPlaceForm,
+  type WithdrawnRow,
+  WithdrawnRows,
+} from "./evidence-change";
 import {
   CHANGE_NOTICES,
   changeBlocked,
@@ -933,116 +938,108 @@ function WithdrawnTable({
   keep: Keep;
   canAct: boolean;
 }) {
-  if (files.length === 0) {
-    return (
-      <EmptyState
-        icon="inbox"
-        title="Nothing withdrawn"
-        detail="A file someone withdraws or replaces is kept here, with who did it and why."
-      />
-    );
-  }
+  const empty = (
+    <EmptyState
+      icon="inbox"
+      title="Nothing withdrawn"
+      detail="A file someone withdraws or replaces is kept here, with who did it and why."
+    />
+  );
+  const head = (
+    <thead>
+      <tr>
+        <th scope="col">File</th>
+        <th scope="col" className="col-control">
+          Control
+        </th>
+        <th scope="col">Why it was withdrawn</th>
+        <th scope="col" className="col-added">
+          Withdrawn
+        </th>
+        <th scope="col" className="col-restore">
+          <span className="sr-only">Actions</span>
+        </th>
+      </tr>
+    </thead>
+  );
+  // Each row's cells are drawn here; its actions, Restore's form and its confirmation
+  // are the rows' own, in place (WithdrawnRows).
+  const rows: WithdrawnRow[] = files.map((file) => ({
+    id: file.id,
+    fileName: file.fileName,
+    downloadHref: `/workspace/evidence-files/${file.id}?organization=${model.organization.id}&project=${model.selectedProject?.id ?? ""}`,
+    // A replaced file is not offered Restore: it stays in its version history.
+    restorable: canAct && file.replacedBy === null,
+    cells: (
+      <>
+        <td>
+          <span className="file-cell">
+            <span
+              className={`file-badge kind-${fileIcon(file.fileName).toLowerCase()}`}
+              aria-hidden="true"
+            >
+              {fileIcon(file.fileName)}
+            </span>
+            <span className="file-text">
+              <strong title={file.fileName}>{file.fileName}</strong>
+              <small>
+                {file.folderPath !== "" ? `${file.folderPath} · ` : ""}
+                {formatBytes(file.sizeBytes)} ·{" "}
+                {file.source === "MAILBOX"
+                  ? "by email"
+                  : `added by ${file.addedBy}`}
+              </small>
+            </span>
+          </span>
+        </td>
+        <td className="col-control">
+          {file.control !== null ? (
+            <span className="mono item-ref">{controlLabel(file.control)}</span>
+          ) : (
+            "—"
+          )}
+        </td>
+        <td>
+          {/* One line, cut with an ellipsis; the whole reason in its title. */}
+          <span className="withdrawn-why" title={file.reason}>
+            {file.reason}
+          </span>
+          {file.replacedBy !== null ? (
+            <small className="cell-sub">
+              Replaced by{" "}
+              <a
+                href={href(model, {
+                  tab: "files",
+                  q: keep.q ?? null,
+                  group: keep.group ?? null,
+                  file: file.replacedBy,
+                })}
+              >
+                {file.replacedByName ?? "the newer version"}
+              </a>
+            </small>
+          ) : null}
+        </td>
+        <td className="col-added">
+          <span>{formatDate(file.withdrawnAt)}</span>
+          {/* Its own line, cut with an ellipsis in the fixed grid; the title holds
+              the whole name (.is-fixed td > .cell-sub[title]). */}
+          <small className="cell-sub" title={`by ${file.withdrawnBy}`}>
+            by {file.withdrawnBy}
+          </small>
+        </td>
+      </>
+    ),
+  }));
   return (
-    <div className="grid-scroll">
-      <table className="table data-grid is-fixed evidence-grid withdrawn-grid">
-        <thead>
-          <tr>
-            <th scope="col">File</th>
-            <th scope="col" className="col-control">
-              Control
-            </th>
-            <th scope="col">Why it was withdrawn</th>
-            <th scope="col" className="col-added">
-              Withdrawn
-            </th>
-            <th scope="col" className="col-restore">
-              <span className="sr-only">Actions</span>
-            </th>
-          </tr>
-        </thead>
-        <tbody>
-          {files.map((file) => (
-            <tr key={file.id}>
-              <td>
-                <span className="file-cell">
-                  <span
-                    className={`file-badge kind-${fileIcon(file.fileName).toLowerCase()}`}
-                    aria-hidden="true"
-                  >
-                    {fileIcon(file.fileName)}
-                  </span>
-                  <span className="file-text">
-                    <strong title={file.fileName}>{file.fileName}</strong>
-                    <small>
-                      {file.folderPath !== "" ? `${file.folderPath} · ` : ""}
-                      {formatBytes(file.sizeBytes)} ·{" "}
-                      {file.source === "MAILBOX"
-                        ? "by email"
-                        : `added by ${file.addedBy}`}
-                    </small>
-                  </span>
-                </span>
-              </td>
-              <td className="col-control">
-                {file.control !== null ? (
-                  <span className="mono item-ref">
-                    {controlLabel(file.control)}
-                  </span>
-                ) : (
-                  "—"
-                )}
-              </td>
-              <td>
-                <span className="withdrawn-why">{file.reason}</span>
-                {file.replacedBy !== null ? (
-                  <small className="cell-sub">
-                    Replaced by{" "}
-                    <a
-                      href={href(model, {
-                        tab: "files",
-                        q: keep.q ?? null,
-                        group: keep.group ?? null,
-                        file: file.replacedBy,
-                      })}
-                    >
-                      {file.replacedByName ?? "the newer version"}
-                    </a>
-                  </small>
-                ) : null}
-              </td>
-              <td className="col-added">
-                <span>{formatDate(file.withdrawnAt)}</span>
-                {/* Its own line, cut with an ellipsis in the fixed grid; the title holds
-                    the whole name (.is-fixed td > .cell-sub[title]). */}
-                <small className="cell-sub" title={`by ${file.withdrawnBy}`}>
-                  by {file.withdrawnBy}
-                </small>
-              </td>
-              <td className="col-restore">
-                <span className="withdrawn-actions">
-                  <a
-                    className="btn btn-ghost btn-sm"
-                    href={`/workspace/evidence-files/${file.id}?organization=${model.organization.id}&project=${model.selectedProject?.id ?? ""}`}
-                  >
-                    Download
-                  </a>
-                  {canAct && file.replacedBy === null ? (
-                    // Restored in place (E1): a replaced file is not offered it, since
-                    // it stays in its version history.
-                    <RestoreForm
-                      organizationId={model.organization.id}
-                      projectId={model.selectedProject?.id ?? ""}
-                      fileId={file.id}
-                      fileName={file.fileName}
-                      keep={keepFields(keep)}
-                    />
-                  ) : null}
-                </span>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <WithdrawnRows
+      organizationId={model.organization.id}
+      projectId={model.selectedProject?.id ?? ""}
+      keep={keepFields(keep)}
+      rows={rows}
+      head={head}
+      empty={empty}
+      columns={5}
+    />
   );
 }

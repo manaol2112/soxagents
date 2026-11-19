@@ -1026,7 +1026,13 @@ export function RequirementRow({
                               {traceFileNote(trace, file.fileId)}
                             </small>
                           ) : (
-                            <CompactFileNote file={file} />
+                            // How it serves the item ("Linked by …") is the card's meta
+                            // line's to say, once (E1 design review, 18 November 2026).
+                            <CompactFileNote
+                              file={
+                                line?.meta ? { ...file, via: "REQUEST" } : file
+                              }
+                            />
                           )}
                         </p>
                         {line?.meta ? (

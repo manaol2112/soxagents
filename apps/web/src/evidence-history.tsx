@@ -5,13 +5,13 @@ import {
   type FileHistoryBody,
   fileHistory,
   type HistoryLine,
+  historyDates,
   historyHref,
   historyLines,
   historyReadHref,
   parseFileHistory,
 } from "./evidence-impact-model";
 import type { WithdrawnFile } from "./evidence-model";
-import { formatBytes, formatDate } from "./format";
 
 type Ids = { organizationId: string; projectId: string };
 
@@ -85,9 +85,10 @@ function useFileHistory(
 }
 
 function Lines({ ids, lines }: { ids: Ids; lines: readonly HistoryLine[] }) {
+  const dates = historyDates(lines);
   return (
     <ol className="ea-history" aria-label="The file's history, oldest first">
-      {lines.map((line) => (
+      {lines.map((line, index) => (
         <li key={line.key}>
           <span className="ea-history-what">
             <strong>{line.label}</strong>
@@ -107,10 +108,10 @@ function Lines({ ids, lines }: { ids: Ids; lines: readonly HistoryLine[] }) {
           <small>
             {/* One date rule on the screen: a file's dates as its facts, the Evidence
                 Library and the Withdrawn list say them (formatDate, the UTC date),
-                never the browser's local time beside them (18 November 2026). */}
-            <time dateTime={line.at}>{formatDate(line.at)}</time>
+                never the browser's local time beside them, with the UTC time where two
+                lines share a date (18 November 2026). */}
+            <time dateTime={line.at}>{dates[index]}</time>
             {line.by !== "" ? ` by ${line.by}` : ""}
-            {line.sizeBytes !== null ? ` · ${formatBytes(line.sizeBytes)}` : ""}
           </small>
           {line.file !== null && line.relation !== null ? (
             <small className="ea-history-version">
@@ -184,7 +185,7 @@ export function FileHistory({
   return (
     <>
       <p className="ea-history-note" role="status">
-        The full history could not be loaded. What the register holds is shown.{" "}
+        Part of the history could not be loaded.{" "}
         <button type="button" className="btn-ghost btn-sm" onClick={retry}>
           Try again
         </button>

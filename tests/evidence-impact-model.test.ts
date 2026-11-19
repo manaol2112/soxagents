@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
-
+import { designListFiles } from "../apps/web/src/design-evidence-model.ts";
 import {
   FILE_ACTION_IMPACT,
   FILE_ACTION_LABELS,
   fileActions,
   fileHistory,
   historyApiPath,
+  historyDates,
   historyHref,
   historyLines,
   historyReadHref,
@@ -20,6 +21,9 @@ import {
   impactUnavailable,
   parseFileHistory,
   parseFileImpact,
+  REASON_HINT,
+  REASON_OPTIONAL_HINT,
+  REASON_PROBLEM,
   RELIANCE_KINDS,
   removedMessage,
   removeProblem,
@@ -34,6 +38,7 @@ import {
 } from "../apps/web/src/evidence-model.ts";
 import { placementProblem } from "../apps/web/src/evidence-wizard-model.ts";
 import { formatDate } from "../apps/web/src/format.ts";
+import { heldReasons } from "../apps/web/src/row-menu-model.ts";
 
 // E1, evidence reliance (product owner, 18 November 2026): the web half. The API's impact
 // read model says what a change to a file would do; the screens offer or hold an action
@@ -512,17 +517,39 @@ describe("taking a file off one request", () => {
 });
 
 describe("what a confirmed change says", () => {
-  it("claims a reason only when the person gave one", () => {
-    // 18 November 2026: the notice said "with your reason" after a withdrawal made
-    // without one.
+  it("says a withdrawal in the page's own words, never a reason it was not given", () => {
+    // Changed 18 November 2026 (E1 design review). Old: "... was withdrawn with your
+    // reason. It is kept on record under Withdrawn ...", worded apart from the page's
+    // notice. New: one sentence, the notice's own (it says "The file"), no reason.
     assert.equal(
-      withdrawnMessage("users.csv", false),
-      "users.csv was withdrawn. It is kept on record under Withdrawn and can be restored.",
+      withdrawnMessage("users.csv"),
+      "users.csv was withdrawn. It is kept under Withdrawn and can be restored.",
     );
-    assert.match(withdrawnMessage("users.csv", true), /with your reason\./);
+    assert.doesNotMatch(withdrawnMessage("users.csv"), /reason/);
     assert.match(removedMessage("users.csv"), /stays on its control/);
     assert.doesNotMatch(removedMessage("users.csv"), /withdrawn/);
-    assert.match(restoredMessage("users.csv"), /^users\.csv was restored\./);
+    // Changed 18 November 2026. Old: "..., and the tester looks at it again."
+    assert.equal(
+      restoredMessage("users.csv"),
+      "users.csv was restored. It is back on its control and is tested again.",
+    );
+  });
+
+  it("says one rule for a reason, under every Why field", () => {
+    assert.equal(REASON_HINT, "At least 3 characters.");
+    assert.equal(
+      REASON_OPTIONAL_HINT,
+      "Optional. At least 3 characters if given.",
+    );
+    assert.equal(REASON_PROBLEM, "Give a reason of at least 3 characters.");
+    const form = readFileSync(
+      new URL("../apps/web/src/evidence-change.tsx", import.meta.url),
+      "utf8",
+    );
+    // Every reason is a two-line field with its rule, in every change form.
+    assert.match(form, /<textarea[\s\S]{0,120}rows=\{2\}/);
+    assert.doesNotMatch(form, /minLength=\{3\}/);
+    assert.equal(form.match(/<ReasonField/g)?.length, 4);
   });
 
   it("takes an empty withdrawal reason, or one plain line of 3 to 500", () => {
@@ -560,15 +587,20 @@ describe("a file's history, from what the register serves", () => {
         withdrawn({ id: newer, fileName: "other.csv" }),
       ],
     );
+    // Changed 18 November 2026 (E1 design review). Old: "Uploaded", then "Replaces
+    // <name>" as a line of its own. New: the facts' word ("Added"), with the version it
+    // replaced as its sub-line, as the full history says it.
     assert.deepEqual(
-      lines.map((line) => [line.event, line.label, line.by, line.file?.name]),
-      [
-        ["UPLOADED", "Uploaded", "Bo", undefined],
-        ["REPLACES", "Replaces", "Bo", "users v1.csv"],
-      ],
+      lines.map((line) => [
+        line.event,
+        line.label,
+        line.by,
+        line.relation,
+        line.file?.name,
+      ]),
+      [["UPLOADED", "Added", "Bo", "Replaces", "users v1.csv"]],
     );
-    assert.equal(lines[1]?.why, "Wrong period");
-    assert.equal(lines[1]?.file?.withdrawn, true);
+    assert.equal(lines[0]?.file?.withdrawn, true);
   });
 
   it("says who withdrew it, when and why, and what replaced it", () => {
@@ -579,7 +611,7 @@ describe("a file's history, from what the register serves", () => {
     assert.deepEqual(
       own.map((line) => [line.label, line.by, line.why]),
       [
-        ["Uploaded", "Ann", null],
+        ["Added", "Ann", null],
         ["Withdrawn", "Bo", "No reason given."],
       ],
     );
@@ -587,7 +619,9 @@ describe("a file's history, from what the register serves", () => {
       { id: older, createdAt: "2026-10-01T09:00:00Z", addedBy: "Ann" },
       [withdrawn({ replacedBy: newer, replacedByName: "users v2.csv" })],
     );
-    assert.equal(replaced[1]?.label, "Replaced by");
+    // "Withdrawn", with "Replaced by <name>" as its sub-line, as the full history.
+    assert.equal(replaced[1]?.label, "Withdrawn");
+    assert.equal(replaced[1]?.relation, "Replaced by");
     assert.deepEqual(replaced[1]?.file, {
       id: newer,
       name: "users v2.csv",
@@ -605,7 +639,7 @@ describe("a file's history, from what the register serves", () => {
     );
     assert.deepEqual(
       mailed.map((line) => [line.label, line.by]),
-      [["Received by email", ""]],
+      [["Added by email", ""]],
     );
   });
 
@@ -735,7 +769,7 @@ describe("a file's history, from the server (E1, 18 November 2026)", () => {
     assert.deepEqual(
       lines.map((line) => [line.label, line.item, line.by, line.why]),
       [
-        ["Uploaded", null, "Bo", null],
+        ["Added", null, "Bo", null],
         ["Linked to", "Access policy", "Ann", "Covers the whole year"],
         ["Withdrawn", null, "Bo", "No reason given."],
         ["Restored", null, "Ann", "Withdrawn by mistake"],
@@ -755,7 +789,8 @@ describe("a file's history, from the server (E1, 18 November 2026)", () => {
       name: "users v1.csv",
       withdrawn: true,
     });
-    assert.equal(lines[0]?.sizeBytes, 2048);
+    // The size is the facts' to say, not the history's (E1 design review).
+    assert.equal(lines[0]?.sizeBytes, null);
     assert.equal(lines[6]?.relation, "Replaced by");
     assert.equal(lines[6]?.file?.withdrawn, true);
     // A newer version the page does not know as withdrawn leads to the Library.
@@ -783,9 +818,11 @@ describe("a file's history, from the server (E1, 18 November 2026)", () => {
           },
         ],
       })[0]?.label;
-    assert.equal(came("UPLOAD"), "Uploaded");
-    assert.equal(came("MAILBOX"), "Received by email");
-    assert.equal(came("PORTAL"), "Uploaded through the secure link");
+    // Changed 18 November 2026 (E1 design review). Old: "Uploaded", "Received by
+    // email", "Uploaded through the secure link". New: the facts' word, "Added".
+    assert.equal(came("UPLOAD"), "Added");
+    assert.equal(came("MAILBOX"), "Added by email");
+    assert.equal(came("PORTAL"), "Added through the secure link");
   });
 
   it("is read through its own route, only when the section is shown", () => {
@@ -865,11 +902,14 @@ describe("a file's history, from the server (E1, 18 November 2026)", () => {
     const read = (path: string) =>
       readFileSync(new URL(`../apps/web/src/${path}`, import.meta.url), "utf8");
     const history = read("evidence-history.tsx");
+    assert.match(history, /const dates = historyDates\(lines\);/);
     assert.match(
       history,
-      /<time dateTime=\{line\.at\}>\{formatDate\(line\.at\)\}<\/time>/,
+      /<time dateTime=\{line\.at\}>\{dates\[index\]\}<\/time>/,
     );
     assert.doesNotMatch(history, /LocalTime/);
+    // The failure says only that part could not be loaded.
+    assert.match(history, /Part of the history could not be loaded\./);
     // The facts beside it ("Added") use the same rule.
     assert.match(
       read("evidence-intelligence-view.tsx"),
@@ -896,6 +936,159 @@ describe("a file's history, from the server (E1, 18 November 2026)", () => {
       ],
     })[0];
     assert.equal(formatDate(upload?.at ?? ""), "Nov 19, 2026");
+  });
+
+  it("adds the UTC time only where two lines share a date", () => {
+    const line = (at: string) => ({
+      key: at,
+      event: "WITHDRAWN" as const,
+      label: "Withdrawn",
+      item: null,
+      by: "Bo",
+      at,
+      why: null,
+      file: null,
+      relation: null,
+      sizeBytes: null,
+    });
+    assert.deepEqual(
+      historyDates([
+        line("2026-11-18T09:05:00Z"),
+        line("2026-11-19T00:56:00Z"),
+        line("2026-11-19T16:30:00Z"),
+      ]),
+      [
+        "Nov 18, 2026",
+        "Nov 19, 2026, 12:56 AM UTC",
+        "Nov 19, 2026, 4:30 PM UTC",
+      ],
+    );
+  });
+});
+
+describe("what an impact says of test sheets (E1 design review, 18 November 2026)", () => {
+  it("says the sheets on the file's one control as 'on this control', not by name again", () => {
+    const one = parseFileImpact(
+      body({
+        retested_sheets: [
+          {
+            id: sheet,
+            control_id: control,
+            control_ref: "ITGC-AC-01",
+            application: "SAP",
+            items: 1,
+          },
+        ],
+      }),
+    );
+    assert.ok(one !== null);
+    assert.equal(
+      impactSummary(one).retests,
+      "1 open test sheet on this control is tested again.",
+    );
+    // A sibling instance's sheet is named.
+    const both = parseFileImpact(
+      body({
+        retested_sheets: [
+          {
+            id: sheet,
+            control_id: control,
+            control_ref: "ITGC-AC-01",
+            application: "SAP",
+            items: 1,
+          },
+          {
+            id: other,
+            control_id: sibling,
+            control_ref: "ITGC-AC-01",
+            application: "Oracle",
+            items: 2,
+          },
+        ],
+      }),
+    );
+    assert.ok(both !== null);
+    assert.equal(
+      impactSummary(both).retests,
+      "1 open test sheet on this control and 1 on ITGC-AC-01 (Oracle) are tested again.",
+    );
+  });
+});
+
+describe("a held reason in a menu (E1 design review, 18 November 2026)", () => {
+  it("says a reason several held items share once, after the last of them", () => {
+    const reason =
+      'The evidence item "Access policy" was accepted with it; change that decision first.';
+    assert.deepEqual(
+      heldReasons([
+        { unavailable: null },
+        { unavailable: reason },
+        { unavailable: reason },
+      ]),
+      [
+        null,
+        null,
+        'Held: the evidence item "Access policy" was accepted with it; change that decision first.',
+      ],
+    );
+    // One held item says its own reason; a reference keeps its capitals after "Held:".
+    assert.deepEqual(heldReasons([{ unavailable: reason }, {}]), [
+      reason,
+      null,
+    ]);
+    assert.deepEqual(
+      heldReasons([
+        { unavailable: "ITGC-AC-01 is signed off." },
+        { unavailable: "ITGC-AC-01 is signed off." },
+      ]),
+      [null, "Held: ITGC-AC-01 is signed off."],
+    );
+    const menu = readFileSync(
+      new URL("../apps/web/src/row-menu.tsx", import.meta.url),
+      "utf8",
+    );
+    assert.match(menu, /const reasons = heldReasons\(items\);/);
+    // Readable: a held item is not half-transparent, and its reason is secondary text.
+    const css = readFileSync(
+      new URL("../apps/web/app/globals.css", import.meta.url),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
+    assert.match(
+      css,
+      /\.row-menu-list button:disabled \{\n {2}color: var\(--text-disabled\);\n {2}cursor: not-allowed;\n {2}opacity: 1;\n\}/,
+    );
+    assert.match(
+      css,
+      /\.row-menu-list button:disabled small \{\n {2}color: var\(--text-secondary\);\n\}/,
+    );
+  });
+});
+
+describe("the D&I list's other files (E1 design review, 18 November 2026)", () => {
+  it("leaves out every file a D&I request shows, by filing or by link", () => {
+    const plan: Parameters<typeof designListFiles>[0] = {
+      phases: [
+        {
+          requirements: [
+            {
+              phase: "DESIGN",
+              state: "ACCEPTED",
+              files: [{ fileId: "a" }, { fileId: "b" }],
+            },
+            { phase: "DESIGN", state: "REMOVED", files: [{ fileId: "c" }] },
+            { phase: "INTERIM", state: "OVERDUE", files: [{ fileId: "d" }] },
+          ],
+        },
+      ],
+    };
+    assert.deepEqual([...designListFiles(plan)].sort(), ["a", "b"]);
+    assert.deepEqual([...designListFiles(null)], []);
+    const view = readFileSync(
+      new URL("../apps/web/src/controls-view.tsx", import.meta.url),
+      "utf8",
+    );
+    assert.match(view, /placed=\{designListFiles\(evidencePlan\)\}/);
+    assert.match(view, /!designListFiles\(evidencePlan\)\.has\(file\.id\)/);
   });
 });
 

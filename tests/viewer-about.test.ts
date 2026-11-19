@@ -382,9 +382,12 @@ describe("About this file", () => {
       3,
     );
     const change = read("apps/web/src/evidence-change.tsx");
+    // Changed again 18 November 2026 (E1 design review). Old: a refusal set the red line
+    // at once. New: a refusal with the server's sentence reads the impact again first
+    // (refusedWith), so a reliance shows once, as the held box; confirmed only after.
     assert.match(
       change,
-      /if \(answer\.notice !== "withdrawn"\) \{\s*setProblem\(changeProblem\(answer\.notice, answer\.detail\)\);\s*return;\s*\}\s*confirmed\(/,
+      /if \(answer\.notice !== "withdrawn"\) \{\s*if \(answer\.detail\.trim\(\) !== ""\) \{\s*refusedWith\(changeProblem\(answer\.notice, answer\.detail\)\);\s*\} else \{\s*setProblem\(changeProblem\(answer\.notice, answer\.detail\)\);\s*\}\s*return;\s*\}\s*confirmed\(/,
     );
     // The removal is the association's own route, never a withdrawal.
     assert.match(

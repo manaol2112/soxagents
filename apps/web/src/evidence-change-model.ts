@@ -185,10 +185,14 @@ export type ChangeNotice =
 export const CHANGE_NOTICES: Record<ChangeNotice, string> = {
   // Changed 18 November 2026 (E1). Old: "... and kept under Withdrawn with your reason."
   // New: no reason is claimed, since a withdrawal may be made without one.
+  // Changed again 18 November 2026 (E1 design review). Old: "File withdrawn. It is off
+  // its request, testing, and workpapers, ...", untrue for a file on no request, and
+  // worded apart from the line said where the person acted. New: those same words
+  // (evidence-impact-model.withdrawnMessage, restoredMessage), with "The file".
   withdrawn:
-    "File withdrawn. It is off its request, testing, and workpapers, and kept on record under Withdrawn.",
+    "The file was withdrawn. It is kept under Withdrawn and can be restored.",
   restored:
-    "File restored. It is back on its control, and the tester looks at it again.",
+    "The file was restored. It is back on its control and is tested again.",
   replaced:
     "File replaced. The new version took the old one's place; the agent is reading it, and the old one is kept under Withdrawn.",
   reading: "The agent is still reading this file. Try again in a moment.",

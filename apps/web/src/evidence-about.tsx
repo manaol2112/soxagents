@@ -63,6 +63,7 @@ import {
   type ReliabilityAction,
 } from "./file-reliability";
 import { DataTable } from "./population-table";
+import { heldReasons } from "./row-menu-model";
 import type { ControlTest } from "./testing-model";
 import { UiIcon } from "./ui-icon";
 
@@ -1265,35 +1266,50 @@ function AboutThisFile({
               }}
             />
           ) : (
-            offered.map((action) => {
-              const held = impactUnavailable(
-                action === "REMOVE" ? removeCheck : withdrawCheck,
+            (() => {
+              // Each change held by the server's reason; one reason the two share is
+              // said once, under both (E1 design review, 18 November 2026).
+              const reasons = heldReasons(
+                offered.map((action) => ({
+                  unavailable: impactUnavailable(
+                    action === "REMOVE" ? removeCheck : withdrawCheck,
+                  ),
+                })),
               );
-              return (
+              const helds = offered.map((action) =>
+                impactUnavailable(
+                  action === "REMOVE" ? removeCheck : withdrawCheck,
+                ),
+              );
+              return offered.map((action, index) => (
                 <span key={action} className="ea-about-change">
                   <button
                     type="button"
                     className={`btn-ghost btn-sm${action === "WITHDRAW" ? " is-danger" : ""}`}
-                    disabled={held !== null}
+                    disabled={helds[index] !== null}
                     aria-describedby={
-                      held !== null ? `${uid}-held-${action}` : undefined
+                      helds[index] !== null
+                        ? `${uid}-held-${helds.lastIndexOf(helds[index] ?? null)}`
+                        : undefined
                     }
                     onClick={() =>
                       setChanging(action === "REMOVE" ? "remove" : "withdraw")
                     }
                   >
+                    {/* One icon, one meaning: x takes it off this request; the
+                        withdrawal from the engagement has the bin. */}
                     <UiIcon
                       name={action === "REMOVE" ? "x" : "trash"}
                       size={14}
                     />
                     {FILE_ACTION_LABELS[action]}
                   </button>
-                  {held !== null ? (
-                    <small id={`${uid}-held-${action}`}>{held}</small>
+                  {reasons[index] !== null ? (
+                    <small id={`${uid}-held-${index}`}>{reasons[index]}</small>
                   ) : null}
                 </span>
-              );
-            })
+              ));
+            })()
           )}
         </section>
       ) : null}

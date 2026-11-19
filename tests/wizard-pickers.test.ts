@@ -64,7 +64,18 @@ describe("a file that needs placing can also be removed (product owner, 14 Novem
     assert.ok(start > 0 && chooser.length > 0);
     assert.match(chooser, /onClick=\{remove\.onRemove\}/);
     assert.doesNotMatch(chooser, /fetch\(|<form|method=/);
-    assert.match(view, /view\.removing === line\.fileId \? \(\s*<Withdraw /);
+    // Changed 18 November 2026 (E1 design review). Old: the form opened beside the row's
+    // Choose, Place file and Confirm its kind, all still live. New: it spans the row
+    // (wz-rf-full), and the row's other actions wait while it is open.
+    assert.match(
+      view,
+      /const removing = view\.removing !== null && view\.removing === line\.fileId;/,
+    );
+    assert.match(
+      view,
+      /\{removing \? \(\s*<span className="wz-rf-full">\s*<Withdraw /,
+    );
+    assert.match(view, /needs\.fix !== null && !removing \?/);
     assert.match(view, /start="withdraw"/);
     // A real, named button, quiet beside the row's main action, off while the file is
     // still being read.

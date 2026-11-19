@@ -672,6 +672,30 @@ function shown(item: Pick<Requirement, "phase" | "state">): boolean {
   return item.phase === "DESIGN" && item.state !== "REMOVED";
 }
 
+/** The files the D&I list's requests show, by filing or by a person's link: what the
+ * list's "Other files" leaves out, so its count and its cards say the same (E1 design
+ * review, 18 November 2026). The list's own rule (`shown`), whatever the plan's
+ * approval. */
+export function designListFiles(
+  plan: {
+    phases: ReadonlyArray<{
+      requirements: ReadonlyArray<
+        Pick<Requirement, "phase" | "state"> & {
+          files: ReadonlyArray<{ fileId: string }>;
+        }
+      >;
+    }>;
+  } | null,
+): Set<string> {
+  return new Set(
+    (plan?.phases ?? []).flatMap((phase) =>
+      phase.requirements
+        .filter(shown)
+        .flatMap((item) => item.files.map((file) => file.fileId)),
+    ),
+  );
+}
+
 function stateOf(
   item: Requirement,
   carrier: Carrier | null,

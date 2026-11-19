@@ -138,11 +138,17 @@ export function useImpacts(ids: Ids): Impacts {
   return { prefetch, state, unavailable, checking, forget };
 }
 
-/** One impact for a confirm form: read as the form opens, and again when what it asks
- * changes; an answer to an earlier ask is dropped. Null while there is nothing to ask. */
-export function useImpact(ids: Ids, ask: ImpactAsk | null): ImpactState | null {
+/** One impact for a confirm form: read as the form opens, again when what it asks
+ * changes, and again on a new `attempt` (after the server refused the change, so the
+ * form shows what stands in its way now, never a stale preview); an answer to an earlier
+ * ask is dropped. Null while there is nothing to ask. */
+export function useImpact(
+  ids: Ids,
+  ask: ImpactAsk | null,
+  attempt = 0,
+): ImpactState | null {
   const [state, setState] = useState<ImpactState | null>(null);
-  const key = ask === null ? "" : impactKey(ask);
+  const key = ask === null ? "" : `${impactKey(ask)}#${attempt}`;
   const asked = useRef(ask);
   asked.current = ask;
   const { organizationId, projectId } = ids;
@@ -246,14 +252,32 @@ export function ImpactPreview({
   );
 }
 
-/** Whether the file's move is held, for the forms that move it (MoveGuard). */
-const MoveHeld = createContext(false);
+type MoveState = {
+  held: boolean;
+  /** A form that moved the file was refused: the move's impact is read again, and the
+   * server's sentence is said only if the new read does not hold the move. */
+  refused: (sentence: string) => void;
+  /** What a move does has been said, so a press sends it. */
+  intended: boolean;
+  /** A person chose where to move the file, or pressed a move: what it does is said;
+   * a press first says it, with how to send it. */
+  intend: (pressed: boolean) => void;
+};
+
+const MoveContext = createContext<MoveState | null>(null);
+
+/** The move check the form is under, or null (InPlaceForm). */
+export function useMoveCheck(): MoveState | null {
+  return useContext(MoveContext);
+}
 
 /**
- * Moving a filed file to another control, or off its control, in the Evidence Library:
- * what the move would do, said once above the forms that make it (the file's impact for
- * MOVE, read as its panel opens), and those forms held (`MoveGuard`) while the server
- * says something on its control relies on the file. Forms that do not move it stay.
+ * Moving a filed file to another control, or off its control, in the Evidence Library
+ * (E1). At rest it says only what holds the move (the file's impact for MOVE, read as its
+ * panel opens), with the forms that move it held (`MoveGuard`); what a move would do is
+ * said once a person chooses a control or presses a move, and a first press only shows
+ * it (the second sends). A refused move reads the impact again, so a reliance shows as
+ * the held box, once.
  */
 export function MoveCheck({
   organizationId,
@@ -266,24 +290,66 @@ export function MoveCheck({
   fileId: string;
   children: ReactNode;
 }) {
+  const [attempt, setAttempt] = useState(0);
+  const [intended, setIntended] = useState<"chosen" | "pressed" | null>(null);
+  const [refusal, setRefusal] = useState<string | null>(null);
   const state = useImpact(
     { organizationId, projectId },
     { fileId, action: "MOVE" },
+    attempt,
   );
   const held = state?.status === "ready" && !state.impact.allowed;
+  const value: MoveState = {
+    held,
+    refused: (sentence) => {
+      setRefusal(sentence);
+      setAttempt((count) => count + 1);
+    },
+    intended: intended !== null,
+    intend: (pressed) => setIntended(pressed ? "pressed" : "chosen"),
+  };
   return (
-    <MoveHeld.Provider value={held}>
-      <ImpactPreview state={state} action="MOVE" />
-      {children}
-    </MoveHeld.Provider>
+    <MoveContext.Provider value={value}>
+      {held || intended !== null || state?.status === "failed" ? (
+        <ImpactPreview state={state} action="MOVE" />
+      ) : null}
+      {intended === "pressed" && !held && refusal === null ? (
+        <p className="form-hint">
+          This is what the move does. Press it again to make it.
+        </p>
+      ) : null}
+      {refusal !== null && state?.status === "ready" && !held ? (
+        <p className="change-problem" role="alert">
+          {refusal}
+        </p>
+      ) : null}
+      {/* Choosing a control says what the move does (a select's change bubbles). */}
+      <div
+        className="move-intent"
+        onChange={() => setIntended((now) => now ?? "chosen")}
+      >
+        {children}
+      </div>
+    </MoveContext.Provider>
   );
 }
 
-/** A form that moves the file: off while its move is held (MoveCheck). */
+/** A form that moves the file: off while its move is held (MoveCheck). Its first press,
+ * before what the move does was said, only says it. */
 export function MoveGuard({ children }: { children: ReactNode }) {
-  const held = useContext(MoveHeld);
+  const check = useContext(MoveContext);
   return (
-    <fieldset className="move-guard" disabled={held}>
+    <fieldset
+      className="move-guard"
+      disabled={check?.held ?? false}
+      onSubmitCapture={(event) => {
+        if (check !== null && !check.intended) {
+          event.preventDefault();
+          event.stopPropagation();
+          check.intend(true);
+        }
+      }}
+    >
       {children}
     </fieldset>
   );

@@ -1408,7 +1408,9 @@ export function DesignEvidence({
               <span>
                 <strong>Other files</strong>
                 <small>
-                  {otherFiles === 0 ? "None" : `${otherFiles} not on a request`}
+                  {otherFiles === 0
+                    ? "None"
+                    : `${otherFiles} not on a D&I request`}
                 </small>
               </span>
               <UiIcon name="chevron" size={13} />
