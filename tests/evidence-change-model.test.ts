@@ -4,10 +4,13 @@ import { describe, it } from "node:test";
 
 import {
   answersInPlace,
+  asSentence,
+  CHANGE_NOTICES,
   changeBlocked,
   changeNoticeFor,
   changeNoticeOk,
   changeNoticeParam,
+  changeProblem,
   changeReturn,
   changeWrite,
   cleanReason,
@@ -149,11 +152,72 @@ describe("notices", () => {
         "this file was replaced; withdraw the newer version to use this one again",
         "was-replaced",
       ],
+      // The API's sentence since E1 (18 November 2026).
+      [
+        "This file was replaced. A replaced file stays in its version history and cannot be restored; to use it again, upload it again under another file name.",
+        "was-replaced",
+      ],
+      // The reliances E1 added, for a page reloaded with its notice.
+      [
+        'the file cannot be withdrawn: an attribute of "Access policy" for ITGC-AC-01 is shown on a tickmark a person made on it; reopen that decision first',
+        "tickmark",
+      ],
+      [
+        'the file cannot be replaced: a person\'s decision on whether it is reliable stands for "User list" for ITGC-AC-01; reopen that decision first',
+        "reliability",
+      ],
+      [
+        'the file cannot be withdrawn: the walkthrough instance for "Change ticket" for ITGC-CM-01 was picked from it; pick it again from another file first',
+        "walkthrough-pick",
+      ],
+      [
+        "the file cannot be withdrawn: the signed design conclusion for ITGC-AC-01 rests on it; reopen that conclusion first",
+        "conclusion-signed",
+      ],
+      [
+        'the file cannot be withdrawn: the finding "Missing approval" for ITGC-AC-01 was sent to the client on it; close that finding first',
+        "finding-held",
+      ],
+      [
+        'the file cannot be withdrawn: a person decided the finding "Missing approval" for ITGC-AC-01 on it; close that finding first',
+        "finding-held",
+      ],
       ["this file is already withdrawn", "already"],
     ];
     for (const [detail, notice] of cases) {
       assert.equal(changeNoticeFor("withdraw", 409, detail), notice, detail);
     }
+  });
+
+  it("says a refusal in place in the server's own sentence (E1, 18 November 2026)", () => {
+    // Changed 18 November 2026. Old: a form that withdrew in place showed the notice's
+    // canned words for every refusal. New: the server's sentence, which names the
+    // reliance and how to clear it; the canned words only where it sent none.
+    assert.equal(
+      changeProblem(
+        "item-accepted",
+        'the file cannot be withdrawn: the evidence item "Access policy" was accepted with it; change that decision first',
+      ),
+      'The file cannot be withdrawn: the evidence item "Access policy" was accepted with it; change that decision first.',
+    );
+    assert.equal(changeProblem("unavailable", ""), CHANGE_NOTICES.unavailable);
+    // A sentence that ends itself keeps its own full stop.
+    assert.equal(
+      asSentence("This file was replaced. It cannot be restored."),
+      "This file was replaced. It cannot be restored.",
+    );
+    assert.equal(asSentence("  "), "");
+  });
+
+  it("claims a reason and a restoration only as the API now has them", () => {
+    // Changed 18 November 2026 (E1). Old withdrawn notice: "... kept under Withdrawn with
+    // your reason", said also when none was given. Old was-replaced notice: "Withdraw its
+    // newer version to use this one again", which never restored it.
+    assert.doesNotMatch(CHANGE_NOTICES.withdrawn, /your reason/);
+    assert.equal(
+      CHANGE_NOTICES["was-replaced"],
+      "This file was replaced. A replaced file stays in its version history and cannot be restored; to use it again, upload it again under another file name.",
+    );
   });
 
   it("maps success and other statuses", () => {
@@ -263,5 +327,32 @@ describe("withdrawing in place", () => {
       "utf8",
     );
     assert.match(route, /searchParams\.set\("ev", "files"\)/);
+    // E1 (18 November 2026): the in-place answer carries the server's sentence and the
+    // page a reload would land on, as a path on this app only.
+    assert.match(
+      route,
+      /NextResponse\.json\(\{\s*notice,\s*detail,\s*location:/,
+    );
+    assert.match(form, /localPath\(body\.location\)/);
+  });
+
+  it("withdraws and restores in place everywhere, never by a page reload (E1)", () => {
+    // Changed 18 November 2026. Old: the Evidence Library and a control's file list
+    // posted the withdrawal, and the Withdrawn list the restoration, reloading the page
+    // (303). New: every form sends in place; where its row leaves the list, the page
+    // comes back in place (router.replace) with the notice.
+    const form = readFileSync(
+      new URL("../apps/web/src/evidence-change.tsx", import.meta.url),
+      "utf8",
+    );
+    assert.match(form, /export function RestoreForm\(/);
+    assert.match(form, /router\.replace\(location, \{ scroll: false \}\)/);
+    assert.doesNotMatch(form, /\/\/ The page's own form post/);
+    const library = readFileSync(
+      new URL("../apps/web/src/evidence-view.tsx", import.meta.url),
+      "utf8",
+    );
+    assert.match(library, /<RestoreForm/);
+    assert.doesNotMatch(library, /name="intent" value="restore"/);
   });
 });

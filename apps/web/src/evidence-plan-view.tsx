@@ -374,7 +374,9 @@ function endsCleanly(text: string): string {
 }
 
 /** A file's form opened from the item's menu, under the file's line. */
-export type FileForm = "replace" | "withdraw" | "application";
+/** The form a file's action opens under its line. "remove": Remove from this request
+ * (E1), which takes the file off the item only. */
+export type FileForm = "replace" | "withdraw" | "remove" | "application";
 
 /** What a page shows of a file on an item's line: its name (opening it), a flag, its
  * actions for the item's menu, and the form one of them opened. */
@@ -726,7 +728,12 @@ export function RequirementRow({
                 {file.period ? ` · ${file.period}` : ""}
               </small>
             )}
-            {canAct && file.via === "LINK" && file.linkId !== null ? (
+            {/* Where the page offers the file's actions, "Remove from this request" is
+                among them (E1); otherwise a person's link is taken off here. */}
+            {canAct &&
+            fileLine === undefined &&
+            file.via === "LINK" &&
+            file.linkId !== null ? (
               <button
                 type="button"
                 className="btn-ghost btn-sm"
@@ -990,7 +997,10 @@ export function RequirementRow({
                 const line = lines.get(file.fileId) ?? null;
                 const menu: RowMenuItem[] = [
                   ...(line?.actions ?? []),
-                  ...(canAct && file.via === "LINK" && file.linkId !== null
+                  ...(canAct &&
+                  fileLine === undefined &&
+                  file.via === "LINK" &&
+                  file.linkId !== null
                     ? [
                         {
                           label: "Unlink from this item",

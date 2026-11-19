@@ -22,6 +22,7 @@ import {
   type WalkthroughInstance,
 } from "./evidence-dialog-model";
 import type { EvidenceFinding } from "./evidence-findings-model";
+import { FILE_ACTION_LABELS } from "./evidence-impact-model";
 import { RequestUpload } from "./evidence-intake";
 import {
   insightOf,
@@ -351,8 +352,11 @@ export function EvidenceDialog({
                     <button
                       type="button"
                       className="ed-file-remove"
-                      aria-label={`Withdraw ${docName}`}
-                      title="Withdraw the file"
+                      // Withdrawn from the engagement, kept on record: the form says
+                      // first where the file is used (E1). Discarding an upload is not
+                      // offered yet.
+                      aria-label={`Withdraw ${docName} from the engagement`}
+                      title={FILE_ACTION_LABELS.WITHDRAW}
                       onClick={() =>
                         setWithdrawing(withdrawing === fileId ? null : fileId)
                       }

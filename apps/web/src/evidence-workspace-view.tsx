@@ -2,9 +2,17 @@
 
 import { type ReactNode, useEffect, useState } from "react";
 import type { ActivityItem } from "./control-workspace-model";
-import { FileChanges } from "./evidence-change";
+import { FileChanges, InPlaceForm } from "./evidence-change";
+import { type Impacts, useImpacts } from "./evidence-impact";
+import {
+  FILE_ACTION_IMPACT,
+  FILE_ACTION_LABELS,
+  type FileAction,
+  fileActions,
+} from "./evidence-impact-model";
 import { RequestUpload } from "./evidence-intake";
 import type { Intelligence } from "./evidence-intelligence-view";
+import { FILING_NOTICES } from "./evidence-model";
 import { PreviewButton } from "./evidence-opener";
 import type { RequirementFile } from "./evidence-plan-model";
 import {
@@ -491,11 +499,16 @@ function ReaderProposals({
 }
 
 /**
- * A file on an evidence item's line: its name opens the preview; Download, Replace file,
- * Withdraw, and the application are in the item's one menu, and the form one opens shows
- * under the line. Nothing is deleted: a withdrawn or replaced file stays on record. A file
- * whose application is not known says so, and that opens the choice. A file serving two
- * items carries the same actions on each.
+ * A file on an evidence item's line: its name opens the preview; Download, the
+ * application, Replace file and Remove from this request are in the item's one menu, and
+ * the form one opens shows under the line. Nothing is deleted: a replaced file stays on
+ * record, and a file removed from the request stays on its control. Withdrawing from the
+ * engagement is offered where the file is shown on its own (its viewer, the Evidence
+ * Library), never on a request (E1, product owner, 18 November 2026: removing a file from
+ * one request withdrew it from the whole engagement). Each change is checked as the menu
+ * opens (its impact, `on.impacts`), and an action the server would refuse is held with
+ * its reason. A file whose application is not known says so, and that opens the choice.
+ * A file serving two items carries the same actions on each.
  */
 export function fileLine(
   ids: Ids,
@@ -505,12 +518,34 @@ export function fileLine(
   applications: Array<{ id: string; name: string }>,
   form: FileForm | null,
   setForm: (form: FileForm | null, done?: string) => void,
+  /** The item the line is on, for "Remove from this request", and the list's impacts. */
+  on: { requirementId?: string | null; impacts?: Impacts } = {},
 ): FileLine {
   const unknown =
     canAct && held?.applicationUnknown === true && applications.length > 1;
   const blocked = held?.blocked ?? null;
   const changes = canAct && held !== undefined;
   const meta = fileCardMeta(held, file);
+  const requirementId = on.requirementId ?? null;
+  const offered = fileActions("REQUEST", {
+    canAct: changes,
+    onRequest: requirementId !== null,
+  });
+  /** A change as the menu offers it: held by what the page knows (the agent reading the
+   * file), else by what the server said of it when the menu opened. */
+  const change = (action: FileAction, form: FileForm) => {
+    const ask = {
+      fileId: file.fileId,
+      action: FILE_ACTION_IMPACT[action],
+      ...(action === "REMOVE" ? { requirementId } : {}),
+    };
+    return {
+      label: FILE_ACTION_LABELS[action],
+      unavailable: blocked ?? on.impacts?.unavailable(ask) ?? null,
+      prefetch: () => on.impacts?.prefetch(ask),
+      onSelect: () => setForm(form),
+    };
+  };
   return {
     meta,
     name: (
@@ -545,24 +580,16 @@ export function fileLine(
             },
           ]
         : []),
-      ...(changes
-        ? [
-            {
-              label: "Replace file",
-              unavailable: blocked,
-              onSelect: () => setForm("replace"),
-            },
-            {
-              label: "Withdraw",
-              danger: true,
-              unavailable: blocked,
-              onSelect: () => setForm("withdraw"),
-            },
-          ]
-        : []),
+      // The item's own change first; what takes the file off the request last.
+      ...offered.map((action) =>
+        change(action, action === "REMOVE" ? "remove" : "replace"),
+      ),
     ],
     form:
-      (form === "replace" || form === "withdraw") && held !== undefined ? (
+      (form === "replace" ||
+        form === "withdraw" ||
+        (form === "remove" && requirementId !== null)) &&
+      held !== undefined ? (
         <div className="ep-file-form">
           <FileChanges
             organizationId={ids.organizationId}
@@ -573,21 +600,22 @@ export function fileLine(
             controlId={ids.controlId}
             step={ids.step ?? null}
             start={form}
+            {...(form === "remove" && requirementId !== null
+              ? { requirementId }
+              : {})}
             onCancel={() => setForm(null)}
-            onDone={() =>
-              setForm(
-                null,
-                `${file.name} was withdrawn. It is kept on record with who withdrew it, and can be restored.`,
-              )
-            }
+            onDone={(message) => {
+              on.impacts?.forget();
+              setForm(null, message);
+            }}
           />
         </div>
       ) : form === "application" ? (
-        <form
-          autoComplete="off"
-          method="post"
+        <InPlaceForm
           action="/workspace/evidence-application"
+          form="application"
           className="ep-file-form ep-file-app"
+          onDone={() => setForm(null, FILING_NOTICES.applied)}
         >
           <input
             type="hidden"
@@ -627,7 +655,7 @@ export function fileLine(
           >
             Cancel
           </button>
-        </form>
+        </InPlaceForm>
       ) : null,
   };
 }
@@ -668,6 +696,8 @@ function RequirementsView({
   tail: ReactNode;
 }) {
   const action = usePlanAction(ids);
+  // Each file's changes, checked as its item's menu opens (E1).
+  const impacts = useImpacts(ids);
   if (plan === null || plan.status === "NOT_PLANNED") {
     return (
       <div className="ew-proposed">
@@ -813,6 +843,7 @@ function RequirementsView({
                         applications,
                         form,
                         setForm,
+                        { requirementId: item.id, impacts },
                       )
                     }
                   />

@@ -1169,7 +1169,75 @@ p.ea-about-read {
 }
 
 .ea-about-remove {
+  display: grid;
+  justify-items: start;
+  gap: 0.375rem;
   border-bottom: 0;
+}
+
+/* A change to the file, and why it is held where the server says it cannot be made. */
+.ea-about-change {
+  display: grid;
+  justify-items: start;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.ea-about-change small {
+  padding-left: 0.5rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+/* The file's history (E1): what happened to it, oldest first. */
+.ea-history {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0 0 0.75rem;
+  padding: 0;
+  list-style: none;
+}
+
+.ea-history li {
+  display: grid;
+  gap: 0.125rem;
+  min-width: 0;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--border);
+}
+
+.ea-history-what {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.ea-history-what strong {
+  font-weight: 500;
+}
+
+.ea-history small {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.ea-history-why,
+.ea-history-version {
+  overflow-wrap: anywhere;
+}
+
+/* The history being read, or read only in part. */
+.ea-history-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  margin: 0 0 0.75rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
 }
 
 /* The file's rows, where "About this file" draws them in place of the file. */

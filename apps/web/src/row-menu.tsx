@@ -15,6 +15,9 @@ export type RowMenuItem = {
   unavailable?: string | null;
   /** The group the item is in, shown as a heading above its first item. */
   section?: string;
+  /** Run as the menu opens: what decides whether the item is available is read then
+   * (a file's impact, E1), never on page load. */
+  prefetch?: () => void;
 };
 
 /**
@@ -96,6 +99,14 @@ export function RowMenu({
   const [up, setUp] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
+  const toggle = () => {
+    if (!open) {
+      for (const item of items) {
+        item.prefetch?.();
+      }
+    }
+    setOpen(!open);
+  };
   useEffect(() => {
     if (!open) {
       setToRight(false);
@@ -165,7 +176,7 @@ export function RowMenu({
           aria-expanded={open}
           aria-label={`More for ${label}`}
           title="More"
-          onClick={() => setOpen((value) => !value)}
+          onClick={toggle}
         >
           <UiIcon name="more" size={16} />
         </button>
@@ -177,7 +188,7 @@ export function RowMenu({
           aria-haspopup="menu"
           aria-expanded={open}
           aria-label={trigger.ariaLabel}
-          onClick={() => setOpen((value) => !value)}
+          onClick={toggle}
         >
           <UiIcon name={trigger.icon} size={15} />
           {trigger.label}

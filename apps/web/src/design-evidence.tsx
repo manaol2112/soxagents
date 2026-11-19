@@ -107,13 +107,10 @@ import {
   useFindingsAction,
 } from "./evidence-findings-view";
 import { evidenceHref } from "./evidence-flow";
+import { useImpacts } from "./evidence-impact";
 import type { Picked } from "./evidence-intake";
 import type { Intelligence } from "./evidence-intelligence-view";
-import type {
-  EvidencePlan,
-  PlanRequirement,
-  RequirementFile,
-} from "./evidence-plan-model";
+import type { EvidencePlan, PlanRequirement } from "./evidence-plan-model";
 import {
   type Action,
   type FileForm,
@@ -238,9 +235,9 @@ type ListDialog =
   | { mode: "attributes"; row: RequestsRow };
 
 /** What a person is asked to say before a judgment or a change is recorded. */
-type Asking =
-  | { kind: "FOLLOW_UP_REQUIRED" | "INSUFFICIENT" | "NOT_REVIEWED" | "WAIVE" }
-  | { kind: "UNLINK"; file: RequirementFile };
+type Asking = {
+  kind: "FOLLOW_UP_REQUIRED" | "INSUFFICIENT" | "NOT_REVIEWED" | "WAIVE";
+};
 
 const MENU_ICONS: Record<MenuKey, IconName> = {
   edit: "compose",
@@ -329,6 +326,7 @@ function useAssuranceAction(ids: Ids) {
     out.current = `reread-${fileId}`;
     setProblem(null);
     let status = 0;
+    let detail = "";
     try {
       const response = await fetch("/workspace/evidence-dialog", {
         method: "POST",
@@ -341,14 +339,18 @@ function useAssuranceAction(ids: Ids) {
           version: analysis.version,
         }),
       });
-      const body = (await response.json()) as { status?: unknown };
+      const body = (await response.json()) as {
+        status?: unknown;
+        detail?: unknown;
+      };
       status = typeof body.status === "number" ? body.status : 0;
+      detail = typeof body.detail === "string" ? body.detail : "";
     } catch {
       status = 0;
     }
     setBusy("");
     out.current = "";
-    const message = rereadProblem(status);
+    const message = rereadProblem(status, detail);
     setProblem(message);
     if (message === null || status === 409) {
       startTransition(() => router.refresh());
@@ -369,9 +371,10 @@ function useAssuranceAction(ids: Ids) {
     setBusy(key);
     out.current = key;
     setProblem(null);
-    const results: { name: string; status: number }[] = [];
+    const results: { name: string; status: number; detail: string }[] = [];
     for (const file of group) {
       let status = 0;
+      let detail = "";
       try {
         const response = await fetch("/workspace/evidence-dialog", {
           method: "POST",
@@ -384,12 +387,16 @@ function useAssuranceAction(ids: Ids) {
             version: file.analysis.version,
           }),
         });
-        const body = (await response.json()) as { status?: unknown };
+        const body = (await response.json()) as {
+          status?: unknown;
+          detail?: unknown;
+        };
         status = typeof body.status === "number" ? body.status : 0;
+        detail = typeof body.detail === "string" ? body.detail : "";
       } catch {
         status = 0;
       }
-      results.push({ name: file.name, status });
+      results.push({ name: file.name, status, detail });
     }
     setBusy("");
     out.current = "";
@@ -1612,6 +1619,8 @@ function Row({
   // Files are dragged over the row: it shows it takes them.
   const [over, setOver] = useState(false);
   const [asking, setAsking] = useState<Asking | null>(null);
+  // Each file's changes, checked as its menu opens (E1).
+  const impacts = useImpacts(ids);
   // "Check again with the current engine", asked once more before it runs: where it was
   // chosen from, so focus can come back to it.
   const [upgrading, setUpgrading] = useState<"action" | "menu" | null>(null);
@@ -1924,32 +1933,22 @@ function Row({
             reason: words,
             version: item.version,
           })
-        : asking.kind === "UNLINK"
-          ? await action.run(`unlink-${item.id}`, {
-              intent: "unlink",
-              requirement_id: item.id,
-              link_id: asking.file.linkId,
-              reason: words,
-              version: asking.file.linkVersion,
-            })
-          : await action.run(`judge-${item.id}`, {
-              intent: "sufficiency",
-              requirement_id: item.id,
-              sufficiency: asking.kind,
-              note: words,
-              version: item.version,
-            });
+        : await action.run(`judge-${item.id}`, {
+            intent: "sufficiency",
+            requirement_id: item.id,
+            sufficiency: asking.kind,
+            note: words,
+            version: item.version,
+          });
     if (ok) {
       onDone(
         asking.kind === "WAIVE"
           ? "Marked not applicable."
-          : asking.kind === "UNLINK"
-            ? "File unlinked."
-            : asking.kind === "NOT_REVIEWED"
-              ? "Decision reopened."
-              : asking.kind === "INSUFFICIENT"
-                ? "Marked insufficient."
-                : "Follow-up recorded.",
+          : asking.kind === "NOT_REVIEWED"
+            ? "Decision reopened."
+            : asking.kind === "INSUFFICIENT"
+              ? "Marked insufficient."
+              : "Follow-up recorded.",
       );
       setAsking(null);
       setWords("");
@@ -2026,6 +2025,7 @@ function Row({
           setFileForm(form === null ? null : { fileId: file.fileId, form });
           setFileDone(note ?? null);
         },
+        { requirementId: item.id, impacts },
       ),
     ]),
   );
@@ -2201,11 +2201,23 @@ function Row({
             const fileMenu: RowMenuItem[] = [
               // A file not read: its own "Read the file again" first, where it
               // can be (its replacement is the menu's own "Replace file").
+              // Held, with the server's reason, where a decision rests on its reading
+              // (E1: a reading relied on is never read again).
               ...(own?.kind === "REREAD" && !againReading
                 ? [
                     {
                       label: READ_AGAIN_LABEL,
-                      unavailable: locked ? lockedWhy : null,
+                      unavailable: locked
+                        ? lockedWhy
+                        : impacts.unavailable({
+                            fileId: file.fileId,
+                            action: "REREAD",
+                          }),
+                      prefetch: () =>
+                        impacts.prefetch({
+                          fileId: file.fileId,
+                          action: "REREAD",
+                        }),
                       onSelect: () => rereadFile(file.fileId),
                     },
                   ]
@@ -2221,17 +2233,10 @@ function Row({
                     },
                   ]
                 : []),
-              ...(line?.actions ?? []).filter((each) => each.danger !== true),
-              ...(canAct && file.via === "LINK" && file.linkId !== null
-                ? [
-                    {
-                      label: "Unlink from this request",
-                      onSelect: () => ask({ kind: "UNLINK", file }),
-                    },
-                  ]
-                : []),
-              // What cannot be undone in place ("Withdraw") stays last.
-              ...(line?.actions ?? []).filter((each) => each.danger === true),
+              // The file's own actions, "Remove from this request" last (E1: it takes
+              // the file off this request only, a person's link or its filing, and
+              // never withdraws it; withdrawing is in the file's viewer).
+              ...(line?.actions ?? []),
             ];
             return (
               <li
@@ -3894,13 +3899,6 @@ const ASK_WORDS: Record<
     save: "Mark not applicable",
     min: 10,
     max: 1000,
-  },
-  UNLINK: {
-    label: "Why it no longer serves it",
-    placeholder: "Why the file no longer serves this request",
-    save: "Unlink",
-    min: 3,
-    max: 500,
   },
 };
 

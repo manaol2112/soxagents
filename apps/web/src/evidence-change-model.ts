@@ -120,6 +120,11 @@ export type ChangeNotice =
   | "item-accepted"
   | "testing-signed"
   | "workpaper-prepared"
+  | "tickmark"
+  | "reliability"
+  | "walkthrough-pick"
+  | "conclusion-signed"
+  | "finding-held"
   | "same-file"
   | "was-replaced"
   | "already"
@@ -128,8 +133,10 @@ export type ChangeNotice =
   | "unavailable";
 
 export const CHANGE_NOTICES: Record<ChangeNotice, string> = {
+  // Changed 18 November 2026 (E1). Old: "... and kept under Withdrawn with your reason."
+  // New: no reason is claimed, since a withdrawal may be made without one.
   withdrawn:
-    "File withdrawn. It is off its request, testing, and workpapers, and kept under Withdrawn with your reason.",
+    "File withdrawn. It is off its request, testing, and workpapers, and kept on record under Withdrawn.",
   restored:
     "File restored. It is back on its control, and the tester looks at it again.",
   replaced:
@@ -144,16 +151,32 @@ export const CHANGE_NOTICES: Record<ChangeNotice, string> = {
     "Signed-off testing used this file, so the file stays. Reopen the testing first, with a reason.",
   "workpaper-prepared":
     "A prepared workpaper cites this file, so the file stays. Reopen the workpaper first.",
+  // The reliances added by E1 (18 November 2026), for a page reloaded with its notice; a
+  // form that changes the file in place shows the server's own sentence instead.
+  tickmark:
+    "A person's tickmark on this file shows an attribute, so the file stays. Reopen that decision first.",
+  reliability:
+    "A person's decision on whether this file is reliable stands, so the file stays. Reopen that decision first.",
+  "walkthrough-pick":
+    "The walkthrough instance was picked from this file, so the file stays. Pick it again from another file first.",
+  "conclusion-signed":
+    "A signed design conclusion rests on this file, so the file stays. Reopen that conclusion first.",
+  "finding-held":
+    "An open finding on this file was decided or sent to the organization, so the file stays. Close that finding first.",
   "same-file": "That is the same file. Choose the corrected one.",
+  // Changed 18 November 2026 (E1), to the API's own sentence. Old: "Withdraw its newer
+  // version to use this one again", which never restored it.
   "was-replaced":
-    "This file was replaced. Withdraw its newer version to use this one again.",
+    "This file was replaced. A replaced file stays in its version history and cannot be restored; to use it again, upload it again under another file name.",
   already: "That file changed. Refresh and try again.",
   denied: "That is not available to you.",
   invalid: "Give a reason of at least three characters, and choose a file.",
   unavailable: "The evidence register could not be reached. Try again.",
 };
 
-/** The notice for the API's answer. A 409 says why in plain words; it is matched, never shown. */
+/** The notice for the API's answer, for a page reloaded with it (only a fixed set travels
+ * in the address). A 409 says why in plain words; it is matched here, and a form that
+ * changes the file in place shows the sentence itself (`changeProblem`). */
 export function changeNoticeFor(
   intent: ChangeIntent | "replace",
   status: number,
@@ -186,6 +209,21 @@ export function changeNoticeFor(
     if (why.includes("workpaper")) {
       return "workpaper-prepared";
     }
+    if (why.includes("tickmark")) {
+      return "tickmark";
+    }
+    if (why.includes("whether it is reliable")) {
+      return "reliability";
+    }
+    if (why.includes("walkthrough instance")) {
+      return "walkthrough-pick";
+    }
+    if (why.includes("signed design conclusion")) {
+      return "conclusion-signed";
+    }
+    if (why.includes("the finding")) {
+      return "finding-held";
+    }
     if (why.includes("same file")) {
       return "same-file";
     }
@@ -201,6 +239,28 @@ export function changeNoticeFor(
     return "invalid";
   }
   return "unavailable";
+}
+
+/** What a form that changes a file in place says when the change did not go through:
+ * the server's own sentence where it refused with one (E1, 18 November 2026: every
+ * refusal names the reliance and how to clear it), else the notice's words. */
+export function changeProblem(notice: ChangeNotice, detail: string): string {
+  return detail.trim() === "" ? CHANGE_NOTICES[notice] : asSentence(detail);
+}
+
+/** How the API starts its refusal to read a file again whose reading a decision rests
+ * on (evidence_reliance.REFUSED["REREAD"]), told apart from its other refusals. */
+export const RELIED_ON_READING = "This file's reading is relied on: ";
+
+/** A server sentence as a screen shows it: a capital first, a full stop last (the API
+ * words its refusals lower case, with no full stop). */
+export function asSentence(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed === "") {
+    return "";
+  }
+  const first = `${trimmed.charAt(0).toUpperCase()}${trimmed.slice(1)}`;
+  return /[.!?]$/.test(first) ? first : `${first}.`;
 }
 
 /** Whether a change route answers with the notice as JSON, for a form that withdraws in

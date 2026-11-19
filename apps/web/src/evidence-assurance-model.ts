@@ -25,6 +25,7 @@
  * exactly as it did.
  */
 
+import { asSentence, RELIED_ON_READING } from "./evidence-change-model.ts";
 import {
   CLOSED_STATUSES,
   FINDING_STATUSES,
@@ -3176,7 +3177,7 @@ export function offeredAction(
  * in the group's order: success only for the files the server confirmed, and the files
  * that did not start, by name, with the first refusal's own sentence. */
 export function rereadAllOutcome(
-  results: readonly { name: string; status: number }[],
+  results: readonly { name: string; status: number; detail?: string }[],
 ): { done: string | null; problem: string | null } {
   const started = results.filter((each) => each.status === 200);
   const refused = results.filter((each) => each.status !== 200);
@@ -3191,7 +3192,8 @@ export function rereadAllOutcome(
     return { done, problem: null };
   }
   const named = refused.map((each) => each.name).join(", ");
-  const why = rereadProblem(refused[0]?.status ?? 0) ?? "";
+  const why =
+    rereadProblem(refused[0]?.status ?? 0, refused[0]?.detail ?? "") ?? "";
   return {
     done,
     problem:
@@ -4040,10 +4042,15 @@ export function assuranceProblem(status: number, detail = ""): string | null {
 }
 
 /** What a person reads when reading a file again did not go through; null when the
- * server confirmed it. */
-export function rereadProblem(status: number): string | null {
+ * server confirmed it. A reading a decision rests on is never read again (E1, 18
+ * November 2026): that refusal is said in the server's own words, which name the
+ * decision and how to clear it. */
+export function rereadProblem(status: number, detail = ""): string | null {
   if (status === 200) {
     return null;
+  }
+  if (status === 409 && detail.startsWith(RELIED_ON_READING)) {
+    return asSentence(detail);
   }
   if (status === 409) {
     return "The file's reading changed meanwhile. The row is refreshed: check it and try again.";

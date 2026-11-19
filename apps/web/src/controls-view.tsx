@@ -140,7 +140,7 @@ import {
   PROGRESS_LABELS,
   SEVERITIES,
 } from "./engagement-model";
-import { FileChanges } from "./evidence-change";
+import { FileChanges, InPlaceForm } from "./evidence-change";
 import {
   CHANGE_NOTICES,
   type ChangeNotice,
@@ -4141,10 +4141,9 @@ function ControlEvidence({
                             </summary>
                             <div className="evidence-file-body">
                               {canAct && files.applications.length > 1 ? (
-                                <form
-                                  autoComplete="off"
-                                  method="post"
+                                <InPlaceForm
                                   action="/workspace/evidence-application"
+                                  form="application"
                                   className="inline-form app-form"
                                 >
                                   <input
@@ -4210,7 +4209,7 @@ function ControlEvidence({
                                       ? "Set by a person."
                                       : "Suggested by the evidence coordinator."}
                                   </small>
-                                </form>
+                                </InPlaceForm>
                               ) : null}
                               <AnalysisPanel
                                 analysis={analysis}

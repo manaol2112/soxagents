@@ -1,11 +1,12 @@
 import { analysisFor, reviewFor } from "./analysis-model";
 import { AnalysisPanel } from "./analysis-view";
-import { FileChanges } from "./evidence-change";
+import { FileChanges, InPlaceForm, RestoreForm } from "./evidence-change";
 import {
   CHANGE_NOTICES,
   changeBlocked,
   changeNoticeOk,
 } from "./evidence-change-model";
+import { MoveCheck, MoveGuard } from "./evidence-impact";
 import { EvidenceIntake } from "./evidence-intake";
 import {
   agentStatus,
@@ -521,10 +522,9 @@ function FilingForm({
     (item) => item.controlId !== file.control?.id,
   );
   return (
-    <form
-      autoComplete="off"
-      method="post"
+    <InPlaceForm
       action="/workspace/evidence-filing"
+      form="filing"
       className={compact ? "filing-form is-compact" : "filing-form"}
     >
       <input
@@ -578,7 +578,7 @@ function FilingForm({
       <button type="submit" className="btn-sm">
         {file.control === null ? "File" : "Move"}
       </button>
-    </form>
+    </InPlaceForm>
   );
 }
 
@@ -664,10 +664,9 @@ function FilePanel({
             <dt>Application</dt>
             <dd>
               {canAct ? (
-                <form
-                  autoComplete="off"
-                  method="post"
+                <InPlaceForm
                   action="/workspace/evidence-application"
+                  form="application"
                   className="inline-form app-form"
                 >
                   <input
@@ -704,7 +703,7 @@ function FilePanel({
                   <button type="submit" className="btn-secondary btn-sm">
                     Save
                   </button>
-                </form>
+                </InPlaceForm>
               ) : (
                 applicationLabel(file) || "Not known"
               )}
@@ -762,7 +761,60 @@ function FilePanel({
               ) : null}
             </>
           )}
-          {movable ? (
+          {movable && file.control !== null ? (
+            // A filed file's move says first what it would do, and is held while the
+            // server says something on its control relies on the file (E1).
+            <MoveCheck
+              organizationId={model.organization.id}
+              projectId={project?.id ?? ""}
+              fileId={file.id}
+            >
+              <div className="filing-actions">
+                <MoveGuard>
+                  <FilingForm
+                    model={model}
+                    file={file}
+                    keep={here}
+                    controls={controls}
+                  />
+                </MoveGuard>
+                {file.filingVersion !== null ? (
+                  <div className="filing-secondary">
+                    {file.filedBy === "AGENT" ? (
+                      <InPlaceForm
+                        action="/workspace/evidence-filing"
+                        form="filing"
+                      >
+                        <FilingHidden model={model} file={file} keep={here} />
+                        <input
+                          type="hidden"
+                          name="control_id"
+                          value={file.control.id}
+                        />
+                        <button type="submit" className="btn-secondary btn-sm">
+                          <UiIcon name="check" size={13} /> Confirm the agent's
+                          filing
+                        </button>
+                      </InPlaceForm>
+                    ) : null}
+                    <MoveGuard>
+                      <InPlaceForm
+                        action="/workspace/evidence-filing"
+                        form="filing"
+                      >
+                        <FilingHidden model={model} file={file} keep={here} />
+                        <input type="hidden" name="control_id" value="none" />
+                        <button type="submit" className="btn-ghost btn-sm">
+                          Take off this control
+                        </button>
+                      </InPlaceForm>
+                    </MoveGuard>
+                  </div>
+                ) : null}
+              </div>
+            </MoveCheck>
+          ) : movable ? (
+            // A file not filed yet is filed: nothing relies on it on a control.
             <div className="filing-actions">
               <FilingForm
                 model={model}
@@ -770,39 +822,6 @@ function FilePanel({
                 keep={here}
                 controls={controls}
               />
-              {file.control !== null && file.filingVersion !== null ? (
-                <div className="filing-secondary">
-                  {file.filedBy === "AGENT" ? (
-                    <form
-                      autoComplete="off"
-                      method="post"
-                      action="/workspace/evidence-filing"
-                    >
-                      <FilingHidden model={model} file={file} keep={here} />
-                      <input
-                        type="hidden"
-                        name="control_id"
-                        value={file.control.id}
-                      />
-                      <button type="submit" className="btn-secondary btn-sm">
-                        <UiIcon name="check" size={13} /> Confirm the agent's
-                        filing
-                      </button>
-                    </form>
-                  ) : null}
-                  <form
-                    autoComplete="off"
-                    method="post"
-                    action="/workspace/evidence-filing"
-                  >
-                    <FilingHidden model={model} file={file} keep={here} />
-                    <input type="hidden" name="control_id" value="none" />
-                    <button type="submit" className="btn-ghost btn-sm">
-                      Take off this control
-                    </button>
-                  </form>
-                </div>
-              ) : null}
             </div>
           ) : null}
         </section>
@@ -999,52 +1018,15 @@ function WithdrawnTable({
                     Download
                   </a>
                   {canAct && file.replacedBy === null ? (
-                    <details className="row-menu">
-                      <summary className="btn btn-secondary btn-sm">
-                        Restore
-                      </summary>
-                      <form
-                        autoComplete="off"
-                        method="post"
-                        action="/workspace/evidence-change"
-                        className="row-menu-panel"
-                      >
-                        <input
-                          type="hidden"
-                          name="organization_id"
-                          value={model.organization.id}
-                        />
-                        <input
-                          type="hidden"
-                          name="project_id"
-                          value={model.selectedProject?.id ?? ""}
-                        />
-                        <input type="hidden" name="file_id" value={file.id} />
-                        <input type="hidden" name="intent" value="restore" />
-                        {Object.entries(keepFields(keep)).map(
-                          ([key, value]) => (
-                            <input
-                              key={key}
-                              type="hidden"
-                              name={key}
-                              value={value}
-                            />
-                          ),
-                        )}
-                        <label>
-                          Why restore it
-                          <input
-                            name="reason"
-                            required
-                            minLength={3}
-                            maxLength={500}
-                          />
-                        </label>
-                        <button type="submit" className="btn-sm">
-                          Restore
-                        </button>
-                      </form>
-                    </details>
+                    // Restored in place (E1): a replaced file is not offered it, since
+                    // it stays in its version history.
+                    <RestoreForm
+                      organizationId={model.organization.id}
+                      projectId={model.selectedProject?.id ?? ""}
+                      fileId={file.id}
+                      fileName={file.fileName}
+                      keep={keepFields(keep)}
+                    />
                   ) : null}
                 </span>
               </td>

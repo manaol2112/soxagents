@@ -44,9 +44,14 @@ describe("a file that needs placing can also be removed (product owner, 14 Novem
   // needed in this control?" A file waiting to be placed offered only Place file; Remove
   // was reachable only from the Move menu of a file already placed or kept out.
   it("offers Remove beside Place file, through the existing withdrawal", () => {
-    // One label wherever the window offers it.
-    assert.match(view, /const REMOVE_LABEL = "Remove from this upload";/);
-    assert.match(view, /label: REMOVE_LABEL,/);
+    // One label wherever the window offers it. Changed 18 November 2026 (E1, product
+    // owner). Old: 'const REMOVE_LABEL = "Remove from this upload"', for what was a
+    // withdrawal from the whole engagement. New: it is labelled as the withdrawal it is,
+    // with the one label every place uses ("Withdraw from the engagement…"), kept on
+    // record; discarding an upload outright is not built yet (E2).
+    assert.match(view, /const WITHDRAW_LABEL = FILE_ACTION_LABELS\.WITHDRAW;/);
+    assert.match(view, /label: WITHDRAW_LABEL,/);
+    assert.doesNotMatch(view, /Remove from this upload/);
     // The row that needs a person passes the wizard's own remove to the chooser.
     assert.match(
       view,
@@ -67,6 +72,9 @@ describe("a file that needs placing can also be removed (product owner, 14 Novem
       chooser,
       /className="btn btn-ghost btn-sm wz-choose-remove"\s*disabled=\{busy \|\| remove\.unavailable !== null\}/,
     );
-    assert.match(chooser, /aria-label=\{`\$\{REMOVE_LABEL\}: \$\{name\}`\}/);
+    assert.match(
+      chooser,
+      /aria-label=\{`Withdraw \$\{name\} from the engagement`\}/,
+    );
   });
 });

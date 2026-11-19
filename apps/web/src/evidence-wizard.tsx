@@ -23,6 +23,7 @@ import {
   REVIEW_TITLE,
 } from "./evidence-assurance-model";
 import { FileChanges } from "./evidence-change";
+import { FILE_ACTION_LABELS } from "./evidence-impact-model";
 import { type Picked, walk } from "./evidence-intake";
 import { planUploads, systemsAnswer } from "./evidence-model";
 import { PreviewButton } from "./evidence-opener";
@@ -1237,9 +1238,10 @@ export function useEvidenceWizard(setup: WizardSetup) {
       setStep(3);
     },
     remove: (fileId: string | null) => setRemoving(fileId),
-    removed: (name: string) => {
+    /** A withdrawal the server confirmed, said as the form words it (with the person's
+     * reason only where they gave one). */
+    removed: (said: string) => {
       setRemoving(null);
-      const said = `${name} was removed from this upload. Its custody record stays, and it can be restored from the control’s files.`;
       setNote(said);
       setLive(said);
       if (session !== null) {
@@ -2737,8 +2739,11 @@ function FixReading({
   );
 }
 
-/** Removing a file from the upload, wherever the window offers it: one label. */
-const REMOVE_LABEL = "Remove from this upload";
+/** Taking a file out of the upload, wherever the window offers it: one label. It is a
+ * withdrawal from the engagement, kept on record (E1, 18 November 2026: it read "Remove
+ * from this upload", which did not say the file left the engagement); discarding an
+ * upload outright is not offered yet. */
+const WITHDRAW_LABEL = FILE_ACTION_LABELS.WITHDRAW;
 const STILL_READING_FILE = "The agent is still reading this file.";
 
 /** Where a file a person must place goes: the agent's suggestion selected first, and
@@ -2757,9 +2762,9 @@ function Choose({
   preselect: string;
   busy: boolean;
   onPlace: (choice: string) => void;
-  /** "Remove": the file is not needed for this control. It opens the existing
-   * withdrawal (its reason, its custody record kept); nothing is removed by the press
-   * itself. Absent where the file cannot be removed here. */
+  /** "Withdraw": the file is not needed for this control. It opens the existing
+   * withdrawal (its reason, its custody record kept); nothing is withdrawn by the press
+   * itself. Absent where the file cannot be withdrawn here. */
   remove?: { onRemove: () => void; unavailable: string | null } | undefined;
 }) {
   const id = useId();
@@ -2811,12 +2816,12 @@ function Choose({
           type="button"
           className="btn btn-ghost btn-sm wz-choose-remove"
           disabled={busy || remove.unavailable !== null}
-          title={remove.unavailable ?? REMOVE_LABEL}
-          aria-label={`${REMOVE_LABEL}: ${name}`}
+          title={remove.unavailable ?? WITHDRAW_LABEL}
+          aria-label={`Withdraw ${name} from the engagement`}
           onClick={remove.onRemove}
         >
           <UiIcon name="trash" size={13} />
-          Remove
+          Withdraw
         </button>
       ) : null}
     </span>
@@ -3275,7 +3280,7 @@ function MoveMenu({
           },
         ]),
     {
-      label: REMOVE_LABEL,
+      label: WITHDRAW_LABEL,
       icon: "trash" as const,
       danger: true,
       section: "This upload",
@@ -3306,7 +3311,8 @@ function MoveMenu({
   );
 }
 
-/** "Remove from this upload": the existing withdrawal, in place; the window stays. */
+/** "Withdraw from the engagement…": the existing withdrawal, in place, which says first
+ * where the file is used (E1); the window stays. */
 function Withdraw({
   line,
   view,
@@ -3333,7 +3339,7 @@ function Withdraw({
         step={view.ids.step ?? null}
         start="withdraw"
         onCancel={() => wizard.remove(null)}
-        onDone={() => wizard.removed(line.name)}
+        onDone={(said) => wizard.removed(said)}
       />
     </div>
   );

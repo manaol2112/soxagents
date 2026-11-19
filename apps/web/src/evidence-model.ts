@@ -4,6 +4,8 @@
  * writes the register makes. The API is the source of truth; this only shapes it.
  */
 
+import { asSentence } from "./evidence-change-model.ts";
+
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const MAX_UPLOAD_BYTES = 25_000_000;
 const SYSTEM_FILES = new Set([".ds_store", "thumbs.db", "desktop.ini"]);
@@ -873,4 +875,26 @@ export function parseFilingNotice(value: string | null): FilingNotice | null {
       (notice) => value === filingNoticeParam(notice),
     ) ?? null
   );
+}
+
+/** What a filing or application form that sends in place says when the change did not go
+ * through; null when the server confirmed it. A refusal is the server's own sentence (E1:
+ * a move or an application change something relies on is refused with its reason, and
+ * how to clear it); otherwise the notice's words. */
+export function filingProblem(
+  status: number,
+  detail: string,
+  form: "filing" | "application",
+): string | null {
+  if (status === 200) {
+    return null;
+  }
+  if (status === 409 && detail.trim() !== "") {
+    return asSentence(detail);
+  }
+  return FILING_NOTICES[
+    form === "application"
+      ? applicationNoticeFor(status)
+      : filingNoticeFor(status, false)
+  ];
 }

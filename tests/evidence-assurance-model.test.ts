@@ -1632,6 +1632,27 @@ describe("files left out for the same reason", () => {
     });
   });
 
+  it("says why a reading a decision rests on is not read again, in the server's words (E1)", () => {
+    // 18 November 2026: the API refuses to read again a file whose reading a person's
+    // decision rests on, naming it ("This file's reading is relied on: ..."). Before,
+    // every 409 said the reading had changed meanwhile.
+    const relied =
+      'This file\'s reading is relied on: the evidence item "Access policy" was accepted with it; change that decision first';
+    assert.equal(rereadProblem(409, relied), `${relied}.`);
+    // Any other refusal keeps its words.
+    assert.equal(rereadProblem(409, "analysis changed"), rereadProblem(409));
+    assert.deepEqual(
+      rereadAllOutcome([
+        { name: "a.png", status: 200 },
+        { name: "b.png", status: 409, detail: relied },
+      ]),
+      {
+        done: "1 of 2 files are being read again.",
+        problem: `Reading again did not start for b.png. ${relied}.`,
+      },
+    );
+  });
+
   // Design review, 18 November 2026: with text recognition not available the server
   // sends no action, so nothing is offered (no "Replace the file" either), and the
   // step says the files could not be read, never that a check is to run again.

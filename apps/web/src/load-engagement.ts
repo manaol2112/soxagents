@@ -460,6 +460,13 @@ function controlFiles(
                 file.application?.name === mine.application)))),
     ),
     applications: mine?.applications ?? [],
+    // Withdrawn from this instance or a sibling of the same control.
+    withdrawn: parsed.withdrawn.filter(
+      (file) =>
+        file.control !== null &&
+        (file.control.id === control ||
+          (mine !== undefined && file.control.controlRef === mine.controlRef)),
+    ),
     analyses: analyses === undefined ? [] : (parseAnalyses(analyses) ?? []),
     reviews: reviews === undefined ? [] : (parseReviews(reviews) ?? []),
   };

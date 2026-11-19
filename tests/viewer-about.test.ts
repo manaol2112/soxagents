@@ -367,14 +367,29 @@ describe("About this file", () => {
       "if (await about.pickRow(row)) { onPicked?.(row); }",
     );
     // Withdrawing: the existing form, and the screen told only once it is withdrawn.
+    // Changed 18 November 2026 (E1, product owner). Old: one "Remove from this request"
+    // that opened the withdrawal ('setWithdrawing(false)'), and a refusal said in the
+    // notice's canned words ('setProblem(CHANGE_NOTICES[notice])'). New: "Remove from
+    // this request" takes the file off that request only (RemoveForm), "Withdraw from the
+    // engagement…" is its own action, last; both tell the screen only once the server
+    // confirmed, and a refusal is said in the server's own sentence (changeProblem).
     has(component(about, "WithdrawForm"), 'start="withdraw"');
-    has(
-      component(about, "AboutThisFile"),
-      "onDone={(message) => { setWithdrawing(false); context.onWithdrawn?.(message); }}",
+    has(component(about, "RemoveForm"), 'start="remove"');
+    assert.equal(
+      squash(component(about, "AboutThisFile")).split(
+        "onDone={(message) => { setChanging(null); context.onWithdrawn?.(message); }}",
+      ).length,
+      3,
     );
+    const change = read("apps/web/src/evidence-change.tsx");
     assert.match(
-      read("apps/web/src/evidence-change.tsx"),
-      /if \(notice !== "withdrawn"\) \{\s*setProblem\(CHANGE_NOTICES\[notice\]\);\s*return;\s*\}\s*done\(notice\);/,
+      change,
+      /if \(answer\.notice !== "withdrawn"\) \{\s*setProblem\(changeProblem\(answer\.notice, answer\.detail\)\);\s*return;\s*\}\s*confirmed\(/,
+    );
+    // The removal is the association's own route, never a withdrawal.
+    assert.match(
+      change,
+      /fetch\(\s*`\/workspace\/evidence-files\/\$\{fileId\}\/remove-from-request`/,
     );
     // The findings keep their own actions, the reading its history.
     has(
