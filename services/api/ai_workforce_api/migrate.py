@@ -103,6 +103,18 @@ def _apply_one(connection: psycopg.Connection[Any], version: str, script: str, d
         )
 
 
+def applied_head(database_url: str) -> str | None:
+    """The latest migration applied to the database, or None when it cannot be read."""
+    if database_url == "":
+        return None
+    try:
+        with psycopg.connect(database_url, connect_timeout=3) as connection:
+            row = connection.execute("SELECT max(version) FROM schema_migrations").fetchone()
+    except psycopg.Error:
+        return None
+    return row[0] if row is not None and isinstance(row[0], str) else None
+
+
 def migrations_dir() -> Path:
     start = Path(__file__).resolve()
     for parent in start.parents:

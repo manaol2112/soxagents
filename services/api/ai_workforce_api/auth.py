@@ -34,6 +34,7 @@ SESSION_COOKIE = "aw_session"
 PUBLIC_PATHS = frozenset(
     {
         "/health",
+        "/health/version",
         "/ready",
         "/auth/login",
         "/auth/callback",

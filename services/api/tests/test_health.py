@@ -1,9 +1,14 @@
 import os
+import re
+from urllib.parse import urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
+from support import Database
 
-from ai_workforce_api.main import create_app
+from ai_workforce_api.auth import PUBLIC_PATHS
+from ai_workforce_api.main import create_app, loaded_code
+from ai_workforce_api.migrate import list_migrations, migrations_dir
 from ai_workforce_api.settings import Settings
 
 
@@ -59,3 +64,46 @@ def test_ready_uses_configured_database() -> None:
     response = client.get("/ready")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_version_says_which_code_and_schema_and_nothing_else(
+    migrated_database: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # scripts/env_status.py, 19 November 2026: which commit a server loaded (a reload that
+    # did not happen leaves older code running) and the latest migration its database has.
+    # Public like /health: no sign-in, no URL, no secret.
+    monkeypatch.setenv("APP_COMMIT", "4431a3f0c1d2")
+    loaded_code.cache_clear()
+    try:
+        client = TestClient(create_app(Settings(database_url=migrated_database.url)))
+        response = client.get("/health/version")
+    finally:
+        loaded_code.cache_clear()
+    assert response.status_code == 200
+    latest = list_migrations(migrations_dir())[-1][0]
+    assert response.json() == {"commit": "4431a3f0c1d2", "branch": None, "migrations_head": latest}
+    assert "/health/version" in PUBLIC_PATHS
+    password = urlsplit(migrated_database.url).password or "no password"
+    assert password not in response.text and "postgres" not in response.text
+
+
+def test_version_reads_git_once_and_shows_no_unchecked_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("APP_COMMIT", "")
+    loaded_code.cache_clear()
+    try:
+        body = TestClient(create_app(Settings(database_url=""))).get("/health/version").json()
+        commit, branch = loaded_code()
+        # A second app in the process reuses what the first read.
+        monkeypatch.setenv("APP_COMMIT", "0123456789ab")
+        again = TestClient(create_app(Settings(database_url=""))).get("/health/version").json()
+        loaded_code.cache_clear()
+        monkeypatch.setenv("APP_COMMIT", "not a commit; DROP TABLE")
+        odd = TestClient(create_app(Settings(database_url=""))).get("/health/version").json()
+    finally:
+        loaded_code.cache_clear()
+    assert body == {"commit": commit, "branch": branch, "migrations_head": None}
+    assert commit is None or re.fullmatch(r"[0-9a-f]{12}", commit)
+    assert again == body
+    assert odd == {"commit": None, "branch": None, "migrations_head": None}

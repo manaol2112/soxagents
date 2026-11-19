@@ -213,8 +213,17 @@ install() {
       ;;
     brew) brew install "${list[@]}" || return 1 ;;
     apt-get)
-      as_root env DEBIAN_FRONTEND=noninteractive apt-get update -qq &&
-        as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${list[@]}" || return 1
+      # From the package lists the system already has, when they name packages the mirror
+      # still serves (a CI runner's image refreshes its lists every week); `apt-get update`
+      # only when they do not. With the lists refreshed every time, the CI step took from 7
+      # to 172 seconds (19 November 2026). Recommended packages are not needed to read text.
+      if ! as_root env DEBIAN_FRONTEND=noninteractive \
+        apt-get install -y -qq --no-install-recommends "${list[@]}"; then
+        echo "The package lists are missing or out of date: refreshing them (apt-get update)."
+        as_root env DEBIAN_FRONTEND=noninteractive apt-get update -qq &&
+          as_root env DEBIAN_FRONTEND=noninteractive \
+            apt-get install -y -qq --no-install-recommends "${list[@]}" || return 1
+      fi
       ;;
     dnf | yum)
       if ! as_root "$pm" install -y -q "${list[@]}"; then

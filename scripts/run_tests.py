@@ -8,7 +8,9 @@ Subcommands (each prints a summary of at most 20 lines; the full output goes to 
                      test-results/<label>/ (git-ignored). Environment errors (port
                      exhaustion 10048, a 503 from a lost connection, a failed PostgreSQL
                      connect) are rerun once alone and reported on their own line, never
-                     hidden; outside CI only. --shard K/N runs one deterministic part.
+                     hidden; outside CI only. --shard K/N runs one deterministic part,
+                     balanced by CI's measured times (scripts/test_durations.json);
+                     each run writes its own times to test-results/<label>/durations.json.
   changed            make check-changed (G0): ruff, mypy, tsc and biome on the changed
                      files, then the tests scripts/changed_tests.py selects, through the
                      same runner.
@@ -18,6 +20,8 @@ Subcommands (each prints a summary of at most 20 lines; the full output goes to 
                      fix (the named files restored to the base, or a patch reversed) is
                      taken out and the test must fail. Nothing in this worktree is touched
                      and nothing is stashed.
+  durations LOG...   make test-durations: scripts/test_durations.json updated from the
+                     durations lines of CI part logs (`gh run view <id> --log`).
 
 Exit codes: 0 passed (or PROVED), 1 failed (or NOT PROVED), 2 inconclusive or a usage error,
 124 timed out.
@@ -37,13 +41,16 @@ import sys
 import tempfile
 import time
 import xml.etree.ElementTree as ET
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, TextIO
 
 ROOT = Path(__file__).resolve().parent.parent
 RESULTS = ROOT / "test-results"
+# CI's measured seconds per test file (or picked test), which balance the CI parts (shard).
+DURATIONS_FILE = "scripts/test_durations.json"
+DURATIONS_KIND = "test-durations"
 SUMMARY_LINES = 20
 DEFAULT_WORKERS = 2
 DEFAULT_TIMEOUT = 45 * 60
@@ -372,16 +379,43 @@ def machine_lock(
 # Running pytest
 
 
-def shard(entries: Sequence[str], index: int, count: int, root: Path = ROOT) -> list[str]:
+def load_durations(root: Path = ROOT) -> dict[str, float]:
+    """The measured seconds of each test entry (DURATIONS_FILE under the root), or none when
+    the file is absent. A file that cannot be read as {"seconds": {entry: seconds}} stops the
+    run: a split silently back on file sizes would undo the balance unnoticed."""
+    path = root / DURATIONS_FILE
+    if not path.is_file():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    seconds = data.get("seconds") if isinstance(data, dict) else None
+    if not isinstance(seconds, dict) or not all(
+        isinstance(key, str) and isinstance(value, int | float) and value >= 0
+        for key, value in seconds.items()
+    ):
+        raise ValueError(f"{DURATIONS_FILE} is not {{'seconds': {{entry: seconds}}}}")
+    return {key: float(value) for key, value in seconds.items()}
+
+
+def shard(
+    entries: Sequence[str],
+    index: int,
+    count: int,
+    root: Path = ROOT,
+    durations: Mapping[str, float] | None = None,
+) -> list[str]:
     """Part `index` (1-based) of `count`: every entry in exactly one part, the same parts for
-    the same files, balanced by size (largest first into the lightest part). A picked test
-    (`file::test`) weighs its file's size over the file's number of tests."""
+    the same files, balanced by measured run time (longest first into the lightest part).
+    The times are CI's (DURATIONS_FILE; `durations` replaces it). An entry with no time yet
+    (a new file) weighs its size, at the seconds per byte of the entries that have one; a
+    picked test (`file::test`) weighs its file's size over the file's number of tests. With
+    no times at all, the split is by size."""
     if not 1 <= index <= count:
         raise ValueError(f"shard {index} of {count} does not exist")
     if len(set(entries)) != len(entries):
         raise ValueError("an entry is listed twice")
+    measured = load_durations(root) if durations is None else durations
 
-    def weight(entry: str) -> int:
+    def size(entry: str) -> int:
         path = root / entry.split("::", 1)[0]
         size = path.stat().st_size
         if "::" not in entry:
@@ -389,13 +423,72 @@ def shard(entries: Sequence[str], index: int, count: int, root: Path = ROOT) -> 
         tests = len(re.findall(r"^\s*(?:async\s+)?def test_", path.read_text("utf-8"), re.M))
         return max(1, size // max(tests, 1))
 
-    loads = [0] * count
+    timed = [entry for entry in sorted(entries) if entry in measured]
+    timed_size = sum(size(entry) for entry in timed)
+    per_byte = sum(measured[entry] for entry in timed) / timed_size if timed_size else 1.0
+    weight = {
+        entry: measured[entry] if entry in measured else size(entry) * per_byte for entry in entries
+    }
+    loads = [0.0] * count
     owner: dict[str, int] = {}
-    for entry in sorted(entries, key=lambda e: (-weight(e), e)):
+    for entry in sorted(entries, key=lambda e: (-weight[e], e)):
         lightest = min(range(count), key=lambda part: (loads[part], part))
-        loads[lightest] += weight(entry)
+        loads[lightest] += weight[entry]
         owner[entry] = lightest
     return [entry for entry in entries if owner[entry] == index - 1]
+
+
+def entry_seconds(cases: Sequence[Case], entries: Sequence[str]) -> dict[str, float]:
+    """Each run entry's measured seconds: the sum of its test cases' JUnit times (setup and
+    teardown included), a whole file's every test, a picked test's own."""
+    wanted = set(entries)
+    totals: dict[str, float] = {}
+    for case in cases:
+        test = re.sub(r"\[.*\]$", "", case.nodeid)
+        key = test if test in wanted else case.nodeid.split("::", 1)[0]
+        if key in wanted:
+            totals[key] = totals.get(key, 0.0) + case.seconds
+    return {key: round(totals[key], 1) for key in sorted(totals)}
+
+
+def durations_line(report: Report, entries: Sequence[str], commit: str = "") -> str:
+    """One JSON line of the run's measured seconds per entry, for DURATIONS_FILE: CI prints
+    it in each part's log, and `durations` reads it back from `gh run view --log`."""
+    return json.dumps(
+        {
+            "kind": DURATIONS_KIND,
+            "label": report.label,
+            "commit": commit,
+            "seconds": entry_seconds(report.cases, entries),
+        }
+    )
+
+
+def read_durations_lines(text: str) -> list[dict[str, Any]]:
+    """Every durations line in a log (a `gh run view --log` prefixes each line with the job,
+    the step and a time stamp)."""
+    found = []
+    for line in text.splitlines():
+        start = line.find('{"kind": "' + DURATIONS_KIND + '"')
+        if start >= 0:
+            found.append(json.loads(line[start:].strip()))
+    return found
+
+
+def merged_durations(
+    known: Mapping[str, float], lines: Sequence[Mapping[str, Any]], root: Path = ROOT
+) -> dict[str, float]:
+    """The known times with each newly measured one in its place; an entry whose file is
+    gone is dropped."""
+    merged = dict(known)
+    for line in lines:
+        for entry, seconds in line["seconds"].items():
+            merged[entry] = round(float(seconds), 1)
+    return {
+        entry: merged[entry]
+        for entry in sorted(merged)
+        if (root / entry.split("::", 1)[0]).is_file()
+    }
 
 
 def _kill_tree(process: subprocess.Popen[bytes]) -> None:
@@ -541,8 +634,30 @@ def command_pytest(args: argparse.Namespace) -> int:
     rerun = environment_rerun_allowed(args.env_rerun)
     with lock_unless(args.no_lock, args.label):
         report = run_with_environment_rerun(targets, args.label, rerun, options)
-    emit(summarize(report, commit_label()), RESULTS / args.label)
+    commit = commit_label()
+    emit(summarize(report, commit), RESULTS / args.label)
+    (RESULTS / args.label / "durations.json").write_text(
+        durations_line(report, targets, commit) + "\n", encoding="utf-8"
+    )
     return report_exit(report)
+
+
+def command_durations(args: argparse.Namespace) -> int:
+    """make test-durations: DURATIONS_FILE updated from the durations lines of CI logs."""
+    lines = [line for log in args.logs for line in read_durations_lines(log.read_text("utf-8"))]
+    if not lines:
+        print(f"No durations line in {', '.join(str(log) for log in args.logs)}.")
+        return 2
+    merged = merged_durations(load_durations(ROOT), lines, ROOT)
+    commits = sorted({str(line.get("commit", "")) for line in lines} - {""})
+    body = {"source": f"CI parts {', '.join(commits) or 'of an unknown commit'}", "seconds": merged}
+    (ROOT / DURATIONS_FILE).write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
+    measured = sum(len(line["seconds"]) for line in lines)
+    print(
+        f"{DURATIONS_FILE}: {measured} measured entries from {len(lines)} parts; "
+        f"{len(merged)} kept."
+    )
+    return 0
 
 
 def lock_unless(skip: bool, label: str) -> contextlib.AbstractContextManager[None]:
@@ -930,6 +1045,9 @@ def parser() -> argparse.ArgumentParser:
     prove.add_argument("--timeout", type=float, default=15 * 60)
     prove.add_argument("--no-lock", action="store_true")
     prove.add_argument("files", nargs="*", help="source files of the fix, restored to the base")
+
+    durations = sub.add_parser("durations", help=f"update {DURATIONS_FILE} from CI logs")
+    durations.add_argument("logs", nargs="+", type=Path, help="`gh run view <id> --log` output")
     return main
 
 
@@ -944,6 +1062,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return command_pytest(args)
         if args.command == "changed":
             return command_changed(args)
+        if args.command == "durations":
+            return command_durations(args)
         return command_prove(args)
     except (LockTimeout, RuntimeError) as error:
         # A lock held too long, or a git ref that does not resolve: said, never a pass.

@@ -55,6 +55,7 @@ GUARDS: dict[str, tuple[str, ...]] = {
         "services/api/tests/test_ci_gate.py",
     ),
     "scripts/changed_tests.py": ("services/api/tests/test_changed_tests.py",),
+    "scripts/env_status.py": ("services/api/tests/test_env_status.py",),
     "scripts/reset.sh": ("tests/test_smoke.py",),
     ".github/workflows/ci.yml": ("services/api/tests/test_ci_gate.py", "tests/test_smoke.py"),
 }
