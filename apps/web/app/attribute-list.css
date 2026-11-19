@@ -1618,7 +1618,7 @@ button.tar-head:focus-visible:not(:disabled) {
 }
 
 .ta.is-embedded .tar-review-text p {
-  max-width: 66ch;
+  max-width: 72ch;
   margin: 0;
   color: var(--text-secondary);
   font-size: var(--fs-md);
@@ -1720,6 +1720,13 @@ button.tar-head:focus-visible:not(:disabled) {
   text-decoration-color: var(--border-strong);
 }
 
+/* Accept all and what it takes with it, kept together. */
+.ta.is-embedded .tar-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
 /* What Accept all takes with it, beside it: small, muted, never only on hover. */
 .ta.is-embedded .tar-all-note {
   color: var(--text-tertiary);
@@ -1776,6 +1783,30 @@ button.tar-head:focus-visible:not(:disabled) {
 }
 
 .ta.is-embedded .tar-top > button.tar-head:hover {
+  background: transparent;
+}
+
+/* Each part keeps its own column, so the chips and carets line up down the list whether
+   or not a row shows the quick Accept (design review, 19 November 2026). */
+.ta.is-embedded .tar-top > .tar-head {
+  grid-column: 1;
+}
+
+.ta.is-embedded .tar-top > .tar-quick {
+  grid-column: 2;
+}
+
+.ta.is-embedded .tar-top > .tar-chip {
+  grid-column: 3;
+  justify-self: end;
+}
+
+.ta.is-embedded .tar-top > .tar-caret {
+  grid-column: 4;
+}
+
+/* A removed row decides nothing: no hover. */
+.ta.is-embedded .tar.is-gone .tar-top:hover {
   background: transparent;
 }
 
@@ -1883,6 +1914,26 @@ button.tar-head:focus-visible:not(:disabled) {
   flex: 1 1 auto;
 }
 
+/* Said where Remove would be on the control's last attribute. */
+.ta.is-embedded .tar-keeps-one {
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+/* The criteria's labels and an assumption's, one muted style in one column (the approved
+   prototype: Tested, Passes, Fails, Judgment, Assumes). */
+.ta.is-embedded .tc.is-flat .tc-rules dt,
+.ta.is-embedded .tc.is-flat .tc-rules .is-pass dt,
+.ta.is-embedded .tc.is-flat .tc-rules .is-fail dt {
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+
+/* The assumptions continue the criteria's rows at the criteria's own gap. */
+.ta.is-embedded .tc.is-flat > .tc-rules + .tas-list.is-rows {
+  margin-top: calc(0.3rem - 0.45rem);
+}
+
 .ta.is-embedded .tar-link {
   height: auto;
   padding: 0;
@@ -1946,8 +1997,8 @@ button.tar-head:focus-visible:not(:disabled) {
 }
 
 .ta.is-embedded .tas-row-label {
-  color: var(--text-secondary);
-  font-weight: 600;
+  color: var(--text-tertiary);
+  font-weight: 400;
 }
 
 .ta.is-embedded .tas-row-body {
@@ -2035,6 +2086,13 @@ button.tar-head:focus-visible:not(:disabled) {
   .ta.is-embedded .tar-acts-gap {
     flex-basis: 100%;
     height: 0;
+  }
+
+  /* On its own line: [Accept all] 2 unconfirmed assumptions. */
+  .ta.is-embedded .tar-all {
+    flex: 1 1 100%;
+    flex-direction: row-reverse;
+    justify-content: flex-end;
   }
 }
 

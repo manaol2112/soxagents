@@ -866,8 +866,9 @@ export function rowAssumptionWords(
   const conflicts = waiting.filter((each) => each.kind === "CONFLICT").length;
   const assumed = waiting.length - conflicts;
   return [
-    assumed > 0 ? `${assumed} assumption${assumed === 1 ? "" : "s"}` : "",
-    conflicts > 0 ? `${conflicts} conflict${conflicts === 1 ? "" : "s"}` : "",
+    // The number and its noun never part at a line end ("1 assumption").
+    assumed > 0 ? `${assumed} assumption${assumed === 1 ? "" : "s"}` : "",
+    conflicts > 0 ? `${conflicts} conflict${conflicts === 1 ? "" : "s"}` : "",
   ]
     .filter((part) => part !== "")
     .join(" · ");
@@ -888,12 +889,16 @@ export function rowOriginLine(row: UnifiedRow): string {
 
 /** What a row's open body offers, so the view only lays it out. Only what can succeed is
  * offered: a control keeps at least one attribute, and a row a conflict holds is not
- * accepted until the conflict is decided (B1l point 6). */
+ * accepted until the conflict is decided (B1l point 6). One Edit (design review, 19
+ * November 2026): on an approved attribute it edits the criteria being reviewed, and its
+ * wording is a quiet link; on the agent's proposal it edits the proposed wording. */
 export type RowOffer = {
   /** The primary action: accept the row, write its criteria, or none. */
   primary: "ACCEPT" | "WRITE" | null;
-  /** Edit: the attribute's wording, in the Edit attribute dialog. */
-  edit: boolean;
+  /** Edit: the criteria's own editor, or the wording in the Edit attribute dialog. */
+  edit: "CRITERIA" | "WORDING" | null;
+  /** "Edit wording", a quiet link beside "Compare with standard" (an approved attribute). */
+  editWording: boolean;
   /** The quiet action, in plain words: remove the attribute (asked inline first), not add
    * the agent's addition, or keep the wording or the attribute the agent would change. */
   decline: {
@@ -903,9 +908,12 @@ export type RowOffer = {
   } | null;
   /** The agent suggests removing the attribute: accepting it is "Remove", asked inline. */
   acceptsRemoval: boolean;
-  /** The criteria's own editor (an approved attribute's that has criteria). */
-  editCriteria: boolean;
+  /** Said where Remove would be: the last attribute is never removed. */
+  keepsOne: boolean;
 };
+
+/** Said in place of Remove on the control's last attribute. */
+export const KEEPS_ONE = "A control keeps at least one attribute.";
 
 export function rowOffer(
   row: UnifiedRow,
@@ -921,34 +929,54 @@ export function rowOffer(
           : state === "MISSING"
             ? "WRITE"
             : null,
-      edit: true,
+      // With no criteria yet, "Write criteria" is the one way into the editor.
+      edit: state === "MISSING" ? null : "CRITERIA",
+      editWording: true,
       decline: options.lastOne
         ? null
         : { label: "Remove", decision: "RETIRE", confirm: true },
       acceptsRemoval: false,
-      editCriteria: state !== "MISSING",
+      keepsOne: options.lastOne,
     };
   }
   if (kind === "REMOVAL") {
     return {
       primary: null,
-      edit: false,
+      edit: null,
+      editWording: false,
       decline: { label: "Keep", decision: "REJECT", confirm: false },
       acceptsRemoval: !options.held && !options.lastOne,
-      editCriteria: false,
+      keepsOne: options.lastOne,
     };
   }
   return {
     primary: options.held ? null : "ACCEPT",
-    edit: true,
+    edit: "WORDING",
+    editWording: false,
     decline: {
       label: kind === "ADDED" ? "Don't add" : "Keep current wording",
       decision: "REJECT",
       confirm: false,
     },
     acceptsRemoval: false,
-    editCriteria: false,
+    keepsOne: false,
   };
+}
+
+/** The row to review after one just decided (design review, 19 November 2026): the next
+ * one below it that waits on a person, then, only past the end, the first from the top;
+ * null when none is left. `decided` holds the rows decided in this visit, that one too. */
+export function nextToReview(
+  rows: readonly UnifiedRow[],
+  after: string,
+  decided: ReadonlySet<string>,
+): string | null {
+  const waits = (row: UnifiedRow) =>
+    !decided.has(row.item.id) && unifiedState(row, false) !== "ACCEPTED";
+  const at = rows.findIndex((row) => row.item.id === after);
+  const below = at < 0 ? [] : rows.slice(at + 1);
+  const above = at < 0 ? rows : rows.slice(0, at);
+  return (below.find(waits) ?? above.find(waits))?.item.id ?? null;
 }
 
 /** The list header's muted line, beside the count (approved prototype, 19 November 2026):

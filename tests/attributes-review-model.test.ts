@@ -21,8 +21,10 @@ import {
   type GoneRow,
   historyWords,
   JUST_DECIDED,
+  KEEPS_ONE,
   listBasisLine,
   listCount,
+  nextToReview,
   removeQuestion,
   reviewedWords,
   reviewList,
@@ -139,7 +141,7 @@ describe("the rows' words", () => {
     });
     assert.equal(
       second && rowOriginLine(second),
-      "Library standard · tailored by the agent · 1 assumption",
+      "Library standard · tailored by the agent · 1 assumption",
     );
     assert.equal(
       third && rowOriginLine(third),
@@ -154,7 +156,8 @@ describe("the rows' words", () => {
           assumption("z", { status: "ACCEPTED_WITH_ATTRIBUTE" }),
         ],
       }),
-      "1 assumption · 1 conflict",
+      // The number and its noun never part at a line end.
+      "1 assumption · 1 conflict",
     );
   });
 
@@ -252,6 +255,18 @@ describe("the row that opens", () => {
     assert.equal(firstUnifiedToDecide(rows, new Set(["b"])), "c");
     assert.equal(firstUnifiedToDecide(rows, new Set(["b", "c"])), null);
   });
+
+  it("after a decision, opens the next row below it, then wraps to the top", () => {
+    const four = unifiedRows({
+      approved: [assuming, plain, attribute("e"), attribute("f")],
+      proposed: [],
+    });
+    // A quick Accept on the third row: the fourth is next, not the first.
+    assert.equal(nextToReview(four, "e", new Set(["e"])), "f");
+    // On the last row: back to the first still to review.
+    assert.equal(nextToReview(four, "f", new Set(["f"])), "b");
+    assert.equal(nextToReview(four, "f", new Set(["b", "c", "e", "f"])), null);
+  });
 });
 
 describe("what a row offers", () => {
@@ -263,24 +278,28 @@ describe("what a row offers", () => {
       replacesId: kind === "ADD" ? null : "b",
     });
 
-  it("offers Accept, Edit and Remove, Remove asked inline first", () => {
+  it("offers Accept, one Edit and Remove, Remove asked inline first", () => {
     assert.ok(approved !== undefined);
+    // One Edit (design review, 19 November 2026): on an approved attribute it edits the
+    // criteria under review; the wording is the quiet "Edit wording" link.
     assert.deepEqual(rowOffer(approved, { held: false, lastOne: false }), {
       primary: "ACCEPT",
-      edit: true,
+      edit: "CRITERIA",
+      editWording: true,
       decline: { label: "Remove", decision: "RETIRE", confirm: true },
       acceptsRemoval: false,
-      editCriteria: true,
+      keepsOne: false,
     });
     assert.equal(removeQuestion("B"), "Remove attribute B from this control?");
   });
 
   it("offers only what can succeed: no Remove for the last, no Accept while held", () => {
     assert.ok(approved !== undefined);
-    assert.equal(
-      rowOffer(approved, { held: false, lastOne: true }).decline,
-      null,
-    );
+    const last = rowOffer(approved, { held: false, lastOne: true });
+    assert.equal(last.decline, null);
+    // Said in its place, not left to disappear.
+    assert.equal(last.keepsOne, true);
+    assert.equal(KEEPS_ONE, "A control keeps at least one attribute.");
     assert.equal(
       rowOffer(approved, { held: true, lastOne: false }).primary,
       null,
@@ -292,7 +311,9 @@ describe("what a row offers", () => {
     assert.ok(missing !== undefined);
     const offer = rowOffer(missing, { held: false, lastOne: true });
     assert.equal(offer.primary, "WRITE");
-    assert.equal(offer.editCriteria, false);
+    // "Write criteria" is the way into the editor: no second Edit beside it.
+    assert.equal(offer.edit, null);
+    assert.equal(offer.editWording, true);
   });
 
   it("keeps the agent's proposals' approve and reject, in plain words", () => {
@@ -312,6 +333,12 @@ describe("what a row offers", () => {
       rowOffer(reworded, { held: false, lastOne: false }).decline?.label,
       "Keep current wording",
     );
+    // A proposal's Edit is its proposed wording, with no second link.
+    for (const row of [added, reworded]) {
+      const offer = rowOffer(row, { held: false, lastOne: false });
+      assert.equal(offer.edit, "WORDING");
+      assert.equal(offer.editWording, false);
+    }
     const [removal] = unifiedRows({
       approved: [assuming, plain],
       proposed: [proposal("RETIRE")],
@@ -401,6 +428,27 @@ describe("the step around the list", () => {
     );
     assert.equal(setLine(5, 0, ""), "5 accepted.");
   });
+
+  it("keeps each part of a row's top line in its own column", () => {
+    // Design review, 19 November 2026: with no quick Accept (an open, accepted or removed
+    // row) the chip fell into the quick Accept's column and the caret into the chip's.
+    const css = readFileSync("apps/web/app/attribute-list.css", "utf8");
+    const at = css.indexOf("Each part keeps its own column");
+    assert.ok(at > 0);
+    const block = css.slice(at, css.indexOf("@media (max-width: 640px)", at));
+    for (const [part, column] of [
+      ["tar-head", "1"],
+      ["tar-quick", "2"],
+      ["tar-chip", "3"],
+      ["tar-caret", "4"],
+    ] as const) {
+      const rule = `.ta.is-embedded .tar-top > .${part} {`;
+      const found = block.indexOf(rule);
+      assert.ok(found >= 0, part);
+      const body = block.slice(found, block.indexOf("}", found));
+      assert.ok(body.includes(`grid-column: ${column};`), part);
+    }
+  });
 });
 
 describe("Remove, never Retire, for a control's attribute", () => {
@@ -456,5 +504,15 @@ describe("the old words do not come back on this step", () => {
     assert.match(step, /if \(await onAccept\(\[each\]\)\) \{\s*settle\(/);
     assert.match(step, /if \(await onDecide\(decision, each\.item\)\) \{/);
     assert.doesNotMatch(step, /Undo/);
+  });
+
+  it("offers Run again once the attributes are set only where it would do something", () => {
+    // Design review, 19 November 2026 (P11).
+    assert.match(
+      step,
+      /heading\?\.kind !== "set" \|\| context\.attributesRerunUseful === true/,
+    );
+    // Accept all and its note are kept together when the bar wraps (design review).
+    assert.match(step, /<span className="tar-all">/);
   });
 });

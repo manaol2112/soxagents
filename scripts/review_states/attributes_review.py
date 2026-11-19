@@ -4,7 +4,7 @@ A second control of the seeded engagement (ITGC-AC-02) whose understanding is co
 whose approved attributes carry criteria the agent tailored, none accepted yet: the state
 the "Review attributes" redesign opens on. Two attributes rest on an assumption the agent
 stated and no person confirmed; one attribute has a long wording, to show how a long row
-wraps.
+wraps. Two attributes are added through the API, so the list has five rows to review.
 
 Built with the test suite's own helpers, as the API tests build the same state
 (tests/test_understanding_once.py: the understanding completed once, the criteria marked as
@@ -14,7 +14,7 @@ the agent's, the assumptions recorded through attribute_assumptions.record).
 from typing import Any
 from uuid import UUID
 
-from test_attributes_follow_understanding import _answer_required
+from test_attributes_follow_understanding import _answer_required, _path
 from test_evidence_plans import _control
 from test_understanding_once import _assume, _completed_now
 from test_walkthrough_answers import _values_and_questions_answered
@@ -23,7 +23,8 @@ from ai_workforce_api.db import connect
 
 CONTROL = "ITGC-AC-02"
 
-# Synthetic criteria, one set per attribute in list order (the rest reuse the last).
+# Synthetic criteria, one set per attribute in list order (the third is the long wording;
+# the last two are the attributes added below), each matching its attribute's wording.
 CRITERIA = [
     (
         "For each sampled grant in the system log, a request in the access request tool "
@@ -41,11 +42,30 @@ CRITERIA = [
         True,
     ),
     (
-        "The approval date on the request is compared with the grant date in the log.",
-        "The approval is dated on or before the grant.",
-        "The access was granted before it was approved.",
+        "The role or permission in the log is compared with the access the request approved.",
+        "The access granted matches the access approved.",
+        "More access, or different access, was granted than was approved.",
+        True,
+    ),
+    (
+        "The approver is compared with the user and with the administrator who made the grant.",
+        "Three different people requested, approved and granted the access.",
+        "The user approved their own access, or the administrator approved the grant.",
         False,
     ),
+    (
+        "The request date in the access request tool is compared with the grant date in the log.",
+        "The request is dated on or before the grant.",
+        "The access was granted before it was requested.",
+        False,
+    ),
+]
+
+# Two more attributes, added as the team would, so the list has five rows to review (the
+# approved prototype's count), enough for "Accept remaining n" after a row is decided.
+ADDED = [
+    "The approver is not the user, and the administrator who granted the access did not approve it",
+    "The access request was raised before the access was granted",
 ]
 
 LONG_TEXT = (
@@ -60,6 +80,9 @@ def build(seed: Any) -> None:
     _values_and_questions_answered(seed.database, seed.team, control)
     _answer_required(seed.database, seed.team, control, seed.client)
     _completed_now(seed.database, control)
+    for text in ADDED:
+        added = seed.client.post(f"{_path(seed.team, control)}/attributes", json={"text": text})
+        assert added.status_code == 200, added.text
     with connect(seed.database.url) as connection:
         rows = connection.execute(
             "SELECT id, code FROM control_attributes WHERE engagement_control_id = %s "

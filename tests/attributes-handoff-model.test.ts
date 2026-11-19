@@ -309,12 +309,12 @@ describe("the Attributes step once settled (product owner, 17 November 2026)", (
     assert.equal(design?.primary, false);
     assert.equal(scope?.primary, true);
     assert.equal(scope?.action, "Review the plan");
-    // Rewritten 19 November 2026 (Review attributes): the counts, then what comes next.
-    // Old: "… · Next: Scope & Sampling, awaiting approval". New: a sentence after the counts.
-    assert.equal(
-      shown?.line,
-      "5 accepted. Next: Scope & Sampling, awaiting approval.",
-    );
+    // Rewritten 19 November 2026 (Review attributes). Old: "… · Next: Scope & Sampling,
+    // awaiting approval".
+    // Rewritten again 19 November 2026 (design review): the button and the footer say
+    // what is next, so the card says the counts alone unless both branches can start.
+    // Old: "5 accepted. Next: Scope & Sampling, awaiting approval.". New: "5 accepted.".
+    assert.equal(shown?.line, "5 accepted.");
     assert.equal(shown?.next.label, "Continue to Scope & Sampling");
     assert.deepEqual(scope?.pill.label, "Awaiting approval");
   });

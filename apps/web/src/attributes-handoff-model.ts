@@ -52,7 +52,8 @@ export type Handoff = {
   title: string;
   /** "5 accepted. D&I Evidence and Scope & Sampling can start." (setLine). */
   line: string;
-  /** What follows the counts: both branches can start, or what comes next. */
+  /** What follows the counts: that both branches can start, or "" (the button says what
+   * is next). */
   follows: string;
   /** The one way on: the step with the person's work in it. */
   next: { key: HandoffCard["key"]; label: string };
@@ -291,23 +292,16 @@ export function handoff(input: {
         ? "designevidence"
         : "testdesign";
   const primary = primaryKey === "designevidence" ? designWork : scopeWork;
-  const toAccept =
-    input.requests.mode === "list" && !input.requests.working
-      ? input.requests.accept.length
-      : 0;
-  // What comes next, in a few words: the requests that wait, or the step and where it stands.
-  const nextWords =
-    primaryKey === "designevidence" && toAccept > 0
-      ? `${toAccept} D&I request${toAccept === 1 ? "" : "s"} to accept`
-      : `${primary.title}, ${primary.pill.label.charAt(0).toLowerCase()}${primary.pill.label.slice(1)}`;
   // Both branches open on the person's work, or not started: they can start (approved
-  // prototype, 19 November 2026); otherwise what comes next, in the branch's own words.
+  // prototype, 19 November 2026).
   const bothStart = cards.every(
     (card) => forThePerson(card.pill.tone) && !card.pill.working,
   );
+  // Only when both can start: otherwise the button and the footer already say what is
+  // next, and the card says the counts alone (design review, 19 November 2026).
   const follows = bothStart
     ? `${designWork.title} and ${scopeWork.title} can start.`
-    : `Next: ${nextWords}.`;
+    : "";
   return {
     title: SET_TITLE,
     line: setLine(input.approved.length, 0, follows),

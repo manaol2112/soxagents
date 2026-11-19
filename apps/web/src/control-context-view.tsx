@@ -60,10 +60,12 @@ import {
   historyWords,
   holdWords,
   JUST_DECIDED,
+  KEEPS_ONE,
   type LibraryUpdate,
   listBasisLine,
   listCount,
   NATURE_LABELS,
+  nextToReview,
   offersAgentRun,
   PROCEDURE_PHASES,
   type ProcessStep,
@@ -1927,20 +1929,30 @@ function EmbeddedAttributes({
   };
   // The decided row's buttons close with it: the focus moves to the row that opens next
   // (its wording), or to the list's count once nothing is left to review, never to the page.
-  const [moved, setMoved] = useState(0);
+  const [moved, setMoved] = useState<{ to: string | null; count: number }>({
+    to: null,
+    count: 0,
+  });
   const countRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
-    if (moved === 0) {
+    if (moved.count === 0) {
       return;
     }
     const next =
-      first !== null
+      moved.to !== null
         ? document
-            .getElementById(attributeAnchor(first))
+            .getElementById(attributeAnchor(moved.to))
             ?.querySelector<HTMLButtonElement>("button.tar-head")
         : null;
     (next ?? countRef.current)?.focus();
-  }, [moved, first]);
+  }, [moved]);
+  // Opens the row to review after the one just decided (the next below it, then from the
+  // top), and moves the focus to it once it shows.
+  function openNext(after: string) {
+    const next = nextToReview(rows, after, new Set([...decided, after]));
+    onOpen(new Set(next !== null ? [next] : []));
+    setMoved((before) => ({ to: next, count: before.count + 1 }));
+  }
 
   // Once the server confirmed a decision: the row says so, and the next to review opens
   // (the list's first that waits, past the rows decided in this visit).
@@ -1968,8 +1980,7 @@ function EmbeddedAttributes({
     setSaid(
       `Attribute ${each.letter}: ${JUST_DECIDED[outcome].toLowerCase()}.`,
     );
-    onOpen(null);
-    setMoved((count) => count + 1);
+    openNext(each.item.id);
   }
   async function accept(each: UnifiedRow) {
     if (await onAccept([each])) {
@@ -1987,7 +1998,7 @@ function EmbeddedAttributes({
         setConfirming(null);
         setSaid(`Attribute ${each.letter}: kept as it was.`);
         onOpen(null);
-        setMoved((count) => count + 1);
+        setMoved((before) => ({ to: first, count: before.count + 1 }));
       }
     }
   }
@@ -2000,7 +2011,7 @@ function EmbeddedAttributes({
       setConfirming(null);
       setSaid(`${sent.length} attributes accepted.`);
       onOpen(new Set());
-      setMoved((count) => count + 1);
+      setMoved((before) => ({ to: null, count: before.count + 1 }));
     }
   }
 
@@ -2191,17 +2202,24 @@ function EmbeddedAttributes({
                 Remove
               </button>
             ) : null}
-            {offer.edit ? (
+            {offer.edit === "CRITERIA" && criteriaForm !== null ? (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                disabled={locked}
+                aria-controls={criteriaForm.formId}
+                onClick={criteriaForm.edit}
+              >
+                Edit
+              </button>
+            ) : null}
+            {offer.edit === "WORDING" ? (
               <button
                 type="button"
                 className="btn btn-secondary btn-sm"
                 disabled={locked}
                 onClick={() =>
-                  onDialog({
-                    mode: kind === "APPROVED" ? "edit" : "review",
-                    attribute: item,
-                    letter,
-                  })
+                  onDialog({ mode: "review", attribute: item, letter })
                 }
               >
                 Edit
@@ -2229,16 +2247,20 @@ function EmbeddedAttributes({
                   : offer.decline.label}
               </button>
             ) : null}
+            {offer.keepsOne ? (
+              <span className="tar-keeps-one">{KEEPS_ONE}</span>
+            ) : null}
             <span className="tar-acts-gap" />
-            {offer.editCriteria && criteriaForm !== null ? (
+            {offer.editWording ? (
               <button
                 type="button"
                 className="tar-link"
                 disabled={locked}
-                aria-controls={criteriaForm.formId}
-                onClick={criteriaForm.edit}
+                onClick={() =>
+                  onDialog({ mode: "edit", attribute: item, letter })
+                }
               >
-                Edit criteria
+                Edit wording
               </button>
             ) : null}
             {previousLink}
@@ -2389,6 +2411,11 @@ function EmbeddedAttributes({
   }
 
   const basisLine = listBasisLine(rows);
+  // Once the attributes are set, "Run again" is offered only where the server says it would
+  // do something (design review, 19 November 2026); the fold below keeps it reachable.
+  const offersRun =
+    offersAgentRun(agentRan(context), context.attributesRerunUseful) &&
+    (heading?.kind !== "set" || context.attributesRerunUseful === true);
   const howId = `${id}-how`;
   const removedNow = gone.filter((item) => item.outcome === "REMOVED").length;
   return (
@@ -2492,10 +2519,7 @@ function EmbeddedAttributes({
               <UiIcon name="plus" size={13} />
               Add
             </button>
-            {offersAgentRun(
-              agentRan(context),
-              context.attributesRerunUseful,
-            ) ? (
+            {offersRun ? (
               <button
                 type="button"
                 className="btn btn-ghost btn-sm"
@@ -2510,26 +2534,33 @@ function EmbeddedAttributes({
                     : "Propose with the agent"}
               </button>
             ) : null}
-            {showAllNote ? (
-              <span
-                className="tar-all-note"
-                id={`ta-accept-note-${ids.controlId}`}
-              >
-                {allNote}
+            {/* Accept all and what it takes with it, kept together when the bar wraps. */}
+            {showAllNote || offersAll ? (
+              <span className="tar-all">
+                {showAllNote ? (
+                  <span
+                    className="tar-all-note"
+                    id={`ta-accept-note-${ids.controlId}`}
+                  >
+                    {allNote}
+                  </span>
+                ) : null}
+                {offersAll ? (
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    disabled={locked}
+                    aria-describedby={
+                      showAllNote
+                        ? `ta-accept-note-${ids.controlId}`
+                        : undefined
+                    }
+                    onClick={() => void acceptAll()}
+                  >
+                    {busyKey === "accept-all" ? "Accepting…" : allWords.label}
+                  </button>
+                ) : null}
               </span>
-            ) : null}
-            {offersAll ? (
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                disabled={locked}
-                aria-describedby={
-                  showAllNote ? `ta-accept-note-${ids.controlId}` : undefined
-                }
-                onClick={() => void acceptAll()}
-              >
-                {busyKey === "accept-all" ? "Accepting…" : allWords.label}
-              </button>
             ) : null}
           </span>
         ) : null}
@@ -2669,11 +2700,11 @@ function EmbeddedAttributes({
             a changed or removed attribute keeps its earlier wording in the
             history.
           </p>
-          {canAct &&
-          !offersAgentRun(agentRan(context), context.attributesRerunUseful) ? (
+          {canAct && !offersRun ? (
             <p>
-              Nothing the agents read has changed since their last run, so
-              running them again is not offered above.{" "}
+              {context.attributesRerunUseful === false
+                ? "Nothing the agents read has changed since their last run, so running them again is not offered above. "
+                : ""}
               <button
                 type="button"
                 className="ur-skip"
