@@ -144,7 +144,8 @@ describe("a change the subscription refused", () => {
     );
     assert.equal(
       refusalWords({ kind: "limit", resource: "controls", allowed: 5 }),
-      "The free trial includes 5 controls. To add more, explore plans.",
+      // Each engagement's allowance (19 November 2026), as Map controls says it.
+      "The free trial includes 5 controls per engagement. To add more, explore plans.",
     );
     assert.equal(
       refusalWords({

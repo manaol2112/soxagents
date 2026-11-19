@@ -2933,6 +2933,85 @@ button.ry-link:hover {
   }
 }
 
+/* The free trial's allowance of controls, above the list (Map controls, 19 November
+   2026): what the engagement may still map, before anything is chosen. */
+.mc-allowance {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.75rem;
+  padding: 0.55rem 0.85rem;
+  color: var(--info);
+  background: var(--info-soft);
+  border: 1px solid var(--info-border);
+  border-radius: var(--radius-lg);
+}
+
+.mc-allowance.tone-warning {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: var(--warning-border);
+}
+
+.mc-allowance > svg {
+  flex: none;
+}
+
+.mc-allowance-text {
+  display: grid;
+  flex: 1;
+  gap: 0.1rem;
+  min-width: 12rem;
+}
+
+.mc-allowance-text strong {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.mc-allowance-text small {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+.mc-allowance-link {
+  color: var(--accent-text);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  display: inline-block;
+  padding-block: 0.25rem;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* The footer's status: a refusal above the count, so the count and its reason stay. */
+.mc-foot-status {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+/* Why Map is held: beside the count, in the warning tone. */
+.mc-held {
+  display: block;
+  color: var(--warning);
+  font-weight: 500;
+}
+
+/* Accept recommended held while the trial has no room: drawn as a disabled button. */
+.mc-advice button[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.5;
+  box-shadow: none;
+}
+
+.as-problem a {
+  color: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+}
+
 /* The agent's recommendations for the system, above the list (Map controls). */
 .mc-advice {
   display: flex;
