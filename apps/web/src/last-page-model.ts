@@ -11,6 +11,26 @@ const PASSING = new Set(["notice", "create", "edit", "manage", "new"]);
 export function rememberedPath(
   params: Record<string, string | string[] | undefined>,
 ): string | null {
+  const query = pageQuery(params);
+  if (query.getAll("organization").length !== 1) {
+    return null;
+  }
+  const path = `/?${query.toString()}`;
+  return path.length <= 2000 ? path : null;
+}
+
+/** The workspace address the person opened, without its passing parts: where signing in
+ * brings them back to (19 November 2026). "/" when nothing is left. */
+export function workspacePath(
+  params: Record<string, string | string[] | undefined>,
+): string {
+  const query = pageQuery(params).toString();
+  return query === "" ? "/" : `/?${query}`;
+}
+
+function pageQuery(
+  params: Record<string, string | string[] | undefined>,
+): URLSearchParams {
   const query = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
     if (PASSING.has(key)) {
@@ -22,11 +42,7 @@ export function rememberedPath(
       }
     }
   }
-  if (query.getAll("organization").length !== 1) {
-    return null;
-  }
-  const path = `/?${query.toString()}`;
-  return path.length <= 2000 ? path : null;
+  return query;
 }
 
 /** Whether the workspace goes back to the last page: only when it is opened with no

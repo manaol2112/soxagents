@@ -1,4 +1,7 @@
-// The sign-in page: which providers the API offers, and what a failed attempt says.
+// The sign-in page: which providers the API offers, what a failed attempt says, and where
+// signing in brings the person back to.
+
+import { localPath } from "./browser-url.ts";
 
 export type ProviderId = "google" | "entra";
 
@@ -60,12 +63,65 @@ export function providerHref(
   return match === undefined ? null : `${apiBase}${match.loginPath}`;
 }
 
+/** The parameter that carries the return address, here and on the API's sign-in starts. */
+export const RETURN_PARAM = "next";
+
+// A workspace address: "/" or "/?..." in printable ASCII with no backslash. The API keeps
+// the same rule (services/api/ai_workforce_api/auth.py, return_path).
+const WORKSPACE_ADDRESS = /^\/(?:\?[\x21-\x5b\x5d-\x7e]*)?$/;
+
+/**
+ * Where signing in brings the person back to, or null for the workspace home: only a
+ * workspace address on this app, at most 2000 characters (localPath). Anything that could
+ * leave the app ("//host", a scheme, a backslash, whitespace, a control character) or open
+ * another page is dropped, never followed (19 November 2026).
+ */
+export function returnAddress(value: unknown): string | null {
+  if (
+    typeof value !== "string" ||
+    localPath(value) === null ||
+    !WORKSPACE_ADDRESS.test(value)
+  ) {
+    return null;
+  }
+  return value;
+}
+
+/** The sign-in page for a signed-out visitor, carrying the page they asked for and, when
+ * there is one, the notice that says why they are there. */
+export function signInAddress(
+  path: string | null,
+  notice: SignInNotice | null = null,
+): string {
+  const query = new URLSearchParams();
+  if (notice !== null) {
+    query.set("notice", notice);
+  }
+  const kept = returnAddress(path);
+  if (kept !== null && kept !== "/") {
+    query.set(RETURN_PARAM, kept);
+  }
+  const text = query.toString();
+  return text === "" ? "/sign-in" : `/sign-in?${text}`;
+}
+
+/** A sign-in start (a provider or the preview, on the API) that comes back to `path`. The
+ * workspace home needs no return: it is where a sign-in lands anyway. */
+export function withReturn(href: string, path: string | null): string {
+  const kept = returnAddress(path);
+  if (kept === null || kept === "/") {
+    return href;
+  }
+  return `${href}?${new URLSearchParams({ [RETURN_PARAM]: kept }).toString()}`;
+}
+
 export type SignInNotice =
   | "failed"
   | "unlinked"
   | "disabled"
   | "unavailable"
-  | "throttled";
+  | "throttled"
+  | "expired";
 
 export const SIGN_IN_NOTICES: Record<SignInNotice, string> = {
   failed: "Sign-in did not complete. Try again.",
@@ -75,7 +131,27 @@ export const SIGN_IN_NOTICES: Record<SignInNotice, string> = {
   throttled:
     "Too many sign-in attempts from this network. Wait a few minutes and try again.",
   unavailable: "Sign-in is not available right now. Try again in a moment.",
+  expired: "Your session has ended.",
 };
+
+/** The sign-in card's lead line: where signing in returns to for a member sent here from
+ * the workspace, or the newcomer's line. A session that ended is never a newcomer. */
+export const SIGN_IN_LEADS = {
+  page: "You will return to the page you were on.",
+  workspace: "You will return to your workspace.",
+  newcomer:
+    "New here? Continue with your account and your workspace is created in the same step. No password to set.",
+} as const;
+
+export function signInLead(
+  returnTo: string | null,
+  notice: SignInNotice | null,
+): keyof typeof SIGN_IN_LEADS {
+  if (returnTo !== null && returnTo !== "/") {
+    return "page";
+  }
+  return notice === "expired" ? "workspace" : "newcomer";
+}
 
 export function parseSignInNotice(value: string | null): SignInNotice | null {
   if (
@@ -83,9 +159,33 @@ export function parseSignInNotice(value: string | null): SignInNotice | null {
     value === "unlinked" ||
     value === "disabled" ||
     value === "throttled" ||
-    value === "unavailable"
+    value === "unavailable" ||
+    value === "expired"
   ) {
     return value;
   }
   return null;
+}
+
+/**
+ * Where the workspace sends a visitor it cannot serve, or null to render it. A signed-out
+ * visitor never sees the workspace's frame (product owner, 19 November 2026): they sign in
+ * and come back to `path`. A first visit to the bare address, with no session at all, is a
+ * newcomer, who sees the landing page as before (docs/development.md). A session cookie the
+ * API no longer knows is a session that ended (expired or revoked: signing out removes the
+ * cookie), and the sign-in page says so. A member who is signed in and denied (403) still
+ * sees the workspace's own message.
+ */
+export function signedOutRedirect(input: {
+  signedOut: boolean;
+  hasSession: boolean;
+  path: string;
+}): string | null {
+  if (!input.signedOut) {
+    return null;
+  }
+  if (!input.hasSession && input.path === "/") {
+    return "/welcome";
+  }
+  return signInAddress(input.path, input.hasSession ? "expired" : null);
 }

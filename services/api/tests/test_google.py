@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from support import Database, unrestricted
 
-from ai_workforce_api.auth import workspace_name, workspace_slug
+from ai_workforce_api.auth import return_path, workspace_name, workspace_slug
 from ai_workforce_api.db import connect, transaction
 from ai_workforce_api.google import (
     GoogleIdentityProvider,
@@ -392,3 +392,134 @@ def test_a_sign_in_started_on_another_local_name_moves_to_the_callback_host_firs
     # never moves (every other sign-in test starts on one).
     again = client.get("http://127.0.0.1:8000/auth/google/login?aw_hop=1", follow_redirects=False)
     assert again.headers["location"].startswith("https://accounts.google.com/")
+
+
+# Signed-out visitors go to sign-in and come back to the page they asked for (product
+# owner, 19 November 2026). The return address is a workspace address on the web app, or
+# nothing: an address that could leave the app is dropped, never followed. The same list,
+# in the same order, as the web app's (tests/sign-in-return.test.ts, UNSAFE).
+DEEP_LINK = "/?organization=0b7f&project=9c2e&section=controls&control=ITGC-01&step=test"
+UNSAFE_RETURNS = [
+    "https://evil.example/",
+    "http:/evil.example",
+    "//evil.example/",
+    "///evil.example",
+    "/\\evil.example",
+    "/?x=\\evil",
+    "\\\\evil.example",
+    "javascript:alert(1)",
+    "/?x=a b",
+    "/?x=\tb",
+    "/?x=\nb",
+    "/?x=\rb",
+    "/?x=\x00",
+    "/?x=\x7f",
+    "/?x=café",
+    "/welcome",
+    "/sign-in?next=/",
+    "?organization=1",
+    " /",
+    "",
+    "/?" + "a" * 1999,
+]
+
+
+@pytest.mark.parametrize("unsafe", UNSAFE_RETURNS)
+def test_a_return_address_that_could_leave_the_workspace_is_dropped(unsafe: str) -> None:
+    assert return_path(unsafe) is None
+
+
+def test_a_workspace_address_is_kept_as_the_return() -> None:
+    assert return_path("/") == "/"
+    assert return_path(DEEP_LINK) == DEEP_LINK
+    assert return_path("/?" + "a" * 1998) is not None
+    assert return_path(None) is None
+    assert return_path(["/"]) is None
+
+
+def test_a_sign_in_returns_to_the_page_the_person_asked_for(migrated: Database) -> None:
+    client = TestClient(_app(migrated, app_base_url="http://localhost:3000/"))
+    started = client.get("/auth/google/login", params={"next": DEEP_LINK}, follow_redirects=False)
+    assert started.status_code == 302
+    # Kept with the attempt, never put in the provider's address.
+    assert "next" not in started.headers["location"]
+    finished = client.get(
+        "/auth/google/callback?code=good-code&state=google-state", follow_redirects=False
+    )
+    assert finished.status_code == 303
+    assert finished.headers["location"] == f"http://localhost:3000{DEEP_LINK}"
+    assert client.get("/auth/me").status_code == 200
+
+
+def test_a_sign_in_without_a_return_lands_on_the_workspace_home(migrated: Database) -> None:
+    client = TestClient(_app(migrated, app_base_url="http://localhost:3000/"))
+    client.get("/auth/google/login", follow_redirects=False)
+    finished = client.get(
+        "/auth/google/callback?code=good-code&state=google-state", follow_redirects=False
+    )
+    assert finished.headers["location"] == "http://localhost:3000/"
+
+
+@pytest.mark.parametrize("unsafe", UNSAFE_RETURNS)
+def test_an_unsafe_return_falls_back_to_the_workspace_home(migrated: Database, unsafe: str) -> None:
+    client = TestClient(_app(migrated, app_base_url="http://localhost:3000"))
+    client.get("/auth/google/login", params={"next": unsafe}, follow_redirects=False)
+    finished = client.get(
+        "/auth/google/callback?code=good-code&state=google-state", follow_redirects=False
+    )
+    assert finished.status_code == 303
+    assert finished.headers["location"] == "http://localhost:3000"
+
+
+def test_a_stored_return_is_checked_again_on_the_way_out(migrated: Database) -> None:
+    """The attempt row is the API's own, but the callback applies the rule again before it
+    redirects, so a row written any other way cannot send the person off the app."""
+    client = TestClient(_app(migrated, app_base_url="http://localhost:3000"))
+    client.get("/auth/google/login", params={"next": "/"}, follow_redirects=False)
+    with connect(migrated.url) as connection:
+        with transaction(connection) as cursor:
+            cursor.execute(
+                "UPDATE oidc_login_attempts SET flow = flow || %s::jsonb",
+                ('{"aw_return": "//evil.example/"}',),
+            )
+    finished = client.get(
+        "/auth/google/callback?code=good-code&state=google-state", follow_redirects=False
+    )
+    assert finished.headers["location"] == "http://localhost:3000"
+
+
+def test_a_failed_sign_in_keeps_the_return_for_the_next_try(migrated: Database) -> None:
+    client = TestClient(_app(migrated, app_base_url="http://localhost:3000/"))
+    client.get("/auth/google/login", params={"next": DEEP_LINK}, follow_redirects=False)
+    response = client.get(
+        "/auth/google/callback?code=bad-code&state=google-state", follow_redirects=False
+    )
+    assert response.status_code == 303
+    location = urlsplit(response.headers["location"])
+    assert location.path == "/sign-in"
+    assert parse_qs(location.query) == {"notice": ["failed"], "next": [DEEP_LINK]}
+
+
+def test_moving_to_the_callback_host_keeps_the_return(migrated: Database) -> None:
+    client = TestClient(_app(migrated, app_base_url="http://localhost:3000"))
+    first = client.get(
+        "http://127.0.0.1:8000/auth/google/login",
+        params={"next": DEEP_LINK},
+        follow_redirects=False,
+    )
+    location = urlsplit(first.headers["location"])
+    assert location.netloc == "localhost:8000"
+    assert parse_qs(location.query) == {"aw_hop": ["1"], "next": [DEEP_LINK]}
+    client.get(first.headers["location"], follow_redirects=False)
+    finished = client.get(
+        "http://localhost:8000/auth/google/callback?code=good-code&state=google-state",
+        follow_redirects=False,
+    )
+    assert finished.headers["location"] == f"http://localhost:3000{DEEP_LINK}"
+    # An unsafe return is not carried across the move.
+    moved = client.get(
+        "http://127.0.0.1:8000/auth/google/login",
+        params={"next": "//evil.example/"},
+        follow_redirects=False,
+    )
+    assert moved.headers["location"] == "http://localhost:8000/auth/google/login?aw_hop=1"

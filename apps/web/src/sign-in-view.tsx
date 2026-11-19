@@ -1,23 +1,29 @@
 import { GoogleMark, MicrosoftMark } from "./provider-marks";
 import {
+  SIGN_IN_LEADS,
   SIGN_IN_NOTICES,
   type SignInNotice,
   type SignInProviders,
+  signInLead,
+  withReturn,
 } from "./sign-in-model";
 import { UiIcon } from "./ui-icon";
 
 /**
  * The sign-in page. A Google or Microsoft account signs an existing member in; a
- * new person gets a workspace of their own on the same click.
+ * new person gets a workspace of their own on the same click. Sent here from a workspace
+ * address (`returnTo`), every way in comes back to it, and the lead says so.
  */
 export function SignInPage({
   providers,
   notice,
   apiBase,
+  returnTo,
 }: {
   providers: SignInProviders | null;
   notice: SignInNotice | null;
   apiBase: string;
+  returnTo: string | null;
 }) {
   const google = providers?.providers.find((item) => item.id === "google");
   const microsoft = providers?.providers.find((item) => item.id === "entra");
@@ -25,6 +31,13 @@ export function SignInPage({
   const shownNotice: SignInNotice | null =
     providers === null ? "unavailable" : notice;
   const nothing = providers !== null && !google && !microsoft && !preview;
+  const lead = (
+    <p className="si-lead">
+      {SIGN_IN_LEADS[signInLead(returnTo, shownNotice)]}
+    </p>
+  );
+  // An ended session says why the person is here before where they will return to.
+  const reasonFirst = shownNotice === "expired";
   return (
     <div className="si theme-light">
       <div className="si-glow" aria-hidden="true" />
@@ -36,25 +49,29 @@ export function SignInPage({
           Audit Workforce
         </a>
         <h1>Sign in</h1>
-        <p className="si-lead">
-          New here? Continue with your account and your workspace is created in
-          the same step. No password to set.
-        </p>
+        {reasonFirst ? null : lead}
         {shownNotice !== null ? (
           <p className="si-notice" role="alert">
             <UiIcon name="info" size={14} />
             {SIGN_IN_NOTICES[shownNotice]}
           </p>
         ) : null}
+        {reasonFirst ? lead : null}
         <div className="si-buttons">
           {google ? (
-            <a className="si-btn" href={`${apiBase}${google.loginPath}`}>
+            <a
+              className="si-btn"
+              href={withReturn(`${apiBase}${google.loginPath}`, returnTo)}
+            >
               <GoogleMark size={18} />
               Continue with Google
             </a>
           ) : null}
           {microsoft ? (
-            <a className="si-btn" href={`${apiBase}${microsoft.loginPath}`}>
+            <a
+              className="si-btn"
+              href={withReturn(`${apiBase}${microsoft.loginPath}`, returnTo)}
+            >
               <MicrosoftMark size={17} />
               Continue with Microsoft
             </a>
@@ -62,7 +79,7 @@ export function SignInPage({
           {preview ? (
             <a
               className="si-btn si-btn-preview"
-              href={`${apiBase}/auth/preview`}
+              href={withReturn(`${apiBase}/auth/preview`, returnTo)}
             >
               <UiIcon name="sparkles" size={16} />
               Open the local preview

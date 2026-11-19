@@ -9,6 +9,7 @@ import {
   lastPageTarget,
   opensOnLastPage,
   rememberedPath,
+  workspacePath,
 } from "../src/last-page-model";
 import { loadConsole } from "../src/load-console";
 import { loadEngagement } from "../src/load-engagement";
@@ -20,6 +21,7 @@ import { loadWorkflow } from "../src/load-workflow";
 import { apiGet, loadWorkspace, sessionToken } from "../src/load-workspace";
 import { setupPlacement } from "../src/routes";
 import { homePlacement, resolveRoute } from "../src/shell-model";
+import { signedOutRedirect } from "../src/sign-in-model";
 import { parsePlanningTab } from "../src/testing-hub-model";
 import { parseTheme, THEME_COOKIE } from "../src/theme";
 import { WorkspaceView } from "../src/workspace-view";
@@ -58,6 +60,18 @@ export default async function Home({ searchParams }: HomeProps) {
     section: route.page,
     notice: firstParam(params.notice),
   });
+  // A signed-out visitor (no session, or one the API no longer knows) signs in and comes
+  // back to this address; the workspace's frame is never shown to them.
+  if (loaded.status === "denied") {
+    const away = signedOutRedirect({
+      signedOut: loaded.signedOut,
+      hasSession: (await cookies()).get("aw_session")?.value !== undefined,
+      path: workspacePath(params),
+    });
+    if (away !== null) {
+      redirect(away);
+    }
+  }
   // Setup is onboarding until the engagement is launched, and a Settings tab after.
   if (loaded.status === "ready") {
     const placed = setupPlacement(
@@ -80,14 +94,6 @@ export default async function Home({ searchParams }: HomeProps) {
   // The loaders read by the page; the shell renders the destination.
   const model =
     loaded.status === "ready" ? { ...loaded, section: route.section } : loaded;
-  // A visitor with no session sees the landing page; a signed-in member who is
-  // denied still sees the workspace's own message.
-  if (
-    model.status === "denied" &&
-    (await cookies()).get("aw_session")?.value === undefined
-  ) {
-    redirect("/welcome");
-  }
   const centerQuery = parseCenterQuery((name) => firstParam(params[name]));
   const [
     workflow,
