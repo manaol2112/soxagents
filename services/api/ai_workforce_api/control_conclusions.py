@@ -13,10 +13,10 @@ Nothing here concludes on its own: the proposal is read, never stored, so it alw
 records.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
 import psycopg
@@ -36,6 +36,9 @@ from ai_workforce_api.authorization import (
 from ai_workforce_api.db import transaction
 from ai_workforce_api.inbound import clean_text
 from ai_workforce_api.settings import Settings
+
+if TYPE_CHECKING:
+    from ai_workforce_api.control_journey import Finality, FinalityFacts, NotFinal
 
 Verdict = Literal["EFFECTIVE", "NOT_EFFECTIVE"]
 Severity = Literal["CONTROL_DEFICIENCY", "SIGNIFICANT_DEFICIENCY", "MATERIAL_WEAKNESS"]
@@ -306,72 +309,188 @@ def suggestion(likelihood: str, magnitude: str) -> tuple[Severity, str]:
 # Reading
 
 
+def engagement_facts(
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    fin_facts: Mapping[UUID, FinalityFacts],
+    control_id: UUID | None = None,
+) -> dict[UUID, Facts]:
+    """What each control's conclusion is proposed from, built from its finality facts (the
+    applicability, the D&I verdict that holds, the rounds) and two reads for the
+    engagement, or for one control: the interim sheet's result and proposal, and the
+    deficiencies not closed. The one reading for the panel and the register (ST-2)."""
+    one = control_id is not None
+    scope = " AND engagement_control_id = %s" if one else ""
+    args: tuple[Any, ...] = (project_id, control_id) if one else (project_id,)
+    sheets = {
+        row[0]: (str(row[1]), None if row[2] is None else str(row[2]), str(row[3]))
+        for row in connection.execute(
+            "SELECT engagement_control_id, status, conclusion, proposal_status FROM test_sheets "
+            "WHERE project_id = %s AND test_round_id IS NULL" + scope,
+            args,
+        ).fetchall()
+    }
+    standing: dict[UUID, list[tuple[str, str, str]]] = {}
+    for found_control, reference, kind, status in connection.execute(
+        "SELECT engagement_control_id, reference, deficiency_type, status FROM deficiencies "
+        "WHERE project_id = %s AND engagement_control_id IS NOT NULL AND status <> 'CLOSED'"
+        + scope
+        + " ORDER BY reference",
+        args,
+    ).fetchall():
+        standing.setdefault(found_control, []).append((str(reference), str(kind), str(status)))
+    found: dict[UUID, Facts] = {}
+    for each, fin in fin_facts.items():
+        applicability = fin.applicability
+        live = [r for r in fin.rounds if r.status != "CANCELLED"]
+        rolled = next((r for r in reversed(live) if r.kind == "ROLLFORWARD"), None)
+        retest = next((r for r in reversed(live) if r.kind == "RETEST"), None)
+        sheet = sheets.get(each)
+        found[each] = Facts(
+            design="EFFECTIVE"
+            if fin.design_verdict == "EFFECTIVE"
+            else "NOT_EFFECTIVE"
+            if fin.design_verdict == "NOT_EFFECTIVE"
+            else None,
+            phases={
+                "INTERIM": (
+                    applicability.get("INTERIM") in _APPLIES,
+                    None if sheet is None else sheet[0],
+                    None if sheet is None else sheet[1],
+                    sheet is not None and sheet[2] == "DISMISSED",
+                ),
+                "ROLLFORWARD": (
+                    applicability.get("ROLLFORWARD") in _APPLIES,
+                    None if rolled is None else rolled.status,
+                    None if rolled is None else rolled.conclusion,
+                    False,
+                ),
+            },
+            retest=(
+                None
+                if retest is None or retest.status != "SIGNED_OFF" or retest.conclusion is None
+                else retest.conclusion
+            ),
+            deficiencies=standing.get(each, []),
+            undecided=tuple(
+                phase
+                for phase in ("DESIGN", "INTERIM", "ROLLFORWARD")
+                if applicability.get(phase) == "PENDING"
+            ),
+        )
+    return found
+
+
 def facts_of(connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID) -> Facts:
-    from ai_workforce_api.design_conclusions import design_verdict
+    """What one control's conclusion is proposed from (engagement_facts, for the one)."""
+    from ai_workforce_api.control_journey import finality_facts
 
-    decided = {
-        str(row[0]): str(row[1])
-        for row in connection.execute(
-            "SELECT phase, applicability FROM evidence_plan_phases "
-            "WHERE project_id = %s AND engagement_control_id = %s",
-            (project_id, control_id),
-        ).fetchall()
-    }
-    applies = {phase: value in _APPLIES for phase, value in decided.items()}
-    sheet = connection.execute(
-        "SELECT status, conclusion, proposal_status FROM test_sheets "
-        "WHERE project_id = %s AND engagement_control_id = %s AND test_round_id IS NULL",
-        (project_id, control_id),
-    ).fetchone()
+    return engagement_facts(
+        connection, project_id, finality_facts(connection, project_id, control_id), control_id
+    )[control_id]
 
-    def latest(kind: str) -> tuple[Any, ...] | None:
-        return connection.execute(
-            "SELECT status, conclusion FROM test_rounds WHERE project_id = %s "
-            "AND engagement_control_id = %s AND kind = %s AND status <> 'CANCELLED' "
-            "ORDER BY number DESC LIMIT 1",
-            (project_id, control_id, kind),
-        ).fetchone()
 
-    rolled = latest("ROLLFORWARD")
-    retest = latest("RETEST")
-    phases: dict[str, tuple[bool, str | None, str | None, bool]] = {
-        "INTERIM": (
-            applies.get("INTERIM", False),
-            None if sheet is None else str(sheet[0]),
-            None if sheet is None or sheet[1] is None else str(sheet[1]),
-            sheet is not None and str(sheet[2]) == "DISMISSED",
-        ),
-        "ROLLFORWARD": (
-            applies.get("ROLLFORWARD", False),
-            None if rolled is None else str(rolled[0]),
-            None if rolled is None or rolled[1] is None else str(rolled[1]),
-            False,
-        ),
-    }
-    deficiencies = [
-        (str(row[0]), str(row[1]), str(row[2]))
-        for row in connection.execute(
-            "SELECT reference, deficiency_type, status FROM deficiencies "
-            "WHERE project_id = %s AND engagement_control_id = %s AND status <> 'CLOSED' "
-            "ORDER BY reference",
-            (project_id, control_id),
-        ).fetchall()
-    ]
-    return Facts(
-        design=design_verdict(connection, project_id, control_id),
-        phases=phases,
-        retest=(
-            None
-            if retest is None or str(retest[0]) != "SIGNED_OFF" or retest[1] is None
-            else str(retest[1])
-        ),
-        deficiencies=deficiencies,
-        undecided=tuple(
-            phase
-            for phase in ("DESIGN", "INTERIM", "ROLLFORWARD")
-            if decided.get(phase) == "PENDING"
-        ),
+# FINAL (ST-2, product owner, 19 November 2026)
+
+CONCLUSION_CHANGED = "Conclusion changed since the review signed it: review outstanding"
+NOTHING_PROPOSED = "No conclusion is proposed from the records yet"
+
+
+@dataclass(frozen=True)
+class Concluded:
+    """Where a control's conclusion stands: NOT_READY, PROPOSED or FINAL; the final
+    verdict (FINAL only); the verdict the register shows once a review is signed (the
+    final one, else the one the latest signed review recorded, else the proposal); why it
+    is not final; and whether it is final as the register counts it."""
+
+    status: Status
+    final: Verdict | None
+    verdict: Verdict | None
+    reasons: tuple[NotFinal, ...]
+    is_final: bool
+
+
+def signed_verdict(facts: FinalityFacts | None) -> tuple[bool, Verdict | None]:
+    """Whether the most recently signed review (the control's own or a round's) recorded
+    the verdict it signed (control_reviews.coverage "conclusion"), and that verdict. A
+    review signed before reviews recorded one recorded none."""
+    if facts is None:
+        return False, None
+    signed: list[tuple[datetime, Mapping[str, Any] | None]] = []
+    if facts.review_status == "SIGNED_OFF" and facts.review_signed_at is not None:
+        signed.append((facts.review_signed_at, facts.review_coverage))
+    for item in facts.rounds:
+        if (
+            item.status != "CANCELLED"
+            and item.review_status == "SIGNED_OFF"
+            and item.review_signed_at is not None
+        ):
+            signed.append((item.review_signed_at, item.review_coverage))
+    if not signed:
+        return False, None
+    coverage = max(signed, key=lambda entry: entry[0])[1] or {}
+    if "conclusion" not in coverage:
+        return False, None
+    value = coverage["conclusion"]
+    return True, (value if value in ("EFFECTIVE", "NOT_EFFECTIVE") else None)
+
+
+def concluded(fin: Finality, facts: FinalityFacts | None, proposed: Verdict | None) -> Concluded:
+    """FINAL only when the control review is signed, finality holds, the records propose a
+    verdict, and it is the verdict the latest signed review recorded; the final verdict is
+    the proposal, never the deficiencies standing now (ST-2). A review that recorded no
+    verdict (signed before reviews recorded one) rests on finality alone. Otherwise the
+    proposal stands, with what keeps it from final; a verdict that moved since the review
+    signed asks for the review again (it clears once a review is signed on the records as
+    they are: the reviewer reopens the review and signs it again), said once: not where a
+    reason of the review's coverage already says the review is outstanding."""
+    from ai_workforce_api.control_journey import NotFinal
+
+    reasons = list(fin.reasons)
+    signed = facts is not None and facts.review_status == "SIGNED_OFF"
+    if not signed:
+        return Concluded(
+            "PROPOSED" if proposed is not None else "NOT_READY",
+            None,
+            None,
+            tuple(reasons),
+            fin.final,
+        )
+    recorded, verdict = signed_verdict(facts)
+    if (
+        recorded
+        and proposed is not None
+        and verdict != proposed
+        and not any(item.kind == "REVIEW" for item in reasons)
+    ):
+        reasons.append(NotFinal(kind="REVIEW", text=CONCLUSION_CHANGED, step="REVIEW"))
+    if proposed is None and not reasons:
+        reasons.append(NotFinal(kind="TESTING", text=NOTHING_PROPOSED, step="CONCLUDE"))
+    if not reasons and proposed is not None:
+        return Concluded("FINAL", proposed, proposed, (), True)
+    return Concluded(
+        "PROPOSED" if proposed is not None else "NOT_READY",
+        None,
+        verdict if recorded and verdict is not None else proposed,
+        tuple(reasons),
+        False,
     )
+
+
+def engagement_conclusions(
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    fin_facts: Mapping[UUID, FinalityFacts],
+) -> dict[UUID, Concluded]:
+    """Every control's conclusion as the panel reads it (concluded), for the register and
+    the review overview: one story on every screen."""
+    from ai_workforce_api.control_journey import finality
+
+    facts = engagement_facts(connection, project_id, fin_facts)
+    return {
+        each: concluded(finality(fin), fin, propose(facts[each])[0])
+        for each, fin in fin_facts.items()
+    }
 
 
 def _deficiencies(
@@ -455,7 +574,10 @@ def body_of(
         is None
     ):
         raise NotVisible()
-    facts = facts_of(connection, project_id, control_id)
+    from ai_workforce_api.control_journey import finality, finality_facts
+
+    fin_facts = finality_facts(connection, project_id, control_id)
+    facts = engagement_facts(connection, project_id, fin_facts, control_id)[control_id]
     proposed, reasons, waiting, phases = propose(facts)
     deficiencies = _deficiencies(connection, project_id, control_id)
     review = connection.execute(
@@ -467,14 +589,16 @@ def body_of(
         (project_id, control_id),
     ).fetchone()
     signed = review is not None and str(review[1]) == "SIGNED_OFF"
-    # Final as the review signed it: not effective while a deficiency is not closed (the
-    # controls register's rule, workspace.py).
-    final: Verdict | None = (
-        ("NOT_EFFECTIVE" if facts.deficiencies else "EFFECTIVE") if signed else None
-    )
+    # FINAL from finality and the verdict the review signed (ST-2, 19 November 2026).
+    # Before, a signed review was FINAL whatever finality said, and its verdict was read
+    # from the deficiencies standing now; it now waits for what keeps it open.
+    fin = fin_facts.get(control_id)
+    result = concluded(finality(fin), fin, proposed)
+    if signed and result.status != "FINAL":
+        waiting = waiting + [item.text for item in result.reasons if item.text not in waiting]
     return ControlConclusionBody(
         control_id=control_id,
-        status="FINAL" if signed else ("PROPOSED" if proposed is not None else "NOT_READY"),
+        status=result.status,
         proposed=proposed,
         reasons=reasons,
         waiting=waiting,
@@ -492,7 +616,7 @@ def body_of(
                 signed_at=review[3],
             )
         ),
-        final=final,
+        final=result.final,
         viewer_can_rate=viewer.kind is PrincipalKind.USER and not signed,
     )
 

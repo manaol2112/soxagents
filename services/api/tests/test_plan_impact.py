@@ -8,7 +8,7 @@ from uuid import UUID
 
 import psycopg
 import pytest
-from support import Database, record_design_choice
+from support import Database, record_design_choice, sign_off_design
 from test_control_progress import _controls
 from test_control_reviews import _prepared_control, _rollforward_decided
 from test_master_plans import _approve
@@ -262,6 +262,13 @@ def test_a_reviewer_documents_that_a_signed_review_covers_later_work(migrated: D
     # The design workpaper is prepared again after the review signed: the review does not
     # cover it, and the conclusion waits.
     _reprepare_design(client, team, control)
+    # Rewritten 19 November 2026 (ST-2, product owner). Old: the reviewer's coverage
+    # assessment alone made the conclusion final again. New: re-preparing the design
+    # workpaper reopened the D&I conclusion, which is signed off again first, and finality
+    # says so until it is. Reason: the conclusion rests on a D&I verdict that holds.
+    row = _controls(client, team)[control]
+    assert "D&I conclusion not signed off" in [item["text"] for item in row["not_final"]]
+    sign_off_design(migrated, team["project"], [control])
     row = _controls(client, team)[control]
     assert row["final"] is False
     assert any(

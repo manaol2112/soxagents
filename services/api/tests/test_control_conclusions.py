@@ -2,12 +2,15 @@
 8 November 2026: "the agent proposes, a person rates"; "OE can't start if design is
 failing")."""
 
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
 import psycopg
 import pytest
 from support import Database, sign_off_design
+from test_control_progress import _controls
+from test_control_reviews import _prepared_control, _rollforward_decided
 from test_design_conclusions import (
     _concluded,
     _control,
@@ -18,8 +21,11 @@ from test_design_conclusions import (
 from test_evidence_flow import _project
 from test_outbound import _session, migrated
 from test_phase_release import _launched
+from test_round_reviews import _sign_review
+from test_testing_engine import _base
 
-from ai_workforce_api.control_conclusions import Facts, propose, suggestion
+from ai_workforce_api.control_conclusions import Facts, concluded, propose, suggestion
+from ai_workforce_api.control_journey import FinalityFacts, RoundFacts, finality
 from ai_workforce_api.db import connect
 from ai_workforce_api.design_conclusions import (
     GATE_DESIGN,
@@ -415,3 +421,147 @@ def test_an_undecided_phase_holds_the_proposal_and_never_reads_does_not_apply() 
     # An undecided D&I phase holds an effective proposal as well.
     proposed, _, waiting, _ = propose(_facts(undecided=("DESIGN",)))
     assert proposed is None and waiting == ["it is decided whether D&I testing applies"]
+
+
+_T1 = datetime(2026, 10, 1, tzinfo=UTC)
+_T2 = datetime(2026, 10, 5, tzinfo=UTC)
+_T3 = datetime(2026, 10, 9, tzinfo=UTC)
+_T4 = datetime(2026, 10, 12, tzinfo=UTC)
+
+
+def _final_facts(**overrides: Any) -> FinalityFacts:
+    values: dict[str, Any] = {
+        "plan_status": "APPROVED",
+        "approved_revision": 2,
+        "applicability": {"DESIGN": "APPLICABLE", "INTERIM": "APPLICABLE"},
+        "design_prepared_at": _T1,
+        "sheet_status": "SIGNED_OFF",
+        "sheet_plan_revision": 2,
+        "sheet_signed_at": _T2,
+        "review_status": "SIGNED_OFF",
+        "review_signed_at": _T3,
+        "rounds": (),
+        "deficiency_statuses": (),
+        "design_verdict": "EFFECTIVE",
+        "review_coverage": {"sheet_version": 3, "workpapers": [], "conclusion": "EFFECTIVE"},
+        "sheet_version": 3,
+    }
+    values.update(overrides)
+    return FinalityFacts(**values)
+
+
+def _signed_conclusion(facts: FinalityFacts, proposed: Any) -> Any:
+    return concluded(finality(facts), facts, proposed)
+
+
+def test_a_signed_review_is_final_only_with_finality_and_the_verdict_it_signed() -> None:
+    """ST-2 (product owner, 19 November 2026). Before, a signed review made the conclusion
+    FINAL whatever finality said, with the verdict read from the deficiencies standing
+    now. Now FINAL needs finality, a proposed verdict, and the verdict the latest signed
+    review recorded; the final verdict is the proposal."""
+    # Signed, final, and the review recorded the verdict proposed now: FINAL.
+    found = _signed_conclusion(_final_facts(), "EFFECTIVE")
+    assert (found.status, found.final, found.verdict, found.reasons) == (
+        "FINAL",
+        "EFFECTIVE",
+        "EFFECTIVE",
+        (),
+    )
+    # Not signed: proposed, never final.
+    unsigned = _final_facts(review_status="OPEN", review_coverage=None)
+    found = _signed_conclusion(unsigned, "EFFECTIVE")
+    assert (found.status, found.final) == ("PROPOSED", None)
+    # Finality open (a D&I sign-off that lapsed): not final, and the reason says why.
+    lapsed = _final_facts(design_out_of_date=("a design deficiency was logged after the sign-off",))
+    found = _signed_conclusion(lapsed, "EFFECTIVE")
+    assert found.status == "PROPOSED" and found.final is None
+    assert [r.kind for r in found.reasons] == ["DESIGN"]
+    # The records now propose another verdict than the review signed: the review is owed.
+    found = _signed_conclusion(_final_facts(), "NOT_EFFECTIVE")
+    assert found.status == "PROPOSED" and found.final is None
+    assert [(r.kind, r.text) for r in found.reasons] == [
+        ("REVIEW", "Conclusion changed since the review signed it: review outstanding")
+    ]
+    # The register still shows the verdict the review signed until the review is done again.
+    assert found.verdict == "EFFECTIVE"
+    # Said once: a change the review's coverage already names is not said a second time.
+    moved = _final_facts(sheet_version=4)
+    found = _signed_conclusion(moved, "NOT_EFFECTIVE")
+    assert [r.text for r in found.reasons] == [
+        "Testing changed since the review covered it: review outstanding"
+    ]
+    # No verdict recorded (signed before reviews recorded one): finality decides.
+    legacy = _final_facts(review_coverage={"sheet_version": 3, "workpapers": []})
+    assert _signed_conclusion(legacy, "NOT_EFFECTIVE").status == "FINAL"
+    # Nothing proposed: never final, whatever the review.
+    found = _signed_conclusion(_final_facts(), None)
+    assert found.status == "NOT_READY" and found.final is None and found.reasons
+    # A later round review governs: retested effective, the round reviewed (recording the
+    # deficiency it found still standing), then the deficiency closed. The records propose
+    # effective, but no review saw the closure: not final.
+    retest = RoundFacts(
+        kind="RETEST",
+        status="SIGNED_OFF",
+        conclusion="EFFECTIVE",
+        review_status="SIGNED_OFF",
+        sheet_version=2,
+        covered_version=2,
+        review_signed_at=_T4,
+        review_coverage={"sheet_version": 2, "conclusion": "NOT_EFFECTIVE"},
+    )
+    closed = _final_facts(
+        review_coverage={"sheet_version": 3, "workpapers": [], "conclusion": "NOT_EFFECTIVE"},
+        rounds=(retest,),
+        deficiency_statuses=("CLOSED",),
+    )
+    found = _signed_conclusion(closed, "EFFECTIVE")
+    assert found.status == "PROPOSED" and found.final is None
+    assert [r.text for r in found.reasons] == [
+        "Conclusion changed since the review signed it: review outstanding"
+    ]
+    # Once a review signed after the closure records the verdict, it is final.
+    reviewed = _final_facts(
+        review_signed_at=datetime(2026, 10, 14, tzinfo=UTC),
+        rounds=(retest,),
+        deficiency_statuses=("CLOSED",),
+    )
+    assert _signed_conclusion(reviewed, "EFFECTIVE").status == "FINAL"
+
+
+def test_a_d_and_i_sign_off_that_lapses_after_a_full_sign_off_takes_the_conclusion_off_final(
+    migrated: Database,
+) -> None:
+    """ST-2 (product owner, 19 November 2026; assessment scenario 13). Before, after a
+    full sign-off, a record that put the D&I sign-off out of date (here a design
+    deficiency logged since) left the panel reading "Concluded at the independent review:
+    Effective". Now the conclusion is not final until the D&I conclusion holds again."""
+    team, client, sheet, _file = _prepared_control(migrated, "cc-lapse", "DISMISS")
+    control = sheet["control_id"]
+    base = _base(team)
+    _rollforward_decided(migrated, team, client, control)
+    review = client.get(f"{base}/reviews").json()[0]
+    _sign_review(migrated, client, team, review["id"])
+    path = f"{base}/control-conclusions/{control}"
+    body = client.get(path).json()
+    assert (body["status"], body["final"]) == ("FINAL", "EFFECTIVE")
+    with connect(migrated.url) as connection:
+        connection.execute(
+            """
+            INSERT INTO deficiencies (organization_id, project_id, reference,
+                                      engagement_control_id, title, deficiency_type,
+                                      identified_by, likelihood, magnitude)
+            VALUES (%s, %s, 'D-903', %s, 'Approval step missing from the design', 'DESIGN',
+                    %s, 'REASONABLY_POSSIBLE', 'MORE_THAN_INCONSEQUENTIAL')
+            """,
+            (team["org"], team["project"], control, team["owner_id"]),
+        )
+        connection.commit()
+    body = client.get(path).json()
+    assert body["status"] != "FINAL" and body["final"] is None
+    row = _controls(client, team)[control]
+    assert row["final"] is False
+    design = next(r for r in row["not_final"] if r["kind"] == "DESIGN")
+    assert (design["step"], design["phase"]) == ("REVIEW", "DESIGN")
+    assert design["text"] == (
+        "D&I conclusion no longer holds: a design deficiency was logged after the sign-off"
+    )

@@ -713,3 +713,56 @@ def test_a_rejected_reviewer_answer_is_said_in_plain_words(migrated: Database) -
     assert review["reperform_note"].startswith("The reviewer could not finish ")
     assert plain in review["reperform_note"] and plain in review["failure_note"]
     assert reasons and all(reason not in review["failure_note"] for reason in reasons)
+
+
+def test_an_undecided_deficiency_proposal_holds_the_review(migrated: Database) -> None:
+    """ST-2 (product owner, 19 November 2026). Before, the review could be signed while
+    the deficiency the tester proposed from the exceptions was still undecided, and the
+    conclusion then read final Effective. Now the review waits for the proposal to be
+    logged or dismissed; the re-performer no longer raises a second note for it."""
+    team, client, sheet, _file = _tested_control(migrated, "review-undecided")
+    base = _base(team)
+    current = _sheet(client, team)
+    assert (current["conclusion"], current["proposal_status"]) == ("NOT_EFFECTIVE", "PROPOSED")
+    paper = next(
+        w
+        for w in client.get(f"{base}/workpapers", params={"control_id": sheet["control_id"]}).json()
+        if w["stage"] == "EFFECTIVENESS"
+    )
+    with connect(migrated.url) as connection:
+        assert run_draft(connection, _Provider([{"sections": []}]), UUID(paper["id"])) == "DONE"
+    paper = next(
+        w
+        for w in client.get(f"{base}/workpapers", params={"control_id": sheet["control_id"]}).json()
+        if w["stage"] == "EFFECTIVENESS"
+    )
+    prepared = client.post(
+        f"{base}/workpapers/{paper['id']}/prepare",
+        json={"version": paper["version"], "rationale_reviewed": True},
+    )
+    assert prepared.status_code == 200, prepared.text
+    review = client.get(f"{base}/reviews").json()[0]
+    held = (
+        "the proposed deficiency is not logged or dismissed yet: decide it on the test sheet "
+        "before the testing is re-performed"
+    )
+    assert held in review["blocking"]
+    reviewer = _session(migrated, team["reviewer_id"])
+    refused = reviewer.post(f"{base}/reviews/{review['id']}/sign-off", json={"version": 1})
+    assert refused.status_code == 409
+    with connect(migrated.url) as connection:
+        assert run_reperformance(connection, None, UUID(review["id"])) == "DONE"
+    review = client.get(f"{base}/reviews").json()[0]
+    assert not any("is not decided" in note["text"] for note in review["notes"])
+    refused = reviewer.post(
+        f"{base}/reviews/{review['id']}/sign-off", json={"version": review["version"]}
+    )
+    assert refused.status_code == 409 and held in refused.json()["detail"]
+    current = _sheet(client, team)
+    dismissed = client.post(
+        f"{base}/test-sheets/{current['id']}/deficiency",
+        json={"version": current["version"], "action": "DISMISS", "reason": "Decided."},
+    )
+    assert dismissed.status_code == 200, dismissed.text
+    review = client.get(f"{base}/reviews").json()[0]
+    assert held not in review["blocking"]

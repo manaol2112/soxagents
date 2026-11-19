@@ -283,6 +283,9 @@ _STEP_OBLIGATIONS: tuple[tuple[str, str], ...] = (
     ("Reconcile the kickoff", "EVIDENCE_PLAN"),
     # A phase the plan leaves PENDING (control_journey.UNDECIDED): decided in the plan.
     ("whether it applies is undecided", "EVIDENCE_PLAN"),
+    # A D&I sign-off that lapsed or was never made (control_journey.finality, ST-2): the
+    # D&I conclusion is signed off again, at the review.
+    ("D&I conclusion", "CONTROL_REVIEW"),
     ("Revise the test plan", "PLAN_APPROVAL"),
     ("Approve the test plan", "PLAN_APPROVAL"),
     ("Test plan not approved", "PLAN_APPROVAL"),

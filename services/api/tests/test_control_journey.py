@@ -18,6 +18,7 @@ from test_workpapers import _tested_control
 from test_workspace import _request, _row
 
 from ai_workforce_api.control_journey import (
+    DESIGN_NOT_SIGNED,
     PHASES,
     STEP_OF_PROGRESS,
     FinalityFacts,
@@ -886,3 +887,26 @@ def test_roll_forward_left_undecided_after_interim_exceptions_is_not_final_until
     row = _controls(client, team)[control]
     assert row["final"] is True, [r["text"] for r in row["not_final"]]
     assert client.get(f"{base}/control-conclusions/{control}").json()["status"] == "FINAL"
+
+
+def test_an_effective_d_and_i_sign_off_out_of_date_keeps_the_conclusion_open() -> None:
+    """ST-2 (product owner, 19 November 2026). Before, finality read the D&I sign-off only
+    when it was not effective, so an effective one that no longer held (a deficiency or an
+    exception recorded since) left the control final. Now the reasons it lapsed keep the
+    conclusion open, at the review, until the D&I conclusion is signed off again."""
+    lapsed = _facts(design_out_of_date=("a design deficiency was logged after the sign-off",))
+    assert [(r.kind, r.text, r.step, r.phase) for r in finality(lapsed).reasons] == [
+        (
+            "DESIGN",
+            "D&I conclusion no longer holds: a design deficiency was logged after the sign-off",
+            "REVIEW",
+            "DESIGN",
+        )
+    ]
+    assert _texts(_facts(design_out_of_date=(DESIGN_NOT_SIGNED,))) == [
+        "D&I conclusion not signed off"
+    ]
+    # Nothing to say until the design workpaper is prepared: the testing is what is owed.
+    assert _texts(_facts(design_out_of_date=(DESIGN_NOT_SIGNED,), design_prepared_at=None)) == [
+        "Design and implementation testing outstanding"
+    ]

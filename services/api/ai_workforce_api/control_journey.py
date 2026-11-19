@@ -135,6 +135,10 @@ class RoundFacts:
     covered_version: int | None = None
     # A reviewer's coverage assessment says the review covers the current version.
     coverage_assessed: bool = False
+    # When the round's own review was signed off, and what it recorded (control_reviews
+    # .coverage, with the verdict it signed: ST-2), when it is signed.
+    review_signed_at: datetime | None = None
+    review_coverage: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -169,6 +173,10 @@ class FinalityFacts:
     # The standing D&I conclusion's verdict (design_conclusions), or None. Not effective
     # means OE is not performed (B0): no interim testing or roll-forward is owed.
     design_verdict: str | None = None
+    # Why no D&I verdict holds where the D&I phase applies and the design workpaper is
+    # prepared (ST-2, 19 November 2026): the reasons a standing sign-off lapsed
+    # (design_conclusions.lapsed_reasons), or DESIGN_NOT_SIGNED where none stands.
+    design_out_of_date: tuple[str, ...] = ()
 
 
 _APPROVED_PLAN = ("APPROVED", "CHANGES_PROPOSED")
@@ -176,6 +184,8 @@ _APPLIES = ("APPLICABLE", "CONDITIONAL")
 _OPEN_ROUNDS = ("REQUESTED", "TESTING")
 # What a phase the plan leaves PENDING says (the plan's wording, without its full stop).
 UNDECIDED = "whether it applies is undecided"
+# FinalityFacts.design_out_of_date where no D&I sign-off stands at all.
+DESIGN_NOT_SIGNED = "the D&I conclusion is not signed off"
 
 
 def _coverage_gaps(facts: FinalityFacts) -> list[NotFinal]:
@@ -326,6 +336,21 @@ def finality(facts: FinalityFacts | None) -> Finality:
                 # and the workpaper versions it recorded, never for later ones.
                 reasons.extend(_coverage_gaps(facts))
     if applies["DESIGN"]:
+        if facts.design_prepared_at is not None and facts.design_out_of_date and not failed:
+            # ST-2 (19 November 2026): the conclusion rests on a D&I verdict that holds.
+            # Before, an effective sign-off that lapsed (a deficiency or an exception
+            # recorded since) was never read here, and the control stayed final.
+            first = facts.design_out_of_date[0]
+            reasons.append(
+                NotFinal(
+                    kind="DESIGN",
+                    text="D&I conclusion not signed off"
+                    if first == DESIGN_NOT_SIGNED
+                    else f"D&I conclusion no longer holds: {first}",
+                    step="REVIEW",
+                    phase="DESIGN",
+                )
+            )
         if facts.design_prepared_at is None:
             reasons.append(
                 NotFinal(
@@ -426,38 +451,50 @@ def finality(facts: FinalityFacts | None) -> Finality:
 
 
 def finality_facts(
-    connection: psycopg.Connection[Any], project_id: UUID
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID | None = None
 ) -> dict[UUID, FinalityFacts]:
-    """Every control's finality facts for the engagement, in one pass per table."""
+    """Every control's finality facts for the engagement, in one pass per table; or one
+    control's (`control_id`), as the conclusion panel reads them."""
+    # Each query reads the engagement, or only the one control: `scoped(alias)` adds the
+    # condition on the alias's engagement_control_id column, and `args` the parameters.
+    one = control_id is not None
+
+    def scoped(column: str) -> str:
+        return f" AND {column} = %s" if one else ""
+
+    args: tuple[Any, ...] = (project_id, control_id) if one else (project_id,)
     plans = {
         row[0]: (str(row[1]), row[2])
         for row in connection.execute(
             "SELECT engagement_control_id, status, approved_revision FROM evidence_plans "
-            "WHERE project_id = %s",
-            (project_id,),
+            "WHERE project_id = %s" + scoped("engagement_control_id"),
+            args,
         ).fetchall()
     }
     applicability: dict[UUID, dict[str, str]] = {}
-    for control_id, phase, decided in connection.execute(
+    for found_control, phase, decided in connection.execute(
         "SELECT engagement_control_id, phase, applicability FROM evidence_plan_phases "
-        "WHERE project_id = %s",
-        (project_id,),
+        "WHERE project_id = %s" + scoped("engagement_control_id"),
+        args,
     ).fetchall():
-        applicability.setdefault(control_id, {})[str(phase)] = str(decided)
+        applicability.setdefault(found_control, {})[str(phase)] = str(decided)
     designed = {
         row[0]: row[1]
         for row in connection.execute(
             "SELECT engagement_control_id, max(prepared_at) FROM workpapers "
-            "WHERE project_id = %s AND stage = 'DESIGN' AND status = 'PREPARED' GROUP BY 1",
-            (project_id,),
+            "WHERE project_id = %s AND stage = 'DESIGN' AND status = 'PREPARED'"
+            + scoped("engagement_control_id")
+            + " GROUP BY 1",
+            args,
         ).fetchall()
     }
     sheets = {
         row[0]: (str(row[1]), row[2], row[3], int(row[4]))
         for row in connection.execute(
             "SELECT engagement_control_id, status, plan_revision, signed_at, version "
-            "FROM test_sheets WHERE project_id = %s AND test_round_id IS NULL",
-            (project_id,),
+            "FROM test_sheets WHERE project_id = %s AND test_round_id IS NULL"
+            + scoped("engagement_control_id"),
+            args,
         ).fetchall()
     }
     # The control's own review; the rounds' reviews travel with the rounds below.
@@ -465,22 +502,22 @@ def finality_facts(
         row[0]: (str(row[1]), row[2], dict(row[3]) if isinstance(row[3], dict) else {})
         for row in connection.execute(
             "SELECT engagement_control_id, status, signed_at, coverage FROM control_reviews "
-            "WHERE project_id = %s AND test_round_id IS NULL",
-            (project_id,),
+            "WHERE project_id = %s AND test_round_id IS NULL" + scoped("engagement_control_id"),
+            args,
         ).fetchall()
     }
     papers: dict[UUID, dict[str, int | None]] = {}
-    for control_id, stage, prepared_version in connection.execute(
+    for found_control, stage, prepared_version in connection.execute(
         "SELECT engagement_control_id, stage, prepared_version FROM workpapers "
-        "WHERE project_id = %s AND status = 'PREPARED'",
-        (project_id,),
+        "WHERE project_id = %s AND status = 'PREPARED'" + scoped("engagement_control_id"),
+        args,
     ).fetchall():
-        papers.setdefault(control_id, {})[str(stage)] = (
+        papers.setdefault(found_control, {})[str(stage)] = (
             None if prepared_version is None else int(prepared_version)
         )
     # The impact assessment of the interim results against the approved revision (W3).
     impact: dict[UUID, str] = {}
-    for control_id, status in connection.execute(
+    for found_control, status in connection.execute(
         """
         SELECT a.engagement_control_id, a.status
         FROM plan_impact_assessments a
@@ -488,10 +525,11 @@ def finality_facts(
         JOIN evidence_plans p ON p.engagement_control_id = a.engagement_control_id
                              AND p.approved_revision = a.to_revision
         WHERE a.project_id = %s AND a.test_round_id IS NULL
-        """,
-        (project_id,),
+        """
+        + scoped("a.engagement_control_id"),
+        args,
     ).fetchall():
-        impact[control_id] = str(status)
+        impact[found_control] = str(status)
     rounds: dict[UUID, list[RoundFacts]] = {}
     for row in connection.execute(
         """
@@ -507,14 +545,16 @@ def finality_facts(
                p.approved_revision,
                EXISTS (SELECT 1 FROM review_coverage_assessments ca
                        WHERE ca.control_review_id = v.id AND ca.decision = 'COVERS'
-                         AND ca.sheet_version = s.version)
+                         AND ca.sheet_version = s.version),
+               v.signed_at, v.coverage
         FROM test_rounds r
         LEFT JOIN control_reviews v ON v.test_round_id = r.id
         LEFT JOIN test_sheets s ON s.test_round_id = r.id
         LEFT JOIN evidence_plans p ON p.engagement_control_id = r.engagement_control_id
-        WHERE r.project_id = %s ORDER BY r.number
-        """,
-        (project_id,),
+        WHERE r.project_id = %s"""
+        + scoped("r.engagement_control_id")
+        + " ORDER BY r.number",
+        args,
     ).fetchall():
         status = str(row[2])
         plan_revision, assessment, approved = row[7], row[8], row[9]
@@ -526,6 +566,7 @@ def finality_facts(
             and assessment != "VALID"
         ):
             round_impact = "PENDING" if assessment == "PENDING" else "OUTSTANDING"
+        signed_round = row[4] == "SIGNED_OFF"
         rounds.setdefault(row[0], []).append(
             RoundFacts(
                 kind=str(row[1]),
@@ -536,75 +577,107 @@ def finality_facts(
                 sheet_version=None if row[6] is None else int(row[6]),
                 covered_version=None if row[5] in (None, "") else int(row[5]),
                 coverage_assessed=bool(row[10]),
+                review_signed_at=row[11] if signed_round else None,
+                review_coverage=(
+                    dict(row[12]) if signed_round and isinstance(row[12], dict) else None
+                ),
             )
         )
     # A reviewer's coverage assessments of the control's own review (W3 follow-up).
     assessed: dict[UUID, list[tuple[int, dict[str, Any]]]] = {}
-    for control_id, sheet_version, versions in connection.execute(
+    for found_control, sheet_version, versions in connection.execute(
         """
         SELECT ca.engagement_control_id, ca.sheet_version, ca.workpaper_versions
         FROM review_coverage_assessments ca
         JOIN control_reviews v ON v.id = ca.control_review_id
         WHERE ca.project_id = %s AND ca.decision = 'COVERS' AND v.test_round_id IS NULL
-        """,
-        (project_id,),
+        """
+        + scoped("ca.engagement_control_id"),
+        args,
     ).fetchall():
-        assessed.setdefault(control_id, []).append(
+        assessed.setdefault(found_control, []).append(
             (int(sheet_version), dict(versions) if isinstance(versions, dict) else {})
         )
-    # A not-effective D&I verdict, as the OE gate reads it (a sign-off out of date with its
-    # workpaper or deficiencies does not hold); the few such controls are read one by one.
-    from ai_workforce_api.design_conclusions import design_verdict
+    # The D&I verdict that holds, as the OE gate reads it (a sign-off out of date with its
+    # workpaper, its deficiencies or its rule does not hold): the effective ones as the
+    # phase progress reads them (effective_controls), and the few not effective ones one by
+    # one. ST-2 (19 November 2026): before, only a not effective verdict was read, so an
+    # effective sign-off that lapsed left the control final.
+    from ai_workforce_api.design_conclusions import (
+        design_verdict,
+        effective_controls,
+        lapsed_reasons,
+    )
 
-    verdicts: dict[UUID, str] = {}
-    for (failed_control,) in connection.execute(
-        "SELECT engagement_control_id FROM design_conclusions "
-        "WHERE project_id = %s AND reopened_at IS NULL AND verdict = 'NOT_EFFECTIVE'",
-        (project_id,),
+    verdicts: dict[UUID, str] = dict.fromkeys(
+        effective_controls(connection, project_id, control_id), "EFFECTIVE"
+    )
+    standing: set[UUID] = set()
+    for signed_control, verdict in connection.execute(
+        "SELECT engagement_control_id, verdict FROM design_conclusions "
+        "WHERE project_id = %s AND reopened_at IS NULL" + scoped("engagement_control_id"),
+        args,
     ).fetchall():
-        held = design_verdict(connection, project_id, failed_control)
-        if held is not None:
-            verdicts[failed_control] = held
+        standing.add(signed_control)
+        if verdict == "NOT_EFFECTIVE":
+            held = design_verdict(connection, project_id, signed_control)
+            if held is not None:
+                verdicts[signed_control] = held
     deficiencies: dict[UUID, list[str]] = {}
-    for control_id, status in connection.execute(
+    for found_control, status in connection.execute(
         "SELECT engagement_control_id, status FROM deficiencies "
-        "WHERE project_id = %s AND engagement_control_id IS NOT NULL",
-        (project_id,),
+        "WHERE project_id = %s AND engagement_control_id IS NOT NULL"
+        + scoped("engagement_control_id"),
+        args,
     ).fetchall():
-        deficiencies.setdefault(control_id, []).append(str(status))
+        deficiencies.setdefault(found_control, []).append(str(status))
     controls = [
         row[0]
         for row in connection.execute(
-            "SELECT id FROM engagement_controls WHERE project_id = %s", (project_id,)
+            "SELECT id FROM engagement_controls WHERE project_id = %s" + scoped("id"), args
         ).fetchall()
     ]
     found: dict[UUID, FinalityFacts] = {}
-    for control_id in controls:
-        plan = plans.get(control_id)
-        sheet = sheets.get(control_id)
-        review = reviews.get(control_id)
-        found[control_id] = FinalityFacts(
+    for each in controls:
+        plan = plans.get(each)
+        sheet = sheets.get(each)
+        review = reviews.get(each)
+        # Why no D&I verdict holds where one is owed: the D&I phase applies and its
+        # workpaper is prepared (otherwise its testing is what is outstanding).
+        out_of_date: tuple[str, ...] = ()
+        if (
+            applicability.get(each, {}).get("DESIGN") in _APPLIES
+            and designed.get(each) is not None
+            and each not in verdicts
+        ):
+            out_of_date = (
+                tuple(lapsed_reasons(connection, project_id, each))
+                if each in standing
+                else (DESIGN_NOT_SIGNED,)
+            ) or (DESIGN_NOT_SIGNED,)
+        found[each] = FinalityFacts(
             plan_status=None if plan is None else plan[0],
             approved_revision=None if plan is None else plan[1],
-            applicability=applicability.get(control_id, {}),
-            design_prepared_at=designed.get(control_id),
+            applicability=applicability.get(each, {}),
+            design_prepared_at=designed.get(each),
             sheet_status=None if sheet is None else sheet[0],
             sheet_plan_revision=None if sheet is None else sheet[1],
             sheet_signed_at=None if sheet is None else sheet[2],
             review_status=None if review is None else review[0],
             review_signed_at=None if review is None else review[1],
-            rounds=tuple(rounds.get(control_id, [])),
-            deficiency_statuses=tuple(deficiencies.get(control_id, [])),
+            rounds=tuple(rounds.get(each, [])),
+            deficiency_statuses=tuple(deficiencies.get(each, [])),
             sheet_version=None if sheet is None else sheet[3],
             review_coverage=None if review is None or review[0] != "SIGNED_OFF" else review[2],
-            workpaper_versions=papers.get(control_id),
-            impact_state=impact.get(control_id),
+            workpaper_versions=papers.get(each),
+            impact_state=impact.get(each),
             coverage_assessed=any(
                 version == (sheet[3] if sheet is not None else None)
-                and papers_match(assessed_papers, papers.get(control_id, {}))
-                for version, assessed_papers in assessed.get(control_id, [])
+                and papers_match(assessed_papers, papers.get(each, {}))
+                for version, assessed_papers in assessed.get(each, [])
             ),
-            design_verdict=verdicts.get(control_id),
+            design_verdict=verdicts.get(each),
+            design_out_of_date=out_of_date,
         )
     return found
 

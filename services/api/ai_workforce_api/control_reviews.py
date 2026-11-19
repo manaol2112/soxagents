@@ -472,15 +472,8 @@ def rules_findings(
                     + ". Confirm why no deficiency is logged, or log one.",
                 )
             )
-        elif sheet.proposal_status == "PROPOSED":
-            findings.append(
-                Finding(
-                    "DEFICIENCY",
-                    {},
-                    "SHOULD_FIX",
-                    "The deficiency the tester proposed from the exceptions is not decided.",
-                )
-            )
+        # An undecided proposal holds the review itself (UNDECIDED_PROPOSAL, ST-2), so the
+        # re-performer raises no note of its own for it.
         elif deficiency_status is not None and deficiency_status == "CLOSED":
             findings.append(
                 Finding(
@@ -1185,7 +1178,8 @@ def _review(
     # The sheet this review is of: the round's own for a round review, else the interim.
     sheet = connection.execute(
         """
-        SELECT s.status, u.display_name, s.version, s.signed_by, s.id
+        SELECT s.status, u.display_name, s.version, s.signed_by, s.id, s.conclusion,
+               s.proposal_status
         FROM test_sheets s LEFT JOIN users u ON u.id = s.signed_by
         WHERE s.project_id = %s AND s.engagement_control_id = %s
           AND s.test_round_id IS NOT DISTINCT FROM %s
@@ -1222,6 +1216,12 @@ def _review(
             blocking.append("the D&I conclusion is not signed off as effective")
         if sheet is None or sheet[0] != "SIGNED_OFF":
             blocking.append("the testing is not signed off")
+        elif sheet[5] == "NOT_EFFECTIVE" and sheet[6] == "PROPOSED":
+            # The deficiency proposed from the exceptions is decided first (ST-2, 19
+            # November 2026): before, the review signed with it undecided and the control
+            # read final Effective. Decided before the re-performance, it costs no second
+            # run (deciding it changes the sheet the re-performance read).
+            blocking.append(UNDECIDED_PROPOSAL)
         effectiveness = next((p for p in papers if p[1] == "EFFECTIVENESS"), None)
         if effectiveness is None or effectiveness[2] != "PREPARED":
             blocking.append("the effectiveness workpaper is not prepared")
@@ -1449,11 +1449,14 @@ def review_overview(connection: psycopg.Connection[Any], project_id: UUID) -> Re
     ).fetchone()
     signed = sum(1 for item in left if item == "SIGNED")
     # Complete means every in-scope control's conclusion is final: reviewed, with every
-    # required phase and round covered (control_journey.finality), not merely signed.
-    from ai_workforce_api.control_journey import finality, finality_facts
+    # required phase and round covered (control_journey.finality), not merely signed, and
+    # on the verdict the review signed (control_conclusions.concluded, ST-2): the same
+    # story as the register and the panel.
+    from ai_workforce_api.control_conclusions import engagement_conclusions
+    from ai_workforce_api.control_journey import finality_facts
 
-    facts = finality_facts(connection, project_id)
-    final = sum(1 for control_id in included if finality(facts.get(control_id)).final)
+    held = engagement_conclusions(connection, project_id, finality_facts(connection, project_id))
+    final = sum(1 for control_id in included if control_id in held and held[control_id].is_final)
     return ReviewOverview(
         in_scope=len(included),
         not_started=sum(1 for control_id in included if control_id not in states),
@@ -2182,6 +2185,12 @@ def _clear_note(
     return _result(connection, project_id, review_id, principal.id), []
 
 
+UNDECIDED_PROPOSAL = (
+    "the proposed deficiency is not logged or dismissed yet: decide it on the test sheet "
+    "before the testing is re-performed"
+)
+
+
 def _sign_off(
     connection: psycopg.Connection[Any],
     principal: Principal,
@@ -2203,21 +2212,27 @@ def _sign_off(
                 "you signed off the testing or prepared a workpaper; "
                 "another reviewer must sign off the review"
             )
+        if current.test_round_id is not None:
+            from ai_workforce_api.test_rounds import round_reviewed
+
+            # A retest's deficiency is remediated only here, and only if the retest
+            # passed (owner's decision 2); a failed retest went back to remediation at
+            # its sign-off. Before the coverage, so the verdict it records follows it.
+            round_reviewed(cursor, organization_id, project_id, current.test_round_id, principal.id)
         # What this review covered, recorded as it signs: the sheet at its version, the
         # round, and each workpaper at its prepared version (workflow integrity W2). A
-        # later sign-off, round or workpaper is never covered by it.
+        # later sign-off, round or workpaper is never covered by it. Every review, a
+        # round's too, records the verdict the records propose as it signs (ST-2, 19
+        # November 2026): FINAL needs the latest signed review's verdict to be the one
+        # proposed (control_conclusions.concluded).
         from ai_workforce_api.control_conclusions import body_of
 
-        concluded = (
-            body_of(cursor.connection, project_id, control_id, principal)
-            if current.test_round_id is None
-            else None
-        )
+        concluded = body_of(cursor.connection, project_id, control_id, principal)
         coverage = {
             # The conclusion as proposed, and each deficiency's severity as rated (B3).
-            "conclusion": None if concluded is None else concluded.proposed,
+            "conclusion": concluded.proposed,
             "deficiencies": []
-            if concluded is None
+            if current.test_round_id is not None
             else [
                 {"id": str(item.id), "reference": item.reference, "severity": item.severity}
                 for item in concluded.deficiencies
@@ -2267,13 +2282,6 @@ def _sign_off(
                 """,
                 (project_id, control_id),
             )
-        else:
-            from ai_workforce_api.test_rounds import round_reviewed
-
-            # A retest's deficiency is remediated only here, and only if the retest
-            # passed (owner's decision 2); a failed retest went back to remediation at
-            # its sign-off.
-            round_reviewed(cursor, organization_id, project_id, current.test_round_id, principal.id)
         _audit(cursor, organization_id, project_id, principal.id, review_id, "review.signed_off",
                {"notes": current.counts, "coverage": coverage})  # fmt: skip
         _update_completion(cursor, project_id, principal.id)
