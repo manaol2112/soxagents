@@ -1,93 +1,157 @@
-# Testing strategy: risk-based and tiered
+# Testing strategy: risk-based, by gates
 
 Decided by the product owner on 19 October 2026, replacing the full Python regression
 suite as the gate for every milestone, and revised by the owner on 21 October 2026 into
-three tiers with risk-based escalation. The objective: audit-grade quality without running
-the whole suite for every change. Nothing here weakens authorization, segregation of
-duties, approval gates or audit traceability; those tests are the ones that always run.
+three tiers with risk-based escalation. Revised again by the owner on 19 November 2026 into
+the gates of §1 (testing assessment of that day, steps 1 to 5): "I still want the test to be
+run but just reasonable amount of test needed to ensure that I build is reliable, secure,
+and no bugs." The success criterion: "Every necessary test should still run, at the right
+time, using the most efficient reliable mechanism." Nothing here weakens authorization,
+segregation of duties, approval gates or audit traceability; those tests are the ones that
+always run, and the critical tier keeps every file it had.
 
-## 1. The tiers
+## 1. The gates
 
-### Tier 1: routine development
+The tiers of §2 and §4 still say *what* runs; the gates say *when* and *where*. CI is the
+integration gate: it runs the critical tier and every Node test on every push and pull
+request, on Linux, where it is green (docs/test-baseline.md). The critical and fast tiers are
+not rerun locally as a gate on unfinished work: on Windows that took 25 to 65 minutes per run
+and every failure it produced on 18 and 19 November 2026 was an environment error (B6), not a
+defect. Targeted tests, the fail-without-fix proof and independent review found the defects.
 
-For an ordinary code change:
+| Gate | When | What runs | Mechanism |
+|---|---|---|---|
+| G0 | Every change, every step | ruff, mypy, tsc and biome on the changed files; the tests selected for them | `make check-changed` |
+| G1 | A change is ready for review | G0; the safeguard tests of the touched area; for each **new** safeguard test only, proof that it fails without its fix; `test_migrations` and `test_schema` when a migration changed | `make test-files`, `make prove` |
+| G2 | High-risk changes only | One independent code review, given the diff and the G1 summary | An agent or a person |
+| G3 | A change to what a person sees | The committed browser checks; snapshots of the changed states; one design review of the changed states | Browser checks and the `ui-reviewer` agent, once |
+| G4 | Every push and pull request | Lint, types, the critical tier in four parallel parts, the fast tier's files not in it, every Node test, the web build, the secret scan and the dependency audit | GitHub Actions; required checks `baseline`, `secrets`, `dependencies` |
+| G5 | A milestone | G4 and `make test-full` on CI; coverage of the audit-critical modules and mutation testing are planned, not yet approved | CI, on demand |
+| G6 | A release | G5, a Windows CI job (planned), a migration rehearsal on a copy of the schema, a security review | CI, one review, the owner's approval |
 
-1. Formatting, linting and type checking for the modified code (`make format`, `make
-   lint`, `make typecheck`).
-2. The targeted tests for the modified components and the code that depends on them:
-   the tests of the changed files and their callers, chosen by hand or with `make
-   test-changed` (`make test-changed BASE=HEAD` selects only from the uncommitted and
-   untracked changes; `scripts/changed_tests.py --list` prints the selection without
-   running it).
-3. `make test-fast` once a feature change is complete.
+A gate's commands run through `scripts/run_tests.py`, so no agent supervises a test run: one
+heavy pytest run per machine at a time (a second one waits and says whose run it waits for),
+two workers locally, a wall-clock limit and stack dumps for a test that hangs, JUnit XML and
+the full log in `test-results/` (git-ignored), and a summary of at most 20 lines: counts,
+time, the failing test ids each with a one-line error, and a separate line counting the
+environment errors (10048, a 503 from a lost connection, a failed PostgreSQL connect). Each
+environment error is rerun once, alone; one that passes then is reported as environment and
+still counted, one that fails is a failure. On CI nothing is rerun: every failure counts.
 
-Decided by the owner on 23 October 2026, for active development:
+### G0: every change
 
-- After each meaningful change, run only the tests above plus the critical safeguard tests
-  the change could affect (approval enforcement, plan applicability, evidence
-  traceability, authorization and permissions, testing gates, approval history). Run the
-  relevant critical files, not the whole critical tier, and never skip one the change
-  could affect.
-- For a significant UI change, also check rendering, navigation, preserved form and filter
-  state, loading and error states, layouts at 390 px and 1440 px, keyboard use, motion
-  (and reduced motion), no unnecessary page reload, and that the page agrees with the
-  server after the action (the UI acceptance checklist in `docs/design-system.md`).
-- Do not run the full suite automatically after a step; it belongs to Tier 3, migration
-  validation, final verification before a merge or release, or the owner's request.
-- After each step report: the tests executed, passed and failed counts, execution time,
-  the tests deliberately deferred, and the risks not yet verified. Never describe targeted
-  runs as regression testing of the application. Before asking to commit, merge, or
-  release, list the outstanding full-regression requirements.
-- On machines where application control blocks `pytest.exe` (the `make test-*` targets
-  fail at once), run the same selection with `python -m pytest`, checking first that every
-  named file exists: a missing path collects nothing and exits 0.
+`make check-changed` runs the linters and type checkers of `make lint` and `make typecheck`
+on the files changed since the merge base with `origin/main` (`BASE=<ref>` to choose),
+uncommitted and untracked ones included, then the tests `scripts/changed_tests.py` selects:
+the tests that import or name a changed module, the migration tests when `migrations/`
+changed, the Node tests that import a changed web file, any changed test file pytest
+collects (in `tests/` or `services/api/tests/`) or Node test, and, for a changed Makefile,
+`pyproject.toml`, compose file, `.env.example`, script or workflow, every test that names the
+file plus its fixed guards (`GUARDS` in the script: the tier guard, the CI gate, the
+runner's and the selection's tests, `tests/test_smoke.py`). The selection is one level deep, so it complements the critical tier on CI rather than replacing
+it. Read the summary; the log is for a failure that needs investigating.
 
-### Tier 2: milestone closure
+After each step, report (the owner's decision of 23 October 2026, kept): the tests executed,
+the passed and failed counts, the execution time, the tests deliberately deferred, and the
+risks not yet verified. Never describe targeted runs as regression testing of the
+application. Before asking to commit, merge or release, list the outstanding
+full-regression requirements.
 
-Before a milestone is committed:
+### G1: ready for review
 
-1. Everything in Tier 1 for the milestone's changes.
-2. The relevant targeted and integration tests for the affected workflows, named in the
-   milestone report.
-3. `make test-fast`.
-4. `make test-critical`: authorization, segregation of duties, approvals, evidence
-   traceability, review independence, database integrity, model-execution safeguards.
-5. The milestone's own acceptance and safeguard tests (and its gated live tests where
-   the milestone measures a model).
-6. Migration validation whenever the database changes: `test_migrations` and
-   `test_schema` (in the critical set), the migration applied to the development
-   database, and the schema and record-preservation checks reported.
+1. G0, clean.
+2. The safeguard tests the change could affect, by its area: approval enforcement, plan
+   applicability, evidence traceability, authorization and permissions, testing gates,
+   approval history (the owner's list of 23 October 2026). Run the relevant critical files
+   with `make test-files TESTS='<files or node ids>'`; never skip one the change could affect.
+3. For each **new** safeguard test, `make prove TEST=<node id> FILES='<source files of the
+   fix>'`: in a temporary git worktree that reproduces the current tree (nothing here is
+   stashed or touched), the test must pass, then the named files are restored to the merge
+   base (the same as applying `git diff <base> -- <file>` in reverse) and the test must fail
+   on an assertion. `PROVED`, `NOT PROVED`, or `INCONCLUSIVE` when it fails only because the
+   revert broke an import or a name; then pass the fix's lines alone as `PATCH=<file>`.
+   Existing safeguard tests are not re-proved.
+4. Migration validation whenever the database changes: `test_migrations` and `test_schema`,
+   the migration applied to the development database, and the schema and
+   record-preservation checks reported.
 
-The full legacy suite is not required at every milestone.
+Risk-based escalation, at any gate: a change that touches model-execution safeguards,
+authentication, authorization, data integrity, migrations, approval boundaries, sampling,
+audit conclusions or shared infrastructure widens G1's selection to the affected dependencies
+and the critical invariants they hold (for example, a change to the agent caller runs every
+test that asserts a model failure is recorded as FAILED or FALLBACK, not only the caller's
+own tests). A High-risk change "runs the critical tier" (AGENTS.md) through G4 on CI.
 
-### Tier 3: major milestone or release
+### G2: independent review, High-risk changes only
 
-`make test-full` and every applicable integration, security and regression test:
+Conclusions and testing gates, approvals and sign-off, authorization and tenant scope,
+evidence reliance, migrations and stored data, the background workers, model prompts and
+tools, outbound email (and the rest of AGENTS.md's High class). One code reviewer, given the
+diff and the G1 summary; it is never asked to rerun what G1 recorded. These reviews found a
+blocking defect every time in November 2026 and are not reduced.
 
-- at the completion of a major milestone group (for example, all of M3);
-- before a production release;
-- after a significant architectural or shared-infrastructure change (the database layer,
-  the agent caller, authentication, the worker, the migration runner);
-- when targeted or critical tests suggest a wider regression risk.
+### G3: a visible change
 
-### Risk-based escalation, within any tier
+The committed browser checks run on the seeded synthetic states (being added: testing
+assessment step 5; until they are committed, the changed states are screenshotted as before,
+on synthetic data only). Snapshots are taken of the states the change alters, light and dark,
+1440 and 390 wide, including editing, empty and long content where the change can show them.
+The `ui-reviewer` agent reviews those changed states once; every blocking defect is fixed and
+the `ui-reviewer` re-checks the fixed states until no blocking defect remains; polish is
+listed, not blocking.
+A significant UI change is still checked against the UI acceptance checklist in
+`docs/design-system.md` (rendering, navigation, preserved form and filter state, loading and
+error states, 390 px and 1440 px, keyboard use, motion and reduced motion, no unnecessary
+page reload, the page agreeing with the server after the action).
 
-A change that touches model-execution safeguards, authentication, authorization, data
-integrity, migrations, approval boundaries, sampling, audit conclusions or shared
-infrastructure widens its tests: the selection must cover the affected dependencies and
-the critical invariants they hold (for example, a change to the agent caller runs every
-test that asserts a model failure is recorded as FAILED or FALLBACK, not only the
-caller's own tests). A high-risk change does not by itself require the whole suite; the
-milestone report says why the selection is enough, or escalates to Tier 3.
+### G4: every push and pull request
+
+`.github/workflows/ci.yml` runs, side by side: lint and types; the critical tier's Python
+files in four parts (`make test-critical-shard`, a deterministic split by file size that
+`test_ci_gate.py` checks covers `CRITICAL_PY` exactly); the fast tier's files that are not
+critical (`make test-fast-only`, `FAST_PY` minus `CRITICAL_PY`, which no CI run reached
+before; every file of either list runs in exactly one part); every Node test, which includes
+`CRITICAL_NODE`; and the web app's production build (`make web-build`). `security.yml` runs
+the secret scan and the dependency audit. Branch protection requires `baseline`, which
+always runs and fails unless every part succeeded, `secrets` and `dependencies`. Each job has
+a time limit, and a test part stops itself at 25 minutes, under its job's 30, so its
+summary is written. A CI result is reported only once the run on GitHub shows it; a
+closeout before the push says that the critical tier has not yet run on CI. JUnit XML is
+not uploaded as an artifact: that needs a new action, a supply-chain dependency for the
+owner to decide.
+
+### G5: a milestone
+
+G4, and the whole Python suite with `make test-full` on CI (the `Full suite` workflow, run on
+demand) at the completion of a major milestone group, before a production release, after a
+significant architectural or shared-infrastructure change, and when targeted or critical
+tests suggest a wider regression. A coverage report for the audit-critical modules and
+mutation testing of the conclusion, reliance and approval modules are planned, not yet
+approved.
+
+### G6: a release
+
+G5, a Windows CI job for the development platform (planned), a migration rehearsal on a copy
+of the schema, and a security review. The owner approves the release.
+
+On machines where application control blocks `pytest.exe`, the runner already calls
+`python -m pytest`; it refuses a target that does not exist, so a missing path never
+collects nothing and passes.
 
 ## 2. Commands
 
 | Command | What it runs | Typical time |
 |---|---|---|
-| `make test-fast` | `FAST_PY` Python files and `FAST_NODE` Node files; defaults are the workflow-integrity set | 2–4 min |
-| `make test-critical` | The CRITICAL files of §4 and the single safeguard tests of §6 (`CRITICAL_PICKED`), in parallel on six workers, then the Node safeguard tests (`CRITICAL_NODE`) | ≈ 6 min |
+| `make check-changed [BASE=<ref>]` | G0: lint and types on the changed files, then the tests `scripts/changed_tests.py` selects, through `scripts/run_tests.py` on two workers | minutes |
+| `make test-files TESTS='…'` | G1: the named test files or node ids through the runner (the touched area's safeguard tests) | depends |
+| `make prove TEST=<node id> FILES='…' [PATCH=<file>] [BASE=<ref>]` | G1, new safeguard tests only: passes with the fix, fails without it, in a temporary worktree | one test, twice |
+| `make test-critical-shard SHARD=k SHARDS=n` | G4: part k of n of `CRITICAL_PY`, through the runner on six workers, stopped at 25 min (CI runs four parts) | about a quarter of the tier |
+| `make test-fast-only` | G4: `FAST_PY` minus `CRITICAL_PY` (26 files on 19 Nov 2026), through the runner | not yet measured |
+| `make web-build` | G4: `next build` of the web app; locally it rewrites `apps/web/next-env.d.ts`, restore that file after | ≈ 15 s locally |
+| `make test-fast` | `FAST_PY` Python files and `FAST_NODE` Node files; defaults are the workflow-integrity set. On request only since 19 Nov 2026 | 25–27 min on Windows (19 Nov 2026) |
+| `make test-critical` | The CRITICAL files of §4 and the single safeguard tests of §6 (`CRITICAL_PICKED`), in parallel on six workers, then the Node safeguard tests (`CRITICAL_NODE`). CI runs it in parts (G4); not a local gate | ≈ 65 min on Windows, 33 min on Linux in one job (19 Nov 2026) |
 | `make test-changed [BASE=<ref>]` | `scripts/changed_tests.py`: tests that import or name the changed modules, migration tests when `migrations/` changed, Node tests importing changed web files; one level deep, so it complements `test-critical` rather than replacing it | depends |
-| `make test` | `test-critical` then the Node smoke test (what `make ci` runs) | |
+| `make test` | `test-critical` then every Node test (what `make ci` runs; CI's one job ran it until 19 Nov 2026) | |
 | Pre-launch hardening (Step 7) | `test_registration_hardening.py` (throttles, duplicate trials, concurrent registration), `test_storage_cleanup.py` (refused uploads, orphan sweep, the development store's guard), `test_archived_guard.py` (archived engagements read-only, active and completed unchanged, the demo reset), `test_trial_hardening.py` (abandoned runs, the quiet window, storage allowance) and `test_demo_reset.py` are in `CRITICAL_PY` | part of `make test-critical` |
 | D&I evidence traceable to the attributes (12 November 2026) | `test_design_traceability.py` (the planner proposes which approved attributes every D&I request addresses, for every kind of control, by the rules and by an agent that names none, on a carrier fixed per kind, as a proposal that never changes an accepted request's links, never for an excepted attribute, and ignoring one that is not approved; the design item that shows the control performed once is linked to every approved attribute whoever planned it, and to an attribute accepted later after the re-plan; a plan whose D&I items leave an approved attribute unaddressed is not released; since the D&I requests list of the same day the hold is per attribute and there is no early release, so it is refused whatever the reason). In `CRITICAL_PY`. `test_attributes_follow_understanding.py` (the attributes follow the understanding; no duplicate attribute on any path; one acceptance; queued work handed to the worker after the commit) is in `FAST_PY`. |
 | The D&I requests list (12 November 2026, B1f) | `test_design_requests.py`: approval boundary and evidence traceability (a D&I request is a person's only once accepted, all or none at the versions seen, a reviewer refused; a person's add, edit, links or restore accepts as that person; the planner never overwrites an accepted request and its addition stays proposed until accepted; every approved attribute is addressed by a request or excepted with a reason; the D&I evidence is released by the request that completes the list, as that person, with the audit record of what was released and the drafts handed over after the commit; whatever event finds the list settled releases it for the person of its last decision, with the trigger on the record, and never for someone who may no longer accept; a links change held to the request's version and to the planner; exceptions withdrawn once a request addresses their attribute; bounded working and drafting; one lock order; the release and its requests in one step; acceptance not surviving a removal; one test through the routes alone from a fresh launch; no early D&I release; migrations 0149 and 0150, the backfill and constraints). In `CRITICAL_PY`. `test_design_release.py`, `test_design_traceability.py`, `test_planning_gate.py` and `test_master_plans.py` hold the expectations rewritten for it, each with the old one noted. | part of `make test-critical` |
@@ -128,7 +192,8 @@ several times slower, so time a tier only when nothing else is running.
 
 Until the current branch is committed, `make test-changed` compares against `main` and
 selects almost everything; commit at each milestone so the selection is meaningful, or
-pass `BASE=<commit>`.
+pass `BASE=<commit>`. `make check-changed` compares against the merge base with
+`origin/main`, so a local `main` that lags behind does not widen its selection.
 
 ## 3. Rules for tests that fail or look obsolete
 
@@ -341,12 +406,23 @@ and `workflow-model` (queue sources).
 - M3d closure (the owner's conditional acceptance; migration 0099; the mapper, the reviewer and the instruction guard changed; `test_plan_evaluation.py` added to the fast and critical sets): `make test-critical` **454 passed**; `make test-fast` **168 Python and 130 Node passed**; every Node file **724 passed**; `make test-full` once, after the connection fix, **908 passed, 0 failed, 13 skipped**, peak 41 connections. The full-suite failures and hangs of the first M3d gate were one test's unbounded recursion (below, §6), not M3d. Expectations changed: see `docs/review/m3d/tests.md`.
 - Unified planning R1 closure (Tier 3 at the owner's request; migration 0104; shared plans, implementations, the reference plan, labels for split controls; `test_shared_plans.py` added to `CRITICAL_PY`, `test_sampling`'s approval test to `CRITICAL_PICKED`, `test_waiting.py` to `FAST_PY`): `make test-critical` **467 passed**; `make test-fast` **169 Python and 172 Node passed**; every Node file **778 passed**; `make test-full` **929 passed, 0 failed, 13 skipped** (live, opt-in), after a first run with 2 failures from earlier branch work (§6). Migration replay on an empty database and on disposable copies of the demonstration and development databases, with 0104 rolled back and applied again: no row changed. Record: docs/unified-planning-r1.md.
 - Release 2a (Tier 2; migrations 0105 and 0106, additive; the evidence catalog, specifications, compatibility rules, read-only consolidation analysis, the freshness gate; `test_evidence_catalog.py` added to `CRITICAL_PY`): `make test-critical` **485 passed**, then **489 passed** after the owner's commit conditions (reviewed sensitivity, unassigned groups never sendable, the freshness gate); `make test-fast` **169 Python and 172 Node passed**; every Node file **778 passed**; migration replay of 0105 and 0106 on disposable copies of the demonstration and development databases, no pre-existing row changed. The full suite was not run: no existing behaviour changed, and it runs at Release 2's close. Record: docs/release-2a.md.
+- The gates (19 November 2026, the owner's approval of the testing assessment's steps 1 to 5):
+  §1 rewritten from tiers to gates G0 to G6; `scripts/run_tests.py` with `make
+  check-changed`, `make test-files`, `make prove`, `make test-critical-shard` and `make
+  test-fast-only`; CI's one `baseline` job split into lint and types, four critical parts,
+  the fast-only part (26 fast-tier files no CI run had reached), every Node test and the web
+  build, with `baseline` kept as the required check over all of them; `make test-full` on CI
+  on demand (`full.yml`). The critical tier keeps every file and gains two guards,
+  `test_ci_gate.py` (the parts are `CRITICAL_PY` exactly; the required check fails unless
+  every part passed) and `test_run_tests_script.py` (the runner never reports a failing run
+  as passed or hides an environment error; a proof needs an assertion failure). The measured
+  baseline is in docs/test-baseline.md.
 
 ## 6. Regression prevention
 
 When a full run, a live run or a later milestone finds a failure that the routine sets
 missed, the milestone that finds it adds the lightest test that would have caught it to
-`make test-fast` or `make test-critical` (a whole file, or one test by its node id in
+`make test-fast` or `make test-critical` (both run on CI since 19 November 2026) (a whole file, or one test by its node id in
 `CRITICAL_PICKED`), and records it here. Assertions are not weakened, safeguards are not
 disabled, and expected outcomes are not changed merely to pass (§3).
 
@@ -379,19 +455,23 @@ Every milestone report states:
 5. The date and commit of the most recent successful full-suite execution, and whether it
    still applies to the code being closed.
 
-Closure checklist (Tier 2, and Tier 3 where §1 requires it):
+Closure checklist (a milestone: the gates of §1 its changes passed, and G5):
 
-- [ ] Formatting, lint and type checks clean for the changed code (known environment
-      exceptions named).
-- [ ] Targeted and integration tests for the affected workflows run and passing.
-- [ ] `make test-fast` passing.
-- [ ] `make test-critical` passing.
+- [ ] G0 clean for the changed code: lint and type checks (known environment exceptions
+      named) and the selected tests, from the `make check-changed` summary.
+- [ ] G1: the safeguard tests of every touched area run and passing; each new safeguard test
+      `PROVED` by `make prove`; migrations validated and applied to the development
+      database when the schema changed.
+- [ ] G2: an independent code review of every High-risk change, its blocking findings fixed.
+- [ ] G3: for a visible change, the browser checks passing and one design review of the
+      changed states with no blocking defect left; polish listed.
+- [ ] G4: the CI run on GitHub for the closing commit green (`baseline`, `secrets`,
+      `dependencies`), with its link.
+- [ ] G5: `make test-full` on CI where §1 requires it, or why it was not run.
 - [ ] The milestone's acceptance and safeguard tests, and gated live tests where a model
       is measured, run and passing, with their results recorded.
-- [ ] Migrations validated and applied to the development database, when the schema
-      changed.
 - [ ] Escalation considered (§1): the high-risk areas touched, and why the selection
-      covers them or why Tier 3 ran.
+      covers them or why G5 ran.
 - [ ] Every rewritten expectation recorded with the old one, the new one and the
       justification (§3); any test missed by the routine sets added to them (§6).
 - [ ] The diff reviewed for unrelated changes, secrets, unsafe defaults and data exposure.

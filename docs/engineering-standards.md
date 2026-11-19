@@ -27,7 +27,7 @@ Classify by what could go wrong, not by how many files change.
 | --- | --- | --- |
 | Low | Local and reversible. No effect on security, stored data, or another module's interface | Targeted tests for the change |
 | Medium | Changes behaviour that several screens or modules share, or an interface between modules | A short impact note (what else calls this, what could regress) before coding; tests for the affected callers |
-| High | Touches any of: authorization or sessions; tenant scoping; a migration or stored data; approvals, sign-offs or review independence; outbound email or anything a client receives; model prompts, tools or budgets; the background workers; a public API body; a destructive command | A written design and risk note agreed before coding; the critical tier; independent review (section 5) |
+| High | Touches any of: authorization or sessions; tenant scoping; a migration or stored data; approvals, sign-offs or review independence; outbound email or anything a client receives; model prompts, tools or budgets; the background workers; a public API body; a destructive command | A written design and risk note agreed before coding; the critical tier, which CI runs on every push and pull request (G4), while locally G1 runs the touched area's safeguard tests (`docs/test-strategy.md` §1); independent review (section 5) |
 
 When unsure between two classes, take the higher.
 

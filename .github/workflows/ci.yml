@@ -15,9 +15,58 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+
+# G4, the integration gate (docs/test-strategy.md §1). Until 19 Nov 2026 one job ran lint,
+# types, the critical tier and every Node test in turn, in 26 to 42 minutes. The same checks
+# now run side by side: the critical tier in four parts (make test-critical-shard; the split
+# is deterministic and services/api/tests/test_ci_gate.py checks that the parts together are
+# CRITICAL_PY exactly); the fast tier's files that are not critical (make test-fast-only),
+# which no CI run reached before; and the production build of the web app, which no check
+# compiled before. Branch protection requires `baseline`, which passes only when every part
+# passed.
 jobs:
-  baseline:
+  gate:
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.minutes }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: lint and types
+            make: lint typecheck
+            database: false
+            minutes: 20
+          - name: critical 1 of 4
+            make: test-critical-shard SHARD=1 SHARDS=4
+            database: true
+            minutes: 30
+          - name: critical 2 of 4
+            make: test-critical-shard SHARD=2 SHARDS=4
+            database: true
+            minutes: 30
+          - name: critical 3 of 4
+            make: test-critical-shard SHARD=3 SHARDS=4
+            database: true
+            minutes: 30
+          - name: critical 4 of 4
+            make: test-critical-shard SHARD=4 SHARDS=4
+            database: true
+            minutes: 30
+          - name: fast only
+            make: test-fast-only
+            database: true
+            minutes: 30
+          - name: node tests
+            make: test-node
+            database: false
+            minutes: 15
+          - name: web build
+            make: web-build
+            database: false
+            minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -48,13 +97,8 @@ jobs:
       - name: Install dependencies
         run: make install
 
-      - name: Lint
-        run: make lint
-
-      - name: Typecheck
-        run: make typecheck
-
       - name: Write local database env
+        if: matrix.database
         run: |
           set -euo pipefail
           password="$(openssl rand -hex 24)"
@@ -73,7 +117,39 @@ jobs:
       # The tests create their own databases on this server (services/api/tests/conftest.py).
       # Only PostgreSQL is started: Temporal and the object store are not needed by the gate.
       - name: Start PostgreSQL
+        if: matrix.database
         run: docker compose up -d --wait --wait-timeout 180 postgres
 
-      - name: Test
-        run: make test
+      # A test part runs through scripts/run_tests.py: its summary is printed here, the
+      # JUnit XML and the full log are in test-results/. On CI an environment error counts as
+      # a failure and is never rerun.
+      - name: Run
+        env:
+          MAKE_ARGS: ${{ matrix.make }}
+        run: make $MAKE_ARGS
+
+      - name: Summary of the part
+        if: always() && matrix.database
+        run: cat test-results/*/summary.txt >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Log of a failed part
+        if: failure() && matrix.database
+        run: tail -n 200 test-results/*/pytest.log || true
+
+  # The required check. A job whose needs failed would be skipped, and a skipped required
+  # check counts as passed, so this one always runs and fails unless every part succeeded.
+  baseline:
+    needs: [gate]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every part of the gate passed
+        env:
+          RESULT: ${{ needs.gate.result }}
+        run: |
+          if [ "$RESULT" != "success" ]; then
+            echo "The gate's result is '$RESULT': a part failed, timed out or was cancelled."
+            exit 1
+          fi
+          echo "Lint, types, the critical tier in four parts, the fast-only files, every Node test and the web build passed."

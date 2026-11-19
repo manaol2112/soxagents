@@ -45,6 +45,7 @@ from ai_workforce_api.evidence_assurance import (  # noqa: E402
 )
 from ai_workforce_api.evidence_extraction import MAX_TEXT  # noqa: E402
 from ai_workforce_api.models import ModelConfig, ModelRaw, ModelRequest  # noqa: E402
+from ai_workforce_api.prompt_data import neutral  # noqa: E402
 from ai_workforce_api.settings import Settings  # noqa: E402
 from evals.assurance import score  # noqa: E402
 from evals.assurance.case_set import (  # noqa: E402
@@ -243,7 +244,20 @@ def test_prompts_build_and_the_reviewer_sees_nothing_of_the_assessor(case: EvalC
         for attribute in case.attributes:
             assert f'"code": "{attribute.code}"' in prompt
         for spec in chain.files:
-            assert spec.text[:200] in prompt
+            # Rewritten 19 November 2026 (docs/test-baseline.md, B9). Old: the first 200
+            # characters of each file appear in the prompt exactly as stored. New: they
+            # appear as the prompt-data neutraliser gives them (a41dad1, 18 November 2026,
+            # owner-approved: every tag-shaped token in untrusted text is made inert, so
+            # "<marcus.hale@...>" arrives as "‹marcus.hale@...>"); before it, only the
+            # prompt's own tag names were. Why: a file's text must never be able to open or
+            # close a block of the prompt; quotes still match the stored text, as citation
+            # matching folds "‹" back to "<". The file is still checked to be in the prompt,
+            # and, where it holds a tag-shaped token, checked not to arrive raw. The
+            # neutraliser is taken from prompt_data, not from the module under test.
+            given = neutral(spec.text)[:200]
+            assert given in prompt
+            if given != spec.text[:200]:
+                assert spec.text[:200] not in prompt
     marked = scripted_answer(case)
     for attribute in marked["attributes"]:
         attribute["reason"] = f"{MARKER} {attribute['reason']}"[:400]

@@ -17,7 +17,7 @@ else
 BASH := bash
 endif
 
-.PHONY: help toolchain check check-tesseract install install-tesseract start free-ports go awake stop status format lint typecheck api web migrate test test-fast test-critical test-demo test-changed test-full ci reset test-node backup restore backup-verify
+.PHONY: help toolchain check check-tesseract install install-tesseract start free-ports go awake stop status format lint typecheck api web migrate test test-fast test-critical test-demo test-changed test-full ci reset test-node check-changed test-files prove test-critical-shard test-fast-only web-build backup restore backup-verify
 
 help:
 	@echo "make toolchain  Show pinned Node.js, pnpm, Python, and uv versions"
@@ -35,10 +35,16 @@ help:
 	@echo "make typecheck  Run mypy and tsc"
 	@echo "make api        Run the API on 127.0.0.1:8000"
 	@echo "make web        Run the web app on 127.0.0.1:3000"
+	@echo "make web-build  The production build of the web app (next build), as CI runs it"
 	@echo "make test       The milestone gate: test-critical, then the Node tests"
 	@echo "make test-fast  Targeted tests for the active work (FAST_PY=... FAST_NODE=... to choose)"
 	@echo "make test-critical  Audit-integrity and security regression tests, in parallel"
 	@echo "make test-changed   Tests for the files changed since main (BASE=<ref> to compare)"
+	@echo "make check-changed  G0: lint and types on the changed files, then their tests, in a summary"
+	@echo "make test-files TESTS='<files or node ids>'  G1: named tests (the touched area's safeguards)"
+	@echo "make prove TEST=<node id> FILES='<fix files>'  G1: the new safeguard test fails without its fix"
+	@echo "make test-critical-shard SHARD=k SHARDS=n  Part k of n of the critical tier (what CI runs)"
+	@echo "make test-fast-only  The fast tier's files that are not critical (what CI runs)"
 	@echo "make test-full  The entire legacy Python suite (only when the owner asks)"
 	@echo "make ci         Run lint, typecheck, and test"
 	@echo "make backup     Back up a database to backups/ (DB=name; default: DATABASE_URL's)"
@@ -124,18 +130,21 @@ stop: require-env
 status: require-env
 	$(COMPOSE) ps
 
+# scripts/run_tests.py decides whether a gate passed and scripts/changed_tests.py what it
+# runs, so both are held to the same checks.
 format:
-	uv run ruff format tests services/api
-	uv run ruff check --fix tests services/api
+	uv run ruff format tests services/api scripts/run_tests.py scripts/changed_tests.py
+	uv run ruff check --fix tests services/api scripts/run_tests.py scripts/changed_tests.py
 	pnpm exec biome check --write
 
 lint:
-	uv run ruff format --check tests services/api
-	uv run ruff check tests services/api
+	uv run ruff format --check tests services/api scripts/run_tests.py scripts/changed_tests.py
+	uv run ruff check tests services/api scripts/run_tests.py scripts/changed_tests.py
 	pnpm exec biome check
 
 typecheck:
 	uv run mypy
+	uv run mypy scripts/run_tests.py scripts/changed_tests.py
 	pnpm exec tsc --noEmit --incremental false
 	pnpm exec tsc -p apps/web/tsconfig.json --noEmit --incremental false
 
@@ -143,6 +152,11 @@ typecheck:
 # launcher .exe (os error 4551), and the API then never started under `make go`.
 api: require-env
 	set -a && . ./.env && set +a && uv run --package ai-workforce-api python -m uvicorn ai_workforce_api.main:app --host 127.0.0.1 --port 8000 --reload --reload-dir services/api/ai_workforce_api
+
+# The production build, which no other check compiles (CI runs it on every push). Locally,
+# it rewrites apps/web/next-env.d.ts to the build's type paths: restore that file after.
+web-build:
+	pnpm --filter web build
 
 # WEB_HOST=0.0.0.0 in .env lets other devices on the network open the workspace; the
 # default keeps it on this machine.
@@ -171,7 +185,7 @@ FAST_NODE ?= tests/button-hover.test.ts tests/attributes-handoff-model.test.ts t
 # call's containment, and a pass standing only on cited evidence.
 CRITICAL_PICKED := $(addprefix $(API_TESTS)/,test_evidence_plans.py::test_the_agent_plans_when_its_plan_passes_the_checks test_evidence_analysis.py::test_a_rejected_model_answer_falls_back_to_the_rules test_pbc_drafting.py::test_a_bad_or_failed_model_draft_falls_back_to_the_rules test_evidence_reading.py::test_claude_receives_images_as_base64_blocks_before_the_prompt test_console.py::test_a_failed_answer_can_be_retried_in_place test_console.py::test_a_busy_model_is_tried_again_before_the_turn_gives_up test_system_applicability.py::test_a_report_waits_for_a_model_and_uploads_are_checked test_control_context.py::test_a_pass_stands_only_on_cited_evidence test_sampling.py::test_a_population_gets_a_proposed_test_plan_that_a_person_approves)
 CRITICAL_NODE := tests/no-autofill.test.ts tests/control-understanding-contract.test.ts
-CRITICAL_PY := $(addprefix $(API_TESTS)/,test_authentication_profile.py test_agent_answers.py test_design_traceability.py test_design_requests.py test_design_evidence.py test_evidence_assurance.py test_evidence_wizard.py test_planner_reliability.py test_control_details.py test_understanding_chat.py test_methodology.py test_access.py test_actions.py test_agents.py test_approvals.py test_auth.py test_authorization.py test_execution.py test_security.py test_policy.py test_schema.py test_migrations.py test_independence.py test_control_reviews.py test_design_conclusions.py test_design_release.py test_control_conclusions.py test_round_reviews.py test_plan_impact.py test_round_readiness.py test_round_basis.py test_queue.py test_signoff_history.py test_planning_gate.py test_master_plans.py test_evidence_flow.py test_evidence_versions.py test_evidence.py test_engagement_integrity.py test_handoffs.py test_outbound.py test_smtp_mailbox.py test_support_notifications.py test_subscriptions.py test_demo.py test_mailbox.py test_inbound.py test_health.py test_control_journey.py test_test_rounds.py test_workspace.py test_phase_release.py test_test_citations.py test_console_citations.py test_evidence_review.py test_testing_engine.py test_workpapers.py test_google.py test_invitations.py test_demo_requests.py test_evidence_portal.py test_projects.py test_tasks.py test_workflows.py test_failures.py test_durable.py test_agent_execution.py test_provenance.py test_evidence_corpus.py test_grounded_testing.py test_reliability.py test_hostile_evidence.py test_plan_evaluation.py test_shared_plans.py test_evidence_catalog.py test_evidence_groups.py test_evidence_owners.py test_evidence_status.py test_registration_hardening.py test_storage_cleanup.py test_archived_guard.py test_evidence_findings.py test_evidence_dialog.py test_evidence_workspace.py test_sample_traces.py test_trial_hardening.py test_demo_reset.py test_engagement_close.py test_test_infrastructure.py test_assurance_upgrade.py test_attribute_dispositions.py test_file_reliability.py test_workpaper_drafts.py test_design_conclusion_choice.py test_workpaper_review_notes.py test_design_review_requests.py test_design_points.py test_design_narrative_prompt.py test_workpaper_redraft_model.py test_workpaper_redraft.py test_understanding_once_rules.py test_understanding_once.py test_understanding_review_rules.py test_understanding_review.py test_walkthrough_since.py test_control_understanding_contract.py test_prompt_data.py test_reliability_audit.py test_secret_text.py test_test_tiers.py test_route_authorization.py test_web_calls_api_routes.py test_scheduler_parity.py test_request_status_moves.py test_prompt_neutral_everywhere.py) $(CRITICAL_PICKED)
+CRITICAL_PY := $(addprefix $(API_TESTS)/,test_authentication_profile.py test_agent_answers.py test_design_traceability.py test_design_requests.py test_design_evidence.py test_evidence_assurance.py test_evidence_wizard.py test_planner_reliability.py test_control_details.py test_understanding_chat.py test_methodology.py test_access.py test_actions.py test_agents.py test_approvals.py test_auth.py test_authorization.py test_execution.py test_security.py test_policy.py test_schema.py test_migrations.py test_independence.py test_control_reviews.py test_design_conclusions.py test_design_release.py test_control_conclusions.py test_round_reviews.py test_plan_impact.py test_round_readiness.py test_round_basis.py test_queue.py test_signoff_history.py test_planning_gate.py test_master_plans.py test_evidence_flow.py test_evidence_versions.py test_evidence.py test_engagement_integrity.py test_handoffs.py test_outbound.py test_smtp_mailbox.py test_support_notifications.py test_subscriptions.py test_demo.py test_mailbox.py test_inbound.py test_health.py test_control_journey.py test_test_rounds.py test_workspace.py test_phase_release.py test_test_citations.py test_console_citations.py test_evidence_review.py test_testing_engine.py test_workpapers.py test_google.py test_invitations.py test_demo_requests.py test_evidence_portal.py test_projects.py test_tasks.py test_workflows.py test_failures.py test_durable.py test_agent_execution.py test_provenance.py test_evidence_corpus.py test_grounded_testing.py test_reliability.py test_hostile_evidence.py test_plan_evaluation.py test_shared_plans.py test_evidence_catalog.py test_evidence_groups.py test_evidence_owners.py test_evidence_status.py test_registration_hardening.py test_storage_cleanup.py test_archived_guard.py test_evidence_findings.py test_evidence_dialog.py test_evidence_workspace.py test_sample_traces.py test_trial_hardening.py test_demo_reset.py test_engagement_close.py test_test_infrastructure.py test_assurance_upgrade.py test_attribute_dispositions.py test_file_reliability.py test_workpaper_drafts.py test_design_conclusion_choice.py test_workpaper_review_notes.py test_design_review_requests.py test_design_points.py test_design_narrative_prompt.py test_workpaper_redraft_model.py test_workpaper_redraft.py test_understanding_once_rules.py test_understanding_once.py test_understanding_review_rules.py test_understanding_review.py test_walkthrough_since.py test_control_understanding_contract.py test_prompt_data.py test_reliability_audit.py test_secret_text.py test_test_tiers.py test_ci_gate.py test_run_tests_script.py test_changed_tests.py test_route_authorization.py test_web_calls_api_routes.py test_scheduler_parity.py test_request_status_moves.py test_prompt_neutral_everywhere.py) tests/test_smoke.py $(CRITICAL_PICKED)
 
 # Test files that run only in the full suite (make test-full), by decision rather than by
 # omission: every pytest file is in the fast, critical or demo tier or is named here, and
@@ -201,6 +215,47 @@ test-critical: require-env
 BASE ?=
 test-changed: require-env
 	set -a && . ./.env && set +a && uv run python scripts/changed_tests.py --workers $(WORKERS) $(if $(BASE),--base $(BASE),)
+
+# The test runner (scripts/run_tests.py, docs/test-strategy.md §1): one heavy pytest run on
+# this machine at a time (a second one waits and says so), a wall-clock limit, JUnit XML
+# and the log in test-results/ (git-ignored), and a summary of at most 20 lines with
+# environment errors (B6) rerun once alone and counted on their own line.
+RUN_TESTS := uv run python scripts/run_tests.py
+
+# G0, every step: ruff, mypy, tsc and biome on the changed files, then the tests
+# scripts/changed_tests.py selects for them, on two workers.
+check-changed: require-env
+	set -a && . ./.env && set +a && $(RUN_TESTS) changed $(if $(BASE),--base $(BASE),)
+
+# G1: the safeguard tests of the touched area (docs/test-strategy.md §1), or any named
+# files or node ids, through the same runner.
+test-files: require-env
+	@test -n "$(TESTS)" || (echo "Usage: make test-files TESTS='<test files or node ids>'"; exit 2)
+	set -a && . ./.env && set +a && $(RUN_TESTS) pytest --label files $(TESTS)
+
+# G1, for a NEW safeguard test only: it passes with its fix and fails without it, in a
+# temporary worktree (nothing here is stashed or touched). FILES are the fix's source files,
+# restored to BASE (default: the merge base with main); or PATCH=<file> reversed instead.
+prove: require-env
+	@test -n "$(TEST)" || (echo "Usage: make prove TEST=<pytest node id> FILES='<source files of the fix>' [PATCH=<file>] [BASE=<ref>]"; exit 2)
+	set -a && . ./.env && set +a && $(RUN_TESTS) prove --test "$(TEST)" $(if $(BASE),--base $(BASE),) $(if $(PATCH),--patch $(PATCH),) $(FILES)
+
+# G4, on CI: the critical tier's Python files in SHARDS parallel jobs (.github/workflows/
+# ci.yml). The split is by file size and deterministic; test_ci_gate.py checks that the
+# shards together are CRITICAL_PY exactly. The Node files of CRITICAL_NODE run in the
+# Node job, which runs every Node test.
+SHARDS ?= 4
+SHARD ?= 1
+# 25 minutes, under the CI job's 30, so a hung part still writes its summary.
+CI_PART_TIMEOUT ?= 1500
+test-critical-shard: require-env
+	set -a && . ./.env && set +a && $(RUN_TESTS) pytest --label critical-$(SHARD)-of-$(SHARDS) --workers $(WORKERS) --timeout $(CI_PART_TIMEOUT) --shard $(SHARD)/$(SHARDS) $(CRITICAL_PY)
+
+# G4, on CI: the fast tier's files that are not in the critical tier, which no CI part ran
+# before 19 Nov 2026 (CI ran the critical tier and the Node tests only). Computed from the
+# two lists, so a file added to FAST_PY runs on CI the day it is added (test_ci_gate.py).
+test-fast-only: require-env
+	set -a && . ./.env && set +a && $(RUN_TESTS) pytest --label fast-only --workers $(WORKERS) --timeout $(CI_PART_TIMEOUT) $(filter-out $(CRITICAL_PY),$(FAST_PY))
 
 # Every node test: about four seconds, so no hand-kept list decides which ones run.
 test-node:
