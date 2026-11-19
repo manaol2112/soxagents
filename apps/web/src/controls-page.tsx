@@ -29,13 +29,13 @@ import {
   type PageRow,
   type PageView,
   PLAN_FILTER_LABEL,
-  PLAN_LABEL,
   type PlanStatus,
   pageOf,
   readPageView,
+  rowPills,
   SOURCE_LABEL,
   STEPS,
-  stepStates,
+  statusSteps,
   TESTING_LABEL,
   type TestingStatus,
   TYPE_FILTER_LABEL,
@@ -46,6 +46,7 @@ import {
 } from "./controls-page-model";
 import { useGuardedRouter } from "./guarded-router";
 import { planningHref } from "./planning-model";
+import { RowExtra } from "./row-extra";
 import {
   CONTROLS_FILTER_EVENT,
   type ControlsFor,
@@ -54,6 +55,7 @@ import { SetupForm } from "./setup-form";
 import { layerIcon } from "./system-layer";
 import { controlStepHref } from "./testing-hub-model";
 import { type IconName, UiIcon } from "./ui-icon";
+import { useFocusReturn } from "./use-focus-return";
 
 type Ids = { organizationId: string; projectId: string };
 
@@ -79,32 +81,15 @@ const TESTINGS: TestingStatus[] = [
   "COMPLETED",
   "EXCEPTIONS",
 ];
+/** The detail's tabs: the ones with content of their own (product owner, 18 November
+ * 2026). Plan, Evidence, Testing, Conclusions and History each held one line the status
+ * card says and a link; the links are on the card's steps. */
 const TABS = [
   "Overview",
   "Organization context",
   "Governing documents",
-  "Plan",
-  "Evidence",
-  "Testing",
-  "Conclusions",
-  "History",
 ] as const;
 type Tab = (typeof TABS)[number];
-const stepOf = (key: string) =>
-  STEPS.find((step) => step.key === key) ?? STEPS[0];
-/** The tabs that open a step of the control's own page. */
-const TAB_STEP: Record<
-  Exclude<
-    Tab,
-    "Overview" | "Organization context" | "Governing documents" | "History"
-  >,
-  (typeof STEPS)[number] | undefined
-> = {
-  Plan: stepOf("PLAN"),
-  Evidence: stepOf("REQUEST"),
-  Testing: stepOf("TEST"),
-  Conclusions: stepOf("CONCLUDE"),
-};
 
 const PLAN_TONE: Record<PlanStatus, string> = {
   DRAFT: "is-muted",
@@ -260,8 +245,14 @@ function Pill({ tone, children }: { tone: string; children: ReactNode }) {
   return <span className={`cpg-pill ${tone}`}>{children}</span>;
 }
 
-/** A control's client context and documents, read when its row first opens. */
-function useControlContext(ids: Ids, id: string, open: boolean) {
+/** A control's client context and documents, read when its row first opens; `retry`
+ * reads them again after a failure (design review, 18 November 2026: a failed read
+ * showed the empty state). */
+function useControlContext(
+  ids: Ids,
+  id: string,
+  open: boolean,
+): [ControlContext | null | "failed", () => void] {
   const [context, setContext] = useState<ControlContext | null | "failed">(
     null,
   );
@@ -296,7 +287,7 @@ function useControlContext(ids: Ids, id: string, open: boolean) {
       live = false;
     };
   }, [ids, id, open, context]);
-  return context;
+  return [context, () => setContext(null)];
 }
 
 function Detail({
@@ -304,71 +295,76 @@ function Detail({
   row,
   action,
   editable,
+  onClose,
 }: {
   ids: Ids;
   row: PageRow;
   action: ScopeAction | undefined;
   editable: boolean;
+  /** Escape in the detail closes it. */
+  onClose: () => void;
 }) {
   const [tab, setTab] = useState<Tab>("Overview");
-  const context = useControlContext(ids, row.id, true);
+  // Escape anywhere in the detail closes it (a form in it closes first, through the
+  // page's focus keeper; E1 design review, round 9).
+  const [box, setBox] = useState<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (box === null) {
+      return;
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !event.defaultPrevented) {
+        event.stopPropagation();
+        onClose();
+      }
+    };
+    box.addEventListener("keydown", onKey);
+    return () => box.removeEventListener("keydown", onKey);
+  }, [box, onClose]);
+  const [context, retry] = useControlContext(ids, row.id, true);
   const loaded = context !== null && context !== "failed" ? context : null;
   const questions = (loaded?.design?.slots ?? []).filter(
     (slot) => !slot.automatic,
   );
   const documents = loaded?.documents ?? [];
-  const states = stepStates(row.step);
-  const facts: Array<{ label: string; value: ReactNode; icon: IconName }> = [
-    {
-      label: "System / application",
-      value: row.system || "None",
-      icon: "server",
-    },
-    { label: "Process", value: row.process, icon: "layers" },
-    { label: "Control area", value: row.area, icon: "shield" },
-    {
-      label: "Type",
-      value: <span className="cpg-type">{TYPE_LABEL[row.type]}</span>,
-      icon: "grid",
-    },
-    {
-      label: "Key control",
-      value: row.key ? (
-        <Pill tone="is-success">
-          <UiIcon name="check" size={11} /> Yes
-        </Pill>
-      ) : (
-        "No"
-      ),
-      icon: "star",
-    },
-    { label: "Frequency", value: row.frequency || "Not stated", icon: "clock" },
-  ];
-  const count = (item: Tab) =>
-    item === "Organization context" && loaded !== null
-      ? questions.length
-      : item === "Governing documents" && loaded !== null
-        ? documents.length
-        : null;
-  const phase = (step: (typeof STEPS)[number] | undefined) =>
-    step === undefined ? null : (
-      <div className="cpg-phase">
-        <p>
-          <strong>{step.label}</strong>{" "}
-          {row.phaseLabels[step.key] ??
-            (states[step.key] === "done" ? "Done" : "Not started")}
-        </p>
-        <a
-          className="btn-secondary btn-sm"
-          href={stepHref(ids, row.id, step.link)}
-        >
-          Open {step.label.toLowerCase()} in the control
-          <UiIcon name="arrow" size={13} />
-        </a>
-      </div>
+  // Only what the row above does not show (product owner, 18 November 2026: "remove the
+  // repetition"): the row has the system, the process, the type, the frequency, Key and
+  // the owner; the control's area shows when it is not the process the row names.
+  const facts: Array<{ label: string; value: ReactNode; icon: IconName }> =
+    row.area !== "" && row.area !== row.process
+      ? [{ label: "Control area", value: row.area, icon: "shield" }]
+      : [];
+  /** The tab's count: a placeholder while it is read, so the tabs never shift; none when
+   * the read failed (the tab says so). */
+  const count = (item: Tab): ReactNode =>
+    item === "Overview" ? null : context === null ? (
+      <small className="cpg-count-wait" aria-hidden="true" />
+    ) : loaded === null ? null : (
+      <small>
+        {item === "Organization context" ? questions.length : documents.length}
+      </small>
     );
+  // "Try again" goes with its line once the read is under way: focus goes to what the
+  // read then shows (E1 design review, round 6: it fell to the page's body).
+  const focus = useFocusReturn();
+  const failed = (what: string) => (
+    <div className="cpg-failed" role="alert" ref={focus.ref}>
+      <p>{what} could not be read.</p>
+      <button
+        type="button"
+        className="btn-secondary btn-sm"
+        onClick={() => {
+          focus.returnFocus("answer");
+          retry();
+        }}
+      >
+        <UiIcon name="retry" size={13} />
+        Try again
+      </button>
+    </div>
+  );
   return (
-    <div className="cpg-detail">
+    <div className="cpg-detail" ref={setBox}>
       <div className="cpg-detail-main">
         <nav className="cpg-tabs" aria-label={`${row.ref} details`}>
           {TABS.map((item) => (
@@ -380,7 +376,7 @@ function Detail({
               onClick={() => setTab(item)}
             >
               {item}
-              {count(item) !== null ? <small>{count(item)}</small> : null}
+              {count(item)}
             </button>
           ))}
         </nav>
@@ -388,19 +384,21 @@ function Detail({
           <>
             <h4>Control description</h4>
             <p className="cpg-description">{row.description || row.title}</p>
-            <dl className="cpg-facts">
-              {facts.map((fact) => (
-                <div key={fact.label}>
-                  <dt>{fact.label}</dt>
-                  <dd>
-                    <span className="cpg-fact-icon" aria-hidden="true">
-                      <UiIcon name={fact.icon} size={14} />
-                    </span>
-                    {fact.value}
-                  </dd>
-                </div>
-              ))}
-            </dl>
+            {facts.length > 0 ? (
+              <dl className="cpg-facts">
+                {facts.map((fact) => (
+                  <div key={fact.label}>
+                    <dt>{fact.label}</dt>
+                    <dd>
+                      <span className="cpg-fact-icon" aria-hidden="true">
+                        <UiIcon name={fact.icon} size={14} />
+                      </span>
+                      {fact.value}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            ) : null}
             {editable && action !== undefined && row.included ? (
               <SetupForm className="cpg-remove">
                 <Hidden ids={ids} action={action} />
@@ -418,15 +416,17 @@ function Detail({
           </>
         ) : tab === "Organization context" ? (
           context === null ? (
-            <p className="cpg-muted">
+            <p className="cpg-muted cpg-tab-note">
               Loading the organization-specific questions…
             </p>
+          ) : context === "failed" ? (
+            failed("The organization-specific questions")
           ) : questions.length === 0 ? (
-            <p className="cpg-muted">
+            <p className="cpg-muted cpg-tab-note" data-focus-return="">
               This control has no organization-specific questions.
             </p>
           ) : (
-            <ul className="cpg-list">
+            <ul className="cpg-list" data-focus-return="">
               {questions.map((slot) => (
                 <li key={slot.key}>
                   <span>{slot.question || slot.label}</span>
@@ -441,85 +441,122 @@ function Detail({
               ))}
             </ul>
           )
-        ) : tab === "Governing documents" ? (
-          context === null ? (
-            <p className="cpg-muted">Loading the documents…</p>
-          ) : documents.length === 0 ? (
-            <p className="cpg-muted">
-              No policy, procedure, narrative or reference applies to this
-              control yet.
-            </p>
-          ) : (
-            <ul className="cpg-list">
-              {documents.map((document) => (
-                <li key={document.id}>
-                  <span>
-                    <UiIcon name="file" size={13} /> {document.title}
-                  </span>
-                  <small>{document.kind.replace("_", " ").toLowerCase()}</small>
-                </li>
-              ))}
-            </ul>
-          )
-        ) : tab === "History" ? (
-          <a
-            className="btn-secondary btn-sm"
-            href={`${controlHref(ids, row.id)}&tab=activity#activity`}
-          >
-            Open the control&apos;s history
-            <UiIcon name="arrow" size={13} />
-          </a>
+        ) : context === null ? (
+          <p className="cpg-muted cpg-tab-note">Loading the documents…</p>
+        ) : context === "failed" ? (
+          failed("The governing documents")
+        ) : documents.length === 0 ? (
+          <p className="cpg-muted cpg-tab-note" data-focus-return="">
+            No policy, procedure, narrative or reference applies to this control
+            yet.
+          </p>
         ) : (
-          phase(TAB_STEP[tab])
+          <ul className="cpg-list" data-focus-return="">
+            {documents.map((document) => (
+              <li key={document.id}>
+                <span>
+                  <UiIcon name="file" size={13} /> {document.title}
+                </span>
+                <small>{document.kind.replace("_", " ").toLowerCase()}</small>
+              </li>
+            ))}
+          </ul>
         )}
       </div>
+      <StatusCard ids={ids} row={row} action={action} editable={editable} />
+    </div>
+  );
+}
+
+/** Where the control stands and what is next, beside its detail. Each step's mark is the
+ * journey's (statusSteps); the step the control is at has the one button; a step done
+ * opens in the control from its own link (the Plan, Evidence, Testing and Conclusions
+ * tabs held only that link and the line said here, and are gone: product owner,
+ * 18 November 2026); the control's history opens from the foot. Out of scope, the card is
+ * that one fact and bringing it back. */
+function StatusCard({
+  ids,
+  row,
+  action,
+  editable,
+}: {
+  ids: Ids;
+  row: PageRow;
+  action: ScopeAction | undefined;
+  editable: boolean;
+}) {
+  const link = (key: string) =>
+    STEPS.find((step) => step.key === key)?.link ?? "plan";
+  if (!row.included) {
+    return (
       <aside className="cpg-steps" aria-label="Status and next steps">
         <h4>Status and next steps</h4>
         <ol>
-          {STEPS.map((step) => {
-            const state = states[step.key];
-            return (
-              <li key={step.key} className={`is-${state}`}>
-                <span className="cpg-step-mark" aria-hidden="true">
-                  {state === "done" ? <UiIcon name="check" size={11} /> : null}
-                </span>
-                <span className="cpg-step-text">
-                  <strong>
-                    {step.key === "PLAN" && row.plan === "PENDING"
-                      ? "Plan to approve"
-                      : step.label}
-                  </strong>
-                  <small>
-                    {row.phaseLabels[step.key] ??
-                      (state === "done"
-                        ? "Done"
-                        : state === "now"
-                          ? "Now"
-                          : "Not started")}
-                  </small>
-                </span>
-                {state === "now" ? (
-                  <a
-                    className="btn btn-sm"
-                    href={stepHref(ids, row.id, step.link)}
-                  >
-                    {step.action}
-                  </a>
-                ) : (
-                  <button
-                    type="button"
-                    className="btn-secondary btn-sm"
-                    disabled
-                  >
-                    {step.action}
-                  </button>
-                )}
-              </li>
-            );
-          })}
+          <li className="is-out">
+            <span className="cpg-step-mark" aria-hidden="true" />
+            <span className="cpg-step-text">
+              {/* "Out of scope" is the row's own pill: said once (E1 design review). */}
+              <strong>Not tested in this engagement</strong>
+            </span>
+            {editable && action !== undefined ? (
+              <SetupForm className="cpg-bring">
+                <Hidden ids={ids} action={action} />
+                <button type="submit" className="btn btn-sm">
+                  <UiIcon name="plus" size={13} /> Bring into scope
+                </button>
+              </SetupForm>
+            ) : null}
+          </li>
         </ol>
+        <a
+          className="text-link cpg-history"
+          href={`${controlHref(ids, row.id)}&tab=activity#activity`}
+        >
+          Open the control&apos;s history
+        </a>
       </aside>
-    </div>
+    );
+  }
+  return (
+    <aside className="cpg-steps" aria-label="Status and next steps">
+      <h4>Status and next steps</h4>
+      <ol>
+        {statusSteps(row).map((step) => (
+          <li key={step.key} className={`is-${step.state}`}>
+            <span className="cpg-step-mark" aria-hidden="true">
+              {step.state === "done" ? <UiIcon name="check" size={11} /> : null}
+            </span>
+            <span className="cpg-step-text">
+              <strong>{step.title}</strong>
+              <small>{step.line}</small>
+            </span>
+            {step.action !== null ? (
+              <a
+                className="btn btn-sm cpg-open"
+                href={stepHref(ids, row.id, link(step.key))}
+              >
+                {step.action}
+              </a>
+            ) : step.opens ? (
+              <a
+                className="btn-ghost btn-sm cpg-open"
+                href={stepHref(ids, row.id, link(step.key))}
+                aria-label={`Open ${step.title.toLowerCase()} in the control`}
+              >
+                Open
+                <UiIcon name="arrow" size={13} />
+              </a>
+            ) : null}
+          </li>
+        ))}
+      </ol>
+      <a
+        className="text-link cpg-history"
+        href={`${controlHref(ids, row.id)}&tab=activity#activity`}
+      >
+        Open the control&apos;s history
+      </a>
+    </aside>
   );
 }
 
@@ -780,6 +817,7 @@ export function ControlsPage({
           <td className="cpg-expand">
             <button
               type="button"
+              id={`cpg-open-${item.id}`}
               aria-expanded={isOpen}
               aria-label={`${isOpen ? "Close" : "Open"} ${item.ref}`}
               onClick={() => setOpen(isOpen ? null : item.id)}
@@ -830,13 +868,9 @@ export function ControlsPage({
               {item.included ? null : <Pill tone="is-muted">Out of scope</Pill>}
               {item.included ? (
                 <>
-                  <Pill tone={PLAN_TONE[item.plan]}>
-                    <span className="sr-only">Plan: </span>
-                    {PLAN_LABEL[item.plan]}
-                  </Pill>
+                  <Pill tone={PLAN_TONE[item.plan]}>{rowPills(item).plan}</Pill>
                   <Pill tone={TESTING_TONE[item.testing]}>
-                    <span className="sr-only">Testing: </span>
-                    {TESTING_LABEL[item.testing]}
+                    {rowPills(item).testing}
                   </Pill>
                 </>
               ) : null}
@@ -850,7 +884,9 @@ export function ControlsPage({
               {item.owner || "Unassigned"}
             </span>
           </td>
-          <td>
+          {/* While the row's detail is open, its card holds the one next action: the row's
+              is hidden, its cell keeping its width (E1 design review). */}
+          <td className={isOpen ? "cpg-next-cell is-covered" : "cpg-next-cell"}>
             {item.included ? (
               <a
                 className="btn btn-secondary btn-sm cpg-next"
@@ -895,16 +931,22 @@ export function ControlsPage({
           </td>
         </tr>
         {isOpen ? (
-          <tr className="cpg-detail-row">
-            <td colSpan={TABLE_COLUMNS}>
-              <Detail
-                ids={ids}
-                row={item}
-                action={action}
-                editable={editable}
-              />
-            </td>
-          </tr>
+          <RowExtra columns={TABLE_COLUMNS} className="cpg-detail-row">
+            <Detail
+              ids={ids}
+              row={item}
+              action={action}
+              editable={editable}
+              onClose={() => {
+                setOpen(null);
+                // Escape closes the detail; focus goes back to the row's chevron (E1
+                // design review, round 9).
+                requestAnimationFrame(() =>
+                  document.getElementById(`cpg-open-${item.id}`)?.focus(),
+                );
+              }}
+            />
+          </RowExtra>
         ) : null}
       </Fragment>
     );

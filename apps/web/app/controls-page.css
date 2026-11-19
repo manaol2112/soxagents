@@ -581,6 +581,12 @@
   background: var(--surface);
 }
 
+/* The shared full-width row (RowExtra, .row-extra in globals.css) keeps the detail inside
+   the table's scroll box at any sideways scroll; the detail pads itself. */
+.cpg-detail-row .row-extra-body {
+  padding: 0;
+}
+
 .cpg-detail {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 300px;
@@ -602,16 +608,26 @@
   color: var(--text-strong);
 }
 
+/* One line of tabs that scrolls sideways where it is narrower than its tabs, never two
+   (design review, 18 November 2026: they wrapped at 390 px). */
 .cpg-tabs {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 0.25rem;
+  overflow-x: auto;
+  scrollbar-width: none;
   border-bottom: 1px solid var(--border);
+}
+
+.cpg-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .cpg-tabs button {
   display: inline-flex;
+  flex: none;
   gap: 0.3rem;
+  white-space: nowrap;
   align-items: center;
   margin-bottom: -1px;
   padding: 0.55rem 0.45rem;
@@ -636,6 +652,33 @@
   color: var(--text-secondary);
   background: var(--surface-muted);
   border-radius: 999px;
+}
+
+/* A count being read keeps its place, so the tabs do not move when it arrives. */
+.cpg-tabs .cpg-count-wait {
+  display: inline-block;
+  width: 1.15rem;
+  height: 0.9rem;
+}
+
+/* A tab's one line, clear of the tab line above it. */
+.cpg-tab-note {
+  margin: 0.75rem 0 0;
+}
+
+/* A read that failed: what failed, and trying again. */
+.cpg-failed {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+  margin-top: 0.75rem;
+}
+
+.cpg-failed p {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--danger);
 }
 
 .cpg-description {
@@ -717,18 +760,6 @@
   color: var(--text-secondary);
 }
 
-.cpg-phase {
-  display: grid;
-  gap: 0.6rem;
-  justify-items: start;
-  padding-top: 0.9rem;
-  font-size: var(--fs-sm);
-}
-
-.cpg-phase p {
-  margin: 0;
-}
-
 .cpg-steps {
   align-self: start;
   margin-top: 0.75rem;
@@ -808,13 +839,7 @@
   color: var(--text-secondary);
 }
 
-.cpg-steps button:disabled {
-  cursor: default;
-  opacity: 0.5;
-}
-
-.cpg-steps li > a,
-.cpg-steps li > button {
+.cpg-steps li > a {
   min-width: 112px;
 }
 
@@ -1269,3 +1294,43 @@
 }
 
 
+
+/* The card's links: the label and its arrow apart (design review, 18 November 2026). */
+.cpg-open {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+  justify-content: center;
+}
+
+.cpg-steps .cpg-history {
+  margin-top: 0.6rem;
+  font-size: var(--fs-sm);
+}
+
+/* Out of scope: one step, with no progress mark. */
+.cpg-steps li.is-out .cpg-step-mark {
+  background: var(--surface-muted);
+  border-style: dashed;
+}
+
+.cpg-steps li.is-out {
+  grid-template-columns: 18px minmax(0, 1fr);
+}
+
+.cpg-steps li.is-out > form {
+  grid-column: 2;
+  justify-self: start;
+}
+
+/* A step done opens from a quiet link, as wide as its words. */
+.cpg-steps li > a.btn-ghost {
+  min-width: 0;
+}
+
+/* The row's next action while its detail (with the card's one primary) is open: hidden,
+   its cell keeping its width (E1 design review). */
+.cpg-next-cell.is-covered,
+.cpg-next-cell.is-covered * {
+  visibility: hidden;
+}

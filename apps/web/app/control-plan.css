@@ -717,6 +717,81 @@ button.pp-count:disabled {
   background: var(--accent-soft);
 }
 
+/* A row's detail or form is the shared full-width row (RowExtra, .row-extra in
+   globals.css), so it stays inside the table's scroll box at any sideways scroll. Its
+   body starts under the row's text, past the number column (1.5rem) and the cell's
+   0.3rem, as the indent cell it replaces did (18 November 2026: the form was as wide as
+   the table and cut off at 390 px). */
+.pp-detail .row-extra-body {
+  padding: 0 0.3rem 0 1.8rem;
+}
+
+/* The evidence table: past the select column (its 15px checkbox and 0.3rem) and the ID
+   column (2.5rem), then the cell's 0.3rem. */
+.pe-table .pp-detail .row-extra-body {
+  padding-left: calc(3.1rem + 15px);
+}
+
+/* Where the table scrolls sideways (its box narrower than the table's 640px, .pp-table
+   below), its columns slide under the body and the indent no longer lines up with
+   anything: the body takes the scroll box's width. */
+@container (max-width: 639.98px) {
+  .pp-detail .row-extra-body,
+  .pe-table .pp-detail .row-extra-body {
+    padding-left: 0.3rem;
+  }
+}
+
+/* Shown only where the table scrolls sideways (the end of this file). */
+.pp-detail-text {
+  display: none;
+  gap: 0.15rem;
+}
+
+.pp-detail-text strong {
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.pp-detail-body .pp-detail-text p {
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+/* An attribute's wording grows with what it holds, within reason. */
+.pl-edit textarea.pa-wording {
+  min-height: 3.5rem;
+  max-height: 12rem;
+  field-sizing: content;
+  resize: vertical;
+}
+
+/* Why a form's button is off, beside it. */
+.pl-edit-why {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+
+/* An item's actions on a phone: two even columns, the long ones across both. */
+@media (max-width: 640px) {
+  .pb-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-flow: dense;
+  }
+
+  .pb-actions > button {
+    justify-content: center;
+  }
+
+  .pb-actions > .pb-wide,
+  .pb-actions > .pb-trace {
+    grid-column: 1 / -1;
+    margin-left: 0;
+  }
+}
+
 .pp-detail-body {
   display: grid;
   gap: 0.5rem;
@@ -1135,7 +1210,8 @@ button.pp-count:disabled {
   min-width: 150px;
 }
 
-.pr-ready.is-none {
+.pr-ready.is-none,
+.pr-review.is-none {
   color: var(--text-strong);
 }
 
@@ -1660,4 +1736,41 @@ button.pp-count:disabled {
   color: var(--text-strong);
   background: var(--surface-hover);
   border-color: var(--border-strong);
+}
+
+/* Where a plan table scrolls sideways (its box narrower than the table's 640px), last in
+   the file so it outranks the open row's unclamped text above. */
+@container (max-width: 639.98px) {
+  /* An open row's text column stays two lines, so the row is not a tall narrow column
+     with a blank band beside it at the end of the scroll (Planning review, 18 November
+     2026, 390 px); the whole text reads at the top of its detail. */
+  .pp-row.is-open .pp-text strong,
+  .pp-row.is-open .pp-text small {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+  }
+
+  .pp-detail-text {
+    display: grid;
+  }
+}
+
+/* Removing an attribute, asked on its own row (E1 design review, round 6). */
+.pa-remove-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  background: var(--warning-soft);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius);
+}
+
+.pa-remove-confirm .pl-problem {
+  flex: 1 1 100%;
+  margin: 0;
 }
