@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { checkTarget } from "./browser/lib.ts";
 import {
+  consoleProblem,
   copyFindings,
   layoutFindings,
   spanFindings,
@@ -10,6 +11,40 @@ import {
 
 // What the browser checks (tests/browser/) assert about a rendered screen, without a
 // browser: these run in every node test run.
+
+describe("console lines", () => {
+  it("fail on errors and React's defect warnings", () => {
+    assert.match(
+      consoleProblem("error", "TypeError: x is undefined") ?? "",
+      /^console error/,
+    );
+    for (const warning of [
+      "Warning: Maximum update depth exceeded.",
+      "Cannot update a component (`Panel`) while rendering a different component",
+      'Each child in a list should have a unique "key" prop.',
+      "A tree hydrated but some attributes of the server rendered HTML didn't match",
+    ]) {
+      assert.match(
+        consoleProblem("warning", warning) ?? "",
+        /^console warning/,
+        warning,
+      );
+    }
+  });
+
+  it("pass the tooling's own lines, ordinary warnings and logs", () => {
+    assert.equal(
+      consoleProblem("error", "Download the React DevTools for a better…"),
+      null,
+    );
+    assert.equal(consoleProblem("log", "[HMR] connected"), null);
+    assert.equal(
+      consoleProblem("warning", "A deprecated option was used"),
+      null,
+    );
+    assert.equal(consoleProblem("log", "Maximum update depth"), null);
+  });
+});
 
 describe("copy rules on a rendered screen", () => {
   it("pass professional copy, an ellipsis and e.g.", () => {

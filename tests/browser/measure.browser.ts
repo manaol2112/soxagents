@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import type { Browser, Page } from "playwright-core";
-import { launch, measure, SHELL_SCROLLERS } from "./lib.ts";
+import { launch, measure, SHELL_SCROLLERS, watch } from "./lib.ts";
 import { layoutFindings } from "./rules.ts";
 
 let browser: Browser;
@@ -148,5 +148,43 @@ describe("the layout measurements", () => {
     );
     await page.focus("#b");
     assert.deepEqual(layoutFindings(await measure(page, "main", [], true)), []);
+  });
+});
+
+describe("what the page reports going wrong", () => {
+  async function reported(script: string): Promise<string[]> {
+    const fresh = await browser.newPage();
+    const errors = watch(fresh);
+    await fresh.setContent(`<main>ok</main><script>${script}</script>`);
+    await fresh.waitForTimeout(100);
+    await fresh.close();
+    return errors;
+  }
+
+  it("fails on React's update-depth warning, a console error and an uncaught error", async () => {
+    const loop = await reported(
+      "console.warn('Warning: Maximum update depth exceeded. This can happen when a component calls setState inside useEffect');",
+    );
+    assert.equal(loop.length, 1, loop.join("; "));
+    assert.match(loop[0] ?? "", /^console warning: .*Maximum update depth/);
+    assert.match(
+      (await reported("console.error('Failed to load the plan');"))[0] ?? "",
+      /^console error: Failed to load the plan/,
+    );
+    assert.match(
+      (await reported("setTimeout(() => { throw new Error('boom'); });"))[0] ??
+        "",
+      /^page error: .*boom/,
+    );
+  });
+
+  it("passes the development tooling's own lines and ordinary warnings", async () => {
+    assert.deepEqual(
+      await reported(
+        "console.error('Download the React DevTools for a better development experience');" +
+          "console.log('[HMR] connected'); console.warn('A deprecated option was used');",
+      ),
+      [],
+    );
   });
 });

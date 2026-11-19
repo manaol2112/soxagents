@@ -92,6 +92,31 @@ export function spanFindings(
       ];
 }
 
+/** Warnings that are defects though React only warns: an update loop, a state update
+ * during another component's render, a list without keys, a hydration mismatch. */
+export const CONSOLE_WARNINGS =
+  /Maximum update depth|Cannot update a component|unique "key"|hydrat/i;
+
+/** Console lines that are the development tooling's own, not the app's. Each is named on
+ * purpose: anything else an error or a listed warning says fails the check. */
+export const CONSOLE_ALLOWED: readonly RegExp[] = [
+  /Download the React DevTools/,
+  /^\[HMR\]/,
+  /^\[Fast Refresh\]/,
+];
+
+/** The console line as a failure, or null when it is not one. */
+export function consoleProblem(type: string, text: string): string | null {
+  const line = text.replace(/\s+/g, " ").trim();
+  if (CONSOLE_ALLOWED.some((allowed) => allowed.test(line))) {
+    return null;
+  }
+  if (type === "error" || (type === "warning" && CONSOLE_WARNINGS.test(line))) {
+    return `console ${type}: ${line.slice(0, 200)}`;
+  }
+  return null;
+}
+
 /** What a page measured at one width and theme (lib.ts measure()). */
 export type Measured = {
   width: number;

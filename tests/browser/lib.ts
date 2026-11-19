@@ -34,6 +34,7 @@ import {
 } from "playwright-core";
 import {
   type Box,
+  consoleProblem,
   copyFindings,
   layoutFindings,
   type Measured,
@@ -133,6 +134,21 @@ export function launch(): Promise<Browser> {
 
 export type Opened = { context: BrowserContext; page: Page; errors: string[] };
 
+/** What the page reports going wrong, as it happens: uncaught errors, console errors and
+ * React's defect warnings (rules.ts consoleProblem, with its allowlist). Each fails the
+ * check's row it arrives before. */
+export function watch(page: Page): string[] {
+  const errors: string[] = [];
+  page.on("pageerror", (error) =>
+    errors.push(`page error: ${String(error).slice(0, 200)}`),
+  );
+  page.on("console", (message) => {
+    const problem = consoleProblem(message.type(), message.text());
+    if (problem !== null) errors.push(problem);
+  });
+  return errors;
+}
+
 /** How long a page is given to open its guide (ms). */
 const GUIDE_WAIT = 2500;
 /** A page has settled when none of its requests is open for this long (ms). */
@@ -187,8 +203,7 @@ export async function open(
     { name: "aw_theme", value: combo.theme, url: WEB },
   ]);
   const page = await context.newPage();
-  const errors: string[] = [];
-  page.on("pageerror", (error) => errors.push(String(error).slice(0, 200)));
+  const errors = watch(page);
   const inflight = new Set<unknown>();
   page.on("request", (request) => inflight.add(request));
   page.on("requestfinished", (request) => inflight.delete(request));
@@ -508,7 +523,7 @@ export class Recorder {
       ...copyFindings(text, actions),
       ...storyFindings(story, declared.shows ?? [], declared.never ?? []),
       ...(declared.extra ?? []),
-      ...opened.errors.map((error) => `page error: ${error}`),
+      ...opened.errors,
     ];
     for (const [row, container] of declared.spans ?? []) {
       const edges = await spans(page, row, container);
