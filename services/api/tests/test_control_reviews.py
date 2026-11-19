@@ -766,3 +766,58 @@ def test_an_undecided_deficiency_proposal_holds_the_review(migrated: Database) -
     assert dismissed.status_code == 200, dismissed.text
     review = client.get(f"{base}/reviews").json()[0]
     assert held not in review["blocking"]
+
+
+def test_the_review_waits_while_the_plan_is_revised_and_not_approved(migrated: Database) -> None:
+    """ST-4 (product owner, 19 November 2026). Before, the reviewer could sign the review
+    while the test plan was revised and not approved again, and while the signed-off
+    results predated its approved revision with no impact decided. Now the review waits
+    for the approval, then for a reviewer's impact decision."""
+    team, client, sheet, _file = _prepared_control(migrated, "review-plan-gate", "DISMISS")
+    base = _base(team)
+    control = sheet["control_id"]
+    review = client.get(f"{base}/reviews").json()[0]
+    with connect(migrated.url) as connection:
+        assert run_reperformance(connection, None, UUID(review["id"])) == "DONE"
+        # A material change to the approved plan, as the revision triggers make it.
+        connection.execute(
+            "SELECT revise_evidence_plan(id) FROM evidence_plans WHERE engagement_control_id = %s",
+            (control,),
+        )
+        connection.commit()
+    review = client.get(f"{base}/reviews").json()[0]
+    assert "approve the test plan first" in review["blocking"]
+    reviewer = _session(migrated, team["reviewer_id"])
+    refused = reviewer.post(
+        f"{base}/reviews/{review['id']}/sign-off", json={"version": review["version"]}
+    )
+    assert refused.status_code == 409 and "approve the test plan first" in refused.json()["detail"]
+    plan = _plan(team, control)
+    approved = team["owner"].post(
+        f"{_project(team)}/controls/{control}/evidence-plan/approve",
+        json={"version": plan["version"], "comment": ""},
+    )
+    assert approved.status_code == 200, approved.text
+    review = client.get(f"{base}/reviews").json()[0]
+    impact = (
+        "1 signed-off result predates the plan's approved revision: a reviewer decides the "
+        "impact assessment first"
+    )
+    assert "approve the test plan first" not in review["blocking"]
+    assert impact in review["blocking"]
+    refused = reviewer.post(
+        f"{base}/reviews/{review['id']}/sign-off", json={"version": review["version"]}
+    )
+    assert refused.status_code == 409 and impact in refused.json()["detail"]
+    [assessment] = [a for a in client.get(f"{base}/impact").json() if a["status"] == "PENDING"]
+    valid = reviewer.post(
+        f"{base}/impact/{assessment['id']}/decide",
+        json={
+            "version": assessment["version"],
+            "decision": "VALID",
+            "rationale": "The revision changed nothing the interim results rest on.",
+        },
+    )
+    assert valid.status_code == 200, valid.text
+    review = client.get(f"{base}/reviews").json()[0]
+    assert impact not in review["blocking"]

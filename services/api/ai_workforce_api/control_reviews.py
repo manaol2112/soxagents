@@ -1202,6 +1202,29 @@ def _review(
     }
     prepared = (sheet is not None and sheet[3] == viewer) or any(p[4] == viewer for p in papers)
     blocking: list[str] = []
+    # The review signs only over the plan as approved (ST-4, 19 November 2026): before, a
+    # reviewer could sign while the plan was revised and not approved again, or while
+    # signed-off results predated its approved revision with no impact decided. The plan's
+    # gate is the one testing's sign-off reads (evidence_plans.gate_reason); finality reads
+    # the same two (PLAN, IMPACT), so the review and finality agree.
+    from ai_workforce_api.evidence_plans import gate_reason
+    from ai_workforce_api.readiness import unassessed_signoffs
+
+    planned = gate_reason(connection, control_id, None)
+    if planned is not None:
+        blocking.append(planned)
+    predating = (
+        0
+        if sheet is None
+        else unassessed_signoffs(connection, project_id, control_id, UUID(str(sheet[4]))).get(
+            control_id, 0
+        )
+    )
+    if predating:
+        blocking.append(
+            f"{predating} signed-off result{' predates' if predating == 1 else 's predate'} "
+            "the plan's approved revision: a reviewer decides the impact assessment first"
+        )
     # The control's own review rests on its D&I conclusion (B0/B3, 8 November 2026). A design
     # signed off as not effective is reviewed without OE: nothing was tested to re-perform.
     design = None
@@ -1924,7 +1947,17 @@ def _round_of(cursor: psycopg.Cursor[Any], review_id: UUID) -> UUID | None:
 def _locked(
     cursor: psycopg.Cursor[Any], project_id: UUID, review_id: UUID, version: int
 ) -> tuple[UUID, UUID, str]:
-    """The review, locked: (organization_id, control_id, status)."""
+    """The review, locked: (organization_id, control_id, status). The control's test plan
+    is locked first (the lock order of evidence_reliance: the plan before what follows it),
+    so a revision cannot commit between the plan's gate the review reads and its sign-off
+    (ST-4, 19 November 2026), and a review note that reopens the testing takes the plan
+    before the sheet, as plan approval does when it brings open sheets in step (ST-1)."""
+    cursor.execute(
+        "SELECT p.id FROM evidence_plans p JOIN control_reviews r "
+        "ON r.engagement_control_id = p.engagement_control_id "
+        "WHERE r.id = %s AND r.project_id = %s FOR UPDATE OF p",
+        (review_id, project_id),
+    )
     row = cursor.execute(
         "SELECT organization_id, engagement_control_id, status, version FROM control_reviews "
         "WHERE id = %s AND project_id = %s FOR UPDATE",
