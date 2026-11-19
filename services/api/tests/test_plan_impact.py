@@ -10,7 +10,7 @@ import psycopg
 import pytest
 from support import Database, record_design_choice
 from test_control_progress import _controls
-from test_control_reviews import _prepared_control
+from test_control_reviews import _prepared_control, _rollforward_decided
 from test_master_plans import _approve
 from test_outbound import _session, migrated
 from test_phase_release import _prepare_design
@@ -190,6 +190,12 @@ def test_reperformance_after_a_signed_review_reopens_the_review_and_keeps_its_re
     base = _base(team)
     control = sheet["control_id"]
     _prepare_design(migrated, team, control)
+    # Rewritten 19 November 2026 (FP-7, decision D5, product owner). Old: with the interim
+    # exceptions dismissed, the conclusion was final with the roll-forward left PENDING by
+    # the rules. New: an undecided phase holds the conclusion, so a person decides the
+    # roll-forward first (the plan approved again, the impact decided VALID). Reason: the
+    # rest of the period is either tested or scoped out by a person, never assumed.
+    _rollforward_decided(migrated, team, client, control)
     review = client.get(f"{base}/reviews").json()[0]
     signed = _sign_review(migrated, client, team, review["id"])
     assert signed["status"] == "SIGNED_OFF"
@@ -245,6 +251,12 @@ def test_a_reviewer_documents_that_a_signed_review_covers_later_work(migrated: D
     team, client, sheet, _file = _prepared_control(migrated, "impact-coverage", "DISMISS")
     base = _base(team)
     control = sheet["control_id"]
+    # Rewritten 19 November 2026 (FP-7, decision D5, product owner). Old: with the interim
+    # exceptions dismissed, the conclusion was final with the roll-forward left PENDING by
+    # the rules. New: an undecided phase holds the conclusion, so a person decides the
+    # roll-forward first (the plan approved again, the impact decided VALID). Reason: the
+    # rest of the period is either tested or scoped out by a person, never assumed.
+    _rollforward_decided(migrated, team, client, control)
     review = client.get(f"{base}/reviews").json()[0]
     signed = _sign_review(migrated, client, team, review["id"])
     # The design workpaper is prepared again after the review signed: the review does not

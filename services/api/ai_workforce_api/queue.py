@@ -37,6 +37,7 @@ from pydantic import BaseModel, Field
 
 from ai_workforce_api.authorization import Action, Principal, _call, _session_principal
 from ai_workforce_api.control_instances import control_label, operating_units
+from ai_workforce_api.control_journey import UNDECIDED
 from ai_workforce_api.settings import Settings
 
 Bucket = Literal["MINE", "WAITING", "BLOCKED", "UPCOMING"]
@@ -280,6 +281,8 @@ _COVERAGE_TEXTS = (
 _STEP_OBLIGATIONS: tuple[tuple[str, str], ...] = (
     ("Plan the evidence", "EVIDENCE_PLAN"),
     ("Reconcile the kickoff", "EVIDENCE_PLAN"),
+    # A phase the plan leaves PENDING (control_journey.UNDECIDED): decided in the plan.
+    ("whether it applies is undecided", "EVIDENCE_PLAN"),
     ("Revise the test plan", "PLAN_APPROVAL"),
     ("Approve the test plan", "PLAN_APPROVAL"),
     ("Test plan not approved", "PLAN_APPROVAL"),
@@ -537,6 +540,9 @@ def _finality(control: Any, step: str, specific: dict[tuple[UUID, str], bool]) -
     if any(key[0] == control.id for key in specific):
         return []
     text = journey.not_final_because[0]
+    # A phase left undecided (FP-7) is a decision due now, the preparer's in the test plan,
+    # not work that waits for its time.
+    undecided = text.endswith(UNDECIDED)
     return [
         QueueItem(
             id=f"finality:{control.id}",
@@ -548,12 +554,16 @@ def _finality(control: Any, step: str, specific: dict[tuple[UUID, str], bool]) -
             control_ref=control.control_ref,
             phase=journey.step_phase,
             title=text,
-            reason="Keeps the conclusion open; no action is due on it today.",
-            owner=QueueOwner(role="NONE"),
-            authorized=False,
-            ready=False,
-            blockers=[text],
-            bucket="UPCOMING",
+            reason="Keeps the conclusion open; decide in the test plan whether the phase applies."
+            if undecided
+            else "Keeps the conclusion open; no action is due on it today.",
+            owner=QueueOwner(role="PREPARER", names=list(control.assignees))
+            if undecided
+            else QueueOwner(role="NONE"),
+            authorized=undecided and bool(control.yours),
+            ready=undecided,
+            blockers=[] if undecided else [text],
+            bucket=_bucket(bool(control.yours), True, "PREPARER") if undecided else "UPCOMING",
             link=_control_link(control.id, step),
         )
     ]

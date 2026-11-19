@@ -7,7 +7,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from support import Database
-from test_control_reviews import _prepared_control
+from test_control_reviews import _prepared_control, _rollforward_decided
 from test_evidence_analysis import _no_ocr, _Provider
 from test_evidence_intake import _accept_population, _client, _engagement, _request, _Scheduler
 from test_evidence_review import (
@@ -171,6 +171,12 @@ def test_coverage_and_stopped_drafts_are_items_of_their_own(migrated: Database) 
     team, client, sheet, _file = _prepared_control(migrated, "queue-cover", "DISMISS")
     base = _base(team)
     control = sheet["control_id"]
+    # Rewritten 19 November 2026 (FP-7, decision D5, product owner). Old: with the interim
+    # exceptions dismissed, the conclusion was final with the roll-forward left PENDING by
+    # the rules. New: an undecided phase holds the conclusion, so a person decides the
+    # roll-forward first (the plan approved again, the impact decided VALID). Reason: the
+    # rest of the period is either tested or scoped out by a person, never assumed.
+    _rollforward_decided(migrated, team, client, control)
     review = client.get(f"{base}/reviews").json()[0]
     _sign_review(migrated, client, team, review["id"])
     # The design workpaper is prepared again after the review signed: the review's coverage

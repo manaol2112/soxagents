@@ -378,3 +378,40 @@ def test_a_rating_belongs_to_its_deficiencys_engagement(migrated: Database) -> N
             connection.rollback()
         connection.execute(insert, (team["org"], team["project"], deficiency, team["owner_id"]))
         connection.commit()
+
+
+def test_an_undecided_phase_holds_the_proposal_and_never_reads_does_not_apply() -> None:
+    """FP-7 (decision D5, product owner, 19 November 2026): a phase whose applicability is
+    PENDING is undecided. It holds the proposal with a reason, never reads as "Does not
+    apply", and its state comes from the records; a design signed off as not effective
+    owes no OE at all, so nothing waits for that decision."""
+    undecided = {"INTERIM": (True, "SIGNED_OFF", "NOT_EFFECTIVE", True), "ROLLFORWARD": NOT_APPLIES}
+    # D&I effective: interim exceptions dismissed, roll-forward left undecided by the rules.
+    proposed, _, waiting, phases = propose(_facts(phases=undecided, undecided=("ROLLFORWARD",)))
+    assert proposed is None
+    assert waiting == ["it is decided whether roll-forward testing applies"]
+    assert [p.state for p in phases] == ["SIGNED_OFF", "NOT_STARTED"]
+    # A round already recorded for the undecided phase shows as it stands.
+    rolled = {**undecided, "ROLLFORWARD": (False, "TESTING", None, False)}
+    _, _, _, phases = propose(_facts(phases=rolled, undecided=("ROLLFORWARD",)))
+    assert phases[1].state == "IN_PROGRESS"
+    # Before the D&I sign-off: nothing is proposed, the undecided interim is not "Does not
+    # apply", and the decision is waited for too.
+    proposed, _, waiting, phases = propose(
+        _facts(design=None, phases={"INTERIM": NOT_APPLIES}, undecided=("INTERIM",))
+    )
+    assert proposed is None
+    assert waiting == [
+        "the D&I conclusion is signed off",
+        "it is decided whether interim testing applies",
+    ]
+    assert [p.state for p in phases] == ["NOT_STARTED", "NOT_APPLICABLE"]
+    # D&I not effective: OE is not performed whatever the plan says of the phase.
+    proposed, _, waiting, phases = propose(
+        _facts(design="NOT_EFFECTIVE", undecided=("ROLLFORWARD",))
+    )
+    assert proposed == "NOT_EFFECTIVE" and waiting == []
+    assert [p.state for p in phases] == ["NOT_PERFORMED", "NOT_PERFORMED"]
+    # An undecided D&I phase holds an effective proposal as well.
+    proposed, _, waiting, _ = propose(_facts(undecided=("DESIGN",)))
+    assert proposed is None and waiting == ["it is decided whether D&I testing applies"]

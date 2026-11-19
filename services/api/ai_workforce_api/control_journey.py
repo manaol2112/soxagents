@@ -174,6 +174,8 @@ class FinalityFacts:
 _APPROVED_PLAN = ("APPROVED", "CHANGES_PROPOSED")
 _APPLIES = ("APPLICABLE", "CONDITIONAL")
 _OPEN_ROUNDS = ("REQUESTED", "TESTING")
+# What a phase the plan leaves PENDING says (the plan's wording, without its full stop).
+UNDECIDED = "whether it applies is undecided"
 
 
 def _coverage_gaps(facts: FinalityFacts) -> list[NotFinal]:
@@ -238,6 +240,20 @@ def finality(facts: FinalityFacts | None) -> Finality:
     # review of the design is (bug hunt, 9 November 2026; before, such a control could never
     # be final).
     failed = facts.design_verdict == "NOT_EFFECTIVE"
+    # A phase the plan leaves PENDING is undecided (FP-7, decision D5, product owner, 19
+    # November 2026): it keeps the conclusion open until a person decides it, in the plan's
+    # own words (evidence_plans.clarifications), and is never read as not applicable. A
+    # design signed off as not effective owes no OE, so its OE phases hold nothing.
+    for phase in ("DESIGN", "INTERIM", "ROLLFORWARD"):
+        if facts.applicability.get(phase) == "PENDING" and (phase == "DESIGN" or not failed):
+            reasons.append(
+                NotFinal(
+                    kind="PLAN",
+                    text=f"{PHASE_LABELS[phase]}: {UNDECIDED}",
+                    step="PLAN",
+                    phase=phase,
+                )
+            )
     if failed and facts.review_status != "SIGNED_OFF":
         reasons.append(
             NotFinal(
@@ -688,7 +704,8 @@ def _requests_by_phase(
     applicable = {
         item.phase
         for item in (phases.phases if phases is not None else [])
-        if item.step != "NOT_APPLICABLE"
+        # An undecided phase (FP-7) serves no request until a person decides it applies.
+        if item.step != "NOT_APPLICABLE" and item.applicability != "PENDING"
     }
     default = next((p for p in ("INTERIM", "ROLLFORWARD", "DESIGN") if p in applicable), "INTERIM")
     found: dict[str, list[ControlRequest]] = {}
@@ -800,6 +817,9 @@ def _phase_blockers(
         blockers.append(control.readiness_blocker or "Approve the test plan at its revision")
     if not control.attributes_settled:
         blockers.append("Settle the control's attributes")
+    if status is not None and status.applicability == "PENDING" and status.waiting_for:
+        # Undecided (FP-7): a person decides in the test plan whether the phase applies.
+        blockers.append(status.waiting_for.rstrip("."))
     if state == "PLANNED" and phase in ("INTERIM", "ROLLFORWARD"):
         # Not a gate on anything now: the platform recommends the release once the
         # earlier phase is complete, and a reviewer may release it earlier.
@@ -967,7 +987,12 @@ def journey_of(
                 phase=phase,
                 label=_LABELS[phase],
                 state=state,
-                state_label=PHASE_STATE_LABELS[state],
+                # An undecided phase says so (FP-7), not that it waits for the plan.
+                state_label=status.step_label
+                if state == "AWAITING_PLAN"
+                and status is not None
+                and status.applicability == "PENDING"
+                else PHASE_STATE_LABELS[state],
                 ready_for_testing=state not in _FINISHED and not held,
                 blockers=held,
                 released_early=bool(status is not None and status.early),

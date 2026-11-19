@@ -679,6 +679,9 @@ def design_state(
     ).fetchone()
     if phase is None:
         return ("", "The control is not planned."), False
+    if phase[0] == "PENDING":
+        # Undecided is not "does not apply" (FP-7, decision D5, 19 November 2026).
+        return ("", undecided_wait("DESIGN")), False
     if phase[0] not in _APPLIES:
         return ("", "The test plan says the D&I phase does not apply."), False
     waits = DesignWaits(connection, project_id, control_id)
@@ -843,6 +846,12 @@ def _statuses(
             label = ""
             if decided is None:
                 status.step, status.waiting_for = "AWAITING_PLAN", "The control is not planned."
+            elif decided == "PENDING":
+                # Undecided, never "Not applicable" (FP-7, decision D5, product owner, 19
+                # November 2026): it waits for a person's decision in the test plan, even
+                # with the plan approved, and nothing of it is released until then.
+                status.step, status.waiting_for = "AWAITING_PLAN", undecided_wait(phase)
+                label = UNDECIDED_LABEL
             elif not applies:
                 status.step = "NOT_APPLICABLE"
             elif complete[phase]:
@@ -1015,6 +1024,10 @@ def release(
             if status is None
             else next((item for item in status.phases if item.phase == phase), None)
         )
+        if current is not None and current.applicability == "PENDING":
+            # An undecided phase is never released, early or not (FP-7): its evidence is
+            # requested only once a person decides that it applies.
+            raise PlanState(f"decide whether the {phase_word(phase)} phase applies first")
         if current is None or current.step == "NOT_APPLICABLE":
             raise PlanState(f"the test plan says the {phase_word(phase)} phase does not apply")
         if phase == "DESIGN":
@@ -1272,6 +1285,14 @@ def release_action(phase: str) -> Action:
 
 def phase_word(phase: str) -> str:
     return {"DESIGN": "D&I", "ROLLFORWARD": "roll-forward"}.get(phase, phase.lower())
+
+
+# A phase the plan leaves PENDING (FP-7): what its status says and what it waits for.
+UNDECIDED_LABEL = "Whether it applies is undecided"
+
+
+def undecided_wait(phase: str) -> str:
+    return f"Decide whether the {phase_word(phase)} phase applies."
 
 
 def request_released(

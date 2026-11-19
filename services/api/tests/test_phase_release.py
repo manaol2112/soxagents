@@ -288,3 +288,46 @@ def test_a_reviewer_releases_the_controls_they_select_one_by_one(migrated: Datab
         assert outcome[other]["released"] is False
         assert outcome[other]["detail"] == "sign off the D&I conclusion as effective first"
     assert result.json()["released"] == 1
+
+
+def test_an_undecided_phase_waits_for_the_plan_not_not_applicable(migrated: Database) -> None:
+    """FP-7 (decision D5, product owner, 19 November 2026): a phase the plan leaves PENDING
+    is undecided. Before, its status read "Not applicable" (and the D&I list said the
+    phase does not apply); now it waits for a person's decision, and nothing of it is
+    released, early or not, until a person decides whether it applies."""
+    from ai_workforce_api.phase_release import design_state
+
+    team = _launched(migrated, "release-undecided")
+    control, _ = _control_with(team, "INTERIM")
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE evidence_plan_phases SET applicability = 'PENDING', "
+            "open_question = 'Does the control still run after the interim date?' "
+            "WHERE engagement_control_id = %s AND phase = 'ROLLFORWARD'",
+            (control,),
+        )
+        connection.commit()
+    _prepare_design(migrated, team, control)
+    sign_off_design(migrated, team["project"], [control])
+    status = _phase(_progress(team), control, "ROLLFORWARD")
+    assert status["step"] == "AWAITING_PLAN" and status["applicability"] == "PENDING"
+    assert status["waiting_for"] == "Decide whether the roll-forward phase applies."
+    assert status["step_label"] == "Whether it applies is undecided"
+    refused = team["owner"].post(
+        f"{_project(team)}/controls/{control}/phases/ROLLFORWARD/release",
+        json={"reason": "Released early, before the phase is decided at all."},
+    )
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == "decide whether the roll-forward phase applies first"
+    # The D&I list of a control whose D&I phase is undecided never says it does not apply.
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE evidence_plan_phases SET applicability = 'PENDING', "
+            "open_question = 'Does the control still run after the interim date?' "
+            "WHERE engagement_control_id = %s AND phase = 'DESIGN'",
+            (control,),
+        )
+        connection.commit()
+        wait, _ = design_state(connection, UUID(str(team["project"])), UUID(control))
+    assert wait is not None and "does not apply" not in wait[1]
+    assert wait[1] == "Decide whether the D&I phase applies."

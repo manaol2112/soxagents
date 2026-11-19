@@ -9,8 +9,10 @@ from uuid import UUID
 
 from support import Database
 from test_control_progress import _controls
+from test_control_reviews import _prepared_control, _rollforward_decided
 from test_engagement_data import _engagement
 from test_outbound import migrated
+from test_round_reviews import _sign_review
 from test_testing_engine import _base, _sheet
 from test_workpapers import _tested_control
 from test_workspace import _request, _row
@@ -815,3 +817,72 @@ def test_a_signed_review_covers_only_the_versions_it_recorded() -> None:
         "The review did not record the testing version it covered: review outstanding",
         "The effectiveness workpaper changed since the review covered it: review outstanding",
     ]
+
+
+def test_an_undecided_phase_keeps_the_conclusion_open() -> None:
+    """FP-7 (decision D5, product owner, 19 November 2026): a phase the plan leaves PENDING
+    keeps the conclusion open until a person decides it, in the plan's own words; never
+    read as not applicable. A design signed off as not effective owes no OE, so an
+    undecided OE phase does not hold it."""
+    pending = {"DESIGN": "APPLICABLE", "INTERIM": "APPLICABLE", "ROLLFORWARD": "PENDING"}
+    reasons = finality(_facts(applicability=pending)).reasons
+    assert [(r.kind, r.text, r.step, r.phase) for r in reasons] == [
+        (
+            "PLAN",
+            "Roll-forward operating effectiveness: whether it applies is undecided",
+            "PLAN",
+            "ROLLFORWARD",
+        )
+    ]
+    interim = {"DESIGN": "APPLICABLE", "INTERIM": "PENDING", "ROLLFORWARD": "NOT_APPLICABLE"}
+    assert _texts(_facts(applicability=interim, sheet_status=None)) == [
+        "Interim operating effectiveness: whether it applies is undecided"
+    ]
+    design = {"DESIGN": "PENDING", "INTERIM": "APPLICABLE", "ROLLFORWARD": "NOT_APPLICABLE"}
+    assert _texts(_facts(applicability=design)) == [
+        "Design effectiveness: whether it applies is undecided"
+    ]
+    # The failed-design exemption: OE is not owed, so its undecided phase holds nothing.
+    assert (
+        finality(
+            _facts(applicability=pending, design_verdict="NOT_EFFECTIVE", sheet_status=None)
+        ).final
+        is True
+    )
+
+
+def test_roll_forward_left_undecided_after_interim_exceptions_is_not_final_until_a_person_decides(
+    migrated: Database,
+) -> None:
+    """FP-7 (decision D5, product owner, 19 November 2026). Interim exceptions dismissed
+    with a reason leave the roll-forward PENDING (the rules). Before, the control read
+    final Effective with the rest of the period never tested or scoped out. Now the
+    conclusion and finality wait for a person to decide the phase, the plan to be approved
+    again and the interim results' impact assessment to be decided, then the review."""
+    team, client, sheet, _file = _prepared_control(migrated, "journey-undecided", "DISMISS")
+    control = sheet["control_id"]
+    base = _base(team)
+    with connect(migrated.url) as connection:
+        decided = connection.execute(
+            "SELECT applicability FROM evidence_plan_phases WHERE engagement_control_id = %s "
+            "AND phase = 'ROLLFORWARD'",
+            (control,),
+        ).fetchone()
+    assert decided == ("PENDING",)
+    undecided = "Roll-forward operating effectiveness: whether it applies is undecided"
+    row = _controls(client, team)[control]
+    assert row["final"] is False and undecided in [r["text"] for r in row["not_final"]]
+    body = client.get(f"{base}/control-conclusions/{control}").json()
+    assert body["proposed"] is None and body["status"] == "NOT_READY"
+    assert "it is decided whether roll-forward testing applies" in body["waiting"]
+    assert [p["state"] for p in body["phases"]] == ["SIGNED_OFF", "NOT_STARTED"]
+    # A person decides; the plan is approved again and the impact decided; then the review.
+    _rollforward_decided(migrated, team, client, control)
+    body = client.get(f"{base}/control-conclusions/{control}").json()
+    assert body["proposed"] == "EFFECTIVE" and body["waiting"] == []
+    assert [p["state"] for p in body["phases"]] == ["SIGNED_OFF", "NOT_APPLICABLE"]
+    review = client.get(f"{base}/reviews").json()[0]
+    _sign_review(migrated, client, team, review["id"])
+    row = _controls(client, team)[control]
+    assert row["final"] is True, [r["text"] for r in row["not_final"]]
+    assert client.get(f"{base}/control-conclusions/{control}").json()["status"] == "FINAL"

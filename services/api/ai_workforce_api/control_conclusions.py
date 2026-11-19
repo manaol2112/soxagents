@@ -50,6 +50,17 @@ SEVERITY_WORDS = {
 }
 _APPLIES = ("APPLICABLE", "CONDITIONAL")
 _PHASE_WORDS = {"INTERIM": "Interim testing", "ROLLFORWARD": "Roll-forward testing"}
+# A phase the plan leaves PENDING is undecided (FP-7, decision D5, product owner, 19 November
+# 2026): it holds the proposal until a person decides it, and never reads as not applicable.
+_UNDECIDED_WORDS = {
+    "DESIGN": "D&I testing",
+    "INTERIM": "interim testing",
+    "ROLLFORWARD": "roll-forward testing",
+}
+
+
+def _undecided(phase: str) -> str:
+    return f"it is decided whether {_UNDECIDED_WORDS[phase]} applies"
 
 
 class ConclusionState(Exception):
@@ -136,6 +147,19 @@ class Facts:
     retest: str | None
     deficiencies: list[tuple[str, str, str]] = field(default_factory=list)
     """(reference, type, status) of each deficiency not closed."""
+    undecided: tuple[str, ...] = ()
+    """The phases (DESIGN, INTERIM, ROLLFORWARD) whose applicability is PENDING."""
+
+
+def _recorded_state(status: str | None) -> PhaseState:
+    """A phase's state from its records: signed off, in progress, or not started."""
+    return (
+        "SIGNED_OFF"
+        if status == "SIGNED_OFF"
+        else "IN_PROGRESS"
+        if status is not None
+        else "NOT_STARTED"
+    )
 
 
 def propose(facts: Facts) -> tuple[Verdict | None, list[str], list[str], list[PhaseResult]]:
@@ -147,13 +171,7 @@ def propose(facts: Facts) -> tuple[Verdict | None, list[str], list[str], list[Ph
         for phase in ("INTERIM", "ROLLFORWARD"):
             applies, status, conclusion, _ = facts.phases.get(phase, (False, None, None, False))
             state: PhaseState = (
-                "NOT_APPLICABLE"
-                if not applies
-                else "SIGNED_OFF"
-                if status == "SIGNED_OFF"
-                else "IN_PROGRESS"
-                if status is not None
-                else "NOT_STARTED"
+                _recorded_state(status) if applies or phase in facts.undecided else "NOT_APPLICABLE"
             )
             phases.append(
                 PhaseResult(
@@ -167,7 +185,14 @@ def propose(facts: Facts) -> tuple[Verdict | None, list[str], list[str], list[Ph
                     ),
                 )
             )
-        return None, [], ["the D&I conclusion is signed off"], phases
+        return (
+            None,
+            [],
+            ["the D&I conclusion is signed off"]
+            + [_undecided(phase) for phase in ("DESIGN", "INTERIM", "ROLLFORWARD")
+               if phase in facts.undecided],
+            phases,
+        )  # fmt: skip
     standing = [item for item in facts.deficiencies]
     design_refs = [ref for ref, kind, _ in standing if kind == "DESIGN"]
     if facts.design == "NOT_EFFECTIVE":
@@ -177,7 +202,10 @@ def propose(facts: Facts) -> tuple[Verdict | None, list[str], list[str], list[Ph
                 PhaseResult(
                     phase=phase,  # type: ignore[arg-type]
                     label=_PHASE_WORDS[phase],
-                    state="NOT_PERFORMED" if applies else "NOT_APPLICABLE",
+                    # An undecided phase is not owed either: OE is not performed at all.
+                    state="NOT_PERFORMED"
+                    if applies or phase in facts.undecided
+                    else "NOT_APPLICABLE",
                     conclusion=None,
                 )
             )
@@ -192,7 +220,7 @@ def propose(facts: Facts) -> tuple[Verdict | None, list[str], list[str], list[Ph
             phases,
         )
     reasons = ["The D&I conclusion is signed off as effective."]
-    waiting: list[str] = []
+    waiting: list[str] = [_undecided("DESIGN")] if "DESIGN" in facts.undecided else []
     failed = False
     for phase in ("INTERIM", "ROLLFORWARD"):
         applies, status, conclusion, dismissed = facts.phases.get(phase, (False, None, None, False))
@@ -202,7 +230,15 @@ def propose(facts: Facts) -> tuple[Verdict | None, list[str], list[str], list[Ph
             state="NOT_APPLICABLE",
             conclusion=None,
         )
-        if applies:
+        if phase in facts.undecided and not applies:
+            # Undecided: its state as the records stand, and the decision is waited for.
+            result.state = _recorded_state(status)
+            if result.state == "SIGNED_OFF":
+                result.conclusion = (
+                    "NOT_EFFECTIVE" if conclusion == "NOT_EFFECTIVE" else "EFFECTIVE"
+                )
+            waiting.append(_undecided(phase))
+        elif applies:
             if status == "SIGNED_OFF":
                 result.state = "SIGNED_OFF"
                 result.conclusion = (
@@ -273,14 +309,15 @@ def suggestion(likelihood: str, magnitude: str) -> tuple[Severity, str]:
 def facts_of(connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID) -> Facts:
     from ai_workforce_api.design_conclusions import design_verdict
 
-    applies = {
-        str(row[0]): str(row[1]) in _APPLIES
+    decided = {
+        str(row[0]): str(row[1])
         for row in connection.execute(
             "SELECT phase, applicability FROM evidence_plan_phases "
             "WHERE project_id = %s AND engagement_control_id = %s",
             (project_id, control_id),
         ).fetchall()
     }
+    applies = {phase: value in _APPLIES for phase, value in decided.items()}
     sheet = connection.execute(
         "SELECT status, conclusion, proposal_status FROM test_sheets "
         "WHERE project_id = %s AND engagement_control_id = %s AND test_round_id IS NULL",
@@ -329,6 +366,11 @@ def facts_of(connection: psycopg.Connection[Any], project_id: UUID, control_id: 
             else str(retest[1])
         ),
         deficiencies=deficiencies,
+        undecided=tuple(
+            phase
+            for phase in ("DESIGN", "INTERIM", "ROLLFORWARD")
+            if decided.get(phase) == "PENDING"
+        ),
     )
 
 

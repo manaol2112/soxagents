@@ -7,6 +7,7 @@ import pytest
 from support import Database
 from test_evidence_analysis import _Provider
 from test_outbound import _session, migrated
+from test_planning_gate import _plan, _project
 from test_testing_engine import _base, _controls, _sheet
 from test_workpapers import _tested_control
 
@@ -354,6 +355,14 @@ def test_the_reviewer_decides_notes_a_must_fix_reopens_the_work_and_signs_off(
             (team["project"], UUID(sheet["control_id"])),
         )
 
+    # Rewritten 19 November 2026 (FP-7, decision D5, product owner). Old: with the interim
+    # exceptions found, the conclusion was final with the roll-forward left PENDING by
+    # the rules. New: an undecided phase holds the conclusion, so a person decides the
+    # roll-forward first (the plan approved again, the impact decided VALID). Reason: the
+    # rest of the period is either tested or scoped out by a person, never assumed.
+    _rollforward_decided(migrated, team, client, sheet["control_id"])
+    review = client.get(f"{base}/reviews").json()[0]
+
     # Nobody signs off a review of work they signed off: the preparer, given the reviewer
     # role, is still refused.
     with connect(migrated.url) as connection:
@@ -624,6 +633,45 @@ def _prepared_control(
     )
     assert prepared.status_code == 200, prepared.text
     return team, client, sheet, ticket_file
+
+
+def _rollforward_decided(
+    migrated: Database, team: dict[str, Any], client: Any, control_id: str
+) -> None:
+    """A person decides the roll-forward the rules left PENDING after interim exceptions
+    (decision D5, product owner, 19 November 2026: an undecided phase holds the conclusion
+    until a person decides it): not applicable, with a reason. The decision revises the
+    plan; the owner approves it again, and a reviewer decides the signed interim results'
+    impact assessment VALID, as the agent recommends."""
+    phase = next(p for p in _plan(team, control_id)["phases"] if p["phase"] == "ROLLFORWARD")
+    decided = team["owner"].post(
+        f"{_project(team)}/controls/{control_id}/evidence-plan/phases/ROLLFORWARD",
+        json={
+            "applicability": "NOT_APPLICABLE",
+            "rationale": "The interim testing covers the period under audit this year.",
+            "version": phase["version"],
+        },
+    )
+    assert decided.status_code == 200, decided.text
+    plan = _plan(team, control_id)
+    approved = team["owner"].post(
+        f"{_project(team)}/controls/{control_id}/evidence-plan/approve",
+        json={"version": plan["version"], "comment": ""},
+    )
+    assert approved.status_code == 200, approved.text
+    base = _base(team)
+    reviewer = _session(migrated, team["reviewer_id"])
+    for assessment in client.get(f"{base}/impact").json():
+        if assessment["status"] == "PENDING" and assessment["control_id"] == control_id:
+            valid = reviewer.post(
+                f"{base}/impact/{assessment['id']}/decide",
+                json={
+                    "version": assessment["version"],
+                    "decision": "VALID",
+                    "rationale": "Only the roll-forward decision changed; the interim stands.",
+                },
+            )
+            assert valid.status_code == 200, valid.text
 
 
 def _all_pass(attributes: int) -> dict[str, Any]:
