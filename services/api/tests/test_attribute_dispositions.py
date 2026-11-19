@@ -1275,12 +1275,24 @@ def test_shown_on_my_review_ends_with_its_annotation(migrated: Database) -> None
     done = _record(bench, ids["B"], "SHOWN_ON_REVIEW", annotation_id=on_log)
     assert done.status_code == 200, done.text
     on_b = _by_code(done.json())["B"]["disposition"]["id"]
+    # 18 November 2026 (E1, evidence reliance; product owner): a file a person's "Shown,
+    # on my review" rests on stays until that decision is changed. Old: the change log was
+    # withdrawn and the copied check ended the disposition as ANNOTATION_GONE, naming
+    # nobody; new: the withdrawal is refused, naming the tickmark, and nothing ends. The
+    # person reopens the disposition first; only then does the file leave. (A withdrawal
+    # can no longer end a standing disposition, so the ANNOTATION_GONE-by-withdrawal
+    # assertions are retired with that path; the copied check is still asserted.)
+    log_url = f"{bench.base}/evidence-files/{log}/withdraw"
+    kept = bench.owner.post(log_url, json={"reason": "Sent in error"})
+    assert kept.status_code == 409
+    assert kept.json()["detail"].startswith("the file cannot be withdrawn: an attribute of ")
+    assert "reopen that decision first" in kept.json()["detail"]
+    assert _by_code(bench.entry())["B"]["disposition"]["id"] == on_b
+    reopened = _reopen(bench, ids["B"], on_b)
+    assert reopened.status_code == 200, reopened.text
     # The change log is withdrawn: the request is back on the ticket alone, and the first
-    # check of that very basis is copied with no model call. The copy finishes as it is
-    # recorded, so it ends what rested on the file, as any finished check would.
-    withdrawn = bench.owner.post(
-        f"{bench.base}/evidence-files/{log}/withdraw", json={"reason": "Sent in error"}
-    )
+    # check of that very basis is copied with no model call.
+    withdrawn = bench.owner.post(log_url, json={"reason": "Sent in error"})
     assert withdrawn.status_code == 200, withdrawn.text
     copied = bench.entry()
     assert copied["status"] == "REVIEWED" and copied["run_id"] not in (
@@ -1290,17 +1302,9 @@ def test_shown_on_my_review_ends_with_its_annotation(migrated: Database) -> None
     b = _by_code(copied)["B"]
     assert b["disposition"] is None
     assert (b["disposition_history"][0]["id"], b["disposition_history"][0]["ended_as"]) == (
-        on_b, "ANNOTATION_GONE",
+        on_b, "REOPENED",
     )  # fmt: skip
-    assert b["disposition_history"][0]["ended_by_name"] is None
-    assert b["disposition_history"][0]["ended_reason"] == (
-        "The file its annotation is on is no longer in force on this request."
-    )
-    by_check = _events(bench, dispositions.ENDED_BY_CHECK)
-    assert [(actor, agent) for actor, agent, _payload in by_check] == [(None, None)]
-    assert (by_check[0][2]["ended_as"], by_check[0][2]["run_id"], by_check[0][2]["finds"]) == (
-        "ANNOTATION_GONE", copied["run_id"], "OTHER",
-    )  # fmt: skip
+    assert _events(bench, dispositions.ENDED_BY_CHECK) == []
     # What rests on no annotation stands through it all.
     assert _by_code(copied)["D"]["disposition"]["kind"] == "NOT_AVAILABLE"
     # The annotation is still a person's, on record; its file is not in force, so it

@@ -1285,3 +1285,31 @@ button.de-copy {
     transition: none;
   }
 }
+
+/* An item's facts (Request, Addresses, Format · period, Evidence): the labels' column is
+   as wide as its longest label, so none wraps (E1 design review, round 5: "Format ·
+   period" broke onto two lines). */
+.de-body .tc.is-flat .tc-rules {
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: 0.75rem;
+}
+
+.de-body .tc.is-flat .tc-rules > div {
+  display: contents;
+}
+
+.de-body .tc.is-flat .tc-rules dt {
+  white-space: nowrap;
+}
+
+/* On a phone each fact's label sits above it, as on every other list of facts. */
+@media (max-width: 640px) {
+  .de-body .tc.is-flat .tc-rules {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 0.1rem;
+  }
+
+  .de-body .tc.is-flat .tc-rules dd {
+    margin-bottom: 0.3rem;
+  }
+}

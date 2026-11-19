@@ -27,7 +27,7 @@ import hashlib
 import json
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from functools import partial
@@ -2165,7 +2165,7 @@ def in_hand_without_request(status: str, phase: str | None) -> bool:
 # set_sufficiency, for the redraft of the design workpaper, a request's move to received
 # once every such item is accepted (_design_redraft, _received_when_accepted,
 # evidence_receipts), and for the file an item was accepted with, which is not withdrawn
-# or replaced (evidence_versions._accepted_with).
+# or replaced (evidence_reliance._accepted).
 JUDGEABLE_SQL = """
     (q.status = 'REQUESTED'
      OR ((q.status = 'PLANNED' OR (q.status = 'AWAITING_DEPENDENCY' AND q.phase = 'DESIGN'))
@@ -5810,29 +5810,35 @@ def _received_when_accepted(
     )  # fmt: skip
 
 
-def _has_own_evidence(cursor: psycopg.Cursor[Any], requirement_id: UUID) -> bool:
+def _has_own_evidence(
+    cursor: psycopg.Cursor[Any], requirement_id: UUID, excluding: UUID | None = None
+) -> bool:
     """Whether a file serves the item itself: one on its request that serves it (filed for
     it, or for the request and not read as missing it), one a sibling control shares for
-    it, or one a person linked to it. The test the plan uses for an item's files."""
+    it, or one a person linked to it. The test the plan uses for an item's files. With
+    `excluding`, as if that file were out of force already (what a withdrawal would leave,
+    read before it: evidence_reliance.impact)."""
     row = cursor.execute(
         """
         SELECT 1 FROM evidence_requirements q
-        WHERE q.id = %s AND (
+        WHERE q.id = %(item)s AND (
             EXISTS (
                 SELECT 1 FROM evidence_file_links l
                 LEFT JOIN evidence_analyses a ON a.evidence_file_id = l.evidence_file_id
-                WHERE l.pbc_request_id = q.pbc_request_id AND {SERVES})
-            OR EXISTS ({SHARED})
+                WHERE l.pbc_request_id = q.pbc_request_id AND {SERVES}
+                  AND l.evidence_file_id IS DISTINCT FROM %(skip)s::uuid)
+            OR EXISTS ({SHARED} AND f.id IS DISTINCT FROM %(skip)s::uuid)
             OR EXISTS (
                 SELECT 1 FROM evidence_requirement_files ef
                 JOIN evidence_file_links l
                   ON l.evidence_file_id = ef.evidence_file_id
                  AND l.engagement_control_id = ef.engagement_control_id
-                WHERE ef.requirement_id = q.id AND ef.status = 'LINKED'))
+                WHERE ef.requirement_id = q.id AND ef.status = 'LINKED'
+                  AND ef.evidence_file_id IS DISTINCT FROM %(skip)s::uuid))
         """.replace("{SERVES}", request_file_serves("l.evidence_file_id")).replace(
             "{SHARED}", shared_from_sibling("1")
         ),
-        (requirement_id,),
+        {"item": requirement_id, "skip": excluding},
     ).fetchone()
     return row is not None
 
@@ -5854,14 +5860,17 @@ def _linked(cursor: psycopg.Cursor[Any], requirement_id: UUID) -> bool:
     )
 
 
-def unsupported_judgment(cursor: psycopg.Cursor[Any], requirement_id: UUID) -> str | None:
+def unsupported_judgment(
+    cursor: psycopg.Cursor[Any], requirement_id: UUID, excluding: UUID | None = None
+) -> str | None:
     """The judgment on record for an item that no file of its own supports (the file it
     was judged on went: withdrawn, replaced, or filed elsewhere), or None. Such a judgment
     is hidden while the item has no file, and would read again, on a file nobody judged,
     once another is linked (independent review of 10.15, 15 November 2026): an acceptance
     of any item, and any judgment of an item in hand without a request (a requested item
     found short with nothing of its own is a judgment of that, and stays). To be read
-    before a file is linked to the item; `reset_judgment` then takes it off the record."""
+    before a file is linked to the item; `reset_judgment` then takes it off the record.
+    With `excluding`, as if that file were out of force already (_has_own_evidence)."""
     row = cursor.execute(
         "SELECT status, phase, sufficiency FROM evidence_requirements WHERE id = %s",
         (requirement_id,),
@@ -5870,7 +5879,7 @@ def unsupported_judgment(cursor: psycopg.Cursor[Any], requirement_id: UUID) -> s
         return None
     if row[2] != "ACCEPTED" and not in_hand_without_request(str(row[0]), str(row[1])):
         return None
-    return None if _has_own_evidence(cursor, requirement_id) else str(row[2])
+    return None if _has_own_evidence(cursor, requirement_id, excluding) else str(row[2])
 
 
 def reset_judgment(cursor: psycopg.Cursor[Any], requirement_id: UUID) -> None:
@@ -5903,18 +5912,57 @@ def reset_judgments_left_without_file(
     (`unsupported_judgment`), in the same transaction, with one audit event per item and
     the person who moved the file as its actor. Before, the judgment stayed on record,
     hidden, and read again as soon as a different file was linked. The file an item was
-    accepted with cannot leave at all (evidence_versions._accepted_with); this is for a
+    accepted with cannot leave at all (evidence_reliance._accepted); this is for a
     file that came after the acceptance. Returns the items reset."""
+    linked = [
+        UUID(str(row[0]))
+        for row in cursor.execute(
+            """
+            SELECT q.id FROM evidence_requirement_files ef
+            JOIN evidence_requirements q ON q.id = ef.requirement_id
+            WHERE ef.evidence_file_id = %s AND ef.project_id = %s AND ef.status = 'LINKED'
+              AND q.sufficiency <> 'NOT_REVIEWED'
+            """,
+            (file_id, project_id),
+        ).fetchall()
+    ]
+    return reset_items_left_without_file(
+        cursor, organization_id, project_id, file_id, actor, by, linked
+    )
+
+
+FileLeft = Literal[
+    "FILE_WITHDRAWN",
+    "FILE_REPLACED",
+    "FILE_REMOVED_FROM_REQUEST",
+    "APPLICATIONS_CHANGED",
+    "FILE_MOVED",
+    "FILE_NARROWED",
+]
+
+
+def reset_items_left_without_file(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    file_id: UUID,
+    actor: UUID,
+    by: FileLeft,
+    requirement_ids: Collection[UUID],
+) -> list[UUID]:
+    """After the file stopped serving the items named (withdrawn, replaced, removed from
+    its request, or no longer applying to a sibling instance): each that now has no file
+    of its own loses the judgment on record (`unsupported_judgment`), with one
+    JUDGMENT_RESET audit event per item, the person who made the change its actor.
+    Returns the items reset."""
     found: list[UUID] = []
     for requirement_id, plan_id in cursor.execute(
         """
-        SELECT q.id, q.plan_id FROM evidence_requirement_files ef
-        JOIN evidence_requirements q ON q.id = ef.requirement_id
-        WHERE ef.evidence_file_id = %s AND ef.project_id = %s AND ef.status = 'LINKED'
-          AND q.sufficiency <> 'NOT_REVIEWED'
+        SELECT q.id, q.plan_id FROM evidence_requirements q
+        WHERE q.id = ANY(%s) AND q.project_id = %s AND q.sufficiency <> 'NOT_REVIEWED'
         ORDER BY q.plan_id, q.created_at, q.id
         """,
-        (file_id, project_id),
+        (list(requirement_ids), project_id),
     ).fetchall():
         # The plan's row, then the requirement, as every other writer takes them.
         cursor.execute("SELECT 1 FROM evidence_plans WHERE id = %s FOR UPDATE", (plan_id,))
@@ -6076,6 +6124,16 @@ def unlink_file(
             raise NotVisible()
         if int(link[0]) != body.version:
             raise PlanState("the link changed")
+        if linked_file is not None:
+            # Evidence a person relied on for this item stays until that is changed (E1,
+            # product owner, 18 November 2026): before, nothing guarded an unlink.
+            from ai_workforce_api.evidence_reliance import refusal
+
+            refused = refusal(
+                cursor, project_id, UUID(str(linked_file[0])), "UNLINK", requirement_id
+            )
+            if refused is not None:
+                raise PlanState(refused)
         cursor.execute(
             """
             UPDATE evidence_requirement_files
@@ -6330,6 +6388,31 @@ def restore(
         return queue_drafts(cursor, organization_id, project_id, actor, control_id, issued.drafts)
 
 
+# Why an item whose request has gone for approval, or been sent, is not changed in place.
+GONE_FOR_APPROVAL = "the request carrying it has gone for approval"
+ALREADY_REQUESTED = "it has already been requested from the organization; waive it instead"
+
+
+def _request_held(cursor: psycopg.Cursor[Any], row: tuple[Any, ...]) -> tuple[Any, ...]:
+    """The requirement's request (a _requirement_row's), locked, with its status as it
+    stands now: _requirement_row reads it without a lock, so a submission for approval
+    could commit before the change rewrites the draft (independent review of E1, B1).
+    pbc_requests comes after the requirement in the lock order (evidence_reliance)."""
+    if row[3] is None:
+        return row
+    found = cursor.execute(
+        "SELECT status FROM pbc_requests WHERE id = %s FOR UPDATE", (row[3],)
+    ).fetchone()
+    return (*row[:4], None if found is None else found[0], *row[5:])
+
+
+def _sent(row: tuple[Any, ...]) -> bool:
+    """Whether the requirement (a _requirement_row) is on a request that has gone for
+    approval or been sent. One on a draft, or on a request withdrawn, is not: a person may
+    still reword it or take it off the plan."""
+    return row[1] == "REQUESTED" and row[4] not in ("DRAFT", "CANCELLED")
+
+
 def remove(
     connection: psycopg.Connection[Any],
     organization_id: UUID,
@@ -6340,17 +6423,24 @@ def remove(
     body: VersionBody,
 ) -> None:
     """A person takes evidence off the plan (decided by the product owner on 26 October
-    2026). Only evidence not yet requested: what the client was already asked for is waived
-    instead, with why. The item is kept, marked removed by whom, so the trail stays and it
-    can be restored; no later run brings it back. A plan already approved goes back for
-    approval, as with any change to it."""
+    2026). Only evidence the organization has not been asked for: what went for approval or
+    was sent is waived instead, with why. An item on a request that is still a draft comes
+    off it too (product owner, 18 November 2026: "Allow while the request is a draft";
+    before, it was refused as "already requested from the organization", which a draft was
+    not), the same rule as rewording it (_sent): the draft is written again from the items
+    it still carries, or withdrawn when it carries none. The item is kept, marked removed by
+    whom, so the trail stays and it can be restored; no later run brings it back. A plan
+    already approved goes back for approval, as with any change to it."""
     with transaction(connection) as cursor:
-        row = _requirement_row(cursor, project_id, control_id, requirement_id)
+        row = _request_held(
+            cursor, _requirement_row(cursor, project_id, control_id, requirement_id)
+        )
         if int(row[2]) != body.version:
             raise PlanState("the requirement changed")
-        if row[1] not in ("PLANNED", "AWAITING_DEPENDENCY"):
+        on_draft = row[1] == "REQUESTED" and not _sent(row)
+        if row[1] not in ("PLANNED", "AWAITING_DEPENDENCY") and not on_draft:
             raise PlanState(
-                "it has already been requested from the organization; waive it instead"
+                (GONE_FOR_APPROVAL if row[4] == "APPROVAL_PENDING" else ALREADY_REQUESTED)
                 if row[1] == "REQUESTED"
                 else "the requirement is not open"
             )
@@ -6369,17 +6459,53 @@ def remove(
             """
             UPDATE evidence_requirements
             SET status = 'REMOVED', removed_by = %s, removed_at = clock_timestamp(),
-                pending_change = NULL, version = version + 1
+                pending_change = NULL,
+                pbc_request_id = CASE WHEN %s THEN NULL ELSE pbc_request_id END,
+                version = version + 1
             WHERE id = %s
             """,
-            (actor, requirement_id),
+            (actor, on_draft, requirement_id),
         )
+        left: dict[str, Any] = {}
+        if on_draft and row[3] is not None:
+            left = _leave_draft(cursor, project_id, control_id, UUID(str(row[3])))
         _revise(cursor, UUID(str(row[7])))
         _audit(
             cursor, organization_id, project_id, actor, "evidence_requirement.removed",
-            "evidence_requirement", requirement_id, {},
+            "evidence_requirement", requirement_id, left,
         )  # fmt: skip
         _decided(cursor, organization_id, project_id, control_id, actor, row)
+
+
+DRAFT_EMPTIED = "Every item it carried was taken off the evidence plan."
+
+
+def _leave_draft(
+    cursor: psycopg.Cursor[Any], project_id: UUID, control_id: UUID, request_id: UUID
+) -> dict[str, Any]:
+    """An item left the draft request it was on: the draft is written again from the items
+    it still carries, or, carrying none, withdrawn, so it never asks for what the plan no
+    longer lists. A withdrawn request is left as it is. What happened, for the audit."""
+    # Locked by the caller already (_request_held), before the item changed.
+    status = cursor.execute(
+        "SELECT status FROM pbc_requests WHERE id = %s AND project_id = %s FOR UPDATE",
+        (request_id, project_id),
+    ).fetchone()
+    if status is None or status[0] != "DRAFT":
+        return {"request_id": str(request_id)}
+    if requirement_lines(cursor, request_id):
+        render_into(cursor, project_id, control_id, request_id)
+        return {"request_id": str(request_id), "request": "REWRITTEN"}
+    cursor.execute(
+        """
+        UPDATE pbc_requests
+        SET status = 'CANCELLED', cancellation_reason = %s,
+            version = version + 1, updated_at = clock_timestamp()
+        WHERE id = %s AND status = 'DRAFT'
+        """,
+        (DRAFT_EMPTIED, request_id),
+    )
+    return {"request_id": str(request_id), "request": "WITHDRAWN"}
 
 
 def edit(
@@ -6393,11 +6519,13 @@ def edit(
 ) -> None:
     """A person rewords a requirement before it is sent. Later runs keep the wording."""
     with transaction(connection) as cursor:
-        row = _requirement_row(cursor, project_id, control_id, requirement_id)
+        row = _request_held(
+            cursor, _requirement_row(cursor, project_id, control_id, requirement_id)
+        )
         if int(row[2]) != body.version:
             raise PlanState("the requirement changed")
-        if row[1] == "REQUESTED" and row[4] not in ("DRAFT", "CANCELLED"):
-            raise PlanState("the request carrying it has gone for approval")
+        if _sent(row):
+            raise PlanState(GONE_FOR_APPROVAL)
         if isinstance(row[5], dict) and row[5].get("add") is True:
             # An addition the planner proposed is not a person's by rewording it: they
             # accept it (or dismiss it) first.
@@ -6522,7 +6650,7 @@ def apply_change(
         )
         _revise(cursor, plan_id)
     else:
-        sent = row[1] == "REQUESTED" and row[4] not in ("DRAFT", "CANCELLED")
+        sent = _sent(row)
         cursor.execute(
             """
             UPDATE evidence_requirements

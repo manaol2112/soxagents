@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { browserUrl } from "../../../src/browser-url";
 import { returnStep } from "../../../src/control-workflow-model";
+import { answersInPlace } from "../../../src/evidence-change-model";
 import {
   applicationNoticeFor,
   applicationWrite,
@@ -11,8 +12,12 @@ import { apiBaseUrl, sessionToken } from "../../../src/load-workspace";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** A person sets which application a file shows; back to where they set it. */
+/** A person sets which application a file shows; back to where they set it. A form
+ * that asks for JSON (InPlaceForm) gets the outcome back, with the server's own sentence
+ * when it refused (E1: "the file's applications cannot be changed: ..." where a sibling
+ * instance relies on the file) and the page to come back to; otherwise the page reloads. */
 export async function POST(request: Request) {
+  const inPlace = answersInPlace(request.headers.get("accept"));
   const form = await request.formData();
   const fields: Record<string, string> = {};
   for (const [key, value] of form.entries()) {
@@ -22,6 +27,7 @@ export async function POST(request: Request) {
   }
   const write = applicationWrite(fields);
   let status = 0;
+  let detail = "";
   if (!("error" in write)) {
     const session = sessionToken((await cookies()).get("aw_session")?.value);
     try {
@@ -37,6 +43,14 @@ export async function POST(request: Request) {
         signal: AbortSignal.timeout(10000),
       });
       status = response.status;
+      if (status === 409) {
+        try {
+          const body = (await response.json()) as { detail?: unknown };
+          detail = typeof body.detail === "string" ? body.detail : "";
+        } catch {
+          detail = "";
+        }
+      }
     } catch {
       status = 0;
     }
@@ -58,6 +72,16 @@ export async function POST(request: Request) {
       destination.searchParams.set(param, value);
     }
   }
+  if (!UUID.test(control)) {
+    // Back to the Evidence page's own view: the Library tab, its queue, search and
+    // grouping (18 November 2026: a change there landed on Requests).
+    for (const key of ["tab", "queue", "q", "group"] as const) {
+      const value = (fields[key] ?? "").slice(0, 120);
+      if (value !== "") {
+        destination.searchParams.set(key, value);
+      }
+    }
+  }
   if (UUID.test(control)) {
     // Back to the step the file was set on: D&I Evidence or OE Evidence.
     const step = returnStep(fields.step);
@@ -71,5 +95,12 @@ export async function POST(request: Request) {
     "notice",
     filingNoticeParam(applicationNoticeFor("error" in write ? null : status)),
   );
+  if (inPlace) {
+    return NextResponse.json({
+      status: "error" in write ? 422 : status,
+      detail,
+      location: `${destination.pathname}${destination.search}`,
+    });
+  }
   return NextResponse.redirect(destination, 303);
 }

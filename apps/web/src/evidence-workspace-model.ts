@@ -373,21 +373,23 @@ export type HeldFile = {
 
 /** The second line of an item's file card: when the file was uploaded, its size, and how
  * it serves the item when not through its request (product owner's reference, 31
- * October 2026: "Uploaded Oct 29, 2026 • 13 KB"). */
+ * October 2026: "Uploaded Oct 29, 2026 · 13 KB"), in the D&I list's own way: "·"
+ * between the parts and "linked by" in lower case (E1 design review, round 5). */
 export function fileCardMeta(
   held: Pick<HeldFile, "createdAt" | "sizeBytes"> | undefined,
   file: { via: string; linkedBy: string | null; sharedFrom: string | null },
 ): string {
-  return [
-    held?.createdAt ? `Uploaded ${formatDate(held.createdAt)}` : "",
+  const line = [
+    held?.createdAt ? `uploaded ${formatDate(held.createdAt)}` : "",
     held?.sizeBytes != null ? formatBytes(held.sizeBytes) : "",
-    file.via === "LINK" ? `Linked by ${file.linkedBy ?? "a person"}` : "",
+    file.via === "LINK" ? `linked by ${file.linkedBy ?? "a person"}` : "",
     file.via === "SHARED" && file.sharedFrom
-      ? `Shared from ${file.sharedFrom}`
+      ? `shared from ${file.sharedFrom}`
       : "",
   ]
     .filter((part) => part !== "")
-    .join(" • ");
+    .join(" · ");
+  return `${line.charAt(0).toUpperCase()}${line.slice(1)}`;
 }
 
 /**

@@ -672,6 +672,30 @@ function shown(item: Pick<Requirement, "phase" | "state">): boolean {
   return item.phase === "DESIGN" && item.state !== "REMOVED";
 }
 
+/** The files the D&I list's requests show, by filing or by a person's link: what the
+ * list's "Other files" leaves out, so its count and its cards say the same (E1 design
+ * review, 18 November 2026). The list's own rule (`shown`), whatever the plan's
+ * approval. */
+export function designListFiles(
+  plan: {
+    phases: ReadonlyArray<{
+      requirements: ReadonlyArray<
+        Pick<Requirement, "phase" | "state"> & {
+          files: ReadonlyArray<{ fileId: string }>;
+        }
+      >;
+    }>;
+  } | null,
+): Set<string> {
+  return new Set(
+    (plan?.phases ?? []).flatMap((phase) =>
+      phase.requirements
+        .filter(shown)
+        .flatMap((item) => item.files.map((file) => file.fileId)),
+    ),
+  );
+}
+
 function stateOf(
   item: Requirement,
   carrier: Carrier | null,
@@ -768,7 +792,7 @@ function factOf(
   }
   const reading = item.files.filter(isReading).length;
   if (reading > 0) {
-    return `${count} · Agent is reading`;
+    return `${count} · Reading`;
   }
   if (item.state === "ACCEPTED") {
     return `${count} · Accepted${by !== "" ? ` by ${by}` : ""}`;
@@ -1066,7 +1090,7 @@ export function evidenceList(input: EvidenceInput): EvidenceList {
       note:
         item.sufficiencyNote === ""
           ? ""
-          : `${decided || who !== "" ? "" : "Decision reopened: "}${item.sufficiencyNote}${who !== "" ? ` (${who})` : ""}`,
+          : `${reopenedPrefix(item.sufficiencyNote, decided || who !== "")}${item.sufficiencyNote}${who !== "" ? ` (${who})` : ""}`,
       period: item.periodLabel || input.period,
       change:
         item.pendingChange === null
@@ -1917,7 +1941,7 @@ function headerOf(facts: {
       need: {
         kind: "agent",
         title: `Reading ${plural(reading, "file")}`,
-        detail: `The agent is reading ${plural(reading, "file")}. ${reading === 1 ? "It shows" : "They show"} here to review when it is done.`,
+        detail: `${reading === 1 ? "It shows" : "They show"} here to review once read.`,
       },
       agent: { did: `Reading ${plural(reading, "file")}.`, found },
     };
@@ -2261,4 +2285,13 @@ export function rowMenu(
     },
     { key: "delete", label: "Delete", danger: true, unavailable: gone },
   ];
+}
+
+/** "Decision reopened: " before a reopened decision's note, unless the note says it
+ * already ("Reopened for the design review"; E1 design review, round 5: "Decision
+ * reopened: Reopened for…"), or the decision stands. */
+export function reopenedPrefix(note: string, decided: boolean): string {
+  return decided || /^reopened(?![a-z])/i.test(note.trim())
+    ? ""
+    : "Decision reopened: ";
 }

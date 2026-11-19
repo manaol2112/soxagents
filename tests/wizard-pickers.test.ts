@@ -44,9 +44,14 @@ describe("a file that needs placing can also be removed (product owner, 14 Novem
   // needed in this control?" A file waiting to be placed offered only Place file; Remove
   // was reachable only from the Move menu of a file already placed or kept out.
   it("offers Remove beside Place file, through the existing withdrawal", () => {
-    // One label wherever the window offers it.
-    assert.match(view, /const REMOVE_LABEL = "Remove from this upload";/);
-    assert.match(view, /label: REMOVE_LABEL,/);
+    // One label wherever the window offers it. Changed 18 November 2026 (E1, product
+    // owner). Old: 'const REMOVE_LABEL = "Remove from this upload"', for what was a
+    // withdrawal from the whole engagement. New: it is labelled as the withdrawal it is,
+    // with the one label every place uses ("Withdraw from the engagement…"), kept on
+    // record; discarding an upload outright is not built yet (E2).
+    assert.match(view, /const WITHDRAW_LABEL = FILE_ACTION_LABELS\.WITHDRAW;/);
+    assert.match(view, /label: WITHDRAW_LABEL,/);
+    assert.doesNotMatch(view, /Remove from this upload/);
     // The row that needs a person passes the wizard's own remove to the chooser.
     assert.match(
       view,
@@ -57,16 +62,37 @@ describe("a file that needs placing can also be removed (product owner, 14 Novem
     const start = view.indexOf("function Choose(");
     const chooser = view.slice(start, view.indexOf("function SuggestionView("));
     assert.ok(start > 0 && chooser.length > 0);
-    assert.match(chooser, /onClick=\{remove\.onRemove\}/);
+    // (Its press calls remove.onRemove only while it is not held: round 4, below.)
+    assert.match(chooser, /remove\.onRemove\(\);/);
     assert.doesNotMatch(chooser, /fetch\(|<form|method=/);
-    assert.match(view, /view\.removing === line\.fileId \? \(\s*<Withdraw /);
+    // Changed 18 November 2026 (E1 design review). Old: the form opened beside the row's
+    // Choose, Place file and Confirm its kind, all still live. New: it spans the row
+    // (wz-rf-full), and the row's other actions wait while it is open.
+    assert.match(
+      view,
+      /const removing = view\.removing !== null && view\.removing === line\.fileId;/,
+    );
+    assert.match(
+      view,
+      /\{removing \? \(\s*<span className="wz-rf-full">\s*<Withdraw /,
+    );
+    assert.match(view, /needs\.fix !== null && !removing \?/);
     assert.match(view, /start="withdraw"/);
-    // A real, named button, quiet beside the row's main action, off while the file is
-    // still being read.
+    // A real, named button, quiet beside the row's main action, held while the file is
+    // still being read. Changed 18 November 2026 (E1 design review, round 4). Old: held
+    // as `disabled` (Tab skipped it, its reason only a title). New: aria-disabled, the
+    // reason its description, and a press does nothing.
     assert.match(
       chooser,
-      /className="btn btn-ghost btn-sm wz-choose-remove"\s*disabled=\{busy \|\| remove\.unavailable !== null\}/,
+      /className="btn btn-ghost btn-sm wz-choose-remove"\s*\{\.\.\.heldControl\(\s*busy \|\| remove\.unavailable !== null,/,
     );
-    assert.match(chooser, /aria-label=\{`\$\{REMOVE_LABEL\}: \$\{name\}`\}/);
+    assert.match(
+      chooser,
+      /if \(!busy && remove\.unavailable === null\) \{\s*remove\.onRemove\(\);/,
+    );
+    assert.match(
+      chooser,
+      /aria-label=\{`Withdraw \$\{name\} from the engagement`\}/,
+    );
   });
 });

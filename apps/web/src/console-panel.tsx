@@ -10,6 +10,7 @@ import {
   threadGroups,
   type WaitingItem,
 } from "./console-model";
+import { onPageEscape } from "./focus-return";
 import { formatDate } from "./format";
 import { UiIcon } from "./ui-icon";
 
@@ -107,13 +108,12 @@ export function ConsoleShell({
     if (open !== true) {
       return;
     }
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !window.matchMedia(WIDE).matches) {
+    // A dialog open over it takes its own Escape (onPageEscape).
+    return onPageEscape(() => {
+      if (!window.matchMedia(WIDE).matches) {
         setOpen(false);
       }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    });
   }, [open]);
   const tabs: Array<[Tab, string, number]> = [
     ["chats", "Chats", 0],

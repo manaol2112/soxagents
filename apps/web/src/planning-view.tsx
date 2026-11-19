@@ -17,6 +17,7 @@ import type { Confidence } from "./control-context-model";
 import { useAction as useContextAction } from "./control-context-view";
 import { PLAN_TAB_EVENT, PLAN_VIEW_EVENT } from "./control-rail-model";
 import { DescribeDialog } from "./describe-dialog";
+import { useChangeForm } from "./evidence-change";
 import { formatDate } from "./format";
 import type { PlanningPageState } from "./load-planning";
 import { CONTROL_CATEGORIES } from "./onboarding-model";
@@ -114,10 +115,12 @@ import {
   valueQuestions,
   valuesItems,
 } from "./planning-model";
+import { RowExtra } from "./row-extra";
 import { implementationName } from "./shared-plans-model";
 import { ControlsView } from "./shared-plans-view";
 import { controlStepHref } from "./testing-hub-model";
 import { type IconName, UiIcon } from "./ui-icon";
+import { useFocusReturn } from "./use-focus-return";
 import { SuggestedAnswer } from "./value-options";
 import { joinAnswers } from "./value-suggestions";
 
@@ -154,7 +157,7 @@ function useAction(ids: Ids) {
   async function run(
     label: string,
     fields: Record<string, unknown>,
-  ): Promise<{ ok: boolean; body: unknown }> {
+  ): Promise<{ ok: boolean; body: unknown; problem: string | null }> {
     setBusy(label);
     setSettling(label);
     setProblem(null);
@@ -190,7 +193,7 @@ function useAction(ids: Ids) {
     } else {
       setSettling("");
     }
-    return { ok: message === null, body };
+    return { ok: message === null, body, problem: message };
   }
   return {
     run,
@@ -269,7 +272,9 @@ function SinceApproval({
 
 function Problem({ text }: { text: string | null }) {
   return text === null ? null : (
-    <p className="pl-problem" role="alert">
+    // A refusal said where the person acted takes the focus when the control they used
+    // went (use-focus-return.ts).
+    <p className="pl-problem" role="alert" data-focus-return="">
       {text}
     </p>
   );
@@ -1769,10 +1774,13 @@ function PlanSummary({
   const today = activityToday ?? 0;
   const plural = (count: number, one: string, many: string) =>
     count === 1 ? one : many;
+  // A zero is said in the neutral tone: nothing waits (Planning review, 18 November 2026:
+  // "0 pending review" read amber).
   const readiness: {
     good: string;
     zero: boolean;
     warn: string;
+    warnZero: boolean;
     label: string;
   } =
     view === "procedures"
@@ -1781,6 +1789,7 @@ function PlanSummary({
           zero: procedures.ready === 0,
           // The same pair on every tab, as the reference shows, zero included.
           warn: `${procedures.review} need review`,
+          warnZero: procedures.review === 0,
           label: "Procedure readiness",
         }
       : view === "attributes"
@@ -1788,6 +1797,7 @@ function PlanSummary({
             good: `${attributes.confirmed} confirmed`,
             zero: attributes.confirmed === 0,
             warn: `${attributes.review} ${plural(attributes.review, "needs review", "need review")}`,
+            warnZero: attributes.review === 0,
             label: "Attribute readiness",
           }
         : view === "evidence"
@@ -1795,12 +1805,14 @@ function PlanSummary({
               good: `${requested} requested`,
               zero: requested === 0,
               warn: `${evidence.NEEDS_REVIEW} pending review`,
+              warnZero: evidence.NEEDS_REVIEW === 0,
               label: "Evidence readiness",
             }
           : {
               good: `${today} ${plural(today, "activity", "activities")} today`,
               zero: today === 0,
               warn: `${versions} plan ${plural(versions, "version", "versions")}`,
+              warnZero: versions === 0,
               label: "Recent activity",
             };
   const figures: Array<{
@@ -1952,7 +1964,11 @@ function PlanSummary({
                     {readiness.good}
                   </span>
                   {" / "}
-                  <span className="pr-review">{readiness.warn}</span>
+                  <span
+                    className={`pr-review${readiness.warnZero ? " is-none" : ""}`}
+                  >
+                    {readiness.warn}
+                  </span>
                 </strong>
                 <span>{readiness.label}</span>
               </span>
@@ -3608,6 +3624,7 @@ function ProcedureForms({
           <EditButtons
             busy={action.pending}
             disabled={text.trim().length < 10}
+            hint="At least 10 characters."
             save="Save procedure"
             onCancel={() => setMode("none")}
             onSave={async () =>
@@ -3678,6 +3695,9 @@ function ProcedureForms({
           <EditButtons
             busy={action.pending}
             disabled={reason.trim().length < 10}
+            // The server's rule (master_plans: a reason of 10 to 500 characters).
+            hint="At least 10 characters."
+            note="Removing revises the plan; an approved plan goes back for review."
             save="Remove procedure"
             onCancel={() => setMode("none")}
             onSave={async () =>
@@ -3880,103 +3900,107 @@ function ProceduresTable({
                     </td>
                   </tr>
                   {isOpen ? (
-                    <tr className="pp-detail">
-                      <td />
-                      <td colSpan={8}>
-                        <div className="pp-detail-body">
-                          <p className="pl-row-meta">
-                            <span className="pl-ref">{row.code}</span>
-                            <Mark
-                              origin={item.origin}
-                              personEdited={item.personEdited}
-                            />
-                            {item.standardKey !== "" &&
-                            plan.control.libraryKey !== "" ? (
-                              <a
-                                className="pl-standard-steps"
-                                href={standardStepsHref(
-                                  ids.organizationId,
-                                  ids.projectId,
-                                  plan.control.libraryKey,
-                                  item.standardKey,
-                                )}
-                              >
-                                View the standard's steps
-                              </a>
-                            ) : null}
-                          </p>
-                          <p className="pl-row-links">
-                            {item.phase === "DESIGN" ? null : (
-                              <Chips
-                                optional
-                                label="Tests"
-                                codes={item.attributeCodes}
-                                onSelect={onSelect}
-                              />
-                            )}
+                    <RowExtra columns={9} className="pp-detail">
+                      <div className="pp-detail-body">
+                        {/* Where the table scrolls sideways its text column stays two
+                            lines, so the open row is not a tall narrow column with a
+                            blank band beside it; the whole text reads here instead. */}
+                        <div className="pp-detail-text">
+                          <strong>{row.title}</strong>
+                          {row.body !== "" ? <p>{row.body}</p> : null}
+                        </div>
+                        <p className="pl-row-meta">
+                          <span className="pl-ref">{row.code}</span>
+                          <Mark
+                            origin={item.origin}
+                            personEdited={item.personEdited}
+                          />
+                          {item.standardKey !== "" &&
+                          plan.control.libraryKey !== "" ? (
+                            <a
+                              className="pl-standard-steps"
+                              href={standardStepsHref(
+                                ids.organizationId,
+                                ids.projectId,
+                                plan.control.libraryKey,
+                                item.standardKey,
+                              )}
+                            >
+                              View the standard's steps
+                            </a>
+                          ) : null}
+                        </p>
+                        <p className="pl-row-links">
+                          {item.phase === "DESIGN" ? null : (
                             <Chips
                               optional
-                              label="Evidence"
-                              codes={item.evidenceCodes}
+                              label="Tests"
+                              codes={item.attributeCodes}
                               onSelect={onSelect}
                             />
-                          </p>
-                          <Flags
-                            ids={ids}
-                            plan={plan}
-                            findings={flagged.get(row.code)}
-                            onLinks={() => setMode(row.id, "links")}
+                          )}
+                          <Chips
+                            optional
+                            label="Evidence"
+                            codes={item.evidenceCodes}
+                            onSelect={onSelect}
                           />
-                          <span className="pl-item-actions">
+                        </p>
+                        <Flags
+                          ids={ids}
+                          plan={plan}
+                          findings={flagged.get(row.code)}
+                          onLinks={() => setMode(row.id, "links")}
+                        />
+                        <span className="pl-item-actions">
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            onClick={() =>
+                              setMode(
+                                row.id,
+                                mode(row.id) === "edit" ? "none" : "edit",
+                              )
+                            }
+                          >
+                            Edit
+                          </button>
+                          {item.phase === "DESIGN" ? null : (
                             <button
                               type="button"
                               className="btn btn-ghost btn-sm"
                               onClick={() =>
                                 setMode(
                                   row.id,
-                                  mode(row.id) === "edit" ? "none" : "edit",
+                                  mode(row.id) === "links" ? "none" : "links",
                                 )
                               }
                             >
-                              Edit
+                              Attributes
                             </button>
-                            {item.phase === "DESIGN" ? null : (
-                              <button
-                                type="button"
-                                className="btn btn-ghost btn-sm"
-                                onClick={() =>
-                                  setMode(
-                                    row.id,
-                                    mode(row.id) === "links" ? "none" : "links",
-                                  )
-                                }
-                              >
-                                Attributes
-                              </button>
-                            )}
-                            <button
-                              type="button"
-                              className="btn btn-ghost btn-sm"
-                              onClick={() =>
-                                setMode(
-                                  row.id,
-                                  mode(row.id) === "remove" ? "none" : "remove",
-                                )
-                              }
-                            >
-                              Remove
-                            </button>
-                          </span>
-                          <ProcedureForms
-                            ids={ids}
-                            plan={plan}
-                            item={item}
-                            mode={mode(row.id)}
-                            onDone={() => setMode(row.id, "none")}
-                          />
-                        </div>
-                      </td>
-                    </tr>
+                          )}
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            onClick={() =>
+                              setMode(
+                                row.id,
+                                mode(row.id) === "remove" ? "none" : "remove",
+                              )
+                            }
+                          >
+                            Remove
+                          </button>
+                        </span>
+                        <ProcedureForms
+                          ids={ids}
+                          plan={plan}
+                          item={item}
+                          mode={mode(row.id)}
+                          onDone={() => setMode(row.id, "none")}
+                        />
+                      </div>
+                    </RowExtra>
                   ) : null}
                 </Fragment>
               );
@@ -4020,7 +4044,7 @@ function ProceduresTable({
                 setOpen(all ? new Set() : new Set(rows.map((row) => row.id)))
               }
             >
-              <UiIcon name="file" size={14} />
+              <UiIcon name={all ? "collapse" : "file"} size={14} />
               {all ? "Close all procedures" : "Review all procedures"}
             </button>
           ) : null}
@@ -4417,15 +4441,18 @@ function ProcedureMenu({
 }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLSpanElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!open) {
       return;
     }
     const close = (event: Event) => {
-      if (
-        event instanceof KeyboardEvent
-          ? event.key === "Escape"
-          : !root.current?.contains(event.target as Node)
+      if (event instanceof KeyboardEvent && event.key === "Escape") {
+        setOpen(false);
+        button.current?.focus();
+      } else if (
+        !(event instanceof KeyboardEvent) &&
+        !root.current?.contains(event.target as Node)
       ) {
         setOpen(false);
       }
@@ -4440,6 +4467,7 @@ function ProcedureMenu({
   return (
     <span className="pp-menu" ref={root}>
       <button
+        ref={button}
         type="button"
         className="pp-menu-button"
         aria-label={label}
@@ -4458,6 +4486,10 @@ function ProcedureMenu({
               role="menuitem"
               onClick={() => {
                 setOpen(false);
+                // Focus stays on the menu's button, so a form or confirm the choice
+                // opens gives it back there once closed (use-focus-return.ts; E1 design
+                // review, round 7: it fell to the table, the chosen item being gone).
+                button.current?.focus();
                 item.run();
               }}
             >
@@ -4696,6 +4728,7 @@ function EditButtons({
   onSave,
   onCancel,
   note = "Saving revises the plan; an approved plan goes back for review.",
+  hint = null,
 }: {
   busy: boolean;
   disabled?: boolean;
@@ -4704,7 +4737,11 @@ function EditButtons({
   onCancel: () => void;
   /** What saving does to the plan; null where it changes nothing in it. */
   note?: string | null;
+  /** Why the button is off, while it is (Planning review, 18 November 2026: a greyed
+   * button said nothing of what it waits for). */
+  hint?: string | null;
 }) {
+  const why = disabled && !busy && hint !== null ? hint : null;
   return (
     <div className="pl-edit-buttons">
       <button
@@ -4718,6 +4755,7 @@ function EditButtons({
       <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel}>
         Cancel
       </button>
+      {why === null ? null : <span className="pl-edit-why">{why}</span>}
       {note === null ? null : <span className="pl-sub">{note}</span>}
     </div>
   );
@@ -4830,12 +4868,15 @@ function AttributeCriteria({
   item,
   editing,
   onEditing,
+  quiet = false,
 }: {
   ids: Ids;
   plan: MasterPlan;
   item: Attribute;
   editing: boolean;
   onEditing: (value: boolean) => void;
+  /** Another editor of the row is open (its wording). */
+  quiet?: boolean;
 }) {
   const action = useAction(ids);
   const setEditing = onEditing;
@@ -4864,72 +4905,77 @@ function AttributeCriteria({
           {item.objective ? ` Addresses: ${item.objective}` : ""}
         </p>
       ) : null}
-      <dl className="pl-criteria">
-        <div>
-          <dt>Passes when</dt>
-          <dd>
-            {item.passCriteria || <span className="pl-none">Not stated</span>}
-          </dd>
-        </div>
-        <div>
-          <dt>Fails when</dt>
-          <dd>
-            {item.failCriteria || <span className="pl-none">Not stated</span>}
-          </dd>
-        </div>
-        {item.objective ? (
-          <div className="pl-criteria-wide">
-            <dt>Addresses</dt>
-            <dd>{item.objective}</dd>
+      {/* While the row has an editor open (its criteria's or its wording's), the criteria
+          are not drawn: the `hidden` attribute lost to the list's own display (E1 design
+          review, round 9). */}
+      {editing || quiet ? null : (
+        <dl className="pl-criteria">
+          <div>
+            <dt>Passes when</dt>
+            <dd>
+              {item.passCriteria || <span className="pl-none">Not stated</span>}
+            </dd>
           </div>
-        ) : null}
-        <div>
-          <dt>Condition tested</dt>
-          <dd>
-            {item.condition || <span className="pl-none">Not stated</span>}
-          </dd>
-        </div>
-        <div>
-          <dt>Judgment</dt>
-          <dd>
-            {yesNo(
-              item.judgmentRequired,
-              "Professional judgment required",
-              "Objectively testable",
-            )}
-          </dd>
-        </div>
-        <div>
-          <dt>Automated testing</dt>
-          <dd>{yesNo(item.automatable, "Suitable", "Not suitable")}</dd>
-        </div>
-        <div>
-          <dt>Criteria</dt>
-          <dd>
-            <span
-              className={
-                item.criteriaSource === "AGENT"
-                  ? "ai-mark"
-                  : item.criteriaSource === "PLAN"
-                    ? "pl-person"
-                    : "pl-sub"
-              }
-            >
-              {item.criteriaSource === "AGENT" ? (
-                <UiIcon name="sparkles" size={11} />
-              ) : null}
-              {CRITERIA_LABELS[item.criteriaSource]}
-            </span>
-            {item.criteriaAcceptedAt !== "" ? (
-              <span className="pl-accepted">
-                <UiIcon name="check" size={11} />
-                Accepted by {item.criteriaAcceptedBy || "a person"} on{" "}
-                {formatDate(item.criteriaAcceptedAt)}
+          <div>
+            <dt>Fails when</dt>
+            <dd>
+              {item.failCriteria || <span className="pl-none">Not stated</span>}
+            </dd>
+          </div>
+          {item.objective ? (
+            <div className="pl-criteria-wide">
+              <dt>Addresses</dt>
+              <dd>{item.objective}</dd>
+            </div>
+          ) : null}
+          <div>
+            <dt>Condition tested</dt>
+            <dd>
+              {item.condition || <span className="pl-none">Not stated</span>}
+            </dd>
+          </div>
+          <div>
+            <dt>Judgment</dt>
+            <dd>
+              {yesNo(
+                item.judgmentRequired,
+                "Professional judgment required",
+                "Objectively testable",
+              )}
+            </dd>
+          </div>
+          <div>
+            <dt>Automated testing</dt>
+            <dd>{yesNo(item.automatable, "Suitable", "Not suitable")}</dd>
+          </div>
+          <div>
+            <dt>Criteria</dt>
+            <dd>
+              <span
+                className={
+                  item.criteriaSource === "AGENT"
+                    ? "ai-mark"
+                    : item.criteriaSource === "PLAN"
+                      ? "pl-person"
+                      : "pl-sub"
+                }
+              >
+                {item.criteriaSource === "AGENT" ? (
+                  <UiIcon name="sparkles" size={11} />
+                ) : null}
+                {CRITERIA_LABELS[item.criteriaSource]}
               </span>
-            ) : null}
-          </dd>
-        </div>
-      </dl>
+              {item.criteriaAcceptedAt !== "" ? (
+                <span className="pl-accepted">
+                  <UiIcon name="check" size={11} />
+                  Accepted by {item.criteriaAcceptedBy || "a person"} on{" "}
+                  {formatDate(item.criteriaAcceptedAt)}
+                </span>
+              ) : null}
+            </dd>
+          </div>
+        </dl>
+      )}
       <span className="pl-item-actions">
         {acceptable ? (
           <button
@@ -5127,7 +5173,28 @@ function AttributesTable({
   const flagged = findingsByCode(plan);
   const rows = attributeRows(plan);
   const [open, setOpen] = useState<Set<string>>(new Set());
-  const [editing, setEditing] = useState<Set<string>>(new Set());
+  // One editor open at a time, on one row: its wording or its criteria, owned with every
+  // other change form on the page (useChangeForm; E1 design review: the wording and the
+  // criteria editors were open together on one row).
+  const [rowEditor, setRowEditor] = useChangeForm<{
+    id: string;
+    kind: "wording" | "criteria";
+  }>();
+  const [wordingText, setWordingText] = useState("");
+  const wording =
+    rowEditor?.kind === "wording"
+      ? { id: rowEditor.id, text: wordingText }
+      : null;
+  const setWording = (next: { id: string; text: string } | null) => {
+    if (next === null) {
+      if (rowEditor?.kind === "wording") {
+        setRowEditor(null);
+      }
+      return;
+    }
+    setWordingText(next.text);
+    setRowEditor({ id: next.id, kind: "wording" });
+  };
   // Users add, reword and remove the control's attributes here (product owner, 26 October
   // 2026), through the control's own attribute record.
   const change = useContextAction({
@@ -5136,10 +5203,27 @@ function AttributesTable({
     controlId: plan.controlId,
   });
   const [adding, setAdding] = useState<string | null>(null);
-  const [wording, setWording] = useState<{ id: string; text: string } | null>(
-    null,
-  );
   const [removing, setRemoving] = useState<string | null>(null);
+  // Where the last refusal belongs ("add", "edit:<id>", "retire:<id>"): it shows in that
+  // form, in the danger tone, until the next edit there (Planning review, 18 November
+  // 2026: a wording refusal showed at the section's top, in body text, under every state).
+  const [failed, setFailed] = useState<string | null>(null);
+  const attempt = async (
+    at: string,
+    label: string,
+    fields: Record<string, unknown>,
+  ): Promise<boolean> => {
+    setFailed(null);
+    const ok = await change.run(label, fields);
+    setFailed(ok ? null : at);
+    return ok;
+  };
+  const problemAt = (at: string): string | null =>
+    failed === at ? change.problem : null;
+  const clearProblem = () => {
+    setFailed(null);
+    change.setProblem(null);
+  };
   const [showGuidance, setShowGuidance] = useState(false);
   // The agent's criteria still to confirm are named under the title and accepted together,
   // after they are opened to read (decided by the product owner, 27 October 2026); the
@@ -5168,9 +5252,11 @@ function AttributesTable({
       return next;
     });
   const edit = (id: string, value: boolean) => {
-    flip(setEditing, id, value);
     if (value) {
+      setRowEditor({ id, kind: "criteria" });
       flip(setOpen, id, true);
+    } else if (rowEditor?.kind === "criteria" && rowEditor.id === id) {
+      setRowEditor(null);
     }
   };
   return (
@@ -5214,7 +5300,7 @@ function AttributesTable({
                 setOpen(all ? new Set() : new Set(rows.map((row) => row.id)))
               }
             >
-              <UiIcon name="file" size={14} />
+              <UiIcon name={all ? "collapse" : "file"} size={14} />
               {all ? "Close all attributes" : "Review all attributes"}
             </button>
           ) : null}
@@ -5297,17 +5383,23 @@ function AttributesTable({
               maxLength={300}
               value={adding}
               placeholder="For example: The access was approved by the user's manager before it was granted."
-              onChange={(event) => setAdding(event.target.value)}
+              onChange={(event) => {
+                clearProblem();
+                setAdding(event.target.value);
+              }}
             />
           </label>
           <EditButtons
             busy={change.pending}
             disabled={adding.trim().length < 3}
             save="Add attribute"
-            onCancel={() => setAdding(null)}
+            onCancel={() => {
+              clearProblem();
+              setAdding(null);
+            }}
             onSave={async () => {
               if (
-                await change.run("add", {
+                await attempt("add", "add", {
                   intent: "attribute-add",
                   text: adding.trim(),
                 })
@@ -5316,52 +5408,8 @@ function AttributesTable({
               }
             }}
           />
+          <Problem text={problemAt("add")} />
         </div>
-      ) : null}
-      {removing !== null ? (
-        <p className="pe-removed" role="alertdialog">
-          <span>
-            Remove attribute{" "}
-            {rows.find((row) => row.id === removing)?.number ?? ""} from the
-            plan? It is kept on record as retired.
-          </span>
-          <span className="pa-confirm">
-            <button
-              type="button"
-              className="btn-ghost btn-sm"
-              onClick={() => setRemoving(null)}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="btn-sm"
-              disabled={change.pending}
-              onClick={async () => {
-                const item = plan.attributes.find(
-                  (entry) => entry.id === removing,
-                );
-                if (
-                  item !== undefined &&
-                  (await change.run("retire", {
-                    intent: "attribute-retire",
-                    attribute_id: item.id,
-                    version: item.version,
-                  }))
-                ) {
-                  setRemoving(null);
-                }
-              }}
-            >
-              Remove
-            </button>
-          </span>
-        </p>
-      ) : null}
-      {change.problem !== null ? (
-        <p className="form-error" role="alert">
-          {change.problem}
-        </p>
       ) : null}
       {rows.length === 0 ? (
         <p className="pl-quiet">The control has no approved attributes yet.</p>
@@ -5434,8 +5482,10 @@ function AttributesTable({
                           items={[
                             {
                               text: "Edit wording",
-                              run: () =>
-                                setWording({ id: row.id, text: item.text }),
+                              run: () => {
+                                clearProblem();
+                                setWording({ id: row.id, text: item.text });
+                              },
                             },
                             {
                               text: "Edit criteria",
@@ -5447,87 +5497,132 @@ function AttributesTable({
                             },
                             {
                               text: "Remove from the plan",
-                              run: () => setRemoving(row.id),
+                              run: () => {
+                                clearProblem();
+                                setRemoving(row.id);
+                              },
                             },
                           ]}
                         />
                       </td>
                     </tr>
                     {wording !== null && wording.id === row.id ? (
-                      <tr className="pp-detail">
-                        <td />
-                        <td colSpan={7}>
-                          <div className="pl-edit" aria-busy={change.pending}>
-                            <label>
-                              Wording of attribute {row.number}
-                              <textarea
-                                rows={2}
-                                maxLength={300}
-                                value={wording.text}
-                                onChange={(event) =>
-                                  setWording({
-                                    id: row.id,
-                                    text: event.target.value,
-                                  })
-                                }
-                              />
-                            </label>
-                            <EditButtons
-                              busy={change.pending}
-                              disabled={
-                                wording.text.trim().length < 3 ||
-                                wording.text.trim() === item.text
-                              }
-                              save="Save wording"
-                              onCancel={() => setWording(null)}
-                              onSave={async () => {
-                                if (
-                                  await change.run("edit", {
-                                    intent: "attribute-edit",
-                                    attribute_id: item.id,
-                                    text: wording.text.trim(),
-                                    version: item.version,
-                                  })
-                                ) {
-                                  setWording(null);
-                                }
+                      <RowExtra columns={8} className="pp-detail">
+                        <div className="pl-edit" aria-busy={change.pending}>
+                          <label>
+                            Wording of attribute {row.number}
+                            <textarea
+                              className="pa-wording"
+                              rows={2}
+                              maxLength={300}
+                              value={wording.text}
+                              onChange={(event) => {
+                                clearProblem();
+                                setWording({
+                                  id: row.id,
+                                  text: event.target.value,
+                                });
                               }}
                             />
-                          </div>
-                        </td>
-                      </tr>
+                          </label>
+                          <EditButtons
+                            busy={change.pending}
+                            disabled={
+                              wording.text.trim().length < 3 ||
+                              wording.text.trim() === item.text
+                            }
+                            hint={
+                              wording.text.trim().length < 3
+                                ? "At least 3 characters."
+                                : null
+                            }
+                            save="Save wording"
+                            onCancel={() => {
+                              clearProblem();
+                              setWording(null);
+                            }}
+                            onSave={async () => {
+                              if (
+                                await attempt(`edit:${item.id}`, "edit", {
+                                  intent: "attribute-edit",
+                                  attribute_id: item.id,
+                                  text: wording.text.trim(),
+                                  version: item.version,
+                                })
+                              ) {
+                                setWording(null);
+                              }
+                            }}
+                          />
+                          <Problem text={problemAt(`edit:${item.id}`)} />
+                        </div>
+                      </RowExtra>
+                    ) : null}
+                    {removing === row.id ? (
+                      // On the row it removes, as the row's other feedback is (E1 design
+                      // review, round 6: it was a bar at the top of the section), and it
+                      // takes the focus.
+                      <RowExtra columns={8} className="pp-detail">
+                        <RemoveAttributeConfirm
+                          number={row.number}
+                          busy={change.pending}
+                          problem={problemAt(`retire:${item.id}`)}
+                          onCancel={() => {
+                            clearProblem();
+                            setRemoving(null);
+                          }}
+                          onRemove={async () => {
+                            if (
+                              await attempt(`retire:${item.id}`, "retire", {
+                                intent: "attribute-retire",
+                                attribute_id: item.id,
+                                version: item.version,
+                              })
+                            ) {
+                              setRemoving(null);
+                            }
+                          }}
+                        />
+                      </RowExtra>
                     ) : null}
                     {isOpen ? (
-                      <tr className="pp-detail">
-                        <td />
-                        <td colSpan={7}>
-                          <div className="pp-detail-body">
-                            <p className="pl-row-meta">
-                              <span className="pl-ref">{row.code}</span>
-                              {item.basis !== "" &&
-                              item.basis !== "DOCUMENTED" ? (
-                                <span className="pill tone-warning">
-                                  Inferred
-                                </span>
-                              ) : null}
-                            </p>
-                            <AttributeCriteria
-                              ids={ids}
-                              plan={plan}
-                              item={item}
-                              editing={editing.has(row.id)}
-                              onEditing={(value) => edit(row.id, value)}
-                            />
-                            <Flags
-                              ids={ids}
-                              plan={plan}
-                              findings={flagged.get(row.code)}
-                              onCriteria={() => edit(row.id, true)}
-                              onSelect={onSelect}
-                            />
+                      <RowExtra columns={8} className="pp-detail">
+                        <div className="pp-detail-body">
+                          {/* The whole text where the table scrolls sideways (its
+                              columns stay two lines there). */}
+                          <div className="pp-detail-text">
+                            <strong>{row.statement}</strong>
+                            <p>{row.expected || "Not stated"}</p>
                           </div>
-                        </td>
-                      </tr>
+                          <p className="pl-row-meta">
+                            <span className="pl-ref">{row.code}</span>
+                            {item.basis !== "" &&
+                            item.basis !== "DOCUMENTED" ? (
+                              <span className="pill tone-warning">
+                                Inferred
+                              </span>
+                            ) : null}
+                          </p>
+                          <AttributeCriteria
+                            ids={ids}
+                            plan={plan}
+                            item={item}
+                            editing={
+                              rowEditor?.kind === "criteria" &&
+                              rowEditor.id === row.id
+                            }
+                            onEditing={(value) => edit(row.id, value)}
+                            quiet={rowEditor?.id === row.id}
+                          />
+                          <Flags
+                            ids={ids}
+                            plan={plan}
+                            findings={flagged.get(row.code)}
+                            onCriteria={() => edit(row.id, true)}
+                            onSelect={onSelect}
+                          />
+                        </div>
+                      </RowExtra>
                     ) : null}
                   </Fragment>
                 );
@@ -5842,6 +5937,7 @@ const EVIDENCE_TONE: Record<EvidenceStatus, string> = {
 const REQUIREMENT_WORDS: Record<string, string> = {
   PLANNED: "Planned; requested once the plan is approved",
   AWAITING_DEPENDENCY: "Waits for an earlier item",
+  REQUESTED: "Requested from the organization",
   NOT_GENERATED: "Not requested yet",
   DRAFT: "Being drafted",
   READY_FOR_REVIEW: "Drafted, ready for review",
@@ -5857,15 +5953,27 @@ const REQUIREMENT_WORDS: Record<string, string> = {
   WAIVED: "Not applicable",
 };
 
-/** Removing an item from the plan (product owner, 26 October 2026), undone right after it. */
+/** Removing an item from the plan (product owner, 26 October 2026), undone right after it.
+ * A refusal belongs to the item it refused and shows on that item; an undo's, by the undo
+ * (Planning review, 18 November 2026: the refusal showed at the section's top). */
 function useEvidenceRemoval(ids: Ids, plan: MasterPlan) {
   const action = useAction(ids);
+  // The item's row goes with a removal, and the notice with an undo: focus goes to what
+  // the page says then, through the one mechanism (E1 design review, round 6).
+  const focus = useFocusReturn();
+  // The item an undo brought back: its row takes the focus.
+  const [restored, setRestored] = useState<string | null>(null);
   const [removed, setRemoved] = useState<{
     id: string;
     code: string;
     version: number;
   } | null>(null);
-  const remove = async (item: Evidence) => {
+  // Where the last refusal belongs: an item's id, or "undo".
+  const [refused, setRefused] = useState<{ at: string; text: string } | null>(
+    null,
+  );
+  const remove = async (item: Evidence): Promise<boolean> => {
+    setRefused(null);
     const result = await action.run("remove", {
       intent: "evidence-remove",
       control_id: plan.controlId,
@@ -5873,13 +5981,19 @@ function useEvidenceRemoval(ids: Ids, plan: MasterPlan) {
       version: item.version,
     });
     if (result.ok) {
+      setRestored(null);
       setRemoved({ id: item.id, code: item.code, version: item.version + 1 });
+    } else {
+      setRefused({ at: item.id, text: result.problem ?? "" });
     }
+    focus.returnFocus("answer");
+    return result.ok;
   };
   const undo = async () => {
     if (removed === null) {
       return;
     }
+    setRefused(null);
     const result = await action.run("restore", {
       intent: "evidence-restore",
       control_id: plan.controlId,
@@ -5888,9 +6002,18 @@ function useEvidenceRemoval(ids: Ids, plan: MasterPlan) {
     });
     if (result.ok) {
       setRemoved(null);
+      setRestored(removed.id);
+    } else {
+      setRefused({ at: "undo", text: result.problem ?? "" });
     }
+    focus.returnFocus("answer");
   };
-  return { action, removed, remove, undo };
+  /** The refusal to show at `at` (an item's id, or "undo"); null when none is there. */
+  const problemAt = (at: string): string | null =>
+    refused !== null && refused.at === at && refused.text !== ""
+      ? refused.text
+      : null;
+  return { action, removed, restored, remove, undo, problemAt };
 }
 
 type EvidenceRemoval = ReturnType<typeof useEvidenceRemoval>;
@@ -6099,6 +6222,9 @@ function EvidenceBoard({ ids, plan, selected, trace, onSelect }: TabProps) {
                     type="button"
                     className="pb-card-head"
                     aria-expanded={isOpen}
+                    data-focus-return={
+                      removal.restored === row.id ? "" : undefined
+                    }
                     onClick={() => toggle(row.id)}
                   >
                     <span className="pb-num is-code">{row.code}</span>
@@ -6144,12 +6270,86 @@ function EvidenceBoard({ ids, plan, selected, trace, onSelect }: TabProps) {
   );
 }
 
+/** Removing an attribute, asked on its row: what it does, Cancel and Remove. It takes the
+ * focus as it opens; Cancel gives it back to what opened it, and a refusal is said in it
+ * (use-focus-return.ts). */
+function RemoveAttributeConfirm({
+  number,
+  busy,
+  problem,
+  onCancel,
+  onRemove,
+}: {
+  number: number | string;
+  busy: boolean;
+  problem: string | null;
+  onCancel: () => void;
+  onRemove: () => Promise<void>;
+}) {
+  const id = useId();
+  const focus = useFocusReturn();
+  const box = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    box.current?.focus();
+  }, []);
+  return (
+    <div
+      ref={(element) => {
+        box.current = element;
+        focus.ref(element);
+      }}
+      className="pa-remove-confirm"
+      role="alertdialog"
+      aria-labelledby={id}
+      tabIndex={-1}
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && !busy) {
+          event.stopPropagation();
+          focus.returnFocus("back");
+          onCancel();
+        }
+      }}
+    >
+      <span id={id}>
+        Remove attribute {number} from the plan? It is kept on record as
+        retired.
+      </span>
+      <span className="pa-confirm">
+        <button
+          type="button"
+          className="btn-ghost btn-sm"
+          onClick={() => {
+            focus.returnFocus("back");
+            onCancel();
+          }}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="btn-sm"
+          aria-disabled={busy || undefined}
+          onClick={() => {
+            if (!busy) {
+              focus.returnFocus("answer");
+              void onRemove();
+            }
+          }}
+        >
+          Remove
+        </button>
+      </span>
+      <Problem text={problem} />
+    </div>
+  );
+}
+
 /** The line that says an item was removed, with its undo. */
 function RemovedNotice({ removal }: { removal: EvidenceRemoval }) {
   return (
     <>
       {removal.removed !== null ? (
-        <p className="pe-removed" role="status">
+        <p className="pe-removed" role="status" data-focus-return="">
           <span>
             {removal.removed.code} was removed from the plan. It stays on
             record.
@@ -6157,14 +6357,19 @@ function RemovedNotice({ removal }: { removal: EvidenceRemoval }) {
           <button
             type="button"
             className="btn-ghost btn-sm"
-            disabled={removal.action.pending}
-            onClick={() => void removal.undo()}
+            // Busy, never switched off under the person: focus stays on it.
+            aria-disabled={removal.action.pending || undefined}
+            onClick={() => {
+              if (!removal.action.pending) {
+                void removal.undo();
+              }
+            }}
           >
             Undo
           </button>
         </p>
       ) : null}
-      <Problem text={removal.action.problem} />
+      <Problem text={removal.problemAt("undo")} />
     </>
   );
 }
@@ -6182,6 +6387,7 @@ function EvidenceBody({
   onMode,
   removal,
   onSelect,
+  underRow = false,
 }: {
   ids: Ids;
   plan: MasterPlan;
@@ -6192,6 +6398,10 @@ function EvidenceBody({
   onMode: (next: EvidenceMode) => void;
   removal: EvidenceRemoval;
   onSelect: (code: string) => void;
+  /** Opened under the compact table's row, which shows the type, the status and the
+   * source: the strip keeps only what the row does not (product owner, 18 November
+   * 2026: "remove the repetition"). A card's head shows none of them. */
+  underRow?: boolean;
 }) {
   const flip = (next: EvidenceMode) => onMode(mode === next ? "none" : next);
   return (
@@ -6200,17 +6410,23 @@ function EvidenceBody({
         <span className={`pp-pill is-phase is-${item.phase.toLowerCase()}`}>
           {row.phaseLabel}
         </span>
-        <span className="pp-pill">{row.typeLabel}</span>
-        <span
-          className={`pp-status ${EVIDENCE_TONE[row.status]}`}
-          title={REQUIREMENT_WORDS[row.state] ?? row.state}
-        >
-          {EVIDENCE_STATUS_LABELS[row.status]}
-        </span>
+        {underRow ? null : (
+          <>
+            <span className="pp-pill">{row.typeLabel}</span>
+            <span
+              className={`pp-status ${EVIDENCE_TONE[row.status]}`}
+              title={REQUIREMENT_WORDS[row.state] ?? row.state}
+            >
+              {EVIDENCE_STATUS_LABELS[row.status]}
+            </span>
+          </>
+        )}
         <span className="pp-pill is-phase">
           {row.required ? "Required" : "Optional"}
         </span>
-        <Mark origin={item.origin} personEdited={item.personEdited} />
+        {underRow ? null : (
+          <Mark origin={item.origin} personEdited={item.personEdited} />
+        )}
       </p>
       <div className="pb-overview">
         <h5>Evidence overview</h5>
@@ -6258,7 +6474,7 @@ function EvidenceBody({
         </button>
         <button
           type="button"
-          className="btn-ghost btn-sm"
+          className="btn-ghost btn-sm pb-wide"
           onClick={() => flip("links")}
         >
           Link attributes and procedures
@@ -6266,8 +6482,12 @@ function EvidenceBody({
         <button
           type="button"
           className="btn-ghost btn-sm"
-          disabled={removal.action.pending}
-          onClick={() => void removal.remove(item)}
+          aria-disabled={removal.action.pending || undefined}
+          onClick={() => {
+            if (!removal.action.pending) {
+              void removal.remove(item);
+            }
+          }}
         >
           Remove
         </button>
@@ -6280,6 +6500,7 @@ function EvidenceBody({
           <UiIcon name="arrow" size={13} />
         </button>
       </span>
+      <Problem text={removal.problemAt(item.id)} />
       <EvidenceForms
         ids={ids}
         plan={plan}
@@ -6469,6 +6690,9 @@ function EvidenceTable({
                           type="button"
                           className="pe-open"
                           aria-expanded={isOpen}
+                          data-focus-return={
+                            removal.restored === row.id ? "" : undefined
+                          }
                           onClick={() => toggle(row.id)}
                         >
                           {row.title}
@@ -6528,31 +6752,35 @@ function EvidenceTable({
                             },
                             {
                               text: "Remove from the plan",
-                              run: () => void removal.remove(item),
+                              // A refusal shows in the item, so the item opens.
+                              run: () =>
+                                void removal.remove(item).then((ok) => {
+                                  if (!ok) {
+                                    toggle(row.id, true);
+                                  }
+                                }),
                             },
                           ]}
                         />
                       </td>
                     </tr>
                     {isOpen ? (
-                      <tr className="pp-detail">
-                        <td colSpan={2} />
-                        <td colSpan={6}>
-                          <div className="pp-detail-body pb-detail">
-                            <EvidenceBody
-                              ids={ids}
-                              plan={plan}
-                              item={item}
-                              row={row}
-                              findings={flagged.get(row.code)}
-                              mode={mode(row.id)}
-                              onMode={(next) => setMode(row.id, next)}
-                              removal={removal}
-                              onSelect={onSelect}
-                            />
-                          </div>
-                        </td>
-                      </tr>
+                      <RowExtra columns={8} className="pp-detail">
+                        <div className="pp-detail-body pb-detail">
+                          <EvidenceBody
+                            ids={ids}
+                            plan={plan}
+                            item={item}
+                            row={row}
+                            findings={flagged.get(row.code)}
+                            mode={mode(row.id)}
+                            onMode={(next) => setMode(row.id, next)}
+                            removal={removal}
+                            onSelect={onSelect}
+                            underRow
+                          />
+                        </div>
+                      </RowExtra>
                     ) : null}
                   </Fragment>
                 );

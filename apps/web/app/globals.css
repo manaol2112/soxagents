@@ -1238,6 +1238,9 @@ button:focus-visible:not(:disabled),
 .btn:focus-visible:not(:disabled) {
   outline: 0;
   box-shadow: var(--ring);
+  /* The ring is there the moment focus is (E1 design review, round 9: read 120 ms after
+     focus, mid-transition, a held button's ring measured transparent). */
+  transition-property: background, border-color, color;
 }
 
 button.btn-secondary,
@@ -1322,8 +1325,15 @@ button:disabled:hover,
 .btn[aria-disabled="true"] {
   cursor: not-allowed;
   opacity: 0.5;
-  box-shadow: none;
   transform: none;
+}
+
+/* A held press keeps its focus ring: it is reachable by keyboard, so the ring shows where
+   focus is (WCAG 2.4.7; E1 design review: the held rule removed it). */
+button:disabled,
+button:disabled:hover,
+.btn[aria-disabled="true"]:not(:focus-visible) {
+  box-shadow: none;
 }
 
 /* Pills */
@@ -1433,6 +1443,17 @@ button:disabled:hover,
   color: var(--warning);
   background: var(--warning-soft);
   border-color: var(--warning-border);
+}
+
+/* A change the person made, confirmed by the server (a withdrawal, naming the file). */
+.banner-success {
+  color: var(--text);
+  background: var(--success-soft);
+  border-color: var(--success-border);
+}
+
+.banner-success svg {
+  color: var(--success);
 }
 
 /* KPI strip */
@@ -7214,6 +7235,25 @@ button.starter:hover {
   font-size: var(--fs-sm);
 }
 
+/* The control to file it to and its press: one height, side by side (E1 design review,
+   round 5). */
+.filing-form {
+  align-items: stretch;
+}
+
+.filing-form select,
+.filing-form button {
+  height: 32px;
+}
+
+.filing-form select {
+  padding-block: 0;
+}
+
+.filing-form.is-compact button {
+  height: 30px;
+}
+
 .file-panel {
   position: sticky;
   top: 4.5rem;
@@ -8781,6 +8821,20 @@ button.cite-chip.is-open {
   font-size: var(--fs-sm);
 }
 
+/* A refusal under a one-row form (InPlaceForm) takes its own full line under the row,
+   and the row keeps its widths (18 November 2026: the sentence sat in the Move row and
+   squeezed the control's select to 40px). */
+form:has(> .change-problem) {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+form > .change-problem {
+  flex: 1 0 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .change-blocked {
   display: flex;
   align-items: center;
@@ -8788,10 +8842,424 @@ button.cite-chip.is-open {
   margin: 0;
 }
 
+.change-optional {
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+
+/* "Why (optional)" is one label on one line, not two grid rows. */
+.change-form label.change-label-line {
+  display: block;
+}
+
+/* A change form never grows past its container, whatever a file's name: its column
+   shrinks, long names wrap, and the chosen file's name is cut with an ellipsis
+   (18 November 2026: a long chosen name made the Replace form 682px wide at 390). */
+.file-changes,
+.change-form {
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.change-form > *,
+.change-pick > * {
+  min-width: 0;
+}
+
+.change-picked {
+  flex: 1 1 10rem;
+  max-width: 100%;
+}
+
+/* The control's own file list: a long file name is cut inside its card, and Preview and
+   the file's actions drop below it, never past the panel's edge. */
+.app-groups,
+.evidence-files,
+.evidence-file-body,
+.evidence-file-tools {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.evidence-file-item,
+.evidence-file,
+.evidence-file-head > strong,
+.evidence-file-body > *,
+.evidence-file-tools > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* The card's line (name, pills, the agent's note, what it serves, who added it): its
+   grid column is the card's width, never the file name's (18 November 2026: at 390 each
+   line was 561px, cut at the card's edge, because the column grew to the unwrapped
+   name). Every line wraps inside it. */
+.evidence-file > summary {
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+
+.evidence-file > summary > *,
+.evidence-file-pills {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.evidence-file-summary,
+.evidence-file-serves,
+.evidence-file-meta {
+  overflow-wrap: anywhere;
+}
+
+/* What a change to a file would do, in its confirm form (E1, evidence-impact.tsx). */
+.ip-impact,
+.ip-held,
+.ip-unchecked {
+  display: grid;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+/* Held, or not checked: an amber notice (the second with "Check again"; E1 design
+   review, round 5: a grey hint said to refresh the page). */
+.ip-held,
+.ip-unchecked {
+  padding: 0.5rem 0.625rem;
+  background: var(--warning-soft);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius);
+}
+
+.ip-unchecked {
+  justify-items: start;
+}
+
+.ip-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.375rem;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.ip-held .ip-line,
+.ip-unchecked .ip-line {
+  color: var(--text-strong);
+}
+
+.ip-held .ip-line svg,
+.ip-unchecked .ip-line svg {
+  flex: none;
+  margin-top: 0.15rem;
+  color: var(--warning);
+}
+
+.ip-list {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+  padding-left: 1.125rem;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+/* Where the file is used: the product chevron, turning as the list opens (never the
+   browser triangle; E1 design review, round 5). */
+.ip-used > summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.375rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  cursor: pointer;
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+
+.ip-used > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ip-used > summary > svg {
+  flex: none;
+  margin-top: 0.2rem;
+  transition: transform 150ms ease;
+}
+
+.ip-used[open] > summary > svg {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ip-used > summary > svg {
+    transition: none;
+  }
+}
+
+.ip-used[open] > summary {
+  margin-bottom: 0.25rem;
+}
+
+/* A first press of a move: what it does, the press that makes it and Cancel, under the
+   press (E1 design review, round 5). */
+.move-confirm {
+  display: grid;
+  flex: 1 1 100%;
+  gap: 0.5rem;
+  min-width: 0;
+  min-inline-size: 0;
+  margin-top: 0.25rem;
+  padding: 0.75rem;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+/* A form that moves a file, held while something relies on it there: no box of its own. */
+.move-guard,
+.move-intent {
+  display: contents;
+}
+
+/* A held change (E1): reachable by keyboard (aria-disabled, never disabled), drawn as a
+   switched-off control; and a form's press while it is on its way. */
+:is(
+    .ea-about-change,
+    .filing-form,
+    .filing-secondary,
+    .change-form,
+    .file-changes-rest
+  )
+  button[aria-disabled="true"],
+form[data-in-place][aria-busy="true"] button[type="submit"] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+:is(
+    .ea-about-change,
+    .filing-form,
+    .filing-secondary,
+    .change-form,
+    .file-changes-rest
+  )
+  button[aria-disabled="true"]:not(:focus-visible) {
+  box-shadow: none;
+}
+
+/* The control to move to, while the move is held: drawn off with it (MoveSubmit). */
+.filing-form select[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* A form or a notice opened under a table's row (RowExtra): a full-width row whose body
+   is as wide as the table's scroll box and stays in it at any sideways scroll (E1 design
+   review, round 4, 18 November 2026: the Withdrawn list's restore form, sized to the
+   window and not to the scroll box, was cut off on the left at 390 px). The table's
+   parent, its scroll box, is what the body is measured against. */
+:has(> table > tbody > tr.row-extra) {
+  container-type: inline-size;
+}
+
+tr.row-extra > td.row-extra-cell {
+  padding-right: 0;
+  padding-left: 0;
+  overflow: visible;
+  white-space: normal;
+}
+
+.row-extra-body {
+  position: sticky;
+  left: 0;
+  box-sizing: border-box;
+  max-width: 100cqi;
+  padding: 0 0.75rem;
+}
+
+/* The Withdrawn list: a restoration's form, and its confirmation, as a full-width row
+   under the file's row (E1 design review, 18 November 2026: a popover clipped at the
+   card's bottom and hid the row). */
+.withdrawn-grid tr.withdrawn-row-extra > td {
+  background: var(--surface);
+}
+
+.withdrawn-row-extra .row-extra-body > * {
+  max-width: 40rem;
+}
+
+.withdrawn-row-extra .ep-done {
+  margin: 0;
+}
+
+.withdrawn-grid tr.is-restored > td {
+  color: var(--text-secondary);
+}
+
+/* Why it was withdrawn: up to two lines; a longer reason opens in full under its row
+   ("Show reason"; E1 design review, round 5: one line and a title hid it). */
+.withdrawn-grid td.col-why {
+  white-space: normal;
+}
+
+.withdrawn-grid .withdrawn-why {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow-wrap: anywhere;
+}
+
+.withdrawn-grid .withdrawn-why.is-open {
+  display: block;
+  -webkit-line-clamp: unset;
+  line-clamp: none;
+  white-space: pre-line;
+}
+
+.withdrawn-why-toggle {
+  display: inline-block;
+  margin-top: 0.125rem;
+  font-size: var(--fs-sm);
+}
+
+
+/* Said on the row header's place in a stacked row only. */
+.withdrawn-label {
+  display: none;
+}
+
+.withdrawn-state {
+  color: var(--success);
+  font-weight: 500;
+  white-space: normal;
+}
+
+/* A search on the Withdrawn queue that matches nothing: one line. */
+.withdrawn-none {
+  margin: 0;
+  padding: 1rem 1.125rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+/* Restore while its form is open: pressed. */
+.withdrawn-actions .btn[aria-expanded="true"] {
+  color: var(--text-strong);
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+
+/* Under 640 px each withdrawn file is one stacked row: the file, why, "Withdrawn {date}
+   by {name}", then Download and Restore (E1 design review, round 5: with the fixed
+   columns the File and Why columns measured 0 at 390 px). */
+@media (max-width: 640px) {
+  .withdrawn-grid,
+  .withdrawn-grid tbody,
+  .withdrawn-grid tr,
+  .withdrawn-grid td {
+    display: block;
+    width: auto;
+  }
+
+  /* A stacked cell is as tall and as wide as what it holds (a table cell's height and
+     the grid's column widths would cut it or let it run over the next row). */
+  .withdrawn-grid.evidence-grid tbody > tr > td {
+    width: auto;
+    height: auto;
+  }
+
+  .withdrawn-grid {
+    min-width: 0;
+  }
+
+  .withdrawn-grid thead,
+  .withdrawn-grid td.col-control {
+    display: none;
+  }
+
+  .withdrawn-grid tbody > tr:not(.row-extra) {
+    padding: 0.625rem 0.75rem;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .withdrawn-grid tbody > tr:not(.row-extra) > td {
+    padding: 0.125rem 0;
+    border: 0;
+    text-align: left;
+    white-space: normal;
+  }
+
+  .withdrawn-grid td.col-added > *,
+  .withdrawn-grid td.col-added > .cell-sub[title] {
+    display: inline;
+  }
+
+  .withdrawn-label {
+    display: inline;
+  }
+
+  .withdrawn-grid td.col-restore {
+    padding-top: 0.375rem;
+  }
+
+  .withdrawn-actions {
+    justify-content: flex-start;
+  }
+}
+
+/* A change's reason: a two-line field with its rule under it. */
+.change-form textarea {
+  width: 100%;
+  min-height: 3.5rem;
+  resize: vertical;
+}
+
+.change-form .change-rule {
+  margin-top: -0.25rem;
+}
+
+/* The control's own file list: a card's head is its name (cut with an ellipsis) and
+   Preview on one line, its tags under them, every card alike (E1 design review). */
+.evidence-file-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.evidence-file-head > strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evidence-file-head .preview-open {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.evidence-file-pills {
+  grid-column: 1 / -1;
+}
+
+/* A file's "…" menu at the end of its card; the form it opens spans the card. */
+.evidence-file-tools.is-open,
+.evidence-file-tools:has(.change-form) {
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: stretch;
+}
+
 .evidence-file-tools {
   display: grid;
   gap: 0.5rem;
-  justify-items: start;
+  justify-items: end;
 }
 
 /* One card per file: the file, its details, and its actions (Download, Replace file,
@@ -8825,6 +9293,31 @@ button.cite-chip.is-open {
 .evidence-file-item > .evidence-file-tools > .file-changes {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+/* The card's "…" menu sits beside Preview, on the card's first line (E1 design review,
+   round 5: it sat alone at the card's foot); a form it opens takes the whole row. */
+.evidence-file-item > .evidence-file-tools {
+  justify-content: flex-end;
+}
+
+.evidence-file-item {
+  position: relative;
+}
+
+.evidence-file-item > .evidence-file-tools:not(.is-open) {
+  position: absolute;
+  top: 0.625rem;
+  right: 0.5rem;
+  padding: 0;
+}
+
+.evidence-file-item:has(> .evidence-file-tools:not(.is-open)) .evidence-file-head {
+  padding-right: 2rem;
+}
+
+.evidence-file-item > .evidence-file-tools.is-open > .file-changes {
+  flex: 1 1 100%;
 }
 
 .withdrawn-grid .col-restore {
@@ -10026,6 +10519,9 @@ body.has-dialog {
   inset: 0;
   z-index: 60;
   display: grid;
+  /* The dialog's width is the window's, never its content's (18 November 2026: a long
+     file name in the switcher made the viewer 948px wide at 390). */
+  grid-template-columns: minmax(0, 1fr);
   place-items: center;
   padding: 2rem;
   background: var(--backdrop);
@@ -10033,6 +10529,7 @@ body.has-dialog {
 
 .preview-dialog {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   width: min(1280px, 100%);
   height: min(92vh, 1000px);
@@ -14980,7 +15477,10 @@ button.answer-done:hover {
   right: 0;
   z-index: 30;
   display: grid;
-  min-width: 12rem;
+  /* Wide enough that "Withdraw from the engagement…" stays on one line beside its icon
+     (E1 design review, round 5: 15rem was asked; measured, the label needs 16.5rem at
+     the menu's type size); wider where a held reason is said in it. */
+  min-width: 16.5rem;
   /* Never wider than the window, less its gutters (a phone); row-menu.tsx keeps it in. */
   max-width: calc(100vw - 2rem);
   padding: 0.3rem;
@@ -15024,7 +15524,7 @@ button.answer-done:hover {
 
 .row-menu-list a:hover,
 .row-menu-list a:focus-visible,
-.row-menu-list button:hover:not(:disabled),
+.row-menu-list button:hover:not([aria-disabled="true"]),
 .row-menu-list button:focus-visible {
   background: var(--surface-hover);
 }
@@ -15033,9 +15533,33 @@ button.answer-done:hover {
   color: var(--danger);
 }
 
-.row-menu-list button:disabled {
-  color: var(--text-tertiary);
+/* A held item reads as held (its label in the disabled colour, as a disabled control
+   may be), and why it is held stays readable: full strength, with the reason in the
+   secondary text colour (WCAG 2.2 AA, 4.5:1 on the menu's surface). The global disabled
+   half-opacity made the reason about 2:1 (E1 design review, 18 November 2026). */
+.row-menu-list button[aria-disabled="true"] {
+  color: var(--text-disabled);
   cursor: not-allowed;
+  opacity: 1;
+}
+
+.row-menu-list button[aria-disabled="true"] small {
+  color: var(--text-secondary);
+}
+
+.row-menu-list.has-held {
+  min-width: 18rem;
+}
+
+/* A reason several held items share: said once, under a divider, after the last of them,
+   naming them ("Replace and remove are held: …"). */
+.row-menu-held {
+  margin: 0.25rem 0 0;
+  padding: 0.45rem 0.6rem 0.3rem;
+  color: var(--text-secondary);
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
 }
 
 .row-menu-section {
@@ -15056,6 +15580,8 @@ button.answer-done:hover {
 
 .row-menu-list small {
   display: block;
+  /* Why an item is held, in the server's words, wraps rather than widening the menu. */
+  max-width: 22rem;
   margin-top: 0.15rem;
   color: var(--text-tertiary);
   font-size: var(--fs-xs);
@@ -16818,4 +17344,10 @@ button:disabled,
   ):hover:not(:disabled) {
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+
+/* A control or item reference named in a sentence: kept whole, never broken at its
+   hyphens (E1 design review, round 6; ref-text.tsx). */
+.ref-token {
+  white-space: nowrap;
 }

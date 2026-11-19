@@ -52,7 +52,12 @@ export async function POST(request: Request) {
     }
     const notice = changeNoticeFor("replace", response.status, detail);
     return NextResponse.json(
-      { notice, file_id: response.status === 200 ? fileId : null },
+      {
+        notice,
+        file_id: response.status === 200 ? fileId : null,
+        // The server's own sentence for a refusal, shown in the form (E1).
+        detail: response.status === 409 ? detail : "",
+      },
       { status: response.status === 200 ? 200 : response.status },
     );
   } catch {

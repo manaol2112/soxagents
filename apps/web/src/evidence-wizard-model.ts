@@ -757,6 +757,55 @@ export function goneFromBatch(
   );
 }
 
+/** The files this page has seen in a session's batch, by id. */
+export type SeenFiles = { batchId: string; ids: ReadonlySet<string> };
+
+/** The files seen so far, with a new read of the batch: the same value where it adds
+ * none (so no render follows), a fresh start for another session. */
+export function seenFiles(
+  before: SeenFiles | null,
+  batch: BatchState,
+): SeenFiles {
+  const ids = batch.files.map((file) => file.fileId);
+  if (before === null || before.batchId !== batch.batchId) {
+    return { batchId: batch.batchId, ids: new Set(ids) };
+  }
+  return ids.every((id) => before.ids.has(id))
+    ? before
+    : { batchId: before.batchId, ids: new Set([...before.ids, ...ids]) };
+}
+
+/** How many files have left this upload (withdrawn), counted once each: this browser's
+ * stored files the batch no longer lists (goneFromBatch), and any file this page saw in
+ * the batch that it no longer lists. A session taken up again has no uploads of this
+ * browser's, so counting only those read "No file has been added yet." after its last
+ * file was withdrawn (E1 final design review). */
+export function withdrawnCount(
+  uploads: readonly Upload[],
+  batch: BatchState | null,
+  readAt: number | null | undefined,
+  seen: SeenFiles | null,
+): number {
+  if (batch === null) {
+    return 0;
+  }
+  const listed = new Set(batch.files.map((file) => file.fileId));
+  const gone = new Set<string>();
+  for (const upload of uploads) {
+    if (upload.fileId !== null && goneFromBatch(upload, batch, readAt)) {
+      gone.add(upload.fileId);
+    }
+  }
+  if (seen !== null && seen.batchId === batch.batchId) {
+    for (const id of seen.ids) {
+      if (!listed.has(id)) {
+        gone.add(id);
+      }
+    }
+  }
+  return gone.size;
+}
+
 /** The upload route's answer for one file, as its row's state: stored (or restored),
  * already held, refused with the server's sentence, or not reached (which can be tried
  * again). Every answer says `restored` and `withdrawn`, so an answer replaces what an
@@ -1834,6 +1883,45 @@ function lastRead(batch: BatchState | null): number | null {
   return times.length === 0 ? null : Math.max(...times);
 }
 
+/** When the reading of the session's files began, on the server's clock: the earliest
+ * reading start; null before any file's reading started. */
+export function firstRead(batch: BatchState | null): number | null {
+  const times = (batch?.files ?? [])
+    .map((file) => file.read.startedAt)
+    .filter((time): time is number => time !== null);
+  return times.length === 0 ? null : Math.min(...times);
+}
+
+/** A pause between readings longer than this is time nobody worked: files added later. */
+export const IDLE_AFTER_MS = 5 * 60 * 1000;
+
+/** The pauses between the session's readings, on the server's clock: from the end of one
+ * run of readings to the start of the next, where nothing was read for IDLE_AFTER_MS. Files
+ * dropped into a session 12 minutes apart, each read in under a second, read "Analyzed in
+ * 23 min 43 s" (E1 design review, round 10). */
+export function idleGaps(batch: BatchState | null): Array<[number, number]> {
+  const runs = (batch?.files ?? [])
+    .map((file) => file.read)
+    .filter(
+      (read): read is BatchRead & { startedAt: number } =>
+        read.startedAt !== null,
+    )
+    .map((read): [number, number] => [
+      read.startedAt,
+      read.finishedAt ?? Number.POSITIVE_INFINITY,
+    ])
+    .sort((one, two) => one[0] - two[0]);
+  const gaps: Array<[number, number]> = [];
+  let end = Number.NEGATIVE_INFINITY;
+  for (const [from, to] of runs) {
+    if (from - end > IDLE_AFTER_MS && end !== Number.NEGATIVE_INFINITY) {
+      gaps.push([end, from]);
+    }
+    end = Math.max(end, to);
+  }
+  return gaps;
+}
+
 /** An item's check still to come: queued or at work, or not queued yet within a minute
  * of its last file's reading (the server queues it once the batch is read). */
 function checkComing(
@@ -2090,31 +2178,65 @@ export function serverClock(
 /** When the session's work ended, on the server's clock: its last reading or its items'
  * last check; null where the server sent neither. */
 export function finishedAt(batch: BatchState | null): number | null {
+  const last = lastRead(batch);
   const checks = (batch?.items ?? [])
     .map((item) =>
       item.check?.finishedAt === null || item.check?.finishedAt === undefined
         ? null
         : timeOf(item.check.finishedAt),
     )
-    .filter((time): time is number => time !== null);
-  const last = lastRead(batch);
+    // A check finished long after the session's last reading was run again later (an
+    // acceptance reopened, a re-check): it is not this session's analysis, and counting
+    // it made "Analyzed in" read 11:44:30 for a session of 44 seconds (E1 design review,
+    // round 9).
+    .filter(
+      (time): time is number =>
+        time !== null && (last === null || time - last <= RECHECK_AFTER_MS),
+    );
   const all = [...checks, ...(last === null ? [] : [last])];
   return all.length === 0 ? null : Math.max(...all);
 }
 
+/** How long after a session's last reading an item's check can still be its own. */
+export const RECHECK_AFTER_MS = 15 * 60 * 1000;
+
+/** A duration as a person says it: "48 s", "2 min 5 s", "1 h 4 min" (never a clock
+ * time: "Analyzed in 11:44:30" read as one; E1 design review, round 9). */
+export function formatDuration(seconds: number): string {
+  const total = Math.max(0, Math.floor(Number.isFinite(seconds) ? seconds : 0));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const rest = total % 60;
+  if (hours > 0) {
+    return minutes > 0 ? `${hours} h ${minutes} min` : `${hours} h`;
+  }
+  if (minutes > 0) {
+    return rest > 0 ? `${minutes} min ${rest} s` : `${minutes} min`;
+  }
+  return `${rest} s`;
+}
+
 /** Seconds since the session began, on the server's clock; once it is done, how long it
- * took (to its last reading or check, else to when this page saw it done). Before the
- * server has the batch, since this browser started it. */
+ * took (to its last reading or check, else to when this page saw it done). It begins
+ * when this page added its first file; for a session taken up again, when its files'
+ * reading began (firstRead), never when the batch was created: a session taken up an
+ * hour later read "Analyzed in 1 h 28 min" for files read in seconds; and pauses between
+ * its readings (idleGaps) are not counted (E1 design review, round 10). */
 export function elapsedSeconds(facts: {
   createdAt: number | null;
   /** The server's clock now (serverClock). */
   now: number;
   done: boolean;
   finished: number | null;
-  /** When this browser started the session, on its clock adjusted to the server's. */
+  /** When this page added the session's first file, on its clock adjusted to the
+   * server's; null for a session taken up again. */
   startedAt: number | null;
+  /** The earliest reading start of the session's files (firstRead). */
+  firstRead?: number | null;
+  /** The pauses between its readings (idleGaps): not counted. */
+  idle?: ReadonlyArray<readonly [number, number]>;
 }): number {
-  const start = facts.createdAt ?? facts.startedAt;
+  const start = facts.startedAt ?? facts.firstRead ?? facts.createdAt;
   if (start === null) {
     return 0;
   }
@@ -2122,7 +2244,12 @@ export function elapsedSeconds(facts: {
     facts.done && facts.finished !== null && facts.finished >= start
       ? facts.finished
       : facts.now;
-  return Math.max(0, Math.floor((end - start) / 1000));
+  const paused = (facts.idle ?? []).reduce(
+    (total, [from, to]) =>
+      total + Math.max(0, Math.min(to, end) - Math.max(from, start)),
+    0,
+  );
+  return Math.max(0, Math.floor((end - start - paused) / 1000));
 }
 
 /** "0:42", "12:05", "1:02:03". */
@@ -2975,6 +3102,8 @@ export function resultsSummary(
   batch: BatchState | null,
   results: readonly ItemResult[],
   progress: Progress,
+  /** This upload's files withdrawn here: said where none is left (E1 design review). */
+  withdrawn = 0,
 ): ResultsSummary {
   const notAdded = progress.notAdded;
   const n = (batch?.files ?? []).length;
@@ -3006,7 +3135,9 @@ export function resultsSummary(
     n === 0
       ? notAdded > 0
         ? `${noneAdded(notAdded)}. The list shows why.`
-        : "No file has been added yet."
+        : withdrawn > 0
+          ? `No files left in this upload · ${withdrawn} withdrawn`
+          : "No file has been added yet."
       : placed === 0 && needs === n
         ? `${n === 1 ? "The file needs you: choose where it goes." : `${n} files need you: choose where they go.`}${notAddedLine}`
         : placed === 0
@@ -3261,12 +3392,25 @@ export function steadySeconds(
   return done || shown === null ? next : Math.max(shown, next);
 }
 
-/** The footer note on Results. */
-export function resultsNote(progress: Progress): string {
+/** The footer note on Results; nothing where no file is left to accept (E1 design
+ * review: "Nothing is accepted until you accept it" under an empty upload). Where an
+ * item in view is accepted, the note opens with how many, and never says nothing is (E1
+ * final design review: "Nothing is accepted" under a card reading "Accepted by ..."). */
+export function resultsNote(progress: Progress, accepted = 0): string {
+  if (progress.files === 0) {
+    return "";
+  }
   const needs =
     progress.needs > 0
       ? ` · ${plural(progress.needs, "file")} ${progress.needs === 1 ? "needs" : "need"} you`
       : "";
+  if (accepted > 0) {
+    const checked =
+      progress.checked > 0
+        ? ` · ${plural(progress.checked, "item")} checked by two readings`
+        : "";
+    return `${plural(accepted, "item")} accepted${checked}${needs}.`;
+  }
   // Design review, 17 November 2026: no "0 items checked by two readings".
   if (progress.checked === 0) {
     return progress.needs > 0
@@ -3279,12 +3423,13 @@ export function resultsNote(progress: Progress): string {
 /** Results' line on how long it took: "Analyzed in 0:42", "Analyzed in under a
  * second"; "" when no file was added (nothing was analyzed). */
 export function analyzedLine(seconds: number, progress: Progress): string {
-  if (progress.nothingAdded) {
+  // Nothing ran, or nothing is left of it (every file withdrawn).
+  if (progress.nothingAdded || progress.files === 0) {
     return "";
   }
   return seconds < 1
     ? "Analyzed in under a second"
-    : `Analyzed in ${formatElapsed(seconds)}`;
+    : `Analyzed in ${formatDuration(seconds)}`;
 }
 
 /** How the Analyze step says it ended, once it is done: the line under the elapsed time,
@@ -3455,8 +3600,9 @@ export function isEarlierSession(
   );
 }
 
-/** The line on the D&I list while a session is open: "Analyzing 7 files · Read 3 of 7 ·
- * 0:42", then "7 files analyzed: 5 sorted into the items, 1 needs you." */
+/** The line on the D&I list while a session is open: "Reading 7 files · Read 3 of 7 ·
+ * 0:42", then "7 files read: 5 sorted into the items, 1 needs you." (one verb on the D&I
+ * Evidence step, "Reading": E1 design review, round 5). */
 export function progressLine(facts: {
   progress: Progress | null;
   summary: BatchSummary | null;
@@ -3494,7 +3640,7 @@ export function progressLine(facts: {
             : "";
     return {
       text: [
-        `Analyzing ${plural(files, "file")}`,
+        `Reading ${plural(files, "file")}`,
         now,
         formatElapsed(facts.seconds),
       ]
@@ -3568,7 +3714,7 @@ export function progressLine(facts: {
     text:
       placed === 0 && unplaced !== ""
         ? `${capital(unplaced)}.${failed}${unchecked}${by}`
-        : `${plural(files, "file")} analyzed${
+        : `${plural(files, "file")} read${
             placed !== null ? `: ${placed} sorted into the items` : ""
           }${needs > 0 ? `${placed !== null ? "," : ":"} ${needs} ${needs === 1 ? "needs" : "need"} you` : ""}.${
             notAdded > 0 ? ` ${notAdded} not added.` : ""

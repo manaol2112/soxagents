@@ -25,6 +25,7 @@
  * exactly as it did.
  */
 
+import { asSentence, RELIED_ON_READING } from "./evidence-change-model.ts";
 import {
   CLOSED_STATUSES,
   FINDING_STATUSES,
@@ -2356,7 +2357,10 @@ export const NOT_CHECKED_LINE = "Not checked against the attributes yet";
 
 /** One request's check as its row shows it. `attributes` are the control's approved
  * attributes with the list's letters: every one of them is checked. `files` are the
- * row's in-force files. */
+ * row's in-force files. The server's reasons a check is not current (`out_of_date`) are
+ * said on its line whatever its status, one rule (19 November 2026: a NOT_CHECKED request
+ * of a control whose retries are held carries "The check could not be brought up to date
+ * after 5 tries. Run it again.", which only an OUT_OF_DATE line said). */
 export function requestCheck(
   request: AssuredRequest,
   attributes: readonly Lettered[],
@@ -2365,6 +2369,42 @@ export function requestCheck(
   /** Whether a file of the request is still waiting to be read. Said by the list only:
    * where it is not said, a finished check is not offered again (section 10.10). */
   options: { reading?: boolean } = {},
+): RequestCheck {
+  const check = checkOf(request, attributes, files, span, options);
+  return withReasons(check, request.outOfDate);
+}
+
+/** A check's line with the server's reasons it is not current, each said once: the out
+ * of date line says them already, and a current, finished check has none to say. */
+export function withReasons(
+  check: RequestCheck,
+  reasons: readonly string[],
+): RequestCheck {
+  const said = reasons.map(sentence).filter((reason) => reason !== "");
+  if (
+    check.standing === "OUT_OF_DATE" ||
+    check.standing === "REVIEWED" ||
+    said.length === 0
+  ) {
+    return check;
+  }
+  const fresh = said.filter((reason) => !check.line.includes(reason));
+  return fresh.length === 0
+    ? check
+    : {
+        ...check,
+        line: [sentence(check.line), ...fresh]
+          .filter((part) => part !== "")
+          .join(" "),
+      };
+}
+
+function checkOf(
+  request: AssuredRequest,
+  attributes: readonly Lettered[],
+  files: readonly RowFile[],
+  span: Span,
+  options: { reading?: boolean },
 ): RequestCheck {
   const all = attributes.map((item) => item.letter);
   const nameOf = (fileId: string) =>
@@ -3176,7 +3216,7 @@ export function offeredAction(
  * in the group's order: success only for the files the server confirmed, and the files
  * that did not start, by name, with the first refusal's own sentence. */
 export function rereadAllOutcome(
-  results: readonly { name: string; status: number }[],
+  results: readonly { name: string; status: number; detail?: string }[],
 ): { done: string | null; problem: string | null } {
   const started = results.filter((each) => each.status === 200);
   const refused = results.filter((each) => each.status !== 200);
@@ -3191,7 +3231,8 @@ export function rereadAllOutcome(
     return { done, problem: null };
   }
   const named = refused.map((each) => each.name).join(", ");
-  const why = rereadProblem(refused[0]?.status ?? 0) ?? "";
+  const why =
+    rereadProblem(refused[0]?.status ?? 0, refused[0]?.detail ?? "") ?? "";
   return {
     done,
     problem:
@@ -4040,10 +4081,15 @@ export function assuranceProblem(status: number, detail = ""): string | null {
 }
 
 /** What a person reads when reading a file again did not go through; null when the
- * server confirmed it. */
-export function rereadProblem(status: number): string | null {
+ * server confirmed it. A reading a decision rests on is never read again (E1, 18
+ * November 2026): that refusal is said in the server's own words, which name the
+ * decision and how to clear it. */
+export function rereadProblem(status: number, detail = ""): string | null {
   if (status === 200) {
     return null;
+  }
+  if (status === 409 && detail.startsWith(RELIED_ON_READING)) {
+    return asSentence(detail);
   }
   if (status === 409) {
     return "The file's reading changed meanwhile. The row is refreshed: check it and try again.";

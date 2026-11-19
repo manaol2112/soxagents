@@ -551,7 +551,8 @@ export function useKeeping(
     blocked.current = false;
     refusedDraft.current = null;
     savedFor.current = null;
-    setKeeping({ state: "none" });
+    // Kept as it is when already none, so a new editor object alone draws nothing again.
+    setKeeping((now) => (now.state === "none" ? now : { state: "none" }));
   }, [session]);
 
   // The editor holds a working copy (it opened with it, or the person chose one found

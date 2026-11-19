@@ -18,8 +18,11 @@ Audit integrity (critical tier):
   force on the request, a file the check raises no reliability question on, a reason or
   what was relied on out of bounds, a stale page (what stands is not the decision the
   person saw, named by its id);
-- a later check never ends a decision; withdrawing or replacing the file ends it as
-  FILE_GONE in that same act, naming nobody, and restoring the file does not bring it back;
+- a later check never ends a decision; withdrawing or replacing the file is refused while
+  a decision stands on it (E1, 18 November 2026: before, that act ended it as FILE_GONE);
+  reopened first, the file can leave, and restoring it does not bring the decision back;
+  a file out of force by a record from before E1 still ends its decision as FILE_GONE,
+  naming nobody, when the chain next follows the control (test_evidence_reliance);
 - the workpaper: a file established on review counts as reliable for the tickmark, a
   procedure says so, and the check's own sentence about it no longer waits; a file not
   relied on is said so in the evidence index, what rests only on it carries no mark and is
@@ -519,56 +522,64 @@ def test_a_later_check_never_ends_a_decision_and_the_files_going_does(
     log_decision = _on(on_log.json(), log)["decision"]["id"]
     assert bench.audit(reliability.ENDED_WITH_FILE, bench.item_id) == []
 
-    # The log is withdrawn: its decision ends in that same act, naming nobody; the
-    # ticket's stands.
+    # 18 November 2026 (E1, evidence reliance; product owner): a file a person's
+    # reliability decision stands on stays until that decision is changed. Old: the log was
+    # withdrawn (and later the ticket replaced) and its decision ended as FILE_GONE in that
+    # same act, naming nobody; new: the withdrawal and the replacement are refused, naming
+    # the decision, and nothing ends. The person reopens the decision first; only then does
+    # the file leave. (A withdrawal or replacement can no longer end a standing decision,
+    # so the FILE_GONE-by-withdrawal assertions are retired with that path.)
+    kept = bench.owner.post(
+        f"{bench.base}/evidence-files/{log}/withdraw", json={"reason": "Sent in error"}
+    )
+    assert kept.status_code == 409
+    assert kept.json()["detail"].startswith(
+        "the file cannot be withdrawn: a person's decision on whether it is reliable stands"
+    )
+    assert [r["ended_at"] for r in _rows(bench)] == [None, None]
+    assert _reopen(bench, log, log_decision).status_code == 200
     withdrawn = bench.owner.post(
         f"{bench.base}/evidence-files/{log}/withdraw", json={"reason": "Sent in error"}
     )
     assert withdrawn.status_code == 200, withdrawn.text
     rows = {r["id"]: r for r in _rows(bench)}
-    gone = rows[log_decision]
-    assert (gone["ended_as"], gone["ended_by"], gone["ended_reason"], gone["version"]) == (
-        "FILE_GONE", None, "The file is no longer in force on this request.", 2,
-    )  # fmt: skip
+    assert rows[log_decision]["ended_as"] == "REOPENED"
     assert rows[ticket_decision]["ended_at"] is None
-    [(actor, agent, event)] = bench.audit(reliability.ENDED_WITH_FILE, bench.item_id)
-    assert (actor, agent) == (None, None)
-    assert event == {
-        "control_id": bench.control, "file_id": log, "decision_id": log_decision,
-        "kind": "NOT_RELIED_ON", "ended_as": "FILE_GONE",
-        "changed_by": str(bench.team["owner_id"]),
-    }  # fmt: skip
+    assert bench.audit(reliability.ENDED_WITH_FILE, bench.item_id) == []
     # Back on the ticket alone: the first check of that basis is copied, and the log has
     # no entry there.
     alone = bench.entry()
     assert alone["status"] == "REVIEWED"
     assert [item["file_id"] for item in alone["file_reliability"]] == [ticket]
-    # Restoring the file does not bring the decision back: the check of both files is
-    # current again, and the log's decision is in its history only.
+    # Restoring the file does not bring the decision back: the log's decision is in its
+    # history only.
     restored = bench.owner.post(
         f"{bench.base}/evidence-files/{log}/restore", json={"reason": "It was the right file."}
     )
     assert restored.status_code == 200, restored.text
-    assert [r["ended_at"] is None for r in _rows(bench)] == [True, False]
     shown = bench.entry()
     assert shown["status"] == "REVIEWED"
     item = _on(shown, log)
     assert item["decision"] is None
-    assert [h["ended_as"] for h in item["history"]] == ["FILE_GONE"]
-    assert item["history"][0]["ended_by_name"] is None
+    assert [h["ended_as"] for h in item["history"]] == ["REOPENED"]
     assert _on(shown, ticket)["decision"]["id"] == ticket_decision
 
-    # The ticket is replaced: its decision ends in that same act.
-    replaced = bench.owner.post(
-        f"{bench.base}/evidence-files/{ticket}/replace",
-        params={"name": "ticket REQ-1041 v2.txt", "reason": "Corrected export"},
-        content=(TICKET + "Closed on 2026-03-05\n").encode(),
-        headers={"content-type": "text/plain"},
-    )
+    # The ticket's replacement is refused while its decision stands, and goes through once
+    # the decision is reopened.
+    def replace() -> Any:
+        return bench.owner.post(
+            f"{bench.base}/evidence-files/{ticket}/replace",
+            params={"name": "ticket REQ-1041 v2.txt", "reason": "Corrected export"},
+            content=(TICKET + "Closed on 2026-03-05\n").encode(),
+            headers={"content-type": "text/plain"},
+        )
+
+    assert replace().status_code == 409
+    assert _reopen(bench, ticket, ticket_decision).status_code == 200
+    replaced = replace()
     assert replaced.status_code == 200, replaced.text
-    ended = {r["id"]: r for r in _rows(bench)}[ticket_decision]
-    assert (ended["ended_as"], ended["ended_by"]) == ("FILE_GONE", None)
-    assert len(bench.audit(reliability.ENDED_WITH_FILE, bench.item_id)) == 2
+    assert {r["id"]: r for r in _rows(bench)}[ticket_decision]["ended_as"] == "REOPENED"
+    assert bench.audit(reliability.ENDED_WITH_FILE, bench.item_id) == []
     assert all(r["ended_at"] is not None for r in _rows(bench))
 
 
@@ -635,8 +646,9 @@ def test_where_the_migration_is_not_applied_nothing_is_read_or_ended_and_nothing
     migrated: Database,
 ) -> None:
     """The code released before migration 0163: there is no record of a decision, so none
-    is read and none is ended, and the D&I list, a check that finishes, a withdrawal and
-    the workpaper all work as before. Only recording is refused."""
+    is read and none is ended, and the D&I list, a check that finishes and the workpaper
+    all work as before. Recording is refused, and since E1 so is a withdrawal (what relies
+    on the file is read, and the missing table fails loudly)."""
     bench = _Bench(migrated, "fr-unmigrated")
     with connect(migrated.url) as connection:
         connection.execute("DROP TABLE file_reliability_decisions")
@@ -645,10 +657,17 @@ def test_where_the_migration_is_not_applied_nothing_is_read_or_ended_and_nothing
     log = bench.add("sap change log.txt", LOG)
     bench.read_next(_reading("change_history"))
     _check(bench, "ticket REQ-1041.txt")
+    # 18 November 2026 (E1 review, N9): what relies on a file is read on every change to
+    # it, and with migration 0163 applied a missing decisions table fails loudly. Old: the
+    # withdrawal went through as before; new: it is refused (503), and the file stays.
     withdrawn = bench.owner.post(
         f"{bench.base}/evidence-files/{log}/withdraw", json={"reason": "Sent in error"}
     )
-    assert withdrawn.status_code == 200, withdrawn.text
+    assert withdrawn.status_code == 503, withdrawn.text
+    assert (
+        bench.rows("SELECT 1 FROM evidence_withdrawals WHERE evidence_file_id = %s", UUID(log))
+        == []
+    )
     # Section 3.9: old, no DISPOSITION matter; new, no file's line says a decision.
     assert {(e["established"], e["not_relied_on"]) for e in _paper(bench)["evidence"]} == {
         ("", None)

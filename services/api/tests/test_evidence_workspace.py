@@ -643,8 +643,27 @@ def test_a_person_links_a_file_to_another_phase_and_it_is_not_requested_again(
     assert others and all(
         r["state"] == "AWAITING_DEPENDENCY" or r["request_id"] is not None for r in others
     )
-    # Unlinking says why; the judgment that rested on it alone goes back to not reviewed.
+    # 18 November 2026 (E1, evidence reliance; product owner): the file an item was
+    # accepted with stays on it until that decision is changed. Old: the unlink went
+    # through and the acceptance reset to not reviewed with it; new: the unlink is refused
+    # naming the acceptance, the person reopens the decision, and then unlinks.
     link = mine["files"][0]
+    kept = client.post(
+        f"{base}/evidence-requirements/{target['id']}/files/{link['link_id']}/remove",
+        json={"reason": "The procedure changed in October.", "version": link["link_version"]},
+    )
+    assert kept.status_code == 409
+    assert kept.json()["detail"] == (
+        f'the file cannot be taken off this item: the evidence item "{mine["title"]}" was '
+        "accepted with it; change that decision first"
+    )
+    reopened = client.post(
+        f"{base}/evidence-requirements/{target['id']}/sufficiency",
+        json={"sufficiency": "NOT_REVIEWED", "note": "The procedure changed in October.",
+              "version": mine["version"]},
+    )  # fmt: skip
+    assert reopened.status_code == 200, reopened.text
+    # Unlinking says why; the item has no judgment on record now.
     unlinked = client.post(
         f"{base}/evidence-requirements/{target['id']}/files/{link['link_id']}/remove",
         json={"reason": "The procedure changed in October.", "version": link["link_version"]},
@@ -661,8 +680,10 @@ def test_a_person_links_a_file_to_another_phase_and_it_is_not_requested_again(
                 (target["id"],),
             ).fetchall()
         ]
-    assert actions[-3:] == [
+    # 18 November 2026 (E1): the reopened decision is on the trail before the unlink.
+    assert actions[-4:] == [
         "evidence_requirement.file_linked",
+        "evidence_requirement.sufficiency",
         "evidence_requirement.sufficiency",
         "evidence_requirement.file_unlinked",
     ]

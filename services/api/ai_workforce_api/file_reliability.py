@@ -26,7 +26,11 @@ Rules held here, whatever is asked:
   (`end_with_files`): it is called by evidence_assurance.reconcile, which every change to
   what is in force on a control's requests runs (a file withdrawn, replaced or restored,
   a link made or removed, a plan reshaped), in that change's transaction where the
-  change queues the chain itself (withdraw, replace) and right after it otherwise. Until
+  change queues the chain itself (withdraw, replace) and right after it otherwise. Since
+  E1 (18 November 2026) a person cannot withdraw, replace, move, unlink or remove from
+  its request a file a standing decision rests on (evidence_reliance): the decision is
+  reopened first. FILE_GONE then ends a decision whose file left by a record from before
+  E1, or a change the chain follows that is not a person's act on the file. Until
   then the D&I list shows no decision on a file that is not in force, and a request
   whose files changed has no current check, so nothing of it is read as standing.
 

@@ -4239,7 +4239,8 @@ def reconcile(
     arrive together are read once; a run still queued is brought up to date in place. A
     held run whose hold cleared is replaced; a failed one only when a person asks
     (`rerun_failed`). A requirement whose current run already rests on the same basis is
-    left alone: the same basis is never run twice."""
+    left alone: the same basis is never run twice. The current runs are locked by
+    created_at, then id: step 3 of the lock order (lock order: evidence_reliance)."""
     connection = cursor.connection
     found = Reconciled([], set())
     control = _control(connection, project_id, control_id)
@@ -4252,7 +4253,7 @@ def reconcile(
             for row in cursor.execute(
                 f"SELECT {_RUN_COLUMNS} FROM evidence_assessments "  # noqa: S608
                 "WHERE engagement_control_id = %s AND stale_at IS NULL "
-                "ORDER BY created_at FOR UPDATE",
+                "ORDER BY created_at, id FOR UPDATE",
                 (control_id,),
             ).fetchall()
         )
@@ -4378,6 +4379,21 @@ def reconcile(
         )  # fmt: skip
         if made is not None and made[1] == "PENDING":
             found.queued.append(made[0])
+    if only_requirement is None:
+        # The whole control is in step now: a queueing that failed for it earlier is done
+        # (migration 0177). After the runs, as every writer of the row takes it.
+        cleared = cursor.execute(
+            "DELETE FROM evidence_assessment_retries WHERE engagement_control_id = %s "
+            "RETURNING attempts, error",
+            (control_id,),
+        ).fetchone()
+        if cleared is not None:
+            _control_audit(
+                cursor, control.organization_id, project_id, actor,
+                "evidence_assessment.requeued", control_id,
+                {"attempts": int(cleared[0]), "error": str(cleared[1]),
+                 "runs": [str(run_id) for run_id in found.queued]},
+            )  # fmt: skip
     return found
 
 
@@ -4446,11 +4462,163 @@ def _safely(
     try:
         with cursor.connection.transaction():
             return queue_for_file(cursor, project_id, file_id, actor)
-    except Exception as error:
-        logger.warning(
-            "the evidence assessment of a file could not be queued (%s)", type(error).__name__
-        )
+    # Any failure: the reading (or the person's change) is kept, and the failure is
+    # recorded for the worker to try again, never only logged (the product owner, 18
+    # November 2026: "Keep the reading, record it").
+    except Exception as error:  # noqa: BLE001 - recorded by record_queue_failure
+        record_queue_failure(cursor, project_id, None, actor, error, file_id=file_id)
         return Reconciled([], set())
+
+
+# How many failed tries of a control's queueing the worker makes on its own (migration
+# 0177); after that the control waits for a person, and its out-of-date requests say so.
+RETRY_LIMIT = 5
+# The wait before a control is tried again, per failed try so far (30 s after the first,
+# 60 s after the second, and so on).
+RETRY_BACKOFF_SECONDS = 30
+RETRY_HELD = f"The check could not be brought up to date after {RETRY_LIMIT} tries. Run it again."
+_ERROR_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,99}")
+
+
+def _error_name(error: BaseException) -> str:
+    """The failure's class name only: its message could carry data."""
+    name = type(error).__name__
+    return name if _ERROR_NAME.fullmatch(name) else "Error"
+
+
+def _control_audit(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    actor: UUID | None,
+    action: str,
+    control_id: UUID,
+    payload: dict[str, Any],
+) -> None:
+    cursor.execute(
+        """
+        INSERT INTO audit_events (
+            organization_id, project_id, actor_user_id, action, target_type, target_id,
+            payload
+        )
+        VALUES (%s, %s, %s, %s, 'engagement_control', %s, %s)
+        """,
+        (organization_id, project_id, actor, action, control_id, Json(payload)),
+    )
+
+
+def record_queue_failure(
+    cursor: psycopg.Cursor[Any],
+    project_id: UUID,
+    controls: Sequence[UUID] | None,
+    actor: UUID | None,
+    error: BaseException,
+    *,
+    file_id: UUID | None = None,
+) -> None:
+    """Bringing the checks of `controls` (None: the controls `file_id` is, or was, in force
+    on) in step failed, and the caller's savepoint was rolled back: in the caller's
+    transaction, each control's try is recorded (evidence_assessment_retries; its error's
+    class, one more failed try) with an evidence_assessment.queue_failed event, for the
+    worker to try again (retry_failed). In a savepoint of its own, so it never fails the
+    transaction that asked; where even that fails, the warning is all that is left."""
+    name = _error_name(error)
+    logger.warning("the evidence assessment of a file could not be queued (%s)", name)
+    try:
+        with cursor.connection.transaction():
+            wanted = (
+                list(controls)
+                if controls is not None
+                else []
+                if file_id is None
+                else _controls_of(cursor, project_id, file_id)
+            )
+            if not wanted:
+                return
+            rows = cursor.execute(
+                """
+                INSERT INTO evidence_assessment_retries (
+                    engagement_control_id, organization_id, project_id, error
+                )
+                SELECT c.id, p.organization_id, c.project_id, %s
+                FROM engagement_controls c JOIN projects p ON p.id = c.project_id
+                WHERE c.id = ANY(%s) AND c.project_id = %s
+                ORDER BY c.id
+                ON CONFLICT (engagement_control_id) DO UPDATE
+                SET error = EXCLUDED.error, failed_at = clock_timestamp(),
+                    attempts = least(evidence_assessment_retries.attempts + 1, 1000)
+                RETURNING engagement_control_id, organization_id, attempts
+                """,
+                (name, sorted(wanted, key=str), project_id),
+            ).fetchall()
+            for control_id, organization_id, attempts in rows:
+                _control_audit(
+                    cursor, UUID(str(organization_id)), project_id, actor,
+                    "evidence_assessment.queue_failed", UUID(str(control_id)),
+                    {"error": name, "attempts": int(attempts),
+                     "held": int(attempts) >= RETRY_LIMIT,
+                     **({} if file_id is None else {"file_id": str(file_id)})},
+                )  # fmt: skip
+    except psycopg.Error as failed:
+        logger.warning(
+            "a failed evidence assessment could not be recorded (%s)", _error_name(failed)
+        )
+
+
+def retry_failed(connection: psycopg.Connection[Any], project_id: UUID | None = None) -> list[UUID]:
+    """The worker's pass, after every reading and every check it runs (one engagement's)
+    and at start-up (every engagement's): each control whose queueing failed fewer than
+    RETRY_LIMIT times, and not within RETRY_BACKOFF_SECONDS per failed try since the last,
+    is brought in step again, in a transaction of its own (reconcile,
+    which removes its row and records evidence_assessment.requeued); a failure is
+    recorded as one more try. An archived engagement is left as it is. Returns the runs
+    queued, for the caller to hand to the worker. Never raises."""
+    try:
+        rows = connection.execute(
+            """
+            SELECT r.engagement_control_id, r.project_id FROM evidence_assessment_retries r
+            JOIN projects p ON p.id = r.project_id
+            WHERE r.attempts < %s AND p.deleted_at IS NULL AND p.status <> 'ARCHIVED'
+              AND (%s::uuid IS NULL OR r.project_id = %s)
+              -- Not before RETRY_BACKOFF_SECONDS per failed try since the last: a burst of
+              -- passes does not spend the tries in seconds.
+              AND r.failed_at <= clock_timestamp() - make_interval(secs => %s * r.attempts)
+            ORDER BY r.engagement_control_id
+            LIMIT 100
+            """,
+            (RETRY_LIMIT, project_id, project_id, RETRY_BACKOFF_SECONDS),
+        ).fetchall()
+        connection.commit()
+    except psycopg.Error as error:
+        logger.warning("failed evidence assessments could not be read (%s)", _error_name(error))
+        return []
+    queued: list[UUID] = []
+    for control_id, project in rows:
+        control, engagement = UUID(str(control_id)), UUID(str(project))
+        try:
+            with transaction(connection) as cursor:
+                queued += reconcile(cursor, engagement, control).queued
+        except Exception as error:  # noqa: BLE001 - recorded as one more try
+            _record_apart(connection, engagement, control, None, error)
+    return queued
+
+
+def _record_apart(
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    control_id: UUID,
+    actor: UUID | None,
+    error: BaseException,
+) -> None:
+    """record_queue_failure for one control, in a transaction of its own: for a queueing
+    that ran in its own transaction, which has been rolled back."""
+    try:
+        with transaction(connection) as cursor:
+            record_queue_failure(cursor, project_id, [control_id], actor, error)
+    except psycopg.Error as failed:
+        logger.warning(
+            "a failed evidence assessment could not be recorded (%s)", _error_name(failed)
+        )
 
 
 def queue_after_reading(
@@ -4499,11 +4667,9 @@ def follow_control(
                 if known is None:
                     return
             queued = reconcile(cursor, project_id, control_id, actor).queued
-    except Exception as error:
-        logger.warning(
-            "evidence assessments could not follow a change (%s); they read as out of date",
-            type(error).__name__,
-        )
+    # Recorded for the worker to try again, never only logged (migration 0177).
+    except Exception as error:  # noqa: BLE001 - recorded by record_queue_failure
+        _record_apart(connection, project_id, control_id, actor, error)
         return
     after_commit(lambda: schedule_assessments(scheduler, queued))
 
@@ -4511,18 +4677,24 @@ def follow_control(
 def follow_plan(connection: psycopg.Connection[Any], plan_id: UUID) -> list[UUID]:
     """A plan run ended (it may have created, removed or reshaped D&I requirements): the
     control's runs are brought in step, a requirement with files and no run gets one.
-    Returns the runs to hand to the worker. Never raises."""
+    Returns the runs to hand to the worker. Never raises: a failure is recorded for the
+    worker to try again (migration 0177)."""
     try:
         row = connection.execute(
             "SELECT project_id, engagement_control_id FROM evidence_plans WHERE id = %s",
             (plan_id,),
         ).fetchone()
-        if row is None:
-            return []
+    except psycopg.Error as error:
+        logger.warning("a plan's checks could not be read (%s)", _error_name(error))
+        return []
+    if row is None:
+        return []
+    project_id, control_id = UUID(str(row[0])), UUID(str(row[1]))
+    try:
         with transaction(connection) as cursor:
-            return reconcile(cursor, UUID(str(row[0])), UUID(str(row[1]))).queued
-    except Exception as error:
-        logger.warning("evidence assessments could not follow a plan (%s)", type(error).__name__)
+            return reconcile(cursor, project_id, control_id).queued
+    except Exception as error:  # noqa: BLE001 - recorded by record_queue_failure
+        _record_apart(connection, project_id, control_id, None, error)
         return []
 
 
@@ -4611,6 +4783,9 @@ def backfill(connection: psycopg.Connection[Any], limit: int = 50) -> list[UUID]
             """,
             (max(limit, 1) * 4,),
         ).fetchall()
+        # Each control below is a transaction of its own (a failure rolls back only
+        # that control's, and leaves the connection usable to record it).
+        connection.commit()
     except psycopg.Error:
         logger.warning("D&I requests without a check could not be looked for")
         return []
@@ -4624,6 +4799,7 @@ def backfill(connection: psycopg.Connection[Any], limit: int = 50) -> list[UUID]
     for (control_key, project), wanted in controls.items():
         if tried >= limit:
             break
+        made: list[UUID] = []
         try:
             control = _control(connection, project, control_key)
             if control is None:
@@ -4662,7 +4838,7 @@ def backfill(connection: psycopg.Connection[Any], limit: int = 50) -> list[UUID]
                     continue
                 tried += 1
                 with transaction(connection) as cursor:
-                    queued += reconcile(
+                    made += reconcile(
                         cursor, project, control_key, only_requirement=request.requirement_id
                     ).queued
                     cursor.execute(
@@ -4676,8 +4852,23 @@ def backfill(connection: psycopg.Connection[Any], limit: int = 50) -> list[UUID]
                         """,
                         (request.requirement_id, control.organization_id, project, basis),
                     )
-        except Exception as error:
-            logger.warning("a control's checks could not be queued (%s)", type(error).__name__)
+            # Each control's work commits on its own: a later control's failure never
+            # takes it back.
+            connection.commit()
+            queued += made
+        # Recorded for the worker to try again, never only logged (migration 0177). The
+        # failed control's transaction is rolled back first: a read that failed outside
+        # its inner transaction leaves the connection aborted, and the record could not
+        # be written on it (independent review of E1, NB5).
+        except Exception as error:  # noqa: BLE001 - recorded by record_queue_failure
+            try:
+                connection.rollback()
+            except psycopg.Error as failed:
+                logger.warning(
+                    "a control's checks could not be rolled back (%s)", _error_name(failed)
+                )
+                continue
+            _record_apart(connection, project, control_key, None, error)
     return queued
 
 
@@ -5706,7 +5897,9 @@ class RequestBody(BaseModel):
     read_in_part: bool
     # Empty until the run is REVIEWED: nothing of a run is shown before it finishes.
     attributes: list[AttributeBody] = Field(default_factory=list)
-    # Why the run is out of date, one sentence each; empty unless OUT_OF_DATE.
+    # Why the run is out of date, one sentence each; empty unless OUT_OF_DATE, or, for a
+    # request NOT_CHECKED, RETRY_HELD alone when its control's checks could not be queued
+    # (migration 0177).
     out_of_date: list[str] = Field(default_factory=list)
     finished_at: datetime | None = None
     # Why a FAILED run stopped, in a sentence; empty otherwise.
@@ -5873,6 +6066,13 @@ def read_assurance(
     decisions = file_reliability.load(connection, control_id, only_requirement)
     entries: list[RequestBody] = []
     summary = SummaryBody()
+    # Its checks' queueing failed RETRY_LIMIT times (migration 0177): each request out of
+    # date says so, and the worker no longer tries on its own.
+    retried = connection.execute(
+        "SELECT attempts FROM evidence_assessment_retries WHERE engagement_control_id = %s",
+        (control_id,),
+    ).fetchone()
+    retry_held = retried is not None and int(retried[0]) >= RETRY_LIMIT
     for request in requests:
         run = latest.get(request.requirement_id)
         if run is None:
@@ -5885,6 +6085,7 @@ def read_assurance(
                     ).lens,
                     read_in_part=False, engine_version=ENGINE_VERSION,
                     tickmarks_kept=dispositions.kept(request.requirement_id),
+                    out_of_date=[RETRY_HELD] if retry_held else [],
                 )
             )  # fmt: skip
             continue
@@ -5903,6 +6104,8 @@ def read_assurance(
                     contexts.sha256(request) if run.engine_version >= 2 else "",
                 ),
             )  # fmt: skip
+        if reasons and retry_held:
+            reasons = [*reasons, RETRY_HELD]
         status: RequestStatus = (
             "OUT_OF_DATE" if reasons else "FAILED" if run.stopped else _STATUS[run.status]
         )
@@ -6157,6 +6360,13 @@ def rerun(
             cursor, project_id, control_id, actor,
             only_requirement=requirement_id, rerun_failed=True,
         ).queued  # fmt: skip
+        # A queueing that failed for the control is recorded (migration 0177): the whole
+        # control is brought in step too, which ends it (reconcile removes the row).
+        if cursor.execute(
+            "SELECT 1 FROM evidence_assessment_retries WHERE engagement_control_id = %s",
+            (control_id,),
+        ).fetchone():
+            queued += reconcile(cursor, project_id, control_id, actor).queued
         _audit(
             cursor, control.organization_id, project_id, actor, None,
             "evidence.assessment_rerun_requested", requirement_id,

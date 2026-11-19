@@ -843,6 +843,23 @@ describe("a request's check, in every status", () => {
     assert.deepEqual(view.leftOut, []);
   });
 
+  it("says the server's reasons a check is not current, whatever its status (19 November 2026)", () => {
+    // The backend sets out_of_date = [RETRY_HELD] on a NOT_CHECKED request of a control
+    // whose retries are held; only an OUT_OF_DATE line said its reasons, so it was lost.
+    const held =
+      "The check could not be brought up to date after 5 tries. Run it again.";
+    const view = check({ status: "NOT_CHECKED", out_of_date: [held] });
+    assert.equal(view.standing, "NOT_CHECKED");
+    assert.equal(view.line, `${NOT_CHECKED_LINE}. ${held}`);
+    assert.equal(view.action?.label, "Check now");
+    // The out-of-date line says them once, as before.
+    const stale = check({ status: "OUT_OF_DATE", out_of_date: [held] });
+    assert.equal(stale.line.split(held).length - 1, 1);
+    // A held or failed check carries them the same way.
+    const failed = check({ status: "FAILED", out_of_date: [held] });
+    assert.ok(failed.line.endsWith(held));
+  });
+
   it("is one quiet working line naming the letters being checked", () => {
     const queued = check({ status: "QUEUED", stage: "GATE" });
     assert.equal(queued.standing, "CHECKING");
@@ -1630,6 +1647,27 @@ describe("files left out for the same reason", () => {
       done: null,
       problem: `Reading again did not start for a.png. ${rereadProblem(403)}`,
     });
+  });
+
+  it("says why a reading a decision rests on is not read again, in the server's words (E1)", () => {
+    // 18 November 2026: the API refuses to read again a file whose reading a person's
+    // decision rests on, naming it ("This file's reading is relied on: ..."). Before,
+    // every 409 said the reading had changed meanwhile.
+    const relied =
+      'This file\'s reading is relied on: the evidence item "Access policy" was accepted with it; change that decision first';
+    assert.equal(rereadProblem(409, relied), `${relied}.`);
+    // Any other refusal keeps its words.
+    assert.equal(rereadProblem(409, "analysis changed"), rereadProblem(409));
+    assert.deepEqual(
+      rereadAllOutcome([
+        { name: "a.png", status: 200 },
+        { name: "b.png", status: 409, detail: relied },
+      ]),
+      {
+        done: "1 of 2 files are being read again.",
+        problem: `Reading again did not start for b.png. ${relied}.`,
+      },
+    );
   });
 
   // Design review, 18 November 2026: with text recognition not available the server

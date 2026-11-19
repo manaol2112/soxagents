@@ -2908,10 +2908,16 @@ export const EVIDENCE_STATUS_LABELS: Record<EvidenceStatus, string> = {
   NOT_APPLICABLE: "Not applicable",
 };
 
+/** An item's group from its status. The plan's items carry the requirement's own status
+ * (evidence_requirements: PLANNED, AWAITING_DEPENDENCY, REQUESTED, WAIVED; master_plans
+ * sends it as it is), so REQUESTED is read here: without it an item already on a request
+ * read as "Not requested" while the server refused its removal as requested (Planning
+ * review, 18 November 2026). */
 const EVIDENCE_STATUS_OF: Record<string, EvidenceStatus> = {
   NOT_GENERATED: "NOT_REQUESTED",
   PLANNED: "NOT_REQUESTED",
   AWAITING_DEPENDENCY: "NOT_REQUESTED",
+  REQUESTED: "REQUESTED",
   DRAFT: "NOT_REQUESTED",
   READY_FOR_REVIEW: "NEEDS_REVIEW",
   APPROVAL_PENDING: "NEEDS_REVIEW",

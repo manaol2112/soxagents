@@ -22,6 +22,7 @@ import type { AboutPlace, AboutTab, PanelTab } from "./evidence-annotations";
 import type { AnnotationAsk } from "./evidence-annotations-model";
 import type { ReliabilityLine } from "./evidence-assurance-model";
 import { FileChanges } from "./evidence-change";
+import { asSentence } from "./evidence-change-model";
 import {
   instanceFor,
   interimPopulationOf,
@@ -38,6 +39,13 @@ import {
 import type { EvidenceFinding } from "./evidence-findings-model";
 import { findingsForFile } from "./evidence-findings-model";
 import { useFindingsAction } from "./evidence-findings-view";
+import { FileHistory } from "./evidence-history";
+import { useImpact } from "./evidence-impact";
+import {
+  FILE_ACTION_LABELS,
+  fileActions,
+  impactUnavailable,
+} from "./evidence-impact-model";
 import {
   insightOf,
   navigatorOf,
@@ -55,6 +63,7 @@ import {
   type ReliabilityAction,
 } from "./file-reliability";
 import { DataTable } from "./population-table";
+import { heldControl, heldReasons } from "./row-menu-model";
 import type { ControlTest } from "./testing-model";
 import { UiIcon } from "./ui-icon";
 
@@ -91,8 +100,9 @@ export type AboutContext = {
   instances: WalkthroughInstance[] | null;
   /** Uploads the walkthrough instance's evidence: the screen's own upload on that item. */
   onUpload?: ((itemId: string) => void) | undefined;
-  /** A file withdrawn from its request (the server confirmed it): the screen says so on
-   * its list and closes the viewer, since the file no longer serves the request. */
+  /** A file withdrawn from the engagement, or removed from its request (the server
+   * confirmed it): the screen says so on its list and closes the viewer, since the file
+   * no longer serves the request. */
   onWithdrawn?: ((message: string) => void) | undefined;
   /** The file's reliability on the D&I request it was opened on (docs/evidence-assurance.md,
    * section 10.14), where the request's finished check raises it or a person decided it;
@@ -152,7 +162,7 @@ export function useDialogAction(ids: Ids) {
       status === 403
         ? "You do not have permission to do this on this engagement."
         : status === 409 && detail !== ""
-          ? `${detail.charAt(0).toUpperCase()}${detail.slice(1)}.`
+          ? asSentence(detail)
           : status === 422
             ? "That was not accepted. Check the choice and try again."
             : "The action did not complete. Try again in a moment.",
@@ -465,7 +475,7 @@ export function Classification({
                 : kindLabel(kind)
               : read === "failed"
                 ? "Not read"
-                : "Reading the file…"}
+                : "Not known yet"}
           </strong>
         </div>
       </div>
@@ -747,7 +757,8 @@ export function FileData({
   );
 }
 
-/** Withdrawing the file from its request: the existing form, asked once. */
+/** Withdrawing the file from the engagement: the existing form, asked once, which says
+ * first where the file is used and what stands in the way (E1). */
 export function WithdrawForm({
   context,
   fileId,
@@ -773,11 +784,42 @@ export function WithdrawForm({
         keep={{ step: "request" }}
         start="withdraw"
         onCancel={onCancel}
-        onDone={() =>
-          onDone(
-            `${fileName} was withdrawn. It is kept on record with who withdrew it, and can be restored.`,
-          )
-        }
+        onDone={onDone}
+      />
+    </div>
+  );
+}
+
+/** Taking the file off the request it was opened on (E1): its link, or its filing, let
+ * go; the file stays on its control and is never withdrawn. */
+export function RemoveForm({
+  context,
+  fileId,
+  fileName,
+  requirementId,
+  onCancel,
+  onDone,
+}: {
+  context: AboutContext;
+  fileId: string;
+  fileName: string;
+  requirementId: string;
+  onCancel: () => void;
+  onDone: (message: string) => void;
+}) {
+  return (
+    <div className="ed-withdraw">
+      <FileChanges
+        organizationId={context.ids.organizationId}
+        projectId={context.ids.projectId}
+        fileId={fileId}
+        fileName={fileName}
+        blocked={null}
+        controlId={context.ids.controlId}
+        start="remove"
+        requirementId={requirementId}
+        onCancel={onCancel}
+        onDone={onDone}
       />
     </div>
   );
@@ -965,7 +1007,9 @@ function AboutThisFile({
 }) {
   const [data, setData] = useState<DataView>(null);
   const [picked, setPicked] = useState<string | null>(null);
-  const [withdrawing, setWithdrawing] = useState(false);
+  // A change to the file asked for: off this request, or out of the engagement.
+  const [changing, setChanging] = useState<"remove" | "withdraw" | null>(null);
+  const [historyShown, setHistoryShown] = useState(false);
   const [focused, setFocused] = useState<EvidenceCitation | null>(null);
   const findingsRef = useRef<HTMLDetailsElement>(null);
   const dataButton = useRef<HTMLButtonElement>(null);
@@ -992,6 +1036,25 @@ function AboutThisFile({
       setData("pick");
     }
   }, [start, about.canPick, about.setPicking]);
+  // The request the viewer was opened on, else the item the file is listed under: what
+  // "Remove from this request" takes the file off.
+  const onRequest = requirementId ?? insight?.file.requirementId ?? null;
+  const offered = fileActions("PANEL", {
+    canAct: context.canAct && insight !== null,
+    onRequest: onRequest !== null,
+  });
+  // Each change checked as the tab opens (a read; nothing is written until a person
+  // sends a form), and held with the server's reason where it cannot be made now (E1).
+  const removeCheck = useImpact(
+    context.ids,
+    offered.includes("REMOVE") && onRequest !== null
+      ? { fileId, action: "REMOVE_FROM_REQUEST", requirementId: onRequest }
+      : null,
+  );
+  const withdrawCheck = useImpact(
+    context.ids,
+    offered.includes("WITHDRAW") ? { fileId, action: "WITHDRAW" } : null,
+  );
   if (insight === null) {
     return null;
   }
@@ -1153,33 +1216,104 @@ function AboutThisFile({
         </details>
       ) : null}
 
-      <details className="ea-sec ea-about-more">
+      <details
+        className="ea-sec ea-about-more"
+        // The file's history is read once the section is shown, never on page load.
+        onToggle={(event) => {
+          if (event.currentTarget.open) {
+            setHistoryShown(true);
+          }
+        }}
+      >
         <summary>History</summary>
+        <FileHistory
+          ids={context.ids}
+          file={insight.file}
+          shown={historyShown}
+          withdrawn={context.register?.withdrawn ?? []}
+          source={
+            context.register?.files.find((entry) => entry.id === fileId)?.source
+          }
+        />
         <Details insight={insight} ids={context.ids} canAct={context.canAct} />
       </details>
 
-      {context.canAct ? (
+      {offered.length > 0 ? (
+        // Off this request only, then out of the engagement: what cannot be undone in
+        // place last (E1: "Remove from this request" withdrew the file everywhere).
         <section className="ea-sec ea-about-remove" aria-label="Remove">
-          {withdrawing ? (
+          {changing === "remove" && onRequest !== null ? (
+            <RemoveForm
+              context={context}
+              fileId={insight.file.id}
+              fileName={name}
+              requirementId={onRequest}
+              onCancel={() => setChanging(null)}
+              onDone={(message) => {
+                setChanging(null);
+                context.onWithdrawn?.(message);
+              }}
+            />
+          ) : changing === "withdraw" ? (
             <WithdrawForm
               context={context}
               fileId={insight.file.id}
               fileName={name}
-              onCancel={() => setWithdrawing(false)}
+              onCancel={() => setChanging(null)}
               onDone={(message) => {
-                setWithdrawing(false);
+                setChanging(null);
                 context.onWithdrawn?.(message);
               }}
             />
           ) : (
-            <button
-              type="button"
-              className="btn-ghost btn-sm is-danger"
-              onClick={() => setWithdrawing(true)}
-            >
-              <UiIcon name="trash" size={14} />
-              Remove from this request
-            </button>
+            (() => {
+              // Each change held by the server's reason; one reason the two share is
+              // said once, under both (E1 design review, 18 November 2026).
+              const reasons = heldReasons(
+                offered.map((action) => ({
+                  unavailable: impactUnavailable(
+                    action === "REMOVE" ? removeCheck : withdrawCheck,
+                  ),
+                })),
+              );
+              const helds = offered.map((action) =>
+                impactUnavailable(
+                  action === "REMOVE" ? removeCheck : withdrawCheck,
+                ),
+              );
+              return offered.map((action, index) => (
+                <span key={action} className="ea-about-change">
+                  <button
+                    type="button"
+                    className={`btn-ghost btn-sm${action === "WITHDRAW" ? " is-danger" : ""}`}
+                    // Held, not disabled: Tab reaches it and its reason is its
+                    // description; a press does nothing (E1 design review, round 4).
+                    {...heldControl(
+                      helds[index] !== null,
+                      `${uid}-held-${helds.lastIndexOf(helds[index] ?? null)}`,
+                    )}
+                    onClick={() => {
+                      if (helds[index] === null) {
+                        setChanging(
+                          action === "REMOVE" ? "remove" : "withdraw",
+                        );
+                      }
+                    }}
+                  >
+                    {/* One icon, one meaning: x takes it off this request; the
+                        withdrawal from the engagement has the bin. */}
+                    <UiIcon
+                      name={action === "REMOVE" ? "x" : "trash"}
+                      size={14}
+                    />
+                    {FILE_ACTION_LABELS[action]}
+                  </button>
+                  {reasons[index] !== null ? (
+                    <small id={`${uid}-held-${index}`}>{reasons[index]}</small>
+                  ) : null}
+                </span>
+              ));
+            })()
           )}
         </section>
       ) : null}

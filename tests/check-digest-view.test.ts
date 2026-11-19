@@ -339,16 +339,22 @@ describe("the first screen of a finished check", () => {
     );
     assert.match(row, /row\.sub\.indexOf\(` · \$\{filesWord\}`\)/);
     // The list is the one every row has: preview, annotations, the file's own actions,
-    // unlink, each behind the file's menu.
+    // each behind the file's menu.
     const files = row.slice(
       row.indexOf("const fileList = ("),
       row.indexOf("const preview = ("),
     );
+    // Changed 18 November 2026 (E1, product owner). Old: the menu had its own 'label:
+    // "Unlink from this request"' for a person's link, and the file's "Withdraw" last.
+    // New: one "Remove from this request" among the file's own actions (fileLine, given
+    // the item), which takes a link or a filing off this request only and never
+    // withdraws; withdrawing is in the file's viewer.
+    assert.ok(!files.includes('label: "Unlink from this request"'));
+    assert.ok(row.includes("{ requirementId: item.id, impacts },"));
     for (const kept of [
       '<ul className="de-files">',
       'label: "Annotations"',
       "...(line?.actions ?? [])",
-      'label: "Unlink from this request"',
       "<RowMenu label={file.name} items={fileMenu} />",
       // Changed 14 November 2026 (section 5b). Old: the file's name opened the reviewer
       // ('mode: "review"'). New: it opens the one viewer, by the row's own openFile.

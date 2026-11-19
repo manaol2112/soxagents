@@ -549,15 +549,31 @@ def test_a_person_adds_and_removes_evidence_and_no_run_brings_it_back(
     base = f"{_base(team)}/controls/{control_id}"
     plan = _plan(client, team, control_id)
     items = [r for phase in plan["phases"] for r in phase["requirements"]]
-    requested = next(r for r in items if r["status"] == "REQUESTED")
-    refused = client.post(
-        f"{base}/evidence-requirements/{requested['id']}/remove",
-        json={"version": requested["version"]},
-    )
-    assert (refused.status_code, refused.json()["detail"]) == (
-        409,
-        "it has already been requested from the organization; waive it instead",
-    )
+    # Rewritten on 18 November 2026 (product owner: "Allow while the request is a draft").
+    # Old: an item on any request was refused as "it has already been requested from the
+    # organization; waive it instead", a request still a draft included, which was untrue.
+    # New: an item on a draft comes off the plan and off the draft, as it may be reworded
+    # there; what went for approval or was sent is still refused
+    # (test_an_item_the_organization_was_asked_for_is_waived_not_removed).
+    on_draft = None
+    for item in [r for r in items if r["status"] == "REQUESTED"]:
+        tried = client.post(
+            f"{base}/evidence-requirements/{item['id']}/remove",
+            json={"version": item["version"]},
+        )
+        if tried.status_code == 200:
+            on_draft = item
+            break
+        assert "depends on it" in tried.json()["detail"], tried.text
+    assert on_draft is not None, "the plan has a requested item nothing depends on"
+    with connect(migrated.url) as connection:
+        left = connection.execute(
+            "SELECT q.status, q.pbc_request_id, r.status, r.evidence_description "
+            "FROM evidence_requirements q, pbc_requests r WHERE q.id = %s AND r.id = %s",
+            (on_draft["id"], on_draft["request_id"]),
+        ).fetchone()
+    assert left is not None and left[:2] == ("REMOVED", None)
+    assert left[2] == "CANCELLED" or on_draft["title"] not in str(left[3])
     # A planned item the agents proposed comes off the plan, kept on record.
     removed = None
     for item in [r for r in items if r["status"] in ("PLANNED", "AWAITING_DEPENDENCY")]:
@@ -675,3 +691,255 @@ def test_a_plan_that_misses_the_shape_check_is_judged_by_the_plan_checks(
         assert rejected.runs[0].source == "FALLBACK"
         assert rejected.runs[0].note.startswith(KEPT_NOTE)
         assert "select samples" in rejected.runs[0].note
+
+
+def test_an_item_on_a_draft_request_comes_off_the_plan_and_the_draft(
+    migrated: Database,
+) -> None:
+    """Product owner, 18 November 2026: "Allow while the request is a draft". The draft is
+    written again without the item, and withdrawn once it carries nothing; the removal is
+    on record with the request it left. The plan goes back for approval as before."""
+    team, client, _scheduler = _engagement(migrated, "plan-draft-remove")
+    control_id = _control(migrated, team, "ITGC-AC-01")
+    base = f"{_base(team)}/controls/{control_id}"
+    plan = _plan(client, team, control_id)
+    requested = [
+        r for ph in plan["phases"] for r in ph["requirements"] if r["status"] == "REQUESTED"
+    ]
+    assert requested
+    draft = requested[0]["request_id"]
+    on_it = [r for r in requested if r["request_id"] == draft]
+    with connect(migrated.url) as connection:
+        assert connection.execute(
+            "SELECT status FROM pbc_requests WHERE id = %s", (draft,)
+        ).fetchone() == ("DRAFT",)
+
+    def remove_all() -> list[dict[str, Any]]:
+        """Each item of the draft, dependents first, until the draft carries none."""
+        removed: list[dict[str, Any]] = []
+        waiting = list(on_it)
+        while waiting:
+            progress = False
+            for item in list(waiting):
+                current = next(
+                    r for ph in _plan(client, team, control_id)["phases"]
+                    for r in ph["requirements"] if r["id"] == item["id"]
+                )  # fmt: skip
+                tried = client.post(
+                    f"{base}/evidence-requirements/{item['id']}/remove",
+                    json={"version": current["version"]},
+                )
+                if tried.status_code == 200:
+                    removed.append(item)
+                    waiting.remove(item)
+                    progress = True
+                else:
+                    assert "depends on it" in tried.json()["detail"], tried.text
+            assert progress, "an item of the draft could not be removed"
+        return removed
+
+    removed = remove_all()
+    with connect(migrated.url) as connection:
+        items = connection.execute(
+            "SELECT status, pbc_request_id FROM evidence_requirements WHERE id = ANY(%s)",
+            ([UUID(r["id"]) for r in removed],),
+        ).fetchall()
+        request = connection.execute(
+            "SELECT status, cancellation_reason FROM pbc_requests WHERE id = %s", (draft,)
+        ).fetchone()
+        events = connection.execute(
+            "SELECT payload FROM audit_events WHERE action = 'evidence_requirement.removed' "
+            "AND target_id = ANY(%s) ORDER BY created_at",
+            ([UUID(r["id"]) for r in removed],),
+        ).fetchall()
+    assert set(items) == {("REMOVED", None)}
+    assert request == ("CANCELLED", "Every item it carried was taken off the evidence plan.")
+    payloads = [row[0] for row in events]
+    assert all(p["request_id"] == draft for p in payloads)
+    assert payloads[-1]["request"] == "WITHDRAWN"
+    assert all(p["request"] == "REWRITTEN" for p in payloads[:-1])
+    # Gone from the plan's requests: the plan shows none of them on a request.
+    after = _plan(client, team, control_id)
+    assert {
+        r["id"] for ph in after["phases"] for r in ph["requirements"] if r["request_id"] == draft
+    } == set()
+
+
+def test_an_item_the_organization_was_asked_for_is_waived_not_removed(
+    migrated: Database,
+) -> None:
+    """Sent: removal stays refused, worded truthfully, and nothing changes. Only a person
+    who may change the plan removes; another firm finds nothing."""
+    from test_design_requests import _member
+    from test_evidence_portal import _sent
+    from test_outbound import _team
+
+    sent = _sent(migrated, "plan-sent-remove", phase="DESIGN")
+    team, client = sent["team"], sent["client"]
+    control_id = _control(migrated, team, "ITGC-AC-01")
+    base = f"{_base(team)}/controls/{control_id}"
+    on_sent = next(
+        r for ph in _plan(client, team, control_id)["phases"] for r in ph["requirements"]
+        if r["request_id"] == str(sent["request_id"])
+    )  # fmt: skip
+    refused = client.post(
+        f"{base}/evidence-requirements/{on_sent['id']}/remove",
+        json={"version": on_sent["version"]},
+    )
+    assert (refused.status_code, refused.json()["detail"]) == (
+        409, "it has already been requested from the organization; waive it instead",
+    )  # fmt: skip
+    with connect(migrated.url) as connection:
+        assert connection.execute(
+            "SELECT status, pbc_request_id::text FROM evidence_requirements WHERE id = %s",
+            (on_sent["id"],),
+        ).fetchone() == ("REQUESTED", str(sent["request_id"]))
+    _reviewer, reviewer = _member(migrated, team, "REVIEWER")
+    assert (
+        reviewer.post(
+            f"{base}/evidence-requirements/{on_sent['id']}/remove",
+            json={"version": on_sent["version"]},
+        ).status_code
+        == 403
+    )
+    _seeded, _project, outsider, _admin = _team(migrated, "plan-sent-out")
+    assert (
+        outsider.post(
+            f"{base}/evidence-requirements/{on_sent['id']}/remove",
+            json={"version": on_sent["version"]},
+        ).status_code
+        == 404
+    )
+
+
+def _draft_item(migrated: Database, control_id: str) -> tuple[str, str]:
+    """A requested item on the control's draft request that nothing depends on."""
+    with connect(migrated.url) as connection:
+        row = connection.execute(
+            """
+            SELECT q.id::text, q.pbc_request_id::text FROM evidence_requirements q
+            JOIN pbc_requests r ON r.id = q.pbc_request_id AND r.status = 'DRAFT'
+            WHERE q.engagement_control_id = %s AND q.status = 'REQUESTED'
+              AND NOT EXISTS (SELECT 1 FROM evidence_requirements d
+                              WHERE d.plan_id = q.plan_id AND d.depends_on = q.requirement_key
+                                AND d.status NOT IN ('REMOVED', 'WAIVED'))
+            ORDER BY q.created_at LIMIT 1
+            """,
+            (control_id,),
+        ).fetchone()
+    assert row is not None, "the control has a requested item on a draft nothing depends on"
+    return str(row[0]), str(row[1])
+
+
+def _version(client: TestClient, team: dict[str, Any], control_id: str, item_id: str) -> int:
+    return int(
+        next(
+            r["version"]
+            for ph in _plan(client, team, control_id)["phases"]
+            for r in ph["requirements"]
+            if r["id"] == item_id
+        )
+    )
+
+
+def _while_sent_for_approval(migrated: Database, request_id: str, change: Any) -> Any:
+    """The change runs while a submission for approval of its draft is under way: the
+    draft's status turns APPROVAL_PENDING in a transaction that commits only once the
+    change waits for it (the race of the independent review of E1, B1)."""
+    import threading
+
+    import psycopg
+    from test_lock_order import _blocked_by
+
+    holder = psycopg.connect(migrated.url)
+    holder.execute(
+        "UPDATE pbc_requests SET status = 'APPROVAL_PENDING' WHERE id = %s", (request_id,)
+    )
+    outcome: dict[str, Any] = {}
+
+    def work() -> None:
+        outcome["response"] = change()
+
+    thread = threading.Thread(target=work)
+    thread.start()
+    try:
+        _blocked_by(migrated.url, holder.info.backend_pid)
+        holder.commit()
+    finally:
+        thread.join(60)
+        holder.close()
+    return outcome["response"]
+
+
+def test_a_removal_racing_a_submission_for_approval_is_refused(migrated: Database) -> None:
+    """The draft's status is read again under its lock before the item changes: a removal
+    that meets a submission for approval is refused and changes nothing, never removes the
+    item from a request whose message already asks for it."""
+    team, client, _scheduler = _engagement(migrated, "plan-race-remove")
+    control_id = _control(migrated, team, "ITGC-AC-01")
+    base = f"{_base(team)}/controls/{control_id}"
+    item_id, request_id = _draft_item(migrated, control_id)
+    version = _version(client, team, control_id, item_id)
+    response = _while_sent_for_approval(
+        migrated,
+        request_id,
+        lambda: client.post(
+            f"{base}/evidence-requirements/{item_id}/remove", json={"version": version}
+        ),
+    )
+    assert (response.status_code, response.json()["detail"]) == (
+        409, "the request carrying it has gone for approval",
+    )  # fmt: skip
+    with connect(migrated.url) as connection:
+        assert connection.execute(
+            "SELECT status, pbc_request_id::text FROM evidence_requirements WHERE id = %s",
+            (item_id,),
+        ).fetchone() == ("REQUESTED", request_id)
+
+
+def test_a_rewording_racing_a_submission_for_approval_is_refused(migrated: Database) -> None:
+    """The same lock for a rewording on a draft (edit)."""
+    team, client, _scheduler = _engagement(migrated, "plan-race-edit")
+    control_id = _control(migrated, team, "ITGC-AC-01")
+    base = f"{_base(team)}/controls/{control_id}"
+    item_id, request_id = _draft_item(migrated, control_id)
+    version = _version(client, team, control_id, item_id)
+    response = _while_sent_for_approval(
+        migrated,
+        request_id,
+        lambda: client.post(
+            f"{base}/evidence-requirements/{item_id}/edit",
+            json={
+                "title": "Reworded during the submission",
+                "description": "A description reworded while the request was submitted.",
+                "version": version,
+            },
+        ),  # fmt: skip
+    )
+    assert (response.status_code, response.json()["detail"]) == (
+        409, "the request carrying it has gone for approval",
+    )  # fmt: skip
+    with connect(migrated.url) as connection:
+        assert connection.execute(
+            "SELECT title <> 'Reworded during the submission' FROM evidence_requirements "
+            "WHERE id = %s",
+            (item_id,),
+        ).fetchone() == (True,)
+
+
+def test_an_item_on_a_request_gone_for_approval_is_not_removed(migrated: Database) -> None:
+    team, client, _scheduler = _engagement(migrated, "plan-pending-remove")
+    control_id = _control(migrated, team, "ITGC-AC-01")
+    base = f"{_base(team)}/controls/{control_id}"
+    item_id, request_id = _draft_item(migrated, control_id)
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE pbc_requests SET status = 'APPROVAL_PENDING' WHERE id = %s", (request_id,)
+        )
+    refused = client.post(
+        f"{base}/evidence-requirements/{item_id}/remove",
+        json={"version": _version(client, team, control_id, item_id)},
+    )
+    assert (refused.status_code, refused.json()["detail"]) == (
+        409, "the request carrying it has gone for approval",
+    )  # fmt: skip

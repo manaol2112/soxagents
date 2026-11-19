@@ -129,7 +129,8 @@ export function suggestionFor(input: SuggestionInput): Suggestion {
     return {
       title: "Classifying the evidence",
       question:
-        "The agent is reading the file to find what it is and what it shows. This takes a few seconds.",
+        // Reading is said once, on the file (E1 design review, round 5).
+        "The agent finds what the file is and what it shows. This takes a few seconds.",
       actions: [],
     };
   }

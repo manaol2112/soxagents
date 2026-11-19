@@ -41,6 +41,11 @@ export type PageRow = {
   /** The step the control is on (DONE once reviewed), for the status panel. */
   step: StepKey | "DONE";
   phaseLabels: Partial<Record<StepKey, string>>;
+  /** Its evidence requests and how many are received; its conclusion ("" before one);
+   * its independent review. The status panel's lines and buttons read them. */
+  requests: { asked: number; received: number };
+  conclusion: string;
+  review: "OPEN" | "SIGNED_OFF" | null;
 };
 
 export const PLAN_LABEL: Record<PlanStatus, string> = {
@@ -160,7 +165,9 @@ export const STEPS: ReadonlyArray<{
   { key: "REVIEW", label: "Review", action: "Request review", link: "review" },
 ];
 
-/** Each step's state: done before the step the control is on, now on it, to do after. */
+/** Each step's state: done before the step the control is on, now on it, to do after.
+ * The step is the API's journey (control_journey.py), the one the control's own page
+ * reads; nothing here works a step's state out of its own facts. */
 export function stepStates(step: StepKey | "DONE"): Record<StepKey, StepState> {
   const at =
     step === "DONE"
@@ -511,7 +518,133 @@ export function toPageRow(
     attention: work !== null && (work.exceptions || work.overdue),
     step,
     phaseLabels,
+    requests: {
+      asked: work?.evidenceRequests ?? 0,
+      received: work?.evidenceReceived ?? 0,
+    },
+    conclusion: CONCLUSION_LABEL[work?.conclusion ?? ""] ?? "",
+    review: work?.reviewStatus ?? null,
   };
+}
+
+/** Which testing a row's testing status speaks of: before the test plan is approved,
+ * only the D&I branch can be under way, so it is named; after it, testing (E1 design
+ * review: "Testing · In progress; waits for plan approval" did not say which). One rule
+ * for the status card's line and the row's pill. */
+export function testingSubject(row: Pick<PageRow, "step" | "testing">): string {
+  const at = STEPS.findIndex((item) => item.key === row.step);
+  const test = STEPS.findIndex((item) => item.key === "TEST");
+  return row.step !== "DONE" &&
+    at >= 0 &&
+    at < test &&
+    row.testing !== "NOT_STARTED"
+    ? "D&I testing"
+    : "Testing";
+}
+
+/** A row's two status pills, each with its subject (E1 design review: "Draft" and "In
+ * progress" said nothing of what they were): the plan's and the testing's. */
+export function rowPills(row: Pick<PageRow, "plan" | "step" | "testing">): {
+  plan: string;
+  testing: string;
+} {
+  const plan =
+    row.plan === "PENDING"
+      ? PLAN_LABEL.PENDING
+      : `Plan ${PLAN_LABEL[row.plan].toLowerCase()}`;
+  const label = TESTING_LABEL[row.testing];
+  return {
+    plan,
+    testing: `${testingSubject(row)} ${label.charAt(0).toLowerCase()}${label.slice(1)}`,
+  };
+}
+
+/** How a later step names a step it waits for. */
+const WAITS_FOR: Record<StepKey, string> = {
+  PLAN: "plan approval",
+  REQUEST: "the evidence",
+  TEST: "testing",
+  CONCLUDE: "the conclusion",
+  REVIEW: "the review",
+};
+
+export type StatusStep = {
+  key: StepKey;
+  title: string;
+  state: StepState;
+  /** Where the step stands: its outcome once done, its fact now, and what it waits for
+   * after (with what has already happened on it, if anything). */
+  line: string;
+  /** The button on the step the control is at; null on every other step. */
+  action: string | null;
+  /** A step done is opened in the control from its own link. */
+  opens: boolean;
+};
+
+/** The status panel's steps (design review, 18 November 2026: "Testing · In progress"
+ * beside a greyed "Start testing"; "2 of 2 received" beside an empty circle; greyed
+ * buttons with no reason). Every step's mark comes from the journey's step alone, as
+ * the control's own page draws it; the line never claims more than the mark: a step
+ * done has its check and its outcome, the step the control is at has the one button,
+ * and a later step says what it waits for. */
+export function statusSteps(row: PageRow): StatusStep[] {
+  const states = stepStates(row.step);
+  const waits = row.step === "DONE" ? "" : `waits for ${WAITS_FOR[row.step]}`;
+  const started: Record<StepKey, boolean> = {
+    PLAN: true,
+    REQUEST: row.requests.asked > 0,
+    TEST: row.testing !== "NOT_STARTED",
+    CONCLUDE: row.conclusion !== "",
+    REVIEW: row.review !== null,
+  };
+  const outcome: Record<StepKey, string> = {
+    PLAN: "Test plan approved",
+    REQUEST:
+      row.requests.asked > 0
+        ? `${row.requests.received} of ${row.requests.asked} received`
+        : "Done",
+    TEST:
+      row.testing === "COMPLETED" || row.testing === "EXCEPTIONS"
+        ? TESTING_LABEL[row.testing]
+        : "Done",
+    CONCLUDE: row.conclusion || "Done",
+    REVIEW: "Reviewed",
+  };
+  const action: Record<StepKey, string> = {
+    PLAN: "Review plan",
+    REQUEST:
+      row.requests.asked > 0 ? "Open evidence requests" : "Request evidence",
+    TEST: row.testing === "IN_PROGRESS" ? "Continue testing" : "Start testing",
+    CONCLUDE: "Conclude",
+    REVIEW: row.review === "OPEN" ? "Open the review" : "Request review",
+  };
+  return STEPS.map((step) => {
+    const state = states[step.key];
+    const fact = row.phaseLabels[step.key] ?? "";
+    const subject = testingSubject(row);
+    const line =
+      state === "done"
+        ? outcome[step.key]
+        : state === "now"
+          ? fact
+          : step.key === "TEST" && started.TEST && subject === "D&I testing"
+            ? // The branch under way, then the one that waits.
+              `${subject} ${fact.charAt(0).toLowerCase()}${fact.slice(1)}; operating testing ${waits}`
+            : started[step.key] && fact !== ""
+              ? `${fact}; ${waits}`
+              : `${waits.charAt(0).toUpperCase()}${waits.slice(1)}`;
+    return {
+      key: step.key,
+      title:
+        step.key === "PLAN" && row.plan === "PENDING"
+          ? "Plan to approve"
+          : step.label,
+      state,
+      line,
+      action: state === "now" ? action[step.key] : null,
+      opens: state === "done",
+    };
+  });
 }
 
 /** What a control's card shows in its one status pill: what it needs next (product
@@ -535,7 +668,7 @@ export function cardStatus(row: PageRow): {
     return { label: "With exceptions", tone: "is-danger" };
   }
   if (row.testing === "IN_PROGRESS") {
-    return { label: "Testing in progress", tone: "is-info" };
+    return { label: `${testingSubject(row)} in progress`, tone: "is-info" };
   }
   if (row.testing === "COMPLETED") {
     return { label: "Testing completed", tone: "is-success" };

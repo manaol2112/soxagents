@@ -1103,6 +1103,52 @@ def request_run(cursor: psycopg.Cursor[Any], sheet_id: UUID) -> UUID | None:
     return None if row is None else UUID(str(row[0]))
 
 
+def off_open_sheets(
+    cursor: psycopg.Cursor[Any], project_id: UUID, control_id: UUID | None, file_id: UUID
+) -> list[UUID]:
+    """A file left (withdrawn, replaced, or moved): take it off every open test sheet of the
+    engagement that holds it, a sibling instance's too (its application tag can place it
+    there), and have the tester look again at those and at its control's open sheets.
+    A signed-off sheet is never touched. Before (E1, 18 November 2026) only the filed
+    control's open sheets were cleaned, so a sibling's sheet kept a withdrawn file, and a
+    replacement sat there beside the file it replaced. Returns the runs to schedule. The
+    sheets are locked by id, the last step of the lock order (lock order:
+    evidence_reliance)."""
+    runs: list[UUID] = []
+    for (sheet_id,) in cursor.execute(
+        """
+        SELECT s.id FROM test_sheets s
+        WHERE s.project_id = %(project)s AND s.status = 'OPEN' AND (
+            s.engagement_control_id = %(control)s::uuid
+            OR EXISTS (SELECT 1 FROM test_sheet_files f
+                       WHERE f.test_sheet_id = s.id AND f.evidence_file_id = %(file)s)
+            OR EXISTS (SELECT 1 FROM test_item_files t
+                       JOIN test_items i ON i.id = t.test_item_id
+                       WHERE i.test_sheet_id = s.id AND t.evidence_file_id = %(file)s))
+        ORDER BY s.id FOR UPDATE OF s
+        """,
+        {"project": project_id, "control": control_id, "file": file_id},
+    ).fetchall():
+        sheet = UUID(str(sheet_id))
+        for (item_id,) in cursor.execute(
+            "DELETE FROM test_item_files t USING test_items i "
+            "WHERE i.id = t.test_item_id AND i.test_sheet_id = %s "
+            "AND t.evidence_file_id = %s RETURNING t.test_item_id",
+            (sheet, file_id),
+        ).fetchall():
+            cursor.execute(
+                "UPDATE test_items SET needs_test = true, version = version + 1 WHERE id = %s",
+                (item_id,),
+            )
+        cursor.execute(
+            "DELETE FROM test_sheet_files WHERE test_sheet_id = %s AND evidence_file_id = %s",
+            (sheet, file_id),
+        )
+        queued = request_run(cursor, sheet)
+        runs += [] if queued is None else [queued]
+    return runs
+
+
 def runs_for_file(
     cursor: psycopg.Cursor[Any],
     organization_id: UUID,
@@ -1149,6 +1195,14 @@ def runs_for_file(
         family_ids(cursor, project_id, control[0])
         if shared_with_family(cursor, file_id)
         else [UUID(str(control[0]))]
+    )
+    # The family's sheets are locked by id before any is asked to run (lock order:
+    # evidence_reliance), whichever instance's file this is: before, each reading locked
+    # its own instance's sheet first, so two siblings' readings took them in turn.
+    cursor.execute(
+        "SELECT 1 FROM test_sheets WHERE project_id = %s AND engagement_control_id = ANY(%s) "
+        "AND test_round_id IS NULL ORDER BY id FOR UPDATE",
+        (project_id, targets),
     )
     runs: list[UUID] = []
     for target in targets:
