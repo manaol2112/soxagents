@@ -6,6 +6,7 @@
 
 import {
   criteriaCounts,
+  reviewCount,
   STEPS,
   type StepKey,
   type Tone,
@@ -73,10 +74,11 @@ const ACTION: Record<StepKey, { title: string; label: string; why: string }> = {
     label: "Answer",
     why: "Each question has a proposed answer from the records; confirm or change it.",
   },
+  // The approved prototype (product owner, 19 November 2026): short, in the step's own card.
   attributes: {
-    title: "Decide the attributes",
-    label: "Decide the attributes",
-    why: "The D&I evidence is requested against them, and each OE sample is tested against them. The standard's come approved; decide what the agent proposed from the understanding.",
+    title: "Review attributes",
+    label: "Review attributes",
+    why: "Accept, edit or remove each one. D&I evidence and OE samples are tested against the accepted set.",
   },
   designevidence: {
     title: "Decide the D&I evidence",
@@ -301,6 +303,31 @@ function needOf(step: WorkflowStep, steps: readonly WorkflowStep[]): PanelNeed {
   };
 }
 
+/** The Attributes step's footer (product owner, 19 November 2026, approved prototype): each
+ * branch's next step says what it waits on here, "3 to review", and "Ready" once it can
+ * start; a next step at work or with its own work in hand keeps its own status. */
+export function attributesFooter(
+  frame: PanelFrame,
+  toReview: number,
+): PanelFrame {
+  if (frame.key !== "attributes") {
+    return frame;
+  }
+  return {
+    ...frame,
+    next: frame.next.map((item) => ({
+      ...item,
+      status: item.status.startsWith("Waiting on")
+        ? toReview > 0
+          ? `${toReview} to review`
+          : item.status
+        : item.tone === "idle"
+          ? "Ready"
+          : item.status,
+    })),
+  };
+}
+
 /** The panel's frame for a step: its need, what it is based on, and what follows. */
 export function panelFrame(
   key: StepKey,
@@ -511,11 +538,12 @@ export function agentNote(
             ? "Started from the standard's attributes and proposed what the understanding changes."
             : "Started from the standard's attributes, proposed what the understanding changes, and tailored each one's pass/fail criteria to this control.",
         // In the rows' own words, as the node counts them (design review, 19 November
-        // 2026: "6 attributes approved" over six "To accept" rows).
+        // 2026: "6 attributes approved" over six "To accept" rows; the rows read "To review"
+        // since the approved prototype of the same day).
         found: [
-          criteria.toAccept > 0
-            ? `${count(criteria.toAccept, "attribute")} to accept${input.attributes.proposed > 0 ? `, ${input.attributes.proposed} proposed to decide` : ""}.`
-            : `${count(input.attributes.approved, "attribute")} approved${input.attributes.proposed > 0 ? `, ${input.attributes.proposed} proposed to decide` : ""}.`,
+          reviewCount(input.attributes) > 0
+            ? `${count(reviewCount(input.attributes), "attribute")} to review.`
+            : `${count(input.attributes.approved, "attribute")} approved.`,
           ...(questions > 0
             ? [`${count(questions, "question")} on them open.`]
             : []),

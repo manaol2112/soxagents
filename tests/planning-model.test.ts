@@ -2583,7 +2583,9 @@ describe("the Attributes tab's own actions", () => {
       'intent: "attribute-add"',
       'intent: "attribute-edit"',
       'intent: "attribute-retire"',
-      "It is kept on record as retired.",
+      // Rewritten 19 November 2026 (product owner: "Remove", never "Retire", for a
+      // control's attribute). Old: "It is kept on record as retired.".
+      "It stays in the history.",
     ]) {
       assert.ok(view.includes(words), words);
     }

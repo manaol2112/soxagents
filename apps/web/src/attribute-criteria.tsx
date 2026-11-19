@@ -34,6 +34,7 @@ export function TailoredCriteria({
   extra = null,
   notes = null,
   startEditing: writing = false,
+  actions,
 }: {
   ids: Ids;
   item: Attribute;
@@ -49,6 +50,10 @@ export function TailoredCriteria({
   /** Opens with the criteria form showing: the step's "Write criteria", after a run that
    * did not write them. */
   startEditing?: boolean;
+  /** The row's own actions, in place of Accept, Edit and `extra` (flat only; Review
+   * attributes, 19 November 2026): given how to open the criteria form, and shown while it
+   * is closed. */
+  actions?: (criteria: { edit: () => void; formId: string }) => ReactNode;
 }) {
   const action = useRelease(ids);
   const formId = useId();
@@ -173,8 +178,11 @@ export function TailoredCriteria({
         {state === "OWNED" ? <p className="tc-by">{owner}</p> : null}
         {notes}
         {editor}
-        {!editing ? heldLine : null}
-        {!editing && (canAct || extra !== null) ? (
+        {!editing && actions !== undefined
+          ? actions({ edit: startEditing, formId })
+          : null}
+        {!editing && actions === undefined ? heldLine : null}
+        {!editing && actions === undefined && (canAct || extra !== null) ? (
           <div className="tc-row-acts">
             {canAct && state === "TO_ACCEPT" ? (
               <button

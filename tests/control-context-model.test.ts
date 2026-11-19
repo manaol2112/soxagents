@@ -1126,13 +1126,16 @@ describe("testing attributes", () => {
   it("confirms what the server applied", () => {
     assert.equal(decidedNote("APPROVE", 2), "2 proposals approved.");
     assert.equal(decidedNote("REJECT", 1), "1 proposal rejected.");
+    // Rewritten 19 November 2026 (product owner: "Remove" replaces "Retire" for a control's
+    // attribute). Old: "1 attribute retired. ...". New: "removed"; the RETIRE decision and
+    // the stored status are unchanged, only the words shown.
     assert.equal(
       decidedNote("RETIRE", 1),
-      "1 attribute retired. It stays in the history.",
+      "1 attribute removed. It stays in the history.",
     );
     assert.equal(
       decidedNote("RETIRE", 2),
-      "2 attributes retired. They stay in the history.",
+      "2 attributes removed. They stay in the history.",
     );
   });
 
@@ -1321,7 +1324,9 @@ describe("the Attributes step's rows", () => {
   it("names every state in words, and never styles agent output as accepted", () => {
     assert.deepEqual(
       Object.values(ATTRIBUTE_ROW_CHIPS).map((chip) => chip.label),
-      ["Proposed", "To accept", "Needs criteria", "Accepted"],
+      // Rewritten 19 November 2026 (owner-approved Review attributes prototype). Old: "To
+      // accept". New: "To review": the row is reviewed, then accepted, edited or removed.
+      ["Proposed", "To review", "Needs criteria", "Accepted"],
     );
     assert.equal(ATTRIBUTE_ROW_CHIPS.PROPOSED.tone, "ai");
     assert.equal(ATTRIBUTE_ROW_CHIPS.TO_ACCEPT.tone, "ai");
@@ -1566,7 +1571,9 @@ describe("the Attributes step as one list the agent prepared", () => {
       Object.values(UNIFIED_CHIPS).map((chip) => [chip.label, chip.tone]),
       [
         ["Updating…", "ai"],
-        ["To accept", "ai"],
+        // Rewritten 19 November 2026 (owner-approved Review attributes prototype). Old: "To
+        // accept". New: "To review", still violet: agent output no person has decided.
+        ["To review", "ai"],
         ["Needs criteria", "warning"],
         ["Accepted", "success"],
       ],

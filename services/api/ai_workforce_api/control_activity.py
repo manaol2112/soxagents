@@ -109,7 +109,7 @@ _TITLES: dict[str, tuple[Category, str]] = {
     "attribute.rejected": ("design", "Test attribute rejected"),
     "attribute.added": ("design", "Test attribute added"),
     "attribute.edited": ("design", "Test attribute changed"),
-    "attribute.retired": ("design", "Test attribute retired"),
+    "attribute.retired": ("design", "Test attribute removed"),
     "process.built": ("design", "Process understanding drafted"),
     "process.saved": ("design", "Process understanding saved"),
     "process.confirmed": ("design", "Process understanding confirmed"),

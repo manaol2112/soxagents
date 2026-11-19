@@ -935,6 +935,26 @@ export function changePrompt(
   return matter === "" ? "What is the case?" : `What is the case on ${matter}?`;
 }
 
+/** An open assumption as a row of its attribute's criteria (Review attributes, product owner,
+ * 19 November 2026, approved prototype): "Assumes … Unconfirmed", the state in one muted
+ * word, never a tinted box. A conflict holds the attribute's acceptance, so it says it is to
+ * decide; anything still open is unconfirmed, accepted with the attribute or not. */
+export function assumptionRowWords(
+  item: Pick<Assumption, "kind" | "assumed">,
+): { label: string; text: string; state: string } {
+  const said = assumptionText(item);
+  const text = `${said.charAt(0).toUpperCase()}${said.slice(1)}`;
+  switch (item.kind) {
+    case "CONFLICT":
+      return { label: "Conflict", text, state: "To decide" };
+    case "NOT_KNOWN":
+    case "UNKNOWN":
+      return { label: "Not known", text, state: "Unconfirmed" };
+    default:
+      return { label: "Assumes", text, state: "Unconfirmed" };
+  }
+}
+
 /** The changing choice's words, by kind: a fact not yet known is answered, not changed. */
 export function changeWords(kind: Assumption["kind"] | undefined): string {
   return kind === "UNKNOWN" ? UNKNOWN_ADD : "Change…";
@@ -986,9 +1006,11 @@ export function notYetAccepted(rows: readonly UnifiedRow[]): UnifiedRow[] {
   return rows.filter((row) => unifiedState(row, false) !== "ACCEPTED");
 }
 
-/** "Accept all N"'s words: the count it accepts, what it leaves out, and the assumptions not
- * confirmed that go with it (the set's too, when it accepts everything still to accept). A
- * conflict on the set holds all of them, and says so. */
+/** "Accept all"'s words: what it leaves out, and the assumptions not confirmed that go with it
+ * (the set's too, when it accepts everything still to accept), shown beside it (B1l point 6;
+ * product owner, 19 November 2026: visible, not on hover). A conflict on the set holds all of
+ * them, and says so. Once a row is reviewed it reads "Accept remaining n" (approved
+ * prototype, 19 November 2026); before, "Accept all". */
 export function acceptAllWords(
   accepted: readonly UnifiedRow[],
   heldOut: number,
@@ -996,11 +1018,16 @@ export function acceptAllWords(
     assumptions?: readonly Assumption[];
     remaining?: readonly UnifiedRow[];
     held?: boolean;
+    /** How many rows are already accepted or removed. */
+    reviewed?: number;
   } = {},
 ): { label: string; leftOut: string; includes: string } {
   const unconfirmed = unconfirmedWith(accepted, set);
   return {
-    label: `Accept all ${accepted.length}`,
+    label:
+      (set.reviewed ?? 0) > 0
+        ? `Accept remaining ${accepted.length}`
+        : "Accept all",
     leftOut:
       set.held === true && heldOut > 0
         ? `${heldOut === 1 ? "1 held" : `All ${heldOut} held`}: a conflict on the attributes as a set to decide`
@@ -1013,8 +1040,8 @@ export function acceptAllWords(
       unconfirmed <= 0
         ? ""
         : unconfirmed === 1
-          ? "includes 1 assumption not confirmed"
-          : `includes ${unconfirmed} assumptions not confirmed`,
+          ? "1 unconfirmed assumption"
+          : `${unconfirmed} unconfirmed assumptions`,
   };
 }
 

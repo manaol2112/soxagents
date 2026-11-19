@@ -645,7 +645,9 @@ export const ATTRIBUTE_ROW_CHIPS: Record<
   { label: string; tone: "ai" | "warning" | "success" }
 > = {
   PROPOSED: { label: "Proposed", tone: "ai" },
-  TO_ACCEPT: { label: "To accept", tone: "ai" },
+  // "To review", not "To accept" (product owner, 19 November 2026, approved prototype:
+  // each row is reviewed, then accepted, edited or removed).
+  TO_ACCEPT: { label: "To review", tone: "ai" },
   MISSING: { label: "Needs criteria", tone: "warning" },
   ACCEPTED: { label: "Accepted", tone: "success" },
 };
@@ -743,10 +745,267 @@ export const UNIFIED_CHIPS: Record<
   { label: string; tone: "ai" | "warning" | "success" }
 > = {
   UPDATING: { label: "Updating…", tone: "ai" },
-  TO_ACCEPT: { label: "To accept", tone: "ai" },
+  TO_ACCEPT: { label: "To review", tone: "ai" },
   MISSING: { label: "Needs criteria", tone: "warning" },
   ACCEPTED: { label: "Accepted", tone: "success" },
 };
+
+/** A row a person took off the list in this visit (Review attributes, product owner, 19
+ * November 2026, approved prototype): an attribute removed, or an agent's addition not
+ * added. It stays in its place, struck through, until the page is left; the record itself
+ * is in the history. Shown only once the server has confirmed the decision. */
+export type GoneRow = {
+  id: string;
+  text: string;
+  /** Where it stood in the list, so the rows around it keep their places. */
+  at: number;
+  outcome: "REMOVED" | "NOT_ADDED";
+};
+
+export const GONE_CHIPS: Record<GoneRow["outcome"], { label: string }> = {
+  REMOVED: { label: "Removed" },
+  NOT_ADDED: { label: "Not added" },
+};
+
+/** The row's line once the server confirmed the decision. No "Undo": no call reverses an
+ * acceptance or a removal, and a second record is not an undo. */
+export const JUST_DECIDED: Record<"ACCEPTED" | GoneRow["outcome"], string> = {
+  ACCEPTED: "Accepted just now",
+  REMOVED: "Removed just now",
+  NOT_ADDED: "Not added just now",
+};
+
+/** The Attributes step's list as shown: the live rows, with the rows removed in this visit
+ * back in their places. A live row whose removal the server confirmed is not shown twice
+ * while the page reads the list again. */
+export type ReviewEntry =
+  | { kind: "row"; row: UnifiedRow }
+  | { kind: "gone"; gone: GoneRow };
+
+export function reviewList(
+  rows: readonly UnifiedRow[],
+  gone: readonly GoneRow[],
+): ReviewEntry[] {
+  const goneIds = new Set(gone.map((item) => item.id));
+  const out: ReviewEntry[] = rows
+    .filter((row) => !goneIds.has(row.item.id))
+    .map((row) => ({ kind: "row", row }));
+  for (const item of [...gone].sort((a, b) => a.at - b.at)) {
+    out.splice(Math.min(Math.max(item.at, 0), out.length), 0, {
+      kind: "gone",
+      gone: item,
+    });
+  }
+  return out;
+}
+
+/** Each entry's mark on the "Reviewed" bar: accepted, removed (or not added), or still to
+ * review. A row the server confirmed as accepted in this visit counts as accepted before the
+ * page has read it again. */
+export type ReviewMark = "ACCEPTED" | "REMOVED" | "OPEN";
+
+export function reviewMark(
+  entry: ReviewEntry,
+  accepted: ReadonlySet<string> = new Set(),
+): ReviewMark {
+  if (entry.kind === "gone") {
+    return "REMOVED";
+  }
+  return accepted.has(entry.row.item.id) ||
+    unifiedState(entry.row, false) === "ACCEPTED"
+    ? "ACCEPTED"
+    : "OPEN";
+}
+
+/** "Reviewed n/N", from the same entries the list shows: one count, one word. */
+export function reviewProgress(
+  entries: readonly ReviewEntry[],
+  accepted: ReadonlySet<string> = new Set(),
+): {
+  marks: ReviewMark[];
+  reviewed: number;
+  total: number;
+  accepted: number;
+  removed: number;
+  open: number;
+} {
+  const marks = entries.map((entry) => reviewMark(entry, accepted));
+  const count = (mark: ReviewMark) =>
+    marks.filter((each) => each === mark).length;
+  const open = count("OPEN");
+  return {
+    marks,
+    reviewed: marks.length - open,
+    total: marks.length,
+    accepted: count("ACCEPTED"),
+    removed: count("REMOVED"),
+    open,
+  };
+}
+
+/** "Reviewed 2/5": the count, and what the bar says to assistive technology. */
+export function reviewedWords(progress: { reviewed: number; total: number }): {
+  value: string;
+  label: string;
+} {
+  return {
+    value: `${progress.reviewed}/${progress.total}`,
+    label: `${progress.reviewed} of ${progress.total} attribute${progress.total === 1 ? "" : "s"} reviewed`,
+  };
+}
+
+/** What a row rests on that no person confirmed, for its origin line: "1 assumption", and
+ * "1 conflict" for one that holds it. */
+export function rowAssumptionWords(
+  item: Pick<Attribute, "assumptions">,
+): string {
+  const waiting = (item.assumptions ?? []).filter(
+    (each) =>
+      each.status === "OPEN" || each.status === "ACCEPTED_WITH_ATTRIBUTE",
+  );
+  const conflicts = waiting.filter((each) => each.kind === "CONFLICT").length;
+  const assumed = waiting.length - conflicts;
+  return [
+    assumed > 0 ? `${assumed} assumption${assumed === 1 ? "" : "s"}` : "",
+    conflicts > 0 ? `${conflicts} conflict${conflicts === 1 ? "" : "s"}` : "",
+  ]
+    .filter((part) => part !== "")
+    .join(" · ");
+}
+
+/** A row's small line: what the agent did to it, or where its wording came from and who
+ * tailored its criteria; then what it rests on that no person confirmed. */
+export function rowOriginLine(row: UnifiedRow): string {
+  const { item, kind } = row;
+  const origin = UNIFIED_ORIGINS[kind];
+  const base =
+    origin !== ""
+      ? `${origin}${item.basis === "INFERRED" && kind !== "REMOVAL" ? " · inferred" : ""}`
+      : attributeSourceLine(item);
+  const resting = kind === "REMOVAL" ? "" : rowAssumptionWords(item);
+  return resting === "" ? base : `${base} · ${resting}`;
+}
+
+/** What a row's open body offers, so the view only lays it out. Only what can succeed is
+ * offered: a control keeps at least one attribute, and a row a conflict holds is not
+ * accepted until the conflict is decided (B1l point 6). */
+export type RowOffer = {
+  /** The primary action: accept the row, write its criteria, or none. */
+  primary: "ACCEPT" | "WRITE" | null;
+  /** Edit: the attribute's wording, in the Edit attribute dialog. */
+  edit: boolean;
+  /** The quiet action, in plain words: remove the attribute (asked inline first), not add
+   * the agent's addition, or keep the wording or the attribute the agent would change. */
+  decline: {
+    label: string;
+    decision: "RETIRE" | "REJECT";
+    confirm: boolean;
+  } | null;
+  /** The agent suggests removing the attribute: accepting it is "Remove", asked inline. */
+  acceptsRemoval: boolean;
+  /** The criteria's own editor (an approved attribute's that has criteria). */
+  editCriteria: boolean;
+};
+
+export function rowOffer(
+  row: UnifiedRow,
+  options: { held: boolean; lastOne: boolean },
+): RowOffer {
+  const { kind } = row;
+  if (kind === "APPROVED") {
+    const state = criteriaState(row.item.criteria);
+    return {
+      primary:
+        state === "TO_ACCEPT" && !options.held
+          ? "ACCEPT"
+          : state === "MISSING"
+            ? "WRITE"
+            : null,
+      edit: true,
+      decline: options.lastOne
+        ? null
+        : { label: "Remove", decision: "RETIRE", confirm: true },
+      acceptsRemoval: false,
+      editCriteria: state !== "MISSING",
+    };
+  }
+  if (kind === "REMOVAL") {
+    return {
+      primary: null,
+      edit: false,
+      decline: { label: "Keep", decision: "REJECT", confirm: false },
+      acceptsRemoval: !options.held && !options.lastOne,
+      editCriteria: false,
+    };
+  }
+  return {
+    primary: options.held ? null : "ACCEPT",
+    edit: true,
+    decline: {
+      label: kind === "ADDED" ? "Don't add" : "Keep current wording",
+      decision: "REJECT",
+      confirm: false,
+    },
+    acceptsRemoval: false,
+    editCriteria: false,
+  };
+}
+
+/** The list header's muted line, beside the count (approved prototype, 19 November 2026):
+ * where the attributes came from, as their rows say it; "" for an empty list. */
+export function listBasisLine(
+  rows: readonly Pick<UnifiedRow, "item" | "target">[],
+): string {
+  const sources = new Set(
+    rows.map((row) => (row.target ?? row.item).sourceKind),
+  );
+  if (sources.size === 0) {
+    return "";
+  }
+  if (sources.has("LIBRARY")) {
+    return "Tailored from the library standard";
+  }
+  if (sources.has("RCM")) {
+    return "Tailored from the organization's RCM";
+  }
+  return "Prepared from the understanding";
+}
+
+/** The list header's count: the attributes listed, and those taken off it in this visit,
+ * so it never counts a removed row as one of the control's attributes ("2 attributes, 1
+ * removed" beside "2 attributes set"). */
+export function listCount(listed: number, gone: number): string {
+  if (listed === 0 && gone === 0) {
+    return "No attributes yet";
+  }
+  const count = `${listed} attribute${listed === 1 ? "" : "s"}`;
+  return gone > 0 ? `${count}, ${gone} removed` : count;
+}
+
+/** The inline question before a removal. */
+export function removeQuestion(letter: string): string {
+  return `Remove attribute ${letter} from this control?`;
+}
+
+/** A history row's word and note, as a person reads them (product owner, 19 November 2026:
+ * an attribute is "removed", never "retired"). The stored status and the server's notes are
+ * kept as they are; only the words shown change. A wording replaced by a newer one is
+ * "replaced", not removed: the attribute stands under its new wording. */
+export function historyWords(item: Pick<Attribute, "status" | "note">): {
+  badge: string;
+  note: string;
+} {
+  const note = item.note.replace(/^Retired\b/, "Removed");
+  if (item.status === "RETIRED") {
+    return {
+      badge: /^(?:Reworded|Replaced)\b/.test(item.note)
+        ? "replaced"
+        : "removed",
+      note,
+    };
+  }
+  return { badge: item.status.toLowerCase(), note };
+}
 
 /** What the agent did to the row, under its wording; "" for an attribute it left alone. */
 export const UNIFIED_ORIGINS: Record<UnifiedKind, string> = {
@@ -786,12 +1045,18 @@ export function acceptItems(
   }));
 }
 
-/** The first row of the unified list that waits on a person, to start open. */
+/** The first row of the unified list that waits on a person, to start open. `decided`: rows
+ * the server confirmed in this visit and the page has not read again yet, never reopened
+ * (Review attributes, 19 November 2026: once a row is decided, the next one opens). */
 export function firstUnifiedToDecide(
   rows: readonly UnifiedRow[],
+  decided: ReadonlySet<string> = new Set(),
 ): string | null {
   return (
-    rows.find((row) => unifiedState(row, false) !== "ACCEPTED")?.item.id ?? null
+    rows.find(
+      (row) =>
+        !decided.has(row.item.id) && unifiedState(row, false) !== "ACCEPTED",
+    )?.item.id ?? null
   );
 }
 
@@ -2104,7 +2369,8 @@ export function selectionPlan(
   };
 }
 
-/** The confirmation once the server has applied a decision. */
+/** The confirmation once the server has applied a decision. The RETIRE decision is said as
+ * "removed" (product owner, 19 November 2026); the decision's stored name is unchanged. */
 export function decidedNote(
   decision: AttributeDecisionKind,
   count: number,
@@ -2118,7 +2384,7 @@ export function decidedNote(
       ? "approved"
       : decision === "REJECT"
         ? "rejected"
-        : "retired";
+        : "removed";
   const kept =
     decision === "RETIRE"
       ? count === 1

@@ -267,9 +267,11 @@ describe("the control's workflow", () => {
     const understoodOnly = workflowOf(
       fresh({ setup: understood, attributes: { approved: 4, proposed: 1 } }),
     );
+    // Rewritten 19 November 2026 (owner-approved Review attributes prototype): the rows
+    // read "To review", and the node counts them in that word. Old: "1 attribute to decide".
     assert.deepEqual(state(understoodOnly, "attributes"), [
       "attention",
-      "1 attribute to decide",
+      "1 to review",
     ]);
     assert.deepEqual(
       understoodOnly.filter((step) => step.next).map((step) => step.key),
@@ -323,13 +325,16 @@ describe("the control's workflow", () => {
         ),
         "attributes",
       ),
-      ["attention", "6 to accept"],
+      // Rewritten 19 November 2026 (Review attributes): old "6 to accept", new "6 to review".
+      ["attention", "6 to review"],
     );
     // Settled: both branches open.
     const both = workflowOf(fresh({ setup: understood, attributes: settled }));
     assert.deepEqual(state(both, "attributes"), [
+      // Rewritten 19 November 2026: "Attributes set", as the step's card says it. Old:
+      // "5 attributes settled".
       "done",
-      "5 attributes settled",
+      "5 attributes set",
     ]);
     assert.deepEqual(
       both.filter((step) => step.next).map((step) => step.key),
@@ -903,9 +908,10 @@ describe("the control's workflow", () => {
         },
       }),
     );
+    // Rewritten 19 November 2026 (Review attributes). Old: "1 attribute to decide".
     assert.deepEqual(state(tailored, "attributes"), [
       "attention",
-      "1 attribute to decide",
+      "1 to review",
     ]);
     const ready = workflowOf(
       fresh({

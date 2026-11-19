@@ -244,7 +244,9 @@ describe("the control's next step (product owner, 10 November 2026)", () => {
     // waits on it too.
     assert.deepEqual(
       next.actions.map((action) => [action.key, action.title]),
-      [["attributes", "Decide the attributes"]],
+      // Rewritten 19 November 2026 (owner-approved prototype): the step's title is
+      // "Review attributes". Old: "Decide the attributes".
+      [["attributes", "Review attributes"]],
     );
     assert.equal(
       steps.find((step) => step.key === "testdesign")?.status,

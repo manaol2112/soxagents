@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   type ReactNode,
@@ -12,6 +13,7 @@ import {
 import { createPortal } from "react-dom";
 import { AttributeAssumptions, CriteriaTrail } from "./attribute-assumptions";
 import { AcceptAllCriteria, TailoredCriteria } from "./attribute-criteria";
+import { setLine } from "./attributes-handoff-model";
 import {
   ClientWalkthrough,
   WALK_ASK_EVENT,
@@ -32,7 +34,6 @@ import {
   acceptItems,
   agentRan,
   attributeLetter,
-  attributeSourceLine,
   attributesSummary,
   attributesWorking,
   BASIS_LABELS,
@@ -53,15 +54,27 @@ import {
   decidedNote,
   FREQUENCY_LABELS,
   firstUnifiedToDecide,
+  GONE_CHIPS,
+  type GoneRow,
   heldRow,
+  historyWords,
   holdWords,
+  JUST_DECIDED,
   type LibraryUpdate,
+  listBasisLine,
+  listCount,
   NATURE_LABELS,
   offersAgentRun,
   PROCEDURE_PHASES,
   type ProcessStep,
   pendingCriteriaLine,
+  removeQuestion,
+  reviewedWords,
+  reviewList,
+  reviewProgress,
   reviewUnfinished,
+  rowOffer,
+  rowOriginLine,
   runFailureLine,
   SECTION_HEADINGS,
   SET_CONFLICT_HOLDS,
@@ -71,9 +84,9 @@ import {
   type Testing,
   TYPE_LABELS,
   UNIFIED_CHIPS,
-  UNIFIED_ORIGINS,
   type Understanding,
   type UnifiedRow,
+  type UnifiedState,
   unifiedRows,
   unifiedState,
 } from "./control-context-model";
@@ -97,6 +110,21 @@ import {
 import { isTopmostDialog, useFocusTrap } from "./use-focus-trap";
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
+
+/** The Attributes step's card, which its list carries (Review attributes, product owner, 19
+ * November 2026, approved prototype): the review with its progress while a row waits on a
+ * person, or the set attributes with the one way on. */
+export type AttributesHeading =
+  | { kind: "review"; title: string; line: string }
+  | {
+      kind: "set";
+      title: string;
+      /** What follows the counts ("D&I Evidence and Scope & Sampling can start."). */
+      follows: string;
+      label: string;
+      href: string;
+      gap: string;
+    };
 
 /** One call to the context route; refreshes the page's data when it succeeds. */
 export function useAction(ids: Ids) {
@@ -215,7 +243,9 @@ const CHANGE_WORDS: Record<LibraryUpdate["items"][number]["change"], string> = {
   REWORD: "Reword",
   ADD: "Add",
   PROPOSE: "Propose",
-  RETIRE: "Retire",
+  // The control's attribute is removed by the update (product owner, 19 November 2026:
+  // "Remove", never "Retire", for a control's attribute).
+  RETIRE: "Remove",
 };
 
 /** What the current library version changes on a control copied from an older one, for
@@ -990,10 +1020,17 @@ export function AttributesPanel({
   compact = false,
   showQuestions = true,
   embedded = false,
+  heading = null,
+  agent = null,
 }: {
   ids: Ids;
   context: ControlContext;
   canAct: boolean;
+  /** The Attributes step's card, carried by the embedded list (Review attributes, 19
+   * November 2026); null where the step's frame says what the step needs. */
+  heading?: AttributesHeading | null;
+  /** What the agent did and found, as the embedded list's "How". */
+  agent?: { did: string; found: string[] } | null;
   /** Off in the guided setup, which asks the open questions in Control Understanding. Once
    * the understanding is complete nothing here sends the person back to it (B1j, 16 November
    * 2026: the warning banner that linked back to it is gone). */
@@ -1081,7 +1118,13 @@ export function AttributesPanel({
     }
   }
 
-  async function decideOne(decision: AttributeDecisionKind, item: Attribute) {
+  // True once the server has recorded it. The Attributes step's rows say it on the row
+  // itself (quiet: no note above the list).
+  async function decideOne(
+    decision: AttributeDecisionKind,
+    item: Attribute,
+    quiet = false,
+  ): Promise<boolean> {
     setDone("");
     const ok =
       decision === "RETIRE"
@@ -1096,31 +1139,36 @@ export function AttributesPanel({
             decision,
             version: item.version,
           });
-    if (ok) {
+    if (ok && !quiet) {
       setDone(decidedNote(decision, 1));
     }
+    return ok;
   }
 
   // One decision per row, or one for the set: the agent's change is approved and its
   // criteria accepted in one call. Done is said only once the server has recorded it.
-  async function acceptRows(rows: UnifiedRow[]) {
+  async function acceptRows(
+    rows: UnifiedRow[],
+    quiet = false,
+  ): Promise<boolean> {
     setDone("");
     // A row a conflict holds is never sent (B1l point 6): the server refuses the whole call.
     const items = acceptItems(rows);
     if (items.length === 0) {
-      return;
+      return false;
     }
     const ok = await action.run(
       rows.length === 1 ? `accept-${rows[0]?.item.id ?? ""}` : "accept-all",
       { intent: "attributes-accept", items },
     );
-    if (ok) {
+    if (ok && !quiet) {
       setDone(
         items.length === 1
           ? "Accepted."
           : `${items.length} attributes accepted.`,
       );
     }
+    return ok;
   }
 
   function row(item: Attribute, letter: string | null) {
@@ -1137,7 +1185,7 @@ export function AttributesPanel({
       ? [
           {
             label:
-              item.proposal === "RETIRE" ? "Approve the retirement" : "Approve",
+              item.proposal === "RETIRE" ? "Approve the removal" : "Approve",
             icon: "check",
             // B1l point 6: a conflict on it is decided first.
             unavailable: held ? holdWords(item) : null,
@@ -1151,7 +1199,7 @@ export function AttributesPanel({
         ]
       : [
           {
-            label: "Retire attribute",
+            label: "Remove attribute",
             icon: "trash",
             danger: true,
             unavailable: lastOne
@@ -1198,7 +1246,7 @@ export function AttributesPanel({
           {target !== null ? (
             <p className="ta-replaces">
               <span>
-                {item.proposal === "RETIRE" ? "Retires" : "Replaces"}{" "}
+                {item.proposal === "RETIRE" ? "Removes" : "Replaces"}{" "}
                 {targetLetter}
               </span>{" "}
               {target.text}
@@ -1337,18 +1385,20 @@ export function AttributesPanel({
           History <span className="num">{context.history.length}</span>
         </summary>
         <ul>
-          {context.history.map((attribute) => (
-            <li key={attribute.id}>
-              <Badge>{attribute.status.toLowerCase()}</Badge>{" "}
-              <span>{attribute.text}</span>
-              {attribute.decidedBy !== null ? (
-                <span className="cc-by"> · {attribute.decidedBy}</span>
-              ) : null}
-              {attribute.note !== "" ? (
-                <span className="cc-by"> · {attribute.note}</span>
-              ) : null}
-            </li>
-          ))}
+          {context.history.map((attribute) => {
+            const words = historyWords(attribute);
+            return (
+              <li key={attribute.id}>
+                <Badge>{words.badge}</Badge> <span>{attribute.text}</span>
+                {attribute.decidedBy !== null ? (
+                  <span className="cc-by"> · {attribute.decidedBy}</span>
+                ) : null}
+                {words.note !== "" ? (
+                  <span className="cc-by"> · {words.note}</span>
+                ) : null}
+              </li>
+            );
+          })}
         </ul>
       </details>
     ) : null;
@@ -1365,8 +1415,10 @@ export function AttributesPanel({
         onOpen={(next) => setOpened(next)}
         shown={shown}
         onShow={(next) => setShown(next)}
-        onDecide={(decision, item) => void decideOne(decision, item)}
-        onAccept={(rows) => void acceptRows(rows)}
+        onDecide={(decision, item) => decideOne(decision, item, true)}
+        onAccept={(rows) => acceptRows(rows, true)}
+        heading={heading}
+        agent={agent}
         onDialog={setDialog}
         onGenerate={(force = false) =>
           void action.run("generate", {
@@ -1456,7 +1508,7 @@ export function AttributesPanel({
               <p className="ta-about" id={`${aboutId}-about`}>
                 Approved attributes are the testing criteria: the test checks
                 each one on every item. A proposal changes nothing until a
-                person approves it, and a changed or retired attribute keeps its
+                person approves it, and a changed or removed attribute keeps its
                 earlier wording in the history.
               </p>
             ) : null}
@@ -1520,7 +1572,7 @@ export function AttributesPanel({
         <p className="cc-propose">
           <span>
             The agent can read the sources and the approved narrative and
-            propose attributes to add, change or retire.
+            propose attributes to add, change or remove.
           </span>
           <button
             type="button"
@@ -1589,8 +1641,8 @@ export function AttributesPanel({
                 onClick={() => void decideMany("RETIRE", plan.approved)}
               >
                 {action.busy === "many-RETIRE"
-                  ? "Retiring…"
-                  : `Retire ${plan.approved.length}`}
+                  ? "Removing…"
+                  : `Remove ${plan.approved.length}`}
               </button>
             ) : null}
             <button
@@ -1667,14 +1719,15 @@ export function AttributesPanel({
 }
 
 /**
- * The Attributes step's work area (product owner, 11 November 2026, approved preview). The
- * step's frame names the step, its status, the one decision and the agent's line, so none
- * of them is repeated here: a title row with the count and the quiet actions, one list
- * where each attribute is a row that opens on request (the first that waits on a person is
- * open), the agent's proposals in the same list with their own chip, the selection's
- * toolbar only while there are proposals, and the settled detail folded below. Every
- * decision is the panel's own, so the same server calls, versions and audit apply, and each
- * shows success only once the server has confirmed it.
+ * The Attributes step's work area: Review attributes (product owner, 19 November 2026,
+ * approved prototype; first built 11 November 2026). The step's card says what the step is
+ * for and how far the review has come (Reviewed n/N, one segment per attribute), or, once
+ * nothing is left to review, that the attributes are set, with the one way on. Under it, one
+ * list: each attribute a row that opens on request, the first that waits on a person open;
+ * a row to review is accepted, edited or removed, and once the server has confirmed the
+ * decision the row says so and the next one opens. The agent's proposals sit in the same
+ * list, decided in the same pattern. Every decision is the panel's own, so the same server
+ * calls, versions and audit apply, and each shows success only once the server confirmed it.
  */
 function EmbeddedAttributes({
   ids,
@@ -1691,6 +1744,8 @@ function EmbeddedAttributes({
   onAccept,
   onDialog,
   onGenerate,
+  heading,
+  agent,
   status,
   folds,
   after,
@@ -1705,17 +1760,26 @@ function EmbeddedAttributes({
   /** The rows the person opened, or null until they open or close one: the first row that
    * waits on them is open until then. */
   open: ReadonlySet<string> | null;
-  onOpen: (next: Set<string>) => void;
+  onOpen: (next: Set<string> | null) => void;
   /** The rows whose standard's requirement, or previous wording, is shown. */
   shown: ReadonlySet<string>;
   onShow: (next: Set<string>) => void;
-  /** Rejects an agent's change, or retires an approved attribute. */
-  onDecide: (decision: AttributeDecisionKind, item: Attribute) => void;
-  /** One decision per row: approves the agent's change and accepts its criteria. */
-  onAccept: (rows: UnifiedRow[]) => void;
+  /** Rejects an agent's change, or removes an approved attribute; true once the server
+   * recorded it. */
+  onDecide: (
+    decision: AttributeDecisionKind,
+    item: Attribute,
+  ) => Promise<boolean>;
+  /** One decision per row: approves the agent's change and accepts its criteria; true once
+   * the server recorded it. */
+  onAccept: (rows: UnifiedRow[]) => Promise<boolean>;
   onDialog: (state: AttributeDialogState) => void;
   /** Asks the agent to read the sources and propose attributes. */
   onGenerate: (force?: boolean) => void;
+  /** The step's card, when this list carries it. */
+  heading: AttributesHeading | null;
+  /** What the agent did and found: the list header's "How". */
+  agent: { did: string; found: string[] } | null;
   status: ReactNode;
   folds: ReactNode;
   after: ReactNode;
@@ -1741,6 +1805,20 @@ function EmbeddedAttributes({
   const pending = pendingCriteriaLine(context);
   // The row whose criteria form "Write criteria" opened.
   const [writing, setWriting] = useState<string | null>(null);
+  // What this visit decided, once the server confirmed it: the rows accepted (said on the
+  // row until the page reads the list again, and after), the rows taken off the list (kept
+  // in their places, struck through), the row whose removal is being asked, the "How" open.
+  const [accepted, setAccepted] = useState<ReadonlySet<string>>(new Set());
+  const [gone, setGone] = useState<readonly GoneRow[]>([]);
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [said, setSaid] = useState("");
+  const [howOpen, setHowOpen] = useState(false);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (confirming !== null) {
+      cancelRef.current?.focus();
+    }
+  }, [confirming]);
   // Once the row's criteria are written (or nothing is missing), its form opens only on
   // the person's own Edit again.
   const toWriteId = toWrite?.id ?? null;
@@ -1770,25 +1848,33 @@ function EmbeddedAttributes({
     return () => window.clearInterval(timer);
   }, [running, router]);
   const locked = busy || running;
-  const toAccept = acceptableRows(rows);
+  const entries = reviewList(rows, gone);
+  const progress = reviewProgress(entries, accepted);
+  const reviewed = reviewedWords(progress);
+  // The rows still to decide are the live ones not accepted in this visit.
+  const live = entries.flatMap((entry) =>
+    entry.kind === "row" && !accepted.has(entry.row.item.id) ? [entry.row] : [],
+  );
+  const toAccept = acceptableRows(live);
   // "Accept all" leaves out a row a conflict holds, and says so, and how many assumptions not
-  // confirmed go with it (B1l point 6).
-  const allRows = acceptAllRows(rows);
+  // confirmed go with it (B1l point 6), beside it.
+  const allRows = acceptAllRows(live);
   // Each unconfirmed assumption counted once, and the set's too when the acceptance leaves
   // nothing else to accept (the server accepts those with it); a conflict on the set holds
   // every row, and the line says so.
   const setHeldNow = context.setHeldByConflict === true;
   const allWords = acceptAllWords(allRows, toAccept.length - allRows.length, {
     assumptions: context.setAssumptions ?? [],
-    remaining: notYetAccepted(rows),
+    remaining: notYetAccepted(live),
     held: setHeldNow,
+    reviewed: progress.reviewed,
   });
   const allNote = acceptAllNote(allWords);
-  // Shown under the bar whenever Accept all is, and on its own when a conflict on the set
-  // holds everything (Accept all is then not offered).
+  const offersAll = allRows.length >= 2 && confirming === null;
+  // Shown beside Accept all whenever it is, and on its own when a conflict on the set holds
+  // everything (Accept all is then not offered).
   const showAllNote =
-    allNote !== "" &&
-    (allRows.length >= 2 || (setHeldNow && toAccept.length > 0));
+    allNote !== "" && (offersAll || (setHeldNow && toAccept.length > 0));
   // Before the understanding is complete (B1j): said quietly, with no warning and no way
   // back; once it is, nothing on this step sends the person to Control Understanding.
   // From the completion alone (q_ui4, 19 November 2026): the pass reads DONE while questions
@@ -1799,7 +1885,8 @@ function EmbeddedAttributes({
     context.questionPass !== null &&
     context.questionPass !== undefined;
   const unreviewed = reviewUnfinished(context.reviewSummary);
-  const first = running ? null : firstUnifiedToDecide(rows);
+  const decided = new Set([...accepted, ...gone.map((item) => item.id)]);
+  const first = running ? null : firstUnifiedToDecide(rows, decided);
   const opened = open ?? new Set(first !== null ? [first] : []);
   // A link to an attribute (the D&I point's "Confirm or change the assumption", B1l point
   // 6) opens its row once and brings it into view, where its assumption is decided.
@@ -1822,8 +1909,13 @@ function EmbeddedAttributes({
         ?.scrollIntoView({ block: "start" }),
     );
   }, [rows, opened, onOpen]);
-  // A control keeps at least one attribute: the last cannot be retired.
-  const lastOne = approved <= 1;
+  // A control keeps at least one attribute: the last cannot be removed. Each row but an
+  // addition stands for one approved attribute (a rewording or a removal, for the one it
+  // names), and a row removed in this visit no longer does.
+  const lastOne =
+    entries.filter(
+      (entry) => entry.kind === "row" && entry.row.kind !== "ADDED",
+    ).length <= 1;
   const flip = (set: ReadonlySet<string>, each: string): Set<string> => {
     const next = new Set(set);
     if (next.has(each)) {
@@ -1833,10 +1925,113 @@ function EmbeddedAttributes({
     }
     return next;
   };
+  // The decided row's buttons close with it: the focus moves to the row that opens next
+  // (its wording), or to the list's count once nothing is left to review, never to the page.
+  const [moved, setMoved] = useState(0);
+  const countRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (moved === 0) {
+      return;
+    }
+    const next =
+      first !== null
+        ? document
+            .getElementById(attributeAnchor(first))
+            ?.querySelector<HTMLButtonElement>("button.tar-head")
+        : null;
+    (next ?? countRef.current)?.focus();
+  }, [moved, first]);
+
+  // Once the server confirmed a decision: the row says so, and the next to review opens
+  // (the list's first that waits, past the rows decided in this visit).
+  function settle(each: UnifiedRow, outcome: "ACCEPTED" | GoneRow["outcome"]) {
+    const at = entries.findIndex(
+      (entry) => entry.kind === "row" && entry.row.item.id === each.item.id,
+    );
+    if (outcome === "ACCEPTED") {
+      setAccepted((before) => new Set([...before, each.item.id]));
+    } else {
+      setGone((before) => [
+        ...before,
+        {
+          id: each.item.id,
+          text:
+            each.kind === "REMOVAL" && each.target !== null
+              ? each.target.text
+              : each.item.text,
+          at: Math.max(at, 0),
+          outcome,
+        },
+      ]);
+    }
+    setConfirming(null);
+    setSaid(
+      `Attribute ${each.letter}: ${JUST_DECIDED[outcome].toLowerCase()}.`,
+    );
+    onOpen(null);
+    setMoved((count) => count + 1);
+  }
+  async function accept(each: UnifiedRow) {
+    if (await onAccept([each])) {
+      settle(each, each.kind === "REMOVAL" ? "REMOVED" : "ACCEPTED");
+    }
+  }
+  async function decline(each: UnifiedRow, decision: "RETIRE" | "REJECT") {
+    if (await onDecide(decision, each.item)) {
+      if (decision === "RETIRE") {
+        settle(each, "REMOVED");
+      } else if (each.kind === "ADDED") {
+        settle(each, "NOT_ADDED");
+      } else {
+        // The agent's change is rejected: the attribute stands as it was.
+        setConfirming(null);
+        setSaid(`Attribute ${each.letter}: kept as it was.`);
+        onOpen(null);
+        setMoved((count) => count + 1);
+      }
+    }
+  }
+  async function acceptAll() {
+    const sent = allRows;
+    if (await onAccept(sent)) {
+      setAccepted(
+        (before) => new Set([...before, ...sent.map((row) => row.item.id)]),
+      );
+      setConfirming(null);
+      setSaid(`${sent.length} attributes accepted.`);
+      onOpen(new Set());
+      setMoved((count) => count + 1);
+    }
+  }
+
+  function goneRow(item: GoneRow) {
+    return (
+      <li key={item.id} className="tar is-gone">
+        <div className="tar-top">
+          <span className="tar-head is-static">
+            <span className="tar-letter" aria-hidden="true">
+              <UiIcon name="x" size={12} />
+            </span>
+            <span className="tar-name">
+              <span className="tar-text">{item.text}</span>
+              <span className="tar-source">{JUST_DECIDED[item.outcome]}</span>
+            </span>
+          </span>
+          <span className="tar-chip tone-neutral">
+            {GONE_CHIPS[item.outcome].label}
+          </span>
+          <span className="tar-caret is-empty" aria-hidden="true" />
+        </div>
+      </li>
+    );
+  }
 
   function row(each: UnifiedRow) {
     const { item, kind, target, letter } = each;
-    const state = unifiedState(each, running);
+    const justAccepted = accepted.has(item.id);
+    const state: UnifiedState = justAccepted
+      ? "ACCEPTED"
+      : unifiedState(each, running);
     const held = heldRow(each);
     const chip = UNIFIED_CHIPS[state];
     const isOpen = opened.has(item.id);
@@ -1845,13 +2040,16 @@ function EmbeddedAttributes({
     const previousShown = shown.has(previousKey);
     const name = `attribute ${letter}`;
     const bodyId = `${id}-${item.id}`;
-    const origin = UNIFIED_ORIGINS[kind];
+    const offer = rowOffer(each, { held, lastOne });
+    const acting = canAct && !running && !justAccepted;
+    const asking = confirming === item.id;
+    const origin = `${rowOriginLine(each)}${justAccepted ? ` · ${JUST_DECIDED.ACCEPTED}` : ""}`;
     // What the agent followed in the confirmed understanding and what it set aside: shown,
     // never silent (12 November 2026).
     const basis =
       kind === "REMOVAL" ? null : basisLines(item.understandingBasis);
-    // What the agent assumed on the attribute after the understanding was complete, and
-    // where its criteria came from (B1j): between the criteria and the row's actions.
+    // What the agent assumed on the attribute after the understanding was complete, as rows
+    // of its criteria ("Assumes … Unconfirmed"), and where its criteria came from (B1j).
     const notes =
       kind === "REMOVAL" ? null : (
         <>
@@ -1862,6 +2060,7 @@ function EmbeddedAttributes({
             locked={locked}
             onContext={onContext}
             label={`The agent's assumptions on ${name}`}
+            layout="row"
           />
           <CriteriaTrail
             ids={ids}
@@ -1876,98 +2075,232 @@ function EmbeddedAttributes({
       criteria.condition !== "" ||
       criteria.passCriteria !== "" ||
       criteria.failCriteria !== "";
-    const standard =
+    const standardLink =
       item.definition !== null ? (
         <button
           type="button"
-          className="btn btn-ghost btn-sm"
+          className="tar-link"
           aria-expanded={standardShown}
           aria-controls={`${bodyId}-standard`}
           onClick={() => onShow(flip(shown, item.id))}
         >
-          {standardShown ? "Hide the standard" : "Show the standard"}
+          {standardShown ? "Hide the standard" : "Compare with standard"}
         </button>
       ) : null;
-    const more =
-      canAct && !running ? (
-        kind === "APPROVED" ? (
-          <RowMenu
-            label={name}
-            items={[
-              {
-                label: "Edit wording",
-                icon: "compose",
-                onSelect: () =>
+    const previousLink =
+      kind === "REWORDED" && target !== null ? (
+        <button
+          type="button"
+          className="tar-link"
+          aria-expanded={previousShown}
+          aria-controls={`${bodyId}-previous`}
+          onClick={() => onShow(flip(shown, previousKey))}
+        >
+          {previousShown ? "Hide the previous wording" : "Previous wording"}
+        </button>
+      ) : null;
+    const removing = busyKey === `retire-${item.id}`;
+    const accepting = busyKey === `accept-${item.id}`;
+    // The row's one action row: Accept, Edit, Remove, then the quiet links on the right; or,
+    // while a removal is asked, the question with Cancel and Remove.
+    const acts = (
+      criteriaForm: { edit: () => void; formId: string } | null,
+    ) => {
+      if (!acting) {
+        return standardLink !== null || previousLink !== null ? (
+          <div className="tar-acts">
+            <span className="tar-acts-gap" />
+            {previousLink}
+            {standardLink}
+          </div>
+        ) : null;
+      }
+      if (asking) {
+        return (
+          <fieldset
+            className="tar-acts tar-confirm"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.stopPropagation();
+                setConfirming(null);
+              }
+            }}
+          >
+            <legend className="tar-confirm-text">
+              {removeQuestion(letter)}
+            </legend>
+            <span className="tar-confirm-acts">
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                disabled={locked}
+                // Focus lands on the question's safe answer.
+                ref={cancelRef}
+                onClick={() => setConfirming(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger btn-sm"
+                disabled={locked}
+                onClick={() =>
+                  void (kind === "REMOVAL"
+                    ? accept(each)
+                    : decline(each, "RETIRE"))
+                }
+              >
+                {removing || accepting ? "Removing…" : "Remove"}
+              </button>
+            </span>
+          </fieldset>
+        );
+      }
+      return (
+        <>
+          {held ? <p className="tc-held">{holdWords(item)}</p> : null}
+          <div className="tar-acts">
+            {offer.primary === "ACCEPT" ? (
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={locked}
+                onClick={() => void accept(each)}
+              >
+                {accepting ? "Accepting…" : "Accept"}
+              </button>
+            ) : null}
+            {offer.primary === "WRITE" && criteriaForm !== null ? (
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={locked}
+                aria-controls={criteriaForm.formId}
+                onClick={criteriaForm.edit}
+              >
+                Write criteria
+              </button>
+            ) : null}
+            {offer.acceptsRemoval ? (
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={locked}
+                onClick={() => setConfirming(item.id)}
+              >
+                Remove
+              </button>
+            ) : null}
+            {offer.edit ? (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                disabled={locked}
+                onClick={() =>
                   onDialog({
-                    mode: "edit",
+                    mode: kind === "APPROVED" ? "edit" : "review",
                     attribute: item,
                     letter,
-                  }),
-              },
-              {
-                label: "Retire attribute",
-                icon: "trash",
-                danger: true,
-                unavailable: lastOne
-                  ? "A control keeps at least one attribute."
-                  : null,
-                onSelect: () => onDecide("RETIRE", item),
-              },
-            ]}
-          />
-        ) : (
-          <RowMenu
-            label={name}
-            items={[
-              {
-                label:
-                  kind === "REMOVAL"
-                    ? "Keep the attribute (reject)"
-                    : "Reject the agent's change",
-                icon: "x",
-                onSelect: () => onDecide("REJECT", item),
-              },
-            ]}
-          />
-        )
-      ) : null;
+                  })
+                }
+              >
+                Edit
+              </button>
+            ) : null}
+            {offer.decline !== null ? (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={locked}
+                onClick={() => {
+                  const choice = offer.decline;
+                  if (choice === null) {
+                    return;
+                  }
+                  if (choice.confirm) {
+                    setConfirming(item.id);
+                  } else {
+                    void decline(each, choice.decision);
+                  }
+                }}
+              >
+                {busyKey === `decide-${item.id}`
+                  ? "Saving…"
+                  : offer.decline.label}
+              </button>
+            ) : null}
+            <span className="tar-acts-gap" />
+            {offer.editCriteria && criteriaForm !== null ? (
+              <button
+                type="button"
+                className="tar-link"
+                disabled={locked}
+                aria-controls={criteriaForm.formId}
+                onClick={criteriaForm.edit}
+              >
+                Edit criteria
+              </button>
+            ) : null}
+            {previousLink}
+            {standardLink}
+          </div>
+        </>
+      );
+    };
+    const quickAccept =
+      acting && !isOpen && state === "TO_ACCEPT" && offer.primary === "ACCEPT";
     return (
       <li
         key={item.id}
         id={attributeAnchor(item.id)}
         className={`tar is-${state.toLowerCase()}${kind === "REMOVAL" ? " is-removal" : ""}${isOpen ? " is-open" : ""}`}
       >
-        <button
-          type="button"
-          className="tar-head"
-          aria-expanded={isOpen}
-          aria-controls={bodyId}
-          onClick={() => onOpen(flip(opened, item.id))}
-        >
-          <span className="tar-letter" aria-hidden="true">
-            {letter}
-          </span>
-          <span className="tar-name">
-            <span className="sr-only">{`Attribute ${letter}: `}</span>
-            <span className="tar-text">
-              {kind === "REMOVAL" && target !== null ? target.text : item.text}
+        <div className="tar-top">
+          <button
+            type="button"
+            className="tar-head"
+            aria-expanded={isOpen}
+            aria-controls={bodyId}
+            onClick={() => {
+              setConfirming(null);
+              onOpen(flip(opened, item.id));
+            }}
+          >
+            <span className="tar-letter" aria-hidden="true">
+              {letter}
             </span>
-            <span className="tar-source">
-              {origin !== "" ? (
-                <span className="tar-origin">{origin}</span>
-              ) : (
-                attributeSourceLine(item)
-              )}
-              {origin !== "" && item.basis === "INFERRED" && kind !== "REMOVAL"
-                ? " · inferred"
-                : ""}
+            <span className="tar-name">
+              <span className="sr-only">{`Attribute ${letter}: `}</span>
+              <span className="tar-text">
+                {kind === "REMOVAL" && target !== null
+                  ? target.text
+                  : item.text}
+              </span>
+              <span className="tar-source">
+                <span
+                  className={kind !== "APPROVED" ? "tar-origin" : undefined}
+                >
+                  {origin}
+                </span>
+              </span>
             </span>
-          </span>
+          </button>
+          {quickAccept ? (
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm tar-quick"
+              disabled={locked}
+              aria-label={`Accept attribute ${letter}`}
+              onClick={() => void accept(each)}
+            >
+              {accepting ? "Accepting…" : "Accept"}
+            </button>
+          ) : null}
           <span className={`tar-chip tone-${chip.tone}`}>{chip.label}</span>
           <span className="tar-caret" aria-hidden="true">
             <UiIcon name="chevron" size={14} />
           </span>
-        </button>
+        </div>
         {isOpen ? (
           <div className="tar-body" id={bodyId}>
             {kind === "REWORDED" && target !== null && previousShown ? (
@@ -2002,14 +2335,7 @@ function EmbeddedAttributes({
                 startEditing={writing === item.id}
                 flat
                 notes={notes}
-                extra={
-                  standard !== null || more !== null ? (
-                    <>
-                      {standard}
-                      {more}
-                    </>
-                  ) : null
-                }
+                actions={(form) => acts(form)}
               />
             ) : (
               <div className="tc is-flat">
@@ -2044,59 +2370,7 @@ function EmbeddedAttributes({
                   </p>
                 )}
                 {notes}
-                {/* B1l point 6: a conflict holds the acceptance until it is decided. */}
-                {canAct && held ? (
-                  <p className="tc-held">{holdWords(item)}</p>
-                ) : null}
-                <div className="tc-row-acts">
-                  {canAct ? (
-                    <>
-                      <button
-                        type="button"
-                        className="btn btn-secondary btn-sm"
-                        disabled={locked || held}
-                        onClick={() => onAccept([each])}
-                      >
-                        {busyKey === `accept-${item.id}`
-                          ? "Accepting…"
-                          : kind === "REMOVAL"
-                            ? "Accept the removal"
-                            : "Accept"}
-                      </button>
-                      {kind !== "REMOVAL" ? (
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-sm"
-                          disabled={locked}
-                          onClick={() =>
-                            onDialog({
-                              mode: "review",
-                              attribute: item,
-                              letter,
-                            })
-                          }
-                        >
-                          Edit wording
-                        </button>
-                      ) : null}
-                    </>
-                  ) : null}
-                  {kind === "REWORDED" && target !== null ? (
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-sm"
-                      aria-expanded={previousShown}
-                      aria-controls={`${bodyId}-previous`}
-                      onClick={() => onShow(flip(shown, previousKey))}
-                    >
-                      {previousShown
-                        ? "Hide the previous wording"
-                        : "Show the previous wording"}
-                    </button>
-                  ) : null}
-                  {standard}
-                  {more}
-                </div>
+                {acts(null)}
               </div>
             )}
             {standardShown && item.definition !== null ? (
@@ -2114,37 +2388,117 @@ function EmbeddedAttributes({
     );
   }
 
+  const basisLine = listBasisLine(rows);
+  const howId = `${id}-how`;
+  const removedNow = gone.filter((item) => item.outcome === "REMOVED").length;
   return (
     <div className="cc-attributes ta is-embedded" aria-busy={locked}>
+      {heading !== null && heading.kind === "review" ? (
+        <section className="tar-review" aria-labelledby={`${id}-review`}>
+          <div className="tar-review-text">
+            <h3 id={`${id}-review`}>{heading.title}</h3>
+            <p>{heading.line}</p>
+          </div>
+          {progress.total > 0 ? (
+            <div className="tar-progress">
+              <p className="tar-progress-line">
+                <span>Reviewed</span>
+                <span className="tar-progress-value">{reviewed.value}</span>
+              </p>
+              <div
+                className="tar-segments"
+                role="img"
+                aria-label={reviewed.label}
+                style={{
+                  gridTemplateColumns: `repeat(${progress.total}, minmax(0, 1fr))`,
+                }}
+              >
+                {progress.marks.map((mark, index) => (
+                  <span
+                    // The bar's segments are its entries' places, in order.
+                    // biome-ignore lint/suspicious/noArrayIndexKey: one per place
+                    key={index}
+                    className={`is-${mark.toLowerCase()}`}
+                  />
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+      {heading !== null && heading.kind === "set" ? (
+        <>
+          <section className="tar-review is-set" aria-labelledby={`${id}-set`}>
+            <span className="tar-review-tick" aria-hidden="true">
+              <UiIcon name="check" size={15} />
+            </span>
+            <div className="tar-review-text">
+              <h3 id={`${id}-set`}>{heading.title}</h3>
+              <p>{setLine(approved, removedNow, heading.follows)}</p>
+            </div>
+            <Link
+              className="btn btn-primary tar-review-act"
+              href={heading.href}
+              scroll={false}
+            >
+              {heading.label}
+              <UiIcon name="arrow" size={14} />
+            </Link>
+          </section>
+          {heading.gap !== "" ? (
+            <p className="ah-coverage is-gap">
+              <UiIcon name="risk" size={13} />
+              <span>{heading.gap}</span>
+            </p>
+          ) : null}
+        </>
+      ) : null}
       <div className="ta-bar">
-        <h4 className="ta-section-title">
-          {rows.length === 0
-            ? "No attributes yet"
-            : `${rows.length} attribute${rows.length === 1 ? "" : "s"}`}
-        </h4>
+        <div className="tar-bar-title">
+          <h4 className="tar-count" ref={countRef} tabIndex={-1}>
+            {listCount(
+              entries.filter((entry) => entry.kind === "row").length,
+              removedNow,
+            )}
+          </h4>
+          {basisLine !== "" || agent !== null ? (
+            <span className="tar-basis">
+              {basisLine}
+              {agent !== null ? (
+                <>
+                  {basisLine !== "" ? " · " : ""}
+                  <button
+                    type="button"
+                    className="tas-link"
+                    aria-expanded={howOpen}
+                    aria-controls={howId}
+                    onClick={() => setHowOpen((value) => !value)}
+                  >
+                    How
+                  </button>
+                </>
+              ) : null}
+            </span>
+          ) : null}
+        </div>
         {canAct ? (
           <span className="ta-bar-acts">
-            {allRows.length >= 2 ? (
-              <button
-                type="button"
-                className="btn btn-secondary btn-sm"
-                disabled={locked}
-                title="Accepts each attribute as the agent prepared it: its change and its criteria, each recorded on its own."
-                aria-describedby={
-                  allNote !== "" ? `ta-accept-note-${ids.controlId}` : undefined
-                }
-                onClick={() => onAccept(allRows)}
-              >
-                {busyKey === "accept-all" ? "Accepting…" : allWords.label}
-              </button>
-            ) : null}
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={locked}
+              onClick={() => onDialog({ mode: "add" })}
+            >
+              <UiIcon name="plus" size={13} />
+              Add
+            </button>
             {offersAgentRun(
               agentRan(context),
               context.attributesRerunUseful,
             ) ? (
               <button
                 type="button"
-                className="btn btn-ghost btn-sm ta-quiet"
+                className="btn btn-ghost btn-sm"
                 disabled={locked}
                 onClick={() => onGenerate()}
               >
@@ -2156,23 +2510,41 @@ function EmbeddedAttributes({
                     : "Propose with the agent"}
               </button>
             ) : null}
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm ta-quiet"
-              disabled={locked}
-              onClick={() => onDialog({ mode: "add" })}
-            >
-              <UiIcon name="plus" size={13} />
-              Add attribute
-            </button>
+            {showAllNote ? (
+              <span
+                className="tar-all-note"
+                id={`ta-accept-note-${ids.controlId}`}
+              >
+                {allNote}
+              </span>
+            ) : null}
+            {offersAll ? (
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                disabled={locked}
+                aria-describedby={
+                  showAllNote ? `ta-accept-note-${ids.controlId}` : undefined
+                }
+                onClick={() => void acceptAll()}
+              >
+                {busyKey === "accept-all" ? "Accepting…" : allWords.label}
+              </button>
+            ) : null}
           </span>
         ) : null}
       </div>
-      {canAct && showAllNote ? (
-        <p className="ta-accept-note" id={`ta-accept-note-${ids.controlId}`}>
-          {allNote.charAt(0).toUpperCase()}
-          {allNote.slice(1)}
-        </p>
+      {agent !== null ? (
+        <div className="tar-how" id={howId} hidden={!howOpen}>
+          <p>{agent.did}</p>
+          {agent.found.length > 0 ? (
+            <ul>
+              {agent.found.map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
       ) : null}
       {working !== null ? (
         <p className="ta-working">
@@ -2260,6 +2632,11 @@ function EmbeddedAttributes({
         </p>
       ) : null}
       {status}
+      {/* What a decision on a row did, once the server confirmed it, for assistive
+          technology; the row itself says it on screen. */}
+      <p className="sr-only" role="status">
+        {said}
+      </p>
       {/* The agent's assumptions on the whole set (B1j), above the list, in the same form. */}
       <AttributeAssumptions
         ids={ids}
@@ -2270,8 +2647,10 @@ function EmbeddedAttributes({
         label="The agent's assumptions on the attributes as a set"
       />
       <ul className="tar-list" aria-label="Testing attributes">
-        {rows.map((each) => row(each))}
-        {rows.length === 0 ? (
+        {entries.map((entry) =>
+          entry.kind === "row" ? row(entry.row) : goneRow(entry.gone),
+        )}
+        {entries.length === 0 ? (
           <li className="tar-empty">
             {running
               ? "The agents are preparing the attributes."
@@ -2287,7 +2666,7 @@ function EmbeddedAttributes({
             one on every item, against its pass and fail criteria. The agents
             prepare them from the understanding and a reviewer agent checks
             them; nothing they wrote counts until a person accepts its row, and
-            a changed or retired attribute keeps its earlier wording in the
+            a changed or removed attribute keeps its earlier wording in the
             history.
           </p>
           {canAct &&

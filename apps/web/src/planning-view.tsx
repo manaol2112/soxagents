@@ -5323,7 +5323,7 @@ function AttributesTable({
           <span>
             Remove attribute{" "}
             {rows.find((row) => row.id === removing)?.number ?? ""} from the
-            plan? It is kept on record as retired.
+            plan? It stays in the history.
           </span>
           <span className="pa-confirm">
             <button

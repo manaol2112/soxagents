@@ -341,44 +341,50 @@ describe("a review that could not run", () => {
 
 describe("the Attributes step", () => {
   it("leaves a held attribute out of Accept all and says what goes with it", () => {
-    assert.match(panel, /const allRows = acceptAllRows\(rows\);/);
-    // Rewritten (B1l review fixes: "Accept all N" miscounted). Old: acceptAllWords(allRows,
-    // heldOut). New: the same, with the set's assumptions and every row not yet accepted, so
-    // each unconfirmed assumption is counted once and the set's are counted when the
-    // acceptance leaves nothing else to accept; and whether a conflict holds the set.
+    // Rewritten 19 November 2026 (owner-approved Review attributes prototype). Old: the
+    // rows were the step's list, and the note was a line under the bar. New: the rows still
+    // to decide are the list's live rows not accepted in this visit, Accept all says how
+    // many rows are already reviewed ("Accept remaining n"), and the note sits beside the
+    // button, inside the actions only a person who may decide sees. Kept: the set's
+    // assumptions and every row not yet accepted are counted (B1l review fixes), and
+    // whether a conflict holds the set.
+    assert.match(panel, /const allRows = acceptAllRows\(live\);/);
     assert.match(
       panel,
-      /acceptAllWords\(allRows, toAccept\.length - allRows\.length, \{\s*assumptions: context\.setAssumptions \?\? \[\],\s*remaining: notYetAccepted\(rows\),\s*held: setHeldNow,\s*\}\)/,
+      /acceptAllWords\(allRows, toAccept\.length - allRows\.length, \{\s*assumptions: context\.setAssumptions \?\? \[\],\s*remaining: notYetAccepted\(live\),\s*held: setHeldNow,\s*reviewed: progress\.reviewed,\s*\}\)/,
     );
-    assert.match(panel, /\{canAct && showAllNote \? \(/);
-    assert.match(panel, /onClick=\{\(\) => onAccept\(allRows\)\}/);
+    assert.match(panel, /\{canAct \? \(\s*<span className="ta-bar-acts">/);
+    assert.match(
+      panel,
+      /const sent = allRows;\s*if \(await onAccept\(sent\)\)/,
+    );
     assert.match(
       panel,
       /\{busyKey === "accept-all" \? "Accepting…" : allWords\.label\}/,
     );
     assert.match(
       panel,
-      /<p className="ta-accept-note" id=\{`ta-accept-note-\$\{ids\.controlId\}`\}>\s*\{allNote\.charAt\(0\)\.toUpperCase\(\)\}\s*\{allNote\.slice\(1\)\}/,
+      /\{showAllNote \? \(\s*<span\s*className="tar-all-note"\s*id=\{`ta-accept-note-\$\{ids\.controlId\}`\}\s*>\s*\{allNote\}/,
     );
     // Nothing held is ever sent, whichever button is pressed.
     assert.match(
       panel,
-      /const items = acceptItems\(rows\);\s*if \(items\.length === 0\) \{\s*return;\s*\}/,
+      /const items = acceptItems\(rows\);\s*if \(items\.length === 0\) \{\s*return false;\s*\}/,
     );
   });
 
   it("turns Accept off on a held attribute, with the reason", () => {
+    // Rewritten 19 November 2026 (Review attributes: offer only what can succeed). Old: the
+    // row's Accept was shown turned off (disabled={locked || held}). New: a held row offers
+    // no Accept at all (rowOffer, tests/attributes-review-model.test.ts), and says why in the
+    // same words. Kept (B1l review fixes): the reason is holdWords(item), the attribute's own
+    // conflict or the set's, shown only to a person who may decide (acting).
+    assert.match(panel, /const offer = rowOffer\(each, \{ held, lastOne \}\);/);
     assert.match(
       panel,
-      /disabled=\{locked \|\| held\}\s*onClick=\{\(\) => onAccept\(\[each\]\)\}/,
+      /\{held \? <p className="tc-held">\{holdWords\(item\)\}<\/p> : null\}/,
     );
-    // Rewritten (B1l review fixes: a conflict that names no attribute holds the whole set,
-    // and says so). Old: the reason was always CONFLICT_HOLDS. New: holdWords(item), the
-    // attribute's own conflict or the set's.
-    assert.match(
-      panel,
-      /\{canAct && held \? \(\s*<p className="tc-held">\{holdWords\(item\)\}<\/p>\s*\) : null\}/,
-    );
+    assert.match(panel, /const acting = canAct && !running && !justAccepted;/);
     assert.match(criteria, /const held = item\.heldByConflict === true;/);
     assert.equal(
       criteria.match(/disabled=\{action\.pending \|\| held\}/g)?.length,
