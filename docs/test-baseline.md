@@ -17,8 +17,10 @@ all passed, in 32 min 42 s. From the testing plan of 19 November the same checks
 parallel jobs, with the critical tier in four parts, the fast tier's 26 other files (which no
 CI run had reached) and the web app's production build added
 (docs/test-strategy.md §1, G4); the required check is still `baseline`, which passes only
-when every part passed. Record here the first run of the parallel gate on GitHub when it
-happens: until then its timing is an estimate (about 10 to 15 minutes).
+when every part passed. Its first run on GitHub (pull request #10, commit `ed63acb`,
+19 November 2026) passed every part in 11 min 36 s from start to end: critical parts
+9 min 28 s, 8 min 40 s, 10 min 17 s and 11 min 24 s; fast only 7 min 20 s; Node tests
+1 min 50 s; lint and types 1 min 14 s; web build 53 s; `secrets` 22 s, `dependencies` 8 s.
 
 **Local runs on Windows.** Every failure in the local pytest logs of 18 and 19 November 2026
 was an environment error, not a product defect: `psycopg.OperationalError` "Address already
