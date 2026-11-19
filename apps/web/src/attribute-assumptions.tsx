@@ -32,6 +32,7 @@ import {
 } from "./understanding-once-model";
 import {
   assumptionLead,
+  assumptionRowWords,
   assumptionText,
   CONFLICT_LEAD,
   changePrompt,
@@ -57,6 +58,7 @@ export function AttributeAssumptions({
   locked,
   onContext,
   label,
+  layout = "card",
 }: {
   ids: Ids;
   items: readonly Assumption[] | undefined;
@@ -68,6 +70,9 @@ export function AttributeAssumptions({
   onContext: (context: ControlContext) => void;
   /** What the list is about, for assistive technology. */
   label: string;
+  /** "row": each one a row of the attribute's criteria, "Assumes … Unconfirmed", in the
+   * criteria's own columns (Review attributes, 19 November 2026, approved prototype). */
+  layout?: "card" | "row";
 }) {
   // Open, or accepted with the attribute and not confirmed (B1l point 6: the D&I point links
   // here, so it is confirmed or changed here); the rest as one quiet line each.
@@ -77,7 +82,10 @@ export function AttributeAssumptions({
     return null;
   }
   return (
-    <ul className="tas-list" aria-label={label}>
+    <ul
+      className={layout === "row" ? "tas-list is-rows" : "tas-list"}
+      aria-label={label}
+    >
       {open.map((item) => (
         <OpenAssumption
           key={item.id}
@@ -86,13 +94,25 @@ export function AttributeAssumptions({
           canAct={canAct}
           locked={locked}
           onContext={onContext}
+          row={layout === "row"}
         />
       ))}
-      {decided.map((item) => (
-        <li key={item.id} className="tas-done">
-          <span suppressHydrationWarning>{decidedLine(item)}</span>
-        </li>
-      ))}
+      {decided.map((item) =>
+        layout === "row" ? (
+          <li key={item.id} className="tas-row is-done">
+            <span className="tas-row-label">
+              {assumptionRowWords(item).label}
+            </span>
+            <span className="tas-row-body" suppressHydrationWarning>
+              {decidedLine(item)}
+            </span>
+          </li>
+        ) : (
+          <li key={item.id} className="tas-done">
+            <span suppressHydrationWarning>{decidedLine(item)}</span>
+          </li>
+        ),
+      )}
     </ul>
   );
 }
@@ -103,12 +123,15 @@ function OpenAssumption({
   canAct,
   locked,
   onContext,
+  row = false,
 }: {
   ids: Ids;
   item: Assumption;
   canAct: boolean;
   locked: boolean;
   onContext: (context: ControlContext) => void;
+  /** As a row of the attribute's criteria (AttributeAssumptions layout "row"). */
+  row?: boolean;
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -177,6 +200,108 @@ function OpenAssumption({
   const conflict = item.kind === "CONFLICT";
   // Accepted with its attribute, not confirmed (B1l point 6): still the agent's, decided here.
   const accepted = item.status === "ACCEPTED_WITH_ATTRIBUTE";
+  const changeForm =
+    canAct && changing ? (
+      <form
+        className="tas-change"
+        id={boxId}
+        autoComplete="off"
+        onSubmit={(event: FormEvent<HTMLFormElement>) => {
+          event.preventDefault();
+          if (wordsProblem === null) {
+            void send("assumption-change");
+          }
+        }}
+      >
+        <label htmlFor={`${boxId}-words`}>{changePrompt(item)}</label>
+        <textarea
+          id={`${boxId}-words`}
+          ref={box}
+          rows={3}
+          maxLength={ASSUMPTION_TEXT_MAX}
+          value={words}
+          disabled={busy !== ""}
+          aria-describedby={`${boxId}-count`}
+          onChange={(event) => setWords(event.target.value)}
+        />
+        <p className="tas-count" id={`${boxId}-count`}>
+          {characterCount(words, ASSUMPTION_TEXT_MAX)}
+          {words.trim() !== "" && wordsProblem !== null
+            ? ` · ${wordsProblem}`
+            : ""}
+        </p>
+        <p className="tas-note">
+          Your words are recorded as your answer, and the attributes this
+          assumption names are updated from them.
+          {accepted ? ` ${CHANGE_REOPENS}` : ""}
+        </p>
+        <div className="tas-acts">
+          <button
+            type="submit"
+            className="btn btn-primary btn-sm"
+            disabled={locked || busy !== "" || wordsProblem !== null}
+          >
+            {busy === "change" ? "Saving…" : "Save the change"}
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            disabled={busy !== ""}
+            onClick={() => {
+              setChanging(false);
+              setProblem(null);
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+      </form>
+    ) : null;
+  const problemLine =
+    problem !== null ? (
+      <p className="tc-problem" role="alert">
+        {problem}
+      </p>
+    ) : null;
+  if (row) {
+    const said = assumptionRowWords(item);
+    return (
+      <li className={`tas-row${conflict ? " is-conflict" : ""}`}>
+        <span className="tas-row-label">{said.label}</span>
+        <div className="tas-row-body">
+          <p className="tas-row-text">
+            {said.text} <span className="tas-row-state">{said.state}</span>
+          </p>
+          {canAct && !changing ? (
+            <span className="tas-row-acts">
+              <button
+                type="button"
+                className="tar-link"
+                disabled={locked || busy !== ""}
+                onClick={() => void send("assumption-confirm")}
+              >
+                {busy === "confirm" ? "Recording…" : confirmWords(item.kind)}
+              </button>
+              <button
+                type="button"
+                className="tar-link"
+                disabled={locked || busy !== ""}
+                aria-expanded={false}
+                onClick={() => {
+                  setProblem(null);
+                  setChanging(true);
+                }}
+              >
+                {changeWords(item.kind)}
+              </button>
+            </span>
+          ) : null}
+          {changeForm}
+          {problemLine}
+        </div>
+      </li>
+    );
+  }
   return (
     <li
       className={`tas-open${conflict ? " is-conflict" : ""}${accepted ? " is-accepted" : ""}`}
@@ -211,67 +336,8 @@ function OpenAssumption({
           </button>
         </div>
       ) : null}
-      {canAct && changing ? (
-        <form
-          className="tas-change"
-          id={boxId}
-          autoComplete="off"
-          onSubmit={(event: FormEvent<HTMLFormElement>) => {
-            event.preventDefault();
-            if (wordsProblem === null) {
-              void send("assumption-change");
-            }
-          }}
-        >
-          <label htmlFor={`${boxId}-words`}>{changePrompt(item)}</label>
-          <textarea
-            id={`${boxId}-words`}
-            ref={box}
-            rows={3}
-            maxLength={ASSUMPTION_TEXT_MAX}
-            value={words}
-            disabled={busy !== ""}
-            aria-describedby={`${boxId}-count`}
-            onChange={(event) => setWords(event.target.value)}
-          />
-          <p className="tas-count" id={`${boxId}-count`}>
-            {characterCount(words, ASSUMPTION_TEXT_MAX)}
-            {words.trim() !== "" && wordsProblem !== null
-              ? ` · ${wordsProblem}`
-              : ""}
-          </p>
-          <p className="tas-note">
-            Your words are recorded as your answer, and the attributes this
-            assumption names are updated from them.
-            {accepted ? ` ${CHANGE_REOPENS}` : ""}
-          </p>
-          <div className="tas-acts">
-            <button
-              type="submit"
-              className="btn btn-primary btn-sm"
-              disabled={locked || busy !== "" || wordsProblem !== null}
-            >
-              {busy === "change" ? "Saving…" : "Save the change"}
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              disabled={busy !== ""}
-              onClick={() => {
-                setChanging(false);
-                setProblem(null);
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-        </form>
-      ) : null}
-      {problem !== null ? (
-        <p className="tc-problem" role="alert">
-          {problem}
-        </p>
-      ) : null}
+      {changeForm}
+      {problemLine}
     </li>
   );
 }

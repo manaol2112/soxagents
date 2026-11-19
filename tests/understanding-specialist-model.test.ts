@@ -767,19 +767,23 @@ describe("the Attributes step: a conflict holds its attribute, and Accept all sa
     // C has two open (an assumption and a not known), D one open and one confirmed.
     assert.equal(unconfirmedWith(accepted), 3);
     const words = acceptAllWords(accepted, rows.length - accepted.length);
+    // Rewritten 19 November 2026 (owner-approved Review attributes prototype). Old: "Accept
+    // all 2" / "Accept all 1" with "includes N assumption(s) not confirmed". New: "Accept
+    // all" before any row is reviewed, "Accept remaining n" after, and "N unconfirmed
+    // assumption(s)" said beside it; what it leaves out is said as before (B1l point 6).
     assert.deepEqual(words, {
-      label: "Accept all 2",
+      label: "Accept all",
       leftOut: "1 left out: a conflict to decide",
-      includes: "includes 3 assumptions not confirmed",
+      includes: "3 unconfirmed assumptions",
     });
     assert.equal(
       acceptAllNote(words),
-      "1 left out: a conflict to decide · includes 3 assumptions not confirmed",
+      "1 left out: a conflict to decide · 3 unconfirmed assumptions",
     );
-    assert.deepEqual(acceptAllWords(accepted.slice(1), 2), {
-      label: "Accept all 1",
+    assert.deepEqual(acceptAllWords(accepted.slice(1), 2, { reviewed: 1 }), {
+      label: "Accept remaining 1",
       leftOut: "2 left out: conflicts to decide",
-      includes: "includes 1 assumption not confirmed",
+      includes: "1 unconfirmed assumption",
     });
     assert.equal(acceptAllNote(acceptAllWords([], 0)), "");
   });

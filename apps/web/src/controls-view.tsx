@@ -5,17 +5,19 @@ import { analysisFor, reviewFor } from "./analysis-model";
 import { AnalysisPanel } from "./analysis-view";
 import { AppIdentity } from "./app-identity";
 import { assistantBrief, stepAnchor } from "./assistant-model";
-import { AttributesHandoff } from "./attributes-handoff";
 import { handoff as attributesHandoff } from "./attributes-handoff-model";
 import { AutoRefresh } from "./auto-refresh";
 import { ControlConclusionWork } from "./control-conclusion-panel";
 import {
+  acceptableRows,
   BLOCKING_STATES,
   CLASSIFICATIONS,
   toAcceptCount,
+  unifiedRows,
   untailored as untailoredCount,
 } from "./control-context-model";
 import {
+  type AttributesHeading,
   AttributesPanel,
   Classifications,
   DesignPanel,
@@ -209,7 +211,12 @@ import { canManageProjects } from "./shell-model";
 import { receiptText, reopenText } from "./signoff-model";
 import { StepFrame } from "./step-frame";
 import { quietLineOf } from "./step-frame-model";
-import { agentNote, PREPARED_TITLE, panelFrame } from "./step-panel-model";
+import {
+  agentNote,
+  attributesFooter,
+  PREPARED_TITLE,
+  panelFrame,
+} from "./step-panel-model";
 import { TestBasisCard } from "./test-basis-view";
 import { testFor } from "./testing-model";
 import { TestPlanCard } from "./testing-view";
@@ -2077,6 +2084,9 @@ function ControlRecord({
       proposed: context?.proposed.length ?? 0,
       untailored: context === null ? 0 : untailoredCount(context),
       toAccept: context === null ? 0 : toAcceptCount(context),
+      // The rows that read "To review", each once (19 November 2026).
+      toReview:
+        context === null ? 0 : acceptableRows(unifiedRows(context)).length,
       questions:
         context?.issues.filter(
           (item) =>
@@ -2219,6 +2229,63 @@ function ControlRecord({
     opened === null || opened === "activity"
       ? null
       : (workflow.find((item) => item.key === opened) ?? null);
+  const shownFrame =
+    openStep === null
+      ? null
+      : panelFrame(
+          openStep.key,
+          workflow,
+          engagement.designConclusion?.status === "SIGNED_OFF"
+            ? (engagement.designConclusion.signed?.verdict ?? null)
+            : null,
+        );
+  // The Attributes step's footer says what each branch waits on here ("3 to review"), then
+  // "Ready" (approved prototype, 19 November 2026).
+  const openFrame =
+    shownFrame === null
+      ? null
+      : attributesFooter(shownFrame, workflowInput.attributes.toReview ?? 0);
+  // The Attributes step once every attribute is set (prototype approved 17 November 2026,
+  // restyled 19 November 2026): what was set, then the one way on, in place of "Nothing is
+  // needed from you here".
+  const settledHandoff =
+    openStep?.key === "attributes" &&
+    openFrame?.need.kind === "done" &&
+    context !== null
+      ? attributesHandoff({
+          steps: workflow,
+          approved: context.approved,
+          requests: designRequests,
+        })
+      : null;
+  // The Attributes step's own card, carried by its list (Review attributes, product owner,
+  // 19 November 2026, approved prototype): the review and its progress while the step asks
+  // something of the person, or the set attributes with the way on; otherwise the frame's
+  // line says what the step waits on.
+  const attributesHeading: AttributesHeading | null =
+    openStep?.key !== "attributes" || openFrame === null
+      ? null
+      : settledHandoff !== null
+        ? {
+            kind: "set",
+            title: settledHandoff.title,
+            follows: settledHandoff.follows,
+            label: settledHandoff.next.label,
+            href: stepHrefsWf[settledHandoff.next.key] ?? "#",
+            gap: settledHandoff.gap,
+          }
+        : openFrame.need.kind === "act"
+          ? {
+              kind: "review",
+              title: openFrame.need.title,
+              line: openFrame.need.detail,
+            }
+          : null;
+  // The agent's line is the list header's "How" while the list carries the card.
+  const attributesAgent =
+    attributesHeading !== null && openStep !== null
+      ? agentNote(openStep, workflowInput)
+      : null;
   const around = (by: -1 | 1) => {
     if (openStep === null) {
       return null;
@@ -2340,6 +2407,8 @@ function ControlRecord({
               canAct={canAct}
               showQuestions={false}
               embedded={embedded}
+              heading={attributesHeading}
+              agent={attributesAgent}
             />
           ),
           documents: (
@@ -3503,45 +3572,15 @@ function ControlRecord({
     (openStep?.key === "understanding" &&
       context !== null &&
       setupInput !== null);
-  const openFrame =
-    openStep === null
-      ? null
-      : panelFrame(
-          openStep.key,
-          workflow,
-          engagement.designConclusion?.status === "SIGNED_OFF"
-            ? (engagement.designConclusion.signed?.verdict ?? null)
-            : null,
-        );
-  // The Attributes step once every attribute is settled (prototype approved 17 November
-  // 2026): what was settled, then each branch's next step, in place of "Nothing is needed
-  // from you here" and the footer's two links.
-  const settledHandoff =
-    openStep?.key === "attributes" &&
-    openFrame?.need.kind === "done" &&
-    context !== null
-      ? attributesHandoff({
-          steps: workflow,
-          approved: context.approved,
-          requests: designRequests,
-        })
-      : null;
   const stepPanel =
     openStep === null || openFrame === null ? (
       panelContent
     ) : (
       <StepFrame
         frame={openFrame}
-        decision={
-          settledHandoff !== null ? (
-            <AttributesHandoff
-              handoff={settledHandoff}
-              stepHrefs={stepHrefsWf}
-            />
-          ) : undefined
-        }
-        nextShown={settledHandoff === null}
         needShown={
+          // The Attributes step's list carries its card (19 November 2026).
+          attributesHeading === null &&
           !(
             openStep.key === "designevidence" &&
             canAct &&
@@ -3559,7 +3598,9 @@ function ControlRecord({
         stepHrefs={stepHrefsWf}
         askHref={askHref}
         about={{ ref: control.controlRef, title: control.title }}
-        agent={agentNote(openStep, workflowInput)}
+        agent={
+          attributesAgent !== null ? null : agentNote(openStep, workflowInput)
+        }
         preparedTitle={PREPARED_TITLE[openStep.key]}
         prepared={panelContent}
         details={stepDetails}

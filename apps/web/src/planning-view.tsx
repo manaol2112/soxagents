@@ -6311,8 +6311,7 @@ function RemoveAttributeConfirm({
       }}
     >
       <span id={id}>
-        Remove attribute {number} from the plan? It is kept on record as
-        retired.
+        Remove attribute {number} from the plan? It stays in the history.
       </span>
       <span className="pa-confirm">
         <button

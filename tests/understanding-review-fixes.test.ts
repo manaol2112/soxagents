@@ -584,10 +584,13 @@ describe("Accept all counts each unconfirmed assumption once, the set's too", ()
     assert.equal(unconfirmedWith(rows, set), 2);
     // Accepting one row leaves the other, so the set is not accepted with it.
     assert.equal(unconfirmedWith(rows.slice(0, 1), set), 1);
+    // Rewritten 19 November 2026 (owner-approved Review attributes prototype; the count is
+    // still said beside the button, B1l point 6). Old: "Accept all 2" with "includes 2
+    // assumptions not confirmed". New: "Accept all" with "2 unconfirmed assumptions".
     assert.deepEqual(acceptAllWords(rows, 0, set), {
-      label: "Accept all 2",
+      label: "Accept all",
       leftOut: "",
-      includes: "includes 2 assumptions not confirmed",
+      includes: "2 unconfirmed assumptions",
     });
   });
 

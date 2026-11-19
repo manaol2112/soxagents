@@ -1581,3 +1581,536 @@ button.tar-head:focus-visible:not(:disabled) {
     transition: none;
   }
 }
+
+/* ==========================================================================
+   Review attributes (product owner, 19 November 2026, approved prototype): the step's
+   card with its "Reviewed n/N" bar, the list header, the rows' chips with their dot, the
+   one action row, the inline removal question, and an assumption as a row of the
+   criteria. Scoped to the step's embedded list; tokens only.
+   ========================================================================== */
+
+.ta.is-embedded .tar-review {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem 2rem;
+  padding: 1.1rem 1.25rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xs);
+}
+
+.ta.is-embedded .tar-review-text {
+  display: grid;
+  flex: 1 1 26rem;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.ta.is-embedded .tar-review-text h3 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.ta.is-embedded .tar-review-text p {
+  max-width: 72ch;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+}
+
+.ta.is-embedded .tar-progress {
+  display: grid;
+  flex: 0 1 14rem;
+  gap: 0.5rem;
+  min-width: 11rem;
+}
+
+.ta.is-embedded .tar-progress-line {
+  display: flex;
+  justify-content: space-between;
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+.ta.is-embedded .tar-progress-value {
+  color: var(--text-strong);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.ta.is-embedded .tar-segments {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+}
+
+.ta.is-embedded .tar-segments > span {
+  height: 4px;
+  background: var(--border);
+  border-radius: 999px;
+  transition: background-color 200ms ease;
+}
+
+.ta.is-embedded .tar-segments > .is-accepted {
+  background: var(--success);
+}
+
+.ta.is-embedded .tar-segments > .is-removed {
+  background: var(--text-disabled);
+}
+
+/* Once nothing is left to review: the attributes set, with the one way on. */
+.ta.is-embedded .tar-review.is-set {
+  gap: 0.75rem 1rem;
+}
+
+.ta.is-embedded .tar-review.is-set .tar-review-text {
+  flex: 1 1 20rem;
+}
+
+.ta.is-embedded .tar-review-tick {
+  display: inline-grid;
+  flex: none;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  color: var(--success);
+  background: var(--success-soft);
+  border-radius: 999px;
+}
+
+.ta.is-embedded .tar-review-act {
+  flex: none;
+}
+
+/* The list header: the count, where the attributes came from with "How", the actions. */
+.ta.is-embedded .tar-bar-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.6rem;
+  min-width: 0;
+}
+
+.ta.is-embedded .tar-count {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  font-weight: 600;
+}
+
+.ta.is-embedded .tar-basis {
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+.ta.is-embedded .tar-basis .tas-link {
+  height: auto;
+  line-height: inherit;
+  box-shadow: none;
+  color: var(--text-strong);
+  text-decoration-color: var(--border-strong);
+}
+
+/* Accept all and what it takes with it, kept together. */
+.ta.is-embedded .tar-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* What Accept all takes with it, beside it: small, muted, never only on hover. */
+.ta.is-embedded .tar-all-note {
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+.ta.is-embedded .tar-how {
+  padding: 0.6rem 0.8rem;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  background: var(--surface-muted);
+  border-radius: var(--radius-lg);
+}
+
+.ta.is-embedded .tar-how[hidden] {
+  display: none;
+}
+
+.ta.is-embedded .tar-how p,
+.ta.is-embedded .tar-how ul {
+  margin: 0;
+}
+
+.ta.is-embedded .tar-how ul {
+  padding-left: 1.1rem;
+}
+
+/* A row's top line: the wording opens it (the whole line is its target), with the quick
+   Accept and the chip beside it. */
+.ta.is-embedded .tar-top {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto 14px;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 52px;
+  padding: 0.6rem 0.9rem;
+  transition: background-color 120ms ease;
+}
+
+.ta.is-embedded .tar-top:hover {
+  background: var(--surface-hover);
+}
+
+.ta.is-embedded .tar-top > .tar-head {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+}
+
+.ta.is-embedded .tar-top > button.tar-head:hover {
+  background: transparent;
+}
+
+/* Each part keeps its own column, so the chips and carets line up down the list whether
+   or not a row shows the quick Accept (design review, 19 November 2026). */
+.ta.is-embedded .tar-top > .tar-head {
+  grid-column: 1;
+}
+
+.ta.is-embedded .tar-top > .tar-quick {
+  grid-column: 2;
+}
+
+.ta.is-embedded .tar-top > .tar-chip {
+  grid-column: 3;
+  justify-self: end;
+}
+
+.ta.is-embedded .tar-top > .tar-caret {
+  grid-column: 4;
+}
+
+/* A removed row decides nothing: no hover. */
+.ta.is-embedded .tar.is-gone .tar-top:hover {
+  background: transparent;
+}
+
+.ta.is-embedded .tar-top > button.tar-head::after {
+  position: absolute;
+  inset: 0;
+  content: "";
+}
+
+.ta.is-embedded .tar-top > button.tar-head:focus-visible:not(:disabled) {
+  box-shadow: none;
+}
+
+.ta.is-embedded
+  .tar-top
+  > button.tar-head:focus-visible:not(:disabled)::after {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
+.ta.is-embedded .tar-quick {
+  position: relative;
+  z-index: 1;
+}
+
+.ta.is-embedded .tar-top > .tar-chip,
+.ta.is-embedded .tar-top > .tar-caret {
+  pointer-events: none;
+}
+
+.ta.is-embedded .tar-letter {
+  width: 26px;
+  height: 26px;
+  color: var(--text-secondary);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  transition:
+    background-color 200ms ease,
+    color 200ms ease;
+}
+
+.ta.is-embedded .tar.is-accepted .tar-letter {
+  color: var(--text-on-status);
+  background: var(--success);
+  border-color: var(--success);
+}
+
+.ta.is-embedded .tar.is-gone .tar-letter {
+  color: var(--text-tertiary);
+  background: var(--surface-muted);
+}
+
+.ta.is-embedded .tar.is-gone .tar-text {
+  color: var(--text-tertiary);
+  text-decoration: line-through;
+}
+
+.ta.is-embedded .tar-caret.is-empty {
+  width: 14px;
+}
+
+/* The chip names the row's state; its dot repeats it. */
+.ta.is-embedded .tar-chip {
+  gap: 0.35rem;
+  font-weight: 500;
+}
+
+.ta.is-embedded .tar-chip::before {
+  width: 6px;
+  height: 6px;
+  background: currentcolor;
+  border-radius: 999px;
+  content: "";
+}
+
+.ta.is-embedded .tar-chip.tone-success {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: var(--success-border);
+}
+
+.ta.is-embedded .tar-chip.tone-warning {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: var(--warning-border);
+}
+
+.ta.is-embedded .tar-chip.tone-neutral {
+  color: var(--text-secondary);
+  background: var(--surface-muted);
+  border-color: var(--border);
+}
+
+/* The one action row: Accept, Edit, Remove, then the quiet links on the right. */
+.ta.is-embedded .tar-acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  margin: 0.25rem 0 0;
+}
+
+.ta.is-embedded .tar-acts-gap {
+  flex: 1 1 auto;
+}
+
+/* Said where Remove would be on the control's last attribute. */
+.ta.is-embedded .tar-keeps-one {
+  color: var(--text-tertiary);
+  font-size: var(--fs-sm);
+}
+
+/* The criteria's labels and an assumption's, one muted style in one column (the approved
+   prototype: Tested, Passes, Fails, Judgment, Assumes). */
+.ta.is-embedded .tc.is-flat .tc-rules dt,
+.ta.is-embedded .tc.is-flat .tc-rules .is-pass dt,
+.ta.is-embedded .tc.is-flat .tc-rules .is-fail dt {
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+
+/* The criteria form's labels read as the criteria's own: muted, regular weight. */
+.ta.is-embedded .tc-edit label {
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+
+.ta.is-embedded .tc-edit textarea {
+  color: var(--text);
+}
+
+/* The assumptions continue the criteria's rows at the criteria's own gap. */
+.ta.is-embedded .tc.is-flat > .tc-rules + .tas-list.is-rows {
+  margin-top: calc(0.3rem - 0.45rem);
+}
+
+.ta.is-embedded .tar-link {
+  height: auto;
+  padding: 0;
+  color: var(--text-tertiary);
+  font: inherit;
+  font-size: var(--fs-sm);
+  background: none;
+  border: 0;
+  box-shadow: none;
+  cursor: pointer;
+  transition: color 120ms ease;
+}
+
+.ta.is-embedded .tar-link:hover {
+  color: var(--text-strong);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  background: none;
+}
+
+.ta.is-embedded .tar-link:focus-visible:not(:disabled) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+  box-shadow: none;
+}
+
+/* The removal, asked inline: the question, then Cancel and Remove. */
+.ta.is-embedded fieldset.tar-confirm {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+}
+
+.ta.is-embedded .tar-confirm-text {
+  float: left;
+  margin-right: 0.25rem;
+  padding: 0;
+  color: var(--text);
+  font-size: var(--fs-md);
+}
+
+.ta.is-embedded .tar-confirm-acts {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+/* An assumption as a row of the criteria: "Assumes … Unconfirmed", in the criteria's own
+   columns; the state is one muted word, never a tinted box. */
+.ta.is-embedded .tas-list.is-rows {
+  gap: 0.3rem;
+}
+
+.ta.is-embedded .tas-row {
+  display: grid;
+  grid-template-columns: 4.5rem minmax(0, 1fr);
+  gap: 0.6rem;
+  font-size: var(--fs-md);
+  line-height: 1.45;
+}
+
+.ta.is-embedded .tas-row-label {
+  color: var(--text-tertiary);
+  font-weight: 400;
+}
+
+.ta.is-embedded .tas-row-body {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+  color: var(--text);
+}
+
+.ta.is-embedded .tas-row.is-done .tas-row-body {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.ta.is-embedded .tas-row-text {
+  margin: 0;
+}
+
+.ta.is-embedded .tas-row-state {
+  color: var(--warning);
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+.ta.is-embedded .tas-row.is-conflict .tas-row-state {
+  color: var(--danger);
+}
+
+.ta.is-embedded .tas-row-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  font-size: var(--fs-sm);
+}
+
+@media (max-width: 640px) {
+  .ta.is-embedded .tar-review {
+    padding: 1rem;
+  }
+
+  .ta.is-embedded .tar-progress {
+    flex: 1 1 100%;
+  }
+
+  .ta.is-embedded .tar-top {
+    grid-template-columns: minmax(0, 1fr) 14px;
+    row-gap: 0.4rem;
+    padding: 0.6rem 0.75rem;
+  }
+
+  .ta.is-embedded .tar-top > .tar-head {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .ta.is-embedded .tar-top > .tar-caret {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  /* The chip and the quick Accept under the wording, indented to it. */
+  .ta.is-embedded .tar-top > .tar-chip {
+    grid-column: 1;
+    grid-row: 2;
+    justify-self: start;
+    margin-left: calc(26px + 0.75rem);
+  }
+
+  .ta.is-embedded .tar-top > .tar-quick {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: end;
+  }
+
+  .ta.is-embedded .tas-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.1rem;
+  }
+
+  /* The origin line wraps rather than cutting its assumption count. */
+  .ta.is-embedded .tar-source {
+    white-space: normal;
+  }
+
+  .ta.is-embedded .tar-acts-gap {
+    flex-basis: 100%;
+    height: 0;
+  }
+
+  /* On its own line: [Accept all] 2 unconfirmed assumptions. */
+  .ta.is-embedded .tar-all {
+    flex: 1 1 100%;
+    flex-direction: row-reverse;
+    justify-content: flex-end;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ta.is-embedded .tar-top,
+  .ta.is-embedded .tar-letter,
+  .ta.is-embedded .tar-segments > span,
+  .ta.is-embedded .tar-link {
+    transition: none;
+  }
+}

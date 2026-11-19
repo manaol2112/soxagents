@@ -350,7 +350,8 @@ describe("a step's panel frame", () => {
     // The Attributes step asks a person to decide them; D&I Evidence is based on it.
     const attributes = panelFrame("attributes", steps, null);
     assert.equal(attributes.need.kind, "act");
-    assert.equal(attributes.need.title, "Decide the attributes");
+    // Rewritten 19 November 2026 (owner-approved prototype). Old: "Decide the attributes".
+    assert.equal(attributes.need.title, "Review attributes");
     assert.deepEqual(
       frame.basedOn.map((item) => item.key),
       ["attributes"],
@@ -367,8 +368,10 @@ describe("the agent's strip", () => {
     });
     const step = workflowOf(input).find((item) => item.key === "attributes");
     assert.ok(step !== undefined);
-    assert.equal(step.status, "6 to accept");
-    assert.deepEqual(agentNote(step, input).found, ["6 attributes to accept."]);
+    // Rewritten 19 November 2026 (Review attributes): the rows read "To review". Old: "6 to
+    // accept" and "6 attributes to accept.".
+    assert.equal(step.status, "6 to review");
+    assert.deepEqual(agentNote(step, input).found, ["6 attributes to review."]);
   });
 
   it("says what the agent did and found, from the records only", () => {

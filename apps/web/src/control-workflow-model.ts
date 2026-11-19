@@ -220,9 +220,12 @@ export type WorkflowInput = {
     /** Approved attributes with no criteria a person owns, tailored to the control
      * (11 November 2026). */
     untailored?: number;
-    /** Of those, the rows that read "To accept": tailored by the agent for a person to
-     * accept (control-context-model.toAcceptCount). The rest need criteria. */
+    /** Of those, the rows tailored by the agent for a person to accept
+     * (control-context-model.toAcceptCount). The rest need criteria. */
     toAccept?: number;
+    /** The rows of the step's list that read "To review": the agent's proposals and the
+     * criteria to accept, each row once (control-context-model.acceptableRows). */
+    toReview?: number;
   };
   /** The test plan. `drafting`: the planner is drawing it up, or a reviewer returned it to
    * the preparer; any other plan that exists and is not approved waits on its approval (the
@@ -710,6 +713,18 @@ export function criteriaCounts(attributes: WorkflowInput["attributes"]): {
   return { toAccept, missing: untailored - toAccept };
 }
 
+/** The rows that read "To review" on the Attributes step (product owner, 19 November 2026):
+ * the agent's proposals and the approved attributes whose tailored criteria wait, as the
+ * step's list counts them (`toReview`); counted from the parts where the list's count is not
+ * given. */
+export function reviewCount(attributes: WorkflowInput["attributes"]): number {
+  return Math.max(
+    attributes.toReview ??
+      attributes.proposed + criteriaCounts(attributes).toAccept,
+    0,
+  );
+}
+
 /** The attributes, settled before both branches (11 November 2026), as the D&I release
  * reads them (phase_release.attribute_waits): approved, none proposed, no open question. */
 function attributesState(input: WorkflowInput, understanding: State): State {
@@ -729,10 +744,12 @@ function attributesState(input: WorkflowInput, understanding: State): State {
   ) {
     return { tone: "active", status: "Being updated" };
   }
+  // In the rows' own word, "To review" (product owner, 19 November 2026; before, "N
+  // attributes to decide" for the agent's proposals and "N to accept" for criteria).
   if (proposed > 0) {
     return {
       tone: "attention",
-      status: `${plural(proposed, "attribute")} to decide`,
+      status: `${reviewCount(input.attributes)} to review`,
     };
   }
   if (questions > 0) {
@@ -746,7 +763,7 @@ function attributesState(input: WorkflowInput, understanding: State): State {
   }
   // The testers judge evidence against each attribute's tailored criteria.
   // In the rows' own words (design review, 19 November 2026): "Needs criteria" for one
-  // with none tailored, "To accept" for one the agent tailored.
+  // with none tailored, "To review" for one the agent tailored.
   const { missing, toAccept } = criteriaCounts(input.attributes);
   if (missing > 0) {
     return {
@@ -755,13 +772,18 @@ function attributesState(input: WorkflowInput, understanding: State): State {
     };
   }
   if (toAccept > 0) {
-    return { tone: "attention", status: `${toAccept} to accept` };
+    return {
+      tone: "attention",
+      status: `${reviewCount(input.attributes)} to review`,
+    };
   }
   // The counts say settled, but the server still waits: the agent is updating them.
   if (input.designRelease?.waitingOn === "ATTRIBUTES") {
     return { tone: "active", status: "Being updated" };
   }
-  return { tone: "done", status: `${plural(approved, "attribute")} settled` };
+  // "Attributes set", as the step's card says once nothing is left to review (19 November
+  // 2026; before, "N attributes settled").
+  return { tone: "done", status: `${plural(approved, "attribute")} set` };
 }
 
 /** Scope and sampling's status while its plan waits on approval: the register's and the

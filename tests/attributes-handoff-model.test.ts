@@ -173,12 +173,18 @@ describe("the Attributes step once settled (product owner, 17 November 2026)", (
       requests: listed([row("r1", ["A"])]),
       timeZone: "UTC",
     });
-    // One card (product owner, 17 November 2026): what was settled, by whom, what is next.
-    assert.equal(shown?.title, "All 5 attributes are settled");
+    // One card (product owner, 17 November 2026): what was settled, what is next.
+    // Rewritten 19 November 2026 (owner-approved Review attributes prototype). Old: "All 5
+    // attributes are settled" over "Accepted by Dana Reyes on Nov 17 · Next: 1 D&I request
+    // to accept". New: "Attributes set" over the counts and what can start; who accepted
+    // stays on each attribute's record ("Accepted by …" when a row is opened), and
+    // acceptedLine still says it.
+    assert.equal(shown?.title, "Attributes set");
     assert.equal(
       shown?.line,
-      "Accepted by Dana Reyes on Nov 17 · Next: 1 D&I request to accept",
+      "5 accepted. D&I Evidence and Scope & Sampling can start.",
     );
+    assert.equal(acceptedLine(five, "UTC"), "Accepted by Dana Reyes on Nov 17");
     assert.deepEqual(shown?.next, {
       key: "designevidence",
       label: "Continue to D&I Evidence",
@@ -303,10 +309,12 @@ describe("the Attributes step once settled (product owner, 17 November 2026)", (
     assert.equal(design?.primary, false);
     assert.equal(scope?.primary, true);
     assert.equal(scope?.action, "Review the plan");
-    assert.match(
-      shown?.line ?? "",
-      / · Next: Scope & Sampling, awaiting approval$/,
-    );
+    // Rewritten 19 November 2026 (Review attributes). Old: "… · Next: Scope & Sampling,
+    // awaiting approval".
+    // Rewritten again 19 November 2026 (design review): the button and the footer say
+    // what is next, so the card says the counts alone unless both branches can start.
+    // Old: "5 accepted. Next: Scope & Sampling, awaiting approval.". New: "5 accepted.".
+    assert.equal(shown?.line, "5 accepted.");
     assert.equal(shown?.next.label, "Continue to Scope & Sampling");
     assert.deepEqual(scope?.pill.label, "Awaiting approval");
   });

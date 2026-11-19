@@ -2611,6 +2611,8 @@ describe("the Attributes tab's own actions", () => {
     }
     // Changed 19 November 2026 (E1 design review, round 6): the removal is asked on its
     // row (RemoveAttributeConfirm), its sentence wrapped across two source lines.
-    assert.match(view, /It is kept on record as\s+retired\./);
+    // Rewritten 19 November 2026 (product owner: "Remove", never "Retire", for a
+    // control's attribute). Old: /It is kept on record as\s+retired\./.
+    assert.match(view, /It stays in the history\./);
   });
 });

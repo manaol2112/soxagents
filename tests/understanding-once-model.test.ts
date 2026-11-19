@@ -654,7 +654,8 @@ describe("the workflow once the understanding is complete", () => {
     const attributes = step(steps, "attributes");
     assert.notEqual(attributes?.status, "Waiting on understanding");
     assert.equal(attributes?.tone, "done");
-    assert.equal(attributes?.status, "4 attributes settled");
+    // Rewritten 19 November 2026 (Review attributes). Old: "4 attributes settled".
+    assert.equal(attributes?.status, "4 attributes set");
     const frame = panelFrame("attributes", steps, null);
     assert.notEqual(frame.need.kind, "wait");
     assert.doesNotMatch(
@@ -684,7 +685,8 @@ describe("the workflow once the understanding is complete", () => {
     );
     assert.deepEqual(
       [step(steps, "attributes")?.tone, step(steps, "attributes")?.status],
-      ["attention", "1 attribute to decide"],
+      // Rewritten 19 November 2026 (Review attributes). Old: "1 attribute to decide".
+      ["attention", "1 to review"],
     );
   });
 });

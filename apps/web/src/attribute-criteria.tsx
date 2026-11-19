@@ -34,6 +34,7 @@ export function TailoredCriteria({
   extra = null,
   notes = null,
   startEditing: writing = false,
+  actions,
 }: {
   ids: Ids;
   item: Attribute;
@@ -49,6 +50,10 @@ export function TailoredCriteria({
   /** Opens with the criteria form showing: the step's "Write criteria", after a run that
    * did not write them. */
   startEditing?: boolean;
+  /** The row's own actions, in place of Accept, Edit and `extra` (flat only; Review
+   * attributes, 19 November 2026): given how to open the criteria form, and shown while it
+   * is closed. */
+  actions?: (criteria: { edit: () => void; formId: string }) => ReactNode;
 }) {
   const action = useRelease(ids);
   const formId = useId();
@@ -139,7 +144,9 @@ export function TailoredCriteria({
   if (flat) {
     return (
       <div className="tc is-flat" aria-busy={action.pending}>
-        {stated || criteria.judgmentRequired === true ? (
+        {/* While the form is open it holds the criteria: they are not shown twice (design
+            review, 19 November 2026). The assumptions stay in view above the form. */}
+        {editing ? null : stated || criteria.judgmentRequired === true ? (
           <dl className="tc-rules">
             {criteria.condition !== "" ? (
               <div>
@@ -173,8 +180,11 @@ export function TailoredCriteria({
         {state === "OWNED" ? <p className="tc-by">{owner}</p> : null}
         {notes}
         {editor}
-        {!editing ? heldLine : null}
-        {!editing && (canAct || extra !== null) ? (
+        {!editing && actions !== undefined
+          ? actions({ edit: startEditing, formId })
+          : null}
+        {!editing && actions === undefined ? heldLine : null}
+        {!editing && actions === undefined && (canAct || extra !== null) ? (
           <div className="tc-row-acts">
             {canAct && state === "TO_ACCEPT" ? (
               <button
@@ -392,7 +402,8 @@ function CriteriaEditor({
     <div className="tc-edit" id={id}>
       {(
         [
-          ["condition", "The condition tested, at this organization"],
+          // The read-only criteria's own words (design review, 19 November 2026).
+          ["condition", "Tested"],
           ["pass_criteria", "Passes when"],
           ["fail_criteria", "Fails when"],
         ] as const

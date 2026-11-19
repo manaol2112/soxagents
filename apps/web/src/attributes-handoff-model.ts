@@ -48,9 +48,13 @@ export type HandoffCard = {
 };
 
 export type Handoff = {
+  /** "Attributes set" (approved prototype, 19 November 2026). */
   title: string;
-  /** "Accepted by Dana Reyes on Nov 17 · Next: 2 D&I requests to accept". */
+  /** "5 accepted. D&I Evidence and Scope & Sampling can start." (setLine). */
   line: string;
+  /** What follows the counts: that both branches can start, or "" (the button says what
+   * is next). */
+  follows: string;
   /** The one way on: the step with the person's work in it. */
   next: { key: HandoffCard["key"]; label: string };
   /** An attribute no D&I request addresses: the one exception said here; "" otherwise. */
@@ -62,6 +66,21 @@ export const ORDER_LINE =
   "OE evidence is requested only after an effective D&I sign-off. Planning can start now.";
 
 const SHOWN_REQUESTS = 3;
+
+/** The Attributes step's card once nothing is left to review (product owner, 19 November
+ * 2026, approved prototype; before, "All N attributes are settled"). */
+export const SET_TITLE = "Attributes set";
+
+/** "5 accepted, 1 removed. D&I Evidence and Scope & Sampling can start.": the attributes that
+ * stand, those removed in this visit, then what follows. */
+export function setLine(
+  accepted: number,
+  removed: number,
+  nextWords: string,
+): string {
+  const counts = `${accepted} accepted${removed > 0 ? `, ${removed} removed` : ""}.`;
+  return nextWords === "" ? counts : `${counts} ${nextWords}`;
+}
 
 /** "Attribute F", "Attributes D and F", "Attributes B, D and F". */
 function listLetters(letters: readonly string[]): string {
@@ -273,19 +292,20 @@ export function handoff(input: {
         ? "designevidence"
         : "testdesign";
   const primary = primaryKey === "designevidence" ? designWork : scopeWork;
-  const toAccept =
-    input.requests.mode === "list" && !input.requests.working
-      ? input.requests.accept.length
-      : 0;
-  // What comes next, in a few words: the requests that wait, or the step and where it stands.
-  const nextWords =
-    primaryKey === "designevidence" && toAccept > 0
-      ? `${toAccept} D&I request${toAccept === 1 ? "" : "s"} to accept`
-      : `${primary.title}, ${primary.pill.label.charAt(0).toLowerCase()}${primary.pill.label.slice(1)}`;
-  const accepted = acceptedLine(input.approved, input.timeZone);
+  // Both branches open on the person's work, or not started: they can start (approved
+  // prototype, 19 November 2026).
+  const bothStart = cards.every(
+    (card) => forThePerson(card.pill.tone) && !card.pill.working,
+  );
+  // Only when both can start: otherwise the button and the footer already say what is
+  // next, and the card says the counts alone (design review, 19 November 2026).
+  const follows = bothStart
+    ? `${designWork.title} and ${scopeWork.title} can start.`
+    : "";
   return {
-    title: `All ${plural(input.approved.length, "attribute")} ${input.approved.length === 1 ? "is" : "are"} settled`,
-    line: `${accepted === "" ? "" : `${accepted} · `}Next: ${nextWords}`,
+    title: SET_TITLE,
+    line: setLine(input.approved.length, 0, follows),
+    follows,
     next: { key: primaryKey, label: `Continue to ${primary.title}` },
     gap:
       designWork.coverage !== null && !designWork.coverage.complete
