@@ -45,6 +45,9 @@ export type SetupInput = {
   /** The questions the agents raised from the records, still open. They are answered with
    * the client-specific questions, on one step (product owner, 4 November 2026). */
   openQuestions: number;
+  /** Of those, the ones whose wording the reviewer agent is still checking (wording_pending):
+   * not shown in the questions yet, so never "to answer" (design review, 19 November 2026). */
+  preparingQuestions?: number;
   documents: number;
   unreviewedDocuments: number;
   /** `drafting`: the planner is drawing the plan up, or it was returned to the preparer
@@ -65,26 +68,45 @@ export type SetupInput = {
  * as the API's control_statements.NO_DOCUMENT, which reads as established practice. */
 export const NO_DOCUMENT = "No formal document";
 
+/** A question being prepared, as the node and the next step say it until it is shown. */
+export function preparingSummary(count: number): string {
+  return `Preparing ${count} ${count === 1 ? "question" : "questions"}`;
+}
+
+/** Whether a step's status is preparingSummary's: the agents' work, not the person's. */
+export function isPreparingSummary(status: string): boolean {
+  return /^Preparing \d+ questions?$/.test(status);
+}
+
 /** The steps that apply, in the order the work is done. */
 export function setupSteps(input: SetupInput): SetupStep[] {
   const asked = input.slots.filter((slot) => slot.document !== true);
   const named = input.slots.filter((slot) => slot.document === true);
   const answered = asked.filter((slot) => slot.value.trim() !== "");
-  const unanswered = asked.length - answered.length + input.openQuestions;
+  // A question still being worded is not shown yet: never counted "to answer".
+  const preparing = Math.min(
+    Math.max(input.preparingQuestions ?? 0, 0),
+    input.openQuestions,
+  );
+  const shownOpen = input.openQuestions - preparing;
+  const unanswered = asked.length - answered.length + shownOpen;
   const steps: SetupStep[] = [];
   if (asked.length > 0 || input.openQuestions > 0) {
     steps.push({
       key: "answers",
       title: "Control understanding",
       summary:
-        input.openQuestions > 0
-          ? `${unanswered} to answer`
-          : answered.length === asked.length
-            ? `All ${asked.length} answered`
-            : `${answered.length} of ${asked.length} answered`,
-      done: unanswered === 0,
+        unanswered === 0 && preparing > 0
+          ? preparingSummary(preparing)
+          : shownOpen > 0
+            ? `${unanswered} to answer`
+            : answered.length === asked.length
+              ? `All ${asked.length} answered`
+              : `${answered.length} of ${asked.length} answered`,
+      done: unanswered === 0 && preparing === 0,
       optional: false,
-      mine: input.canAct,
+      // While only the agents' wording is awaited, nothing is the person's to do.
+      mine: input.canAct && !(unanswered === 0 && preparing > 0),
     });
   }
   if (input.processRequired) {
@@ -544,6 +566,21 @@ export function inlineScreens(row: Prefill, picks: RowPicks): InlineScreen[] {
   ];
 }
 
+/** Whether the agents' answer is the one selected on the screen: shown as one of its options
+ * and picked (design review, 19 November 2026: "The agents' answer is selected" stood over
+ * options none of which was selected). */
+export function suggestionSelected(screen: InlineScreen | undefined): boolean {
+  if (screen === undefined || screen.suggested === "") {
+    return false;
+  }
+  return (
+    screen.choices.includes(screen.suggested) &&
+    screen.pick !== null &&
+    "label" in screen.pick &&
+    screen.pick.label === screen.suggested
+  );
+}
+
 /** Whether the answers given in place settle the question: every step on the way answered,
  * and the person's own words not left empty. */
 export function inlineComplete(row: Prefill, picks: RowPicks): boolean {
@@ -681,6 +718,36 @@ export function agentQuestions(
         };
       })
   );
+}
+
+/** What a question need says while its wording is not ready (18 November 2026). */
+export const PREPARING_QUESTION =
+  "Preparing the question. The reviewer agent is checking its wording; it appears here when the check is complete.";
+
+/** How the review asks an agents' question: in place, from the question its need carries,
+ * or, while that question is not ready (its wording still checked, or a body that carries
+ * none), as being prepared. */
+export type QuestionState =
+  | { state: "inline"; row: Prefill; issue: SetupIssue }
+  | { state: "preparing"; issue?: SetupIssue };
+
+/**
+ * The one way an agents' question is asked in Control Understanding (product owner, 18
+ * November 2026): from the issue its need carries (understanding_chat NeedBody.issue), read
+ * with the need, never from a list of the page's issues read at another time. Pure.
+ */
+export function questionState(need: {
+  key: string;
+  issue?: SetupIssue;
+}): QuestionState {
+  const issue = need.issue;
+  if (issue === undefined || issue.id !== need.key) {
+    return { state: "preparing" };
+  }
+  const [row] = agentQuestions([issue]);
+  return row === undefined
+    ? { state: "preparing", issue }
+    : { state: "inline", row, issue };
 }
 
 /** Answers too long for two to a row, such as a full statement to confirm or a quote. */

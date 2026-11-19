@@ -40,11 +40,16 @@ import {
 import {
   acceptAllNote,
   acceptAllWords,
+  askedAttributeChip,
   assumptionLead,
+  assumptionText,
   blocksLine,
   CONFLICT_STANDS,
+  changePrompt,
+  changeWords,
   confirmWords,
   courseWithout,
+  FAILURE_FALLBACK,
   FROM_REVIEW,
   fromReview,
   heldByFailedReview,
@@ -61,6 +66,7 @@ import {
   REVIEW_FAILED,
   REVIEW_FAILED_STATUS,
   REVIEW_TITLE,
+  reviewChoiceLine,
   reviewedLead,
   reviewProblem,
   reviewView,
@@ -346,10 +352,12 @@ describe("the review's place in Control Understanding", () => {
         failure: "The specialist's answer could not be used.",
       },
     );
-    // A failed pass with no sentence of its own still says one.
+    // A failed pass with no sentence of its own still says one. Rewritten (final design
+    // review, 19 November 2026, N3). Old: "The specialist's answer could not be used.". New:
+    // the server's sentence for that kind, without its lead.
     assert.equal(
       (reviewView("FAILED", null) as { failure: string }).failure,
-      "The specialist's answer could not be used.",
+      "The IT audit specialist's review could not be completed.",
     );
     assert.deepEqual(reviewView(null, null), { state: "none" });
   });
@@ -588,11 +596,15 @@ describe("a review that could not run never blocks", () => {
       body: {},
       slow: false,
     });
+    // Rewritten 18 November 2026 (owner decision, "Completion waits for a person"). Old:
+    // body {}. New: the person's reason, needed to proceed past attributes the review did
+    // not review and empty after a review that could not run (tests/understanding-review-
+    // held.test.ts).
     assert.deepEqual(contextWrite({ ...IDS, intent: "review-proceed" }), {
       intent: "review-proceed",
       method: "POST",
       path: `${BASE}/understanding/review/proceed`,
-      body: {},
+      body: { reason: "" },
       slow: false,
     });
   });
@@ -636,7 +648,8 @@ describe("a review that could not run never blocks", () => {
       { key: "evidence" as const, ready: false, note: "After", text: "D&I" },
     ];
     assert.deepEqual(heldByFailedReview(lines, true), [
-      { ...lines[0], ready: false, note: "Review to run or skip" },
+      // Rewritten (design review, 19 November 2026). Old: "Review to run or skip".
+      { ...lines[0], ready: false, note: "Review to run again, or proceed" },
       lines[1],
     ]);
     assert.deepEqual(heldByFailedReview(lines, false), lines);
@@ -789,6 +802,26 @@ describe("the Attributes step: a conflict holds its attribute, and Accept all sa
     assert.equal(confirmWords("NOT_KNOWN"), "That's right");
   });
 
+  it("never offers a fact not yet known as an assumption to confirm", () => {
+    // Design review, 19 November 2026: "The agent assumed: Who leads ... is not yet known."
+    // with "That's right". A fact no agent could propose asks for the answer.
+    assert.equal(assumptionLead("UNKNOWN"), "Not yet known:");
+    assert.equal(confirmWords("UNKNOWN"), "Leave unanswered");
+    assert.equal(changeWords("UNKNOWN"), "Add the answer");
+    assert.equal(changeWords("ASSUMPTION"), "Change…");
+    assert.equal(
+      decidedLine({
+        kind: "UNKNOWN",
+        status: "CONFIRMED",
+        assumed: "Who leads each investigation is not yet known.",
+        answer: "",
+        decidedBy: { id: "p1", name: "Dana Reyes" },
+        decidedAt: null,
+      }),
+      "Left unanswered by Dana Reyes: Who leads each investigation is not yet known.",
+    );
+  });
+
   it("words a decided conflict as the person's decision, never as the source confirmed", () => {
     const decided = {
       status: "CONFIRMED" as const,
@@ -844,5 +877,90 @@ describe("the D&I workpaper's ASSUMPTION point", () => {
     );
     assert.equal(settleWhere("ASSUMPTION"), "in the attributes step");
     assert.equal(settleWhere("RERUN"), SETTLE_WHERE);
+  });
+});
+
+// Re-shoot r8, 19 November 2026.
+describe("the words after the re-shoot", () => {
+  it("says a fact not yet known once, as its question", () => {
+    const item = {
+      kind: "UNKNOWN" as const,
+      assumed:
+        "Who leads each investigation of inappropriate access is not yet known.",
+      matter: "Investigation owner",
+    };
+    assert.equal(
+      assumptionText(item),
+      "who leads each investigation of inappropriate access.",
+    );
+    assert.equal(
+      changePrompt(item),
+      "Who leads each investigation of inappropriate access?",
+    );
+    // Any other kind reads as recorded, and its box asks on its matter.
+    const assumed = {
+      kind: "ASSUMPTION" as const,
+      assumed: "The IT manager leads it.",
+      matter: "Investigation owner",
+    };
+    assert.equal(assumptionText(assumed), "The IT manager leads it.");
+    assert.equal(
+      changePrompt(assumed),
+      "What is the case on Investigation owner?",
+    );
+    assert.equal(
+      assumptionText({
+        kind: "UNKNOWN",
+        assumed: "IT owns it is not yet known.",
+      }),
+      "IT owns it.",
+    );
+  });
+
+  it("gives the next step the end of the course's state and choice", () => {
+    assert.equal(
+      reviewChoiceLine({
+        failed: false,
+        held: "The review is held on attribute B.",
+        runAgain: true,
+      }),
+      "The review is held on attribute B: run it again, or proceed without it and record the reason.",
+    );
+    assert.equal(
+      reviewChoiceLine({ failed: true, held: "", runAgain: true }),
+      "The review of the questions asked could not run: run it again, or proceed without it and record the reason.",
+    );
+    assert.match(
+      reviewChoiceLine({
+        failed: false,
+        held: "The review is held on attribute B.",
+        runAgain: false,
+      }),
+      /^The review is held on attribute B\. It has run twice and cannot run again: proceed without it and record the reason\.$/,
+    );
+  });
+});
+
+// Final design review, 19 November 2026.
+describe("the final review's words", () => {
+  it("names the attribute a review question asks about by the page's letter (N2)", () => {
+    const approved = [{ code: "A1" }, { code: "A2" }, { code: "A6" }];
+    assert.equal(askedAttributeChip("A6", approved), "Attribute C");
+    assert.equal(askedAttributeChip("A9", approved), null);
+    assert.equal(askedAttributeChip(null, approved), null);
+  });
+
+  it("says a failed review in the current words when none is given (N3)", () => {
+    assert.equal(
+      FAILURE_FALLBACK,
+      "The IT audit specialist's review could not be completed.",
+    );
+    assert.deepEqual(
+      reviewView("FAILED", {
+        status: "FAILED",
+        failure: "",
+      } as never),
+      { state: "failed", failure: FAILURE_FALLBACK },
+    );
   });
 });

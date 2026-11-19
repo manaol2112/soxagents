@@ -306,6 +306,25 @@ describe("the control's workflow", () => {
       ),
       ["attention", "2 need criteria"],
     );
+    // Tailored by the agent, to accept: said in the rows' own word, never "need criteria"
+    // (design review, 19 November 2026: "6 need criteria" over six "To accept" rows).
+    assert.deepEqual(
+      state(
+        workflowOf(
+          fresh({
+            setup: understood,
+            attributes: {
+              approved: 6,
+              proposed: 0,
+              untailored: 6,
+              toAccept: 6,
+            },
+          }),
+        ),
+        "attributes",
+      ),
+      ["attention", "6 to accept"],
+    );
     // Settled: both branches open.
     const both = workflowOf(fresh({ setup: understood, attributes: settled }));
     assert.deepEqual(state(both, "attributes"), [

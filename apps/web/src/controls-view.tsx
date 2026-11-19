@@ -12,6 +12,7 @@ import { ControlConclusionWork } from "./control-conclusion-panel";
 import {
   BLOCKING_STATES,
   CLASSIFICATIONS,
+  toAcceptCount,
   untailored as untailoredCount,
 } from "./control-context-model";
 import {
@@ -213,6 +214,12 @@ import { type TraceRound, traceOf, traceRows } from "./trace-model";
 import { TraceRail } from "./trace-rail";
 import { UiIcon } from "./ui-icon";
 import { rulesOpen } from "./understanding-once-model";
+import {
+  heldLede,
+  reviewChoiceAction,
+  reviewChoiceLine,
+  runsAgain,
+} from "./understanding-specialist-model";
 import { canDecide, canRequestEvidence } from "./workflow-model";
 import { WorkpapersTab } from "./workpaper-view";
 import { EmptyState, PageHeader, sectionHref } from "./workspace-view";
@@ -1845,6 +1852,9 @@ function ControlRecord({
           proposedAttributes: context.proposed.length,
           openQuestions: context.issues.filter((item) => item.status === "OPEN")
             .length,
+          preparingQuestions: context.issues.filter(
+            (item) => item.status === "OPEN" && item.wordingPending === true,
+          ).length,
           documents: context.documents.length,
           unreviewedDocuments: context.documents.filter(
             (item) => !item.reviewed,
@@ -1897,10 +1907,12 @@ function ControlRecord({
   if (sheet?.running === true) {
     busy.add("oetesting");
   }
-  // The question pass (B1j): the agents check what else the attributes need.
+  // The question pass (B1j): the agents check what else the attributes need; or a question
+  // they raised (a challenge's, among others) is still being worded, not shown yet.
   if (
-    context?.questionPass === "CHECKING" &&
-    (context.understandingCompletedAt ?? null) === null
+    (context?.questionPass === "CHECKING" ||
+      (setupInput?.preparingQuestions ?? 0) > 0) &&
+    (context?.understandingCompletedAt ?? null) === null
   ) {
     busy.add("understanding");
   }
@@ -2061,6 +2073,7 @@ function ControlRecord({
       approved: context?.approved.length ?? 0,
       proposed: context?.proposed.length ?? 0,
       untailored: context === null ? 0 : untailoredCount(context),
+      toAccept: context === null ? 0 : toAcceptCount(context),
       questions:
         context?.issues.filter(
           (item) =>
@@ -2082,6 +2095,35 @@ function ControlRecord({
             completedAt: context.understandingCompletedAt ?? null,
             questionPass: context.questionPass ?? null,
             rulesOpen: rulesOpen(context.issues),
+            proceeded: (context.reviewProceeded?.notReviewed ?? []).length > 0,
+            // The end of the course's state and choice, said on the next step too.
+            choice:
+              (context.understandingCompletedAt ?? null) !== null
+                ? ""
+                : context.questionPass === "FAILED"
+                  ? reviewChoiceLine({ failed: true, held: "", runAgain: true })
+                  : context.questionPass === "HELD"
+                    ? reviewChoiceLine({
+                        failed: false,
+                        held: heldLede(
+                          context.questionReview?.notReviewed ??
+                            context.reviewHeld?.notReviewed ??
+                            [],
+                          context.approved,
+                          context.questionReview?.notReviewedItems ?? [],
+                        ),
+                        runAgain: runsAgain(
+                          context.reviewHeld ?? { runAgain: false },
+                        ),
+                      })
+                    : "",
+            choiceAction: reviewChoiceAction(
+              runsAgain(
+                context.questionPass === "HELD"
+                  ? (context.reviewHeld ?? { runAgain: false })
+                  : null,
+              ),
+            ),
           },
     requirements: requirements.map((item) => ({
       phase: item.phase,
@@ -2241,6 +2283,9 @@ function ControlRecord({
                 reviewRequest: context.questionReviewRequest ?? null,
                 reviewNotRun: context.reviewNotRun ?? null,
                 reviewDue: context.reviewDue === true,
+                reviewHeld: context.reviewHeld ?? null,
+                reviewReasonNeeded: context.reviewReasonNeeded === true,
+                reviewProceeded: context.reviewProceeded ?? null,
                 approved: context.approved,
               }
             : null

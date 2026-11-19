@@ -523,6 +523,11 @@ describe("Control Understanding asked once", () => {
     assert.deepEqual(readyOnceComplete(ready, false, 0, true), [
       { key: "attributes", ready: false, note: "Checking" },
     ]);
+    // A question still being prepared (a challenge's): the attributes wait on it, never
+    // "Ready" (design review, 19 November 2026).
+    assert.deepEqual(readyOnceComplete(ready, false, 0, false, 1), [
+      { key: "attributes", ready: false, note: "Waiting on a question" },
+    ]);
     assert.equal(
       rulesOpen([
         { status: "OPEN", raisedBy: "RULES" },

@@ -1791,9 +1791,13 @@ function EmbeddedAttributes({
     (allRows.length >= 2 || (setHeldNow && toAccept.length > 0));
   // Before the understanding is complete (B1j): said quietly, with no warning and no way
   // back; once it is, nothing on this step sends the person to Control Understanding.
+  // From the completion alone (q_ui4, 19 November 2026): the pass reads DONE while questions
+  // are still open, held or failed, and the understanding is not complete then either. A
+  // body from before B1j (no pass at all) says nothing.
   const beforeComplete =
     (context.understandingCompletedAt ?? null) === null &&
-    (context.questionPass === "WAITING" || context.questionPass === "CHECKING");
+    context.questionPass !== null &&
+    context.questionPass !== undefined;
   const unreviewed = reviewUnfinished(context.reviewSummary);
   const first = running ? null : firstUnifiedToDecide(rows);
   const opened = open ?? new Set(first !== null ? [first] : []);

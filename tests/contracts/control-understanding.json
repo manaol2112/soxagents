@@ -4,7 +4,8 @@
   "routes": [
     {"intent": "review-follow", "method": "POST", "path": "/understanding/review/follow", "fields": {}, "body": []},
     {"intent": "review-run", "method": "POST", "path": "/understanding/review/run", "fields": {}, "body": []},
-    {"intent": "review-proceed", "method": "POST", "path": "/understanding/review/proceed", "fields": {}, "body": []},
+    {"intent": "review-proceed", "method": "POST", "path": "/understanding/review/proceed", "fields": {"reason": "The owner confirmed the approver in writing."}, "body": ["reason"]},
+    {"intent": "review-challenge", "method": "POST", "path": "/understanding/review/challenge", "fields": {"review_id": "018f0000-0000-7000-8000-0000000000cc", "unit": "A2", "need": "APPROVER", "note": "The approver named is not the one on the ticket."}, "body": ["need", "note", "review_id", "unit"]},
     {"intent": "walkthrough-not-known", "method": "POST", "path": "/understanding/not-known", "fields": {"key": "wt-cm06-approver", "note": "Asked the CAB chair."}, "body": ["key", "note", "subject"], "sent": {"subject": "WALKTHROUGH", "key": "wt-cm06-approver", "note": "Asked the CAB chair."}},
     {"intent": "value-not-known", "method": "POST", "path": "/understanding/not-known", "fields": {"key": "change-tool", "note": ""}, "body": ["key", "note", "subject"], "sent": {"subject": "VALUE", "key": "change-tool", "note": ""}},
     {"intent": "issue-not-known", "method": "POST", "path": "/issues/{issue_id}/not-known", "fields": {"issue_id": "018f0000-0000-7000-8000-0000000000aa", "version": 2, "note": ""}, "body": ["note", "version"]},
@@ -12,14 +13,15 @@
     {"intent": "assumption-change", "method": "POST", "path": "/assumptions/{assumption_id}/change", "fields": {"assumption_id": "018f0000-0000-7000-8000-0000000000bb", "version": 1, "text": "The CAB chair approves each patch."}, "body": ["text", "version"]}
   ],
   "fields": {
-    "ContextBody": ["attributes", "question_pass", "review", "review_due", "review_not_run", "review_request", "set_assumptions", "understanding_completed_at"],
+    "ContextBody": ["attributes", "question_pass", "review", "review_due", "review_held", "review_not_run", "review_reason_needed", "review_proceeded", "review_request", "set_assumptions", "understanding_completed_at"],
     "AttributesBody": ["approved", "proposed", "set_held_by_conflict"],
     "AttributeBody": ["code", "held_by_conflict", "assumptions", "criteria_updated_from", "criteria_versions"],
-    "ReviewBody": ["id", "status", "round", "narrative", "marked", "not_reviewed", "not_reviewed_items", "open_questions", "reviewed_at", "failure"],
+    "ReviewBody": ["id", "status", "round", "narrative", "marked", "not_reviewed", "not_reviewed_items", "open_questions", "reviewed_at", "failure", "points"],
     "NotReviewedBody": ["key", "kind", "attribute_id", "code", "text"],
     "ReviewRequestBody": ["status", "failure"],
     "AssumptionBody": ["id", "matter", "assumed", "status", "answer", "decided_by", "decided_at", "attribute_codes", "version", "kind"],
-    "NeedBody": ["key", "kind", "status", "not_known_note"]
+    "NeedBody": ["key", "kind", "status", "not_known_note", "issue"],
+    "IssueBody": ["id", "origin", "kind", "topic", "status", "version", "question", "suggestions", "proposal", "proposal_basis", "raised_by", "wording_reviewed", "wording_pending", "interview", "from_review", "blocks"]
   },
   "absent": {
     "AssumptionBody": ["upholds"],
@@ -29,7 +31,7 @@
     "review_not_run": ["", "NO_MODEL", "PROCEEDED", "ACCEPTED"],
     "need_status": ["CONFIRMED", "PROPOSED", "MISSING", "NOT_KNOWN"],
     "not_known_kinds": ["WALKTHROUGH", "ANSWER", "AUTH"],
-    "question_pass": ["WAITING", "CHECKING", "DONE", "FAILED"],
+    "question_pass": ["WAITING", "CHECKING", "DONE", "FAILED", "HELD"],
     "review_request_status": ["PENDING", "FAILED"],
     "set_held_sentence": "A conflict on the attributes as a set is to be decided first.",
     "held_sentence": "A conflict on this attribute is to be decided first.",

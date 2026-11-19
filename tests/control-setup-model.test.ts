@@ -17,6 +17,7 @@ import {
   inlineScreens,
   interviewAnswer,
   interviewShort,
+  isPreparingSummary,
   longChoices,
   NO_DOCUMENT,
   nextScreen,
@@ -31,6 +32,7 @@ import {
   setupDraftKey,
   setupState,
   setupSteps,
+  suggestionSelected,
   summaryRows,
   walkInterview,
 } from "../apps/web/src/control-setup-model.ts";
@@ -110,6 +112,32 @@ describe("the control's guided setup", () => {
       ["answers", "1 to answer"],
     );
     assert.equal(setupSteps({ ...fresh, slots: [] })[0]?.key, "attributes");
+  });
+
+  it("says a question still being worded is being prepared, never to answer", () => {
+    // Design review, 19 November 2026: a challenge's question was counted "1 to answer" on
+    // the node and the next step while nothing was shown in the questions yet.
+    const answered = fresh.slots.map((slot) => ({ ...slot, value: "x" }));
+    const preparing = setupSteps({
+      ...fresh,
+      slots: answered,
+      openQuestions: 1,
+      preparingQuestions: 1,
+    });
+    assert.deepEqual(
+      [preparing[0]?.summary, preparing[0]?.done, preparing[0]?.mine],
+      ["Preparing 1 question", false, false],
+    );
+    assert.equal(isPreparingSummary("Preparing 1 question"), true);
+    assert.equal(isPreparingSummary("1 to answer"), false);
+    // One shown and one being worded: only the shown one is to answer.
+    const both = setupSteps({
+      ...fresh,
+      slots: answered,
+      openQuestions: 2,
+      preparingQuestions: 1,
+    });
+    assert.deepEqual([both[0]?.summary, both[0]?.done], ["1 to answer", false]);
   });
 
   it("opens for whoever can do the next part, and says what it waits on otherwise", () => {
@@ -1043,6 +1071,37 @@ describe("an agent's question answered in place on the review's card (12 Novembe
     assert.deepEqual(plan.resolved, [
       { issueId: "q1", version: 3, note: "The IT Security Manager is told." },
     ]);
+  });
+
+  it("says the agents' answer is selected only when it is", () => {
+    // Design review, 19 November 2026 (C1): "The agents' answer is selected" over a step
+    // whose usual answer was not picked.
+    const [screen] = inlineScreens(rowOf(), {});
+    assert.equal(suggestionSelected(screen), true);
+    const step = {
+      step: "s1",
+      question: "Who leads it?",
+      choices: ["The IT manager", "The CISO"],
+      suggested: "The IT manager",
+    };
+    assert.equal(suggestionSelected({ ...step, pick: null }), false);
+    assert.equal(
+      suggestionSelected({ ...step, pick: { label: "The CISO" } }),
+      false,
+    );
+    assert.equal(
+      suggestionSelected({
+        ...step,
+        suggested: "Not an option",
+        pick: { label: "Not an option" },
+      }),
+      false,
+    );
+    assert.equal(
+      suggestionSelected({ ...step, pick: { label: "The IT manager" } }),
+      true,
+    );
+    assert.equal(suggestionSelected(undefined), false);
   });
 
   it("offers a conflict's sources with none selected: the person decides", () => {

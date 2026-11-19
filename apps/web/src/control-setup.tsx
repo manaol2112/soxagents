@@ -13,7 +13,9 @@ import {
 import type {
   QuestionPass,
   QuestionReview,
+  ReviewHeld,
   ReviewNotRun,
+  ReviewProceeded,
   ReviewRequest,
 } from "./control-context-model";
 import { useAction } from "./control-context-view";
@@ -48,11 +50,15 @@ import {
   AGENT_NAME,
   answeredTurns,
   type CopyTargets,
+  chatEnd,
   copiedNote,
   copyOffer,
   greeting,
   parseReading,
   parseTargets,
+  questionIssues,
+  REVIEW_UNREAD,
+  readReview,
 } from "./understanding-chat-model";
 import type { ApprovedRef } from "./understanding-once-model";
 import { UnderstandingReview } from "./understanding-review";
@@ -99,6 +105,12 @@ export type Conversation = {
   reviewNotRun?: ReviewNotRun | null;
   /** The server says a read is due and none is queued: the page follows it up. */
   reviewDue?: boolean;
+  /** While the pass is HELD: the units not reviewed and whether a run again is left. */
+  reviewHeld?: ReviewHeld | null;
+  /** Proceed without it takes a reason (a read before left attributes not reviewed). */
+  reviewReasonNeeded?: boolean;
+  /** After a person proceeded without the review of some units. */
+  reviewProceeded?: ReviewProceeded | null;
   approved?: readonly ApprovedRef[];
 };
 
@@ -218,6 +230,9 @@ export function ControlSetup({
             request: conversation.reviewRequest ?? null,
             notRun: conversation.reviewNotRun ?? null,
             reviewDue: conversation.reviewDue === true,
+            held: conversation.reviewHeld ?? null,
+            reasonNeeded: conversation.reviewReasonNeeded === true,
+            proceeded: conversation.reviewProceeded ?? null,
             approved: conversation.approved ?? [],
           }}
         />
@@ -520,6 +535,54 @@ function AnswersStep({
       alive = false;
     };
   }, [ids, conversation, saves, finished]);
+  // The agents' open questions as the review asks them (18 November 2026): read with the
+  // review's needs, the one source the draft to review asks them from, never the page's list
+  // of issues read at another time. null until read; the form behind it keeps the page's.
+  const [asked, setAsked] = useState<{
+    issues: readonly SetupIssue[];
+    checking: number;
+  } | null>(conversation === null ? { issues, checking: 0 } : null);
+  // The read failed (no answer, an error status, or a body that is not the review): said in
+  // the conversation with Try again, never left reading (review finding N3).
+  const [readFailed, setReadFailed] = useState(false);
+  const [rereads, setRereads] = useState(0);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: read again after each save
+  useEffect(() => {
+    if (conversation === null) {
+      return;
+    }
+    let alive = true;
+    const query = new URLSearchParams({
+      intent: "review",
+      organization_id: ids.organizationId,
+      project_id: ids.projectId,
+      control_id: ids.controlId,
+    });
+    void fetch(`/workspace/understanding-chat?${query.toString()}`)
+      .then(async (response) =>
+        readReview(response.ok, response.ok ? await response.json() : null),
+      )
+      .then((found) => {
+        if (!alive) {
+          return;
+        }
+        setReadFailed(found === null);
+        if (found !== null) {
+          setAsked((now) => ({
+            issues: questionIssues(found, now?.issues ?? []),
+            checking: found.questionsChecking,
+          }));
+        }
+      })
+      .catch(() => {
+        if (alive) {
+          setReadFailed(true);
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, [ids, conversation, saves, finished, rereads]);
   const offer = conversation === null ? null : copyOffer(targets);
   const log = useRef<HTMLOListElement>(null);
   // The greeting as the visit opened: it follows the records until the person first acts,
@@ -559,7 +622,10 @@ function AnswersStep({
   };
   const rows = [
     ...prefillAnswers(slots, proposals),
-    ...agentQuestions(issues, settled),
+    ...agentQuestions(
+      conversation === null ? issues : (asked?.issues ?? []),
+      settled,
+    ),
   ];
   // null: the summary. An edit returns to it once the answers are complete again.
   const [screenAt, setScreenAt] = useState<number | null>(() =>
@@ -833,11 +899,20 @@ function AnswersStep({
           </li>
         ) : (
           <>
-            <li className="uc-msg is-agent">
-              {finished
-                ? "Recorded. The understanding is confirmed."
-                : "Every point is on record."}
-            </li>
+            {!finished && readFailed ? (
+              <li className="uc-msg is-agent" role="alert">
+                {REVIEW_UNREAD}{" "}
+                <button
+                  type="button"
+                  className="cs-link"
+                  onClick={() => setRereads((count) => count + 1)}
+                >
+                  Try again
+                </button>
+              </li>
+            ) : (
+              <li className="uc-msg is-agent">{chatEnd(finished, asked)}</li>
+            )}
             {offer !== null && copyNote === null ? (
               <li className="uc-msg is-agent">
                 <p>{offer.text}</p>
