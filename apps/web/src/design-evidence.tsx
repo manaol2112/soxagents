@@ -2218,6 +2218,12 @@ function Row({
                           fileId: file.fileId,
                           action: "REREAD",
                         }),
+                      note: locked
+                        ? null
+                        : impacts.checking({
+                            fileId: file.fileId,
+                            action: "REREAD",
+                          }),
                       onSelect: () => rereadFile(file.fileId),
                     },
                   ]

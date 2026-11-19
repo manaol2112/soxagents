@@ -72,6 +72,16 @@ export async function POST(request: Request) {
       destination.searchParams.set(param, value);
     }
   }
+  if (!UUID.test(control)) {
+    // Back to the Evidence page's own view: the Library tab, its queue, search and
+    // grouping (18 November 2026: a change there landed on Requests).
+    for (const key of ["tab", "queue", "q", "group"] as const) {
+      const value = (fields[key] ?? "").slice(0, 120);
+      if (value !== "") {
+        destination.searchParams.set(key, value);
+      }
+    }
+  }
   if (UUID.test(control)) {
     // Back to the step the file was set on: D&I Evidence or OE Evidence.
     const step = returnStep(fields.step);

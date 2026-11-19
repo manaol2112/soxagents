@@ -74,6 +74,9 @@ function keepFields(keep: Keep): Record<string, string> {
 
 function keepOf(view: EvidenceView): Keep {
   return {
+    // The Evidence Library's own tab: every link and form of the tab comes back to it
+    // (18 November 2026: a withdrawal or a restoration landed on Requests, unconfirmed).
+    tab: "files",
     queue: view.queue,
     q: view.query,
     group: view.group === "control" ? "control" : null,
@@ -238,6 +241,7 @@ export function EvidenceFiles({
               />
               <input type="hidden" name="project" value={project.id} />
               <input type="hidden" name="section" value="evidence" />
+              <input type="hidden" name="tab" value="files" />
               {view.queue !== null ? (
                 <input type="hidden" name="queue" value={view.queue} />
               ) : null}
@@ -680,6 +684,10 @@ function FilePanel({
                     value={project?.id ?? ""}
                   />
                   <input type="hidden" name="file_id" value={file.id} />
+                  {/* Back to this view of the Library (its tab, queue and search). */}
+                  {Object.entries(keepFields(keep)).map(([key, value]) => (
+                    <input key={key} type="hidden" name={key} value={value} />
+                  ))}
                   <select
                     name="application"
                     aria-label="Application the file shows"
@@ -991,6 +999,7 @@ function WithdrawnTable({
                     Replaced by{" "}
                     <a
                       href={href(model, {
+                        tab: "files",
                         q: keep.q ?? null,
                         group: keep.group ?? null,
                         file: file.replacedBy,

@@ -5,9 +5,8 @@ import { returnStep } from "../../../src/control-workflow-model";
 import {
   answersInPlace,
   type ChangeNotice,
+  changeLanding,
   changeNoticeFor,
-  changeNoticeParam,
-  changeReturn,
   changeWrite,
 } from "../../../src/evidence-change-model";
 import { apiBaseUrl, sessionToken } from "../../../src/load-workspace";
@@ -85,44 +84,19 @@ function back(
   return NextResponse.redirect(destinationOf(request, fields, notice), 303);
 }
 
-/** The page a change comes back to, with its notice: the control's step it was made on,
- * or the evidence page with its view kept. */
+/** The page a change comes back to, with its notice (evidence-change-model.changeLanding),
+ * on the address the browser asked for. */
 function destinationOf(
   request: Request,
   fields: Record<string, string>,
   notice: ChangeNotice,
 ): URL {
+  const landing = new URLSearchParams(
+    changeLanding(fields, notice, returnStep(fields.step)).slice(2),
+  );
   const destination = browserUrl("/", request);
-  const organization = fields.organization_id ?? "";
-  const project = fields.project_id ?? "";
-  if (/^[0-9a-f-]{36}$/i.test(organization)) {
-    destination.searchParams.set("organization", organization);
+  for (const [key, value] of landing) {
+    destination.searchParams.set(key, value);
   }
-  if (/^[0-9a-f-]{36}$/i.test(project)) {
-    destination.searchParams.set("project", project);
-  }
-  const target = changeReturn(fields);
-  if (target.to === "control") {
-    destination.searchParams.set("section", "controls");
-    destination.searchParams.set("control", target.control);
-    // Back to the step the file was changed on: D&I Evidence or OE Evidence.
-    const step = returnStep(fields.step);
-    if (step !== null) {
-      destination.searchParams.set("step", step);
-    } else {
-      destination.searchParams.set("tab", "evidence");
-    }
-    // The notice shows with the control's files: open them.
-    destination.searchParams.set("ev", "files");
-  } else {
-    destination.searchParams.set("section", "evidence");
-    for (const [key, value] of Object.entries(target.keep)) {
-      destination.searchParams.set(key, value);
-    }
-    if (target.file !== null && notice !== "withdrawn") {
-      destination.searchParams.set("file", target.file);
-    }
-  }
-  destination.searchParams.set("notice", changeNoticeParam(notice));
   return destination;
 }

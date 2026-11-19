@@ -65,7 +65,9 @@ export function changeWrite(fields: Record<string, string>): ChangeWrite {
   };
 }
 
-const KEEP = ["queue", "q", "group"] as const;
+// The Evidence page's view: its tab (the Evidence Library is "files"), queue, search and
+// grouping, so a change made there comes back to the same view with its notice.
+const KEEP = ["tab", "queue", "q", "group"] as const;
 
 export function changeReturn(fields: Record<string, string>): ChangeReturn {
   const control = fields.control_id ?? "";
@@ -81,6 +83,54 @@ export function changeReturn(fields: Record<string, string>): ChangeReturn {
     }
   }
   return { to: "evidence", file: UUID.test(file) ? file : null, keep };
+}
+
+/**
+ * The page a withdrawal or a restoration comes back to, with its notice, as a path on this
+ * app: the control's workflow step it was made on (`step`, as control-workflow-model
+ * .returnStep reads it; else its Evidence tab) with its files open; or the Evidence page
+ * with the view kept (its tab, so the Evidence Library stays the Library, its queue,
+ * search and grouping) and the file open unless it was just withdrawn (18 November 2026:
+ * a withdrawal and a restoration in the Library landed on Requests, with no banner).
+ */
+export function changeLanding(
+  fields: Record<string, string>,
+  notice: ChangeNotice,
+  step: string | null,
+): string {
+  const params = new URLSearchParams();
+  for (const [field, param] of [
+    ["organization_id", "organization"],
+    ["project_id", "project"],
+  ] as const) {
+    const value = fields[field] ?? "";
+    if (UUID.test(value)) {
+      params.set(param, value);
+    }
+  }
+  const target = changeReturn(fields);
+  if (target.to === "control") {
+    params.set("section", "controls");
+    params.set("control", target.control);
+    // Back to the step the file was changed on: D&I Evidence or OE Evidence.
+    if (step !== null) {
+      params.set("step", step);
+    } else {
+      params.set("tab", "evidence");
+    }
+    // The notice shows with the control's files: open them.
+    params.set("ev", "files");
+  } else {
+    params.set("section", "evidence");
+    for (const [key, value] of Object.entries(target.keep)) {
+      params.set(key, value);
+    }
+    if (target.file !== null && notice !== "withdrawn") {
+      params.set("file", target.file);
+    }
+  }
+  params.set("notice", changeNoticeParam(notice));
+  return `/?${params.toString()}`;
 }
 
 export type ReplaceTarget =

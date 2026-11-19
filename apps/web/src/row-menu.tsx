@@ -18,6 +18,9 @@ export type RowMenuItem = {
   /** Run as the menu opens: what decides whether the item is available is read then
    * (a file's impact, E1), never on page load. */
   prefetch?: () => void;
+  /** A quiet word under the label while what decides the item is on its way ("Checking…");
+   * the item stays available (the form it opens checks again). */
+  note?: string | null;
 };
 
 /**
@@ -201,6 +204,7 @@ export function RowMenu({
         <div
           className={`row-menu-list${toRight ? " is-right" : ""}${up ? " is-up" : ""}`}
           role="menu"
+          aria-busy={items.some((item) => Boolean(item.note))}
           aria-label={label}
         >
           {items.map((item, index) => [
@@ -240,7 +244,11 @@ export function RowMenu({
                 {item.icon ? <UiIcon name={item.icon} size={14} /> : null}
                 <span>
                   {item.label}
-                  {item.unavailable ? <small>{item.unavailable}</small> : null}
+                  {item.unavailable ? (
+                    <small>{item.unavailable}</small>
+                  ) : item.note ? (
+                    <small className="row-menu-note">{item.note}</small>
+                  ) : null}
                 </span>
               </button>
             ),

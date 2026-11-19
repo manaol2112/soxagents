@@ -542,6 +542,7 @@ export function fileLine(
     return {
       label: FILE_ACTION_LABELS[action],
       unavailable: blocked ?? on.impacts?.unavailable(ask) ?? null,
+      note: blocked === null ? (on.impacts?.checking(ask) ?? null) : null,
       prefetch: () => on.impacts?.prefetch(ask),
       onSelect: () => setForm(form),
     };

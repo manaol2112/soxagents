@@ -7,6 +7,7 @@ import {
   asSentence,
   CHANGE_NOTICES,
   changeBlocked,
+  changeLanding,
   changeNoticeFor,
   changeNoticeOk,
   changeNoticeParam,
@@ -83,6 +84,70 @@ describe("withdraw and restore writes", () => {
       changeReturn({ ...fields, queue: "agent", q: "users", junk: "x" }),
       { to: "evidence", file, keep: { queue: "agent", q: "users" } },
     );
+  });
+
+  it("keeps the person on the Evidence Library, with the notice (E1, 18 November 2026)", () => {
+    // Before: the Library's forms kept the queue but not the tab, so a withdrawal landed
+    // on Requests ("section=evidence&notice=change-withdrawn") and a restoration too,
+    // where the Library's banner is not shown.
+    const library = { tab: "files", queue: "withdrawn", q: "users" };
+    const withdrawn = new URLSearchParams(
+      changeLanding({ ...fields, tab: "files" }, "withdrawn", null).slice(2),
+    );
+    assert.deepEqual(Object.fromEntries(withdrawn), {
+      organization: org,
+      project,
+      section: "evidence",
+      tab: "files",
+      notice: "change-withdrawn",
+    });
+    const restored = new URLSearchParams(
+      changeLanding(
+        { ...fields, intent: "restore", ...library },
+        "restored",
+        null,
+      ).slice(2),
+    );
+    assert.deepEqual(Object.fromEntries(restored), {
+      organization: org,
+      project,
+      section: "evidence",
+      tab: "files",
+      queue: "withdrawn",
+      q: "users",
+      file,
+      notice: "change-restored",
+    });
+    // A control's step, with its files open.
+    const step = new URLSearchParams(
+      changeLanding(
+        { ...fields, control_id: control },
+        "withdrawn",
+        "request",
+      ).slice(2),
+    );
+    assert.equal(step.get("section"), "controls");
+    assert.equal(step.get("step"), "request");
+    assert.equal(step.get("ev"), "files");
+    assert.equal(step.get("tab"), null);
+    // Every form of the Library carries its tab; the filing route keeps it too.
+    const view = readFileSync(
+      new URL("../apps/web/src/evidence-view.tsx", import.meta.url),
+      "utf8",
+    );
+    assert.match(
+      view,
+      /function keepOf\(view: EvidenceView\): Keep \{[\s\S]{0,300}tab: "files",/,
+    );
+    assert.match(view, /<input type="hidden" name="tab" value="files" \/>/);
+    const filing = readFileSync(
+      new URL(
+        "../apps/web/app/workspace/evidence-filing/route.ts",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    assert.match(filing, /\["tab", "tab"\],/);
   });
 });
 
@@ -326,7 +391,27 @@ describe("withdrawing in place", () => {
       ),
       "utf8",
     );
-    assert.match(route, /searchParams\.set\("ev", "files"\)/);
+    // Changed 18 November 2026 (E1). Old: the route set `ev=files` itself. New: the
+    // landing is the model's (changeLanding, tested below), which still opens the files.
+    assert.match(
+      route,
+      /changeLanding\(fields, notice, returnStep\(fields\.step\)\)/,
+    );
+    assert.equal(
+      new URLSearchParams(
+        changeLanding(
+          {
+            organization_id: org,
+            project_id: project,
+            file_id: file,
+            control_id: control,
+          },
+          "withdrawn",
+          null,
+        ).slice(2),
+      ).get("ev"),
+      "files",
+    );
     // E1 (18 November 2026): the in-place answer carries the server's sentence and the
     // page a reload would land on, as a path on this app only.
     assert.match(

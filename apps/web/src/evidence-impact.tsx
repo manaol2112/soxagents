@@ -30,6 +30,9 @@ type Ids = { organizationId: string; projectId: string };
 const DEBOUNCE_MS = 150;
 const FRESH_MS = 15000;
 
+/** What a menu item says while its check is on its way. */
+export const IMPACT_CHECKING = "Checking…";
+
 async function readImpact(
   ids: Ids,
   ask: ImpactAsk,
@@ -58,6 +61,9 @@ export type Impacts = {
   state: (ask: ImpactAsk) => ImpactState | undefined;
   /** Why the action is held, in the server's words; null when it is not (or not known). */
   unavailable: (ask: ImpactAsk) => string | null;
+  /** A quiet word while the check is on its way ("Checking…"), else null: the item stays
+   * available meanwhile. */
+  checking: (ask: ImpactAsk) => string | null;
   /** Forgets what was read, after a change the person made. */
   forget: () => void;
 };
@@ -90,6 +96,8 @@ export function useImpacts(ids: Ids): Impacts {
       ) {
         return;
       }
+      // Said as checking from the moment the menu opens, through the debounce.
+      setStates((map) => new Map(map).set(key, { status: "loading" }));
       timers.current.set(
         key,
         setTimeout(() => {
@@ -116,13 +124,18 @@ export function useImpacts(ids: Ids): Impacts {
     (ask: ImpactAsk) => impactUnavailable(states.get(impactKey(ask))),
     [states],
   );
+  const checking = useCallback(
+    (ask: ImpactAsk) =>
+      states.get(impactKey(ask))?.status === "loading" ? IMPACT_CHECKING : null,
+    [states],
+  );
   const forget = useCallback(() => {
     for (const key of turns.current.keys()) {
       turns.current.set(key, (turns.current.get(key) ?? 0) + 1);
     }
     setStates(new Map());
   }, []);
-  return { prefetch, state, unavailable, forget };
+  return { prefetch, state, unavailable, checking, forget };
 }
 
 /** One impact for a confirm form: read as the form opens, and again when what it asks

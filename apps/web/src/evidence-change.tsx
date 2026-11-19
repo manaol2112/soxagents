@@ -477,7 +477,7 @@ export function FileChanges(props: Props) {
             The file and who withdrew it stay on record, and it can be restored.
           </p>
           <ImpactPreview state={impact} action="WITHDRAW" />
-          <label htmlFor={`${uid}-why`}>
+          <label htmlFor={`${uid}-why`} className="change-label-line">
             Why <span className="change-optional">(optional)</span>
           </label>
           <input

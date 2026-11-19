@@ -796,6 +796,7 @@ export function historyHref(
     organization: ids.organizationId,
     project: ids.projectId,
     section: "evidence",
+    tab: "files",
   });
   if (file.withdrawn) {
     params.set("queue", "withdrawn");

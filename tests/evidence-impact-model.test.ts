@@ -33,6 +33,7 @@ import {
   type WithdrawnFile,
 } from "../apps/web/src/evidence-model.ts";
 import { placementProblem } from "../apps/web/src/evidence-wizard-model.ts";
+import { formatDate } from "../apps/web/src/format.ts";
 
 // E1, evidence reliance (product owner, 18 November 2026): the web half. The API's impact
 // read model says what a change to a file would do; the screens offer or hold an action
@@ -618,6 +619,9 @@ describe("a file's history, from what the register serves", () => {
       }).slice(2),
     );
     assert.equal(kept.get("section"), "evidence");
+    // On the Evidence Library tab itself (18 November 2026: without it the link opened
+    // Requests).
+    assert.equal(kept.get("tab"), "files");
     assert.equal(kept.get("queue"), "withdrawn");
     assert.equal(kept.get("q"), "users v1.csv");
     const live = new URLSearchParams(
@@ -628,6 +632,7 @@ describe("a file's history, from what the register serves", () => {
       }).slice(2),
     );
     assert.equal(live.get("file"), newer);
+    assert.equal(live.get("tab"), "files");
     assert.equal(live.get("queue"), null);
   });
 });
@@ -815,11 +820,110 @@ describe("a file's history, from the server (E1, 18 November 2026)", () => {
       /onToggle=\{\(event\) => \{\s*if \(event\.currentTarget\.open\) \{\s*setHistoryShown\(true\);/,
     );
     const history = read("src/evidence-history.tsx");
-    assert.match(history, /if \(!shown \|\| known\) \{\s*return;/);
-    assert.match(history, /<LocalTime at=\{line\.at\} \/>/);
+    // 18 November 2026: the read's effect listed a value derived from the read itself,
+    // so setting its loading state re-ran the effect, whose cleanup aborted its own
+    // request (net::ERR_ABORTED), and the section stayed on "Loading…". The effect now
+    // depends only on what asks for a read: never on state it sets, nor on anything
+    // computed from that state.
+    const hook = history.slice(
+      history.indexOf("function useFileHistory("),
+      history.indexOf("function Lines("),
+    );
+    const effect =
+      /useEffect\(\(\) => \{([\s\S]*?)\n {2}\}, \[([^\]]*)\]\);/.exec(hook);
+    assert.ok(effect !== null);
+    const deps = (effect[2] ?? "").split(",").map((dep) => dep.trim());
+    assert.deepEqual(deps, [
+      "shown",
+      "attempt",
+      "fileId",
+      "organizationId",
+      "projectId",
+    ]);
+    const set = [...(effect[1] ?? "").matchAll(/\bset([A-Z]\w*)\(/g)].map(
+      (match) => `${match[1]?.charAt(0).toLowerCase()}${match[1]?.slice(1)}`,
+    );
+    assert.ok(set.includes("read"), "the effect sets the read");
+    for (const dep of deps) {
+      assert.ok(!set.includes(dep), `${dep} is state the effect sets`);
+      // Nor derived from it (the old `const known = read !== null && ...`).
+      assert.doesNotMatch(hook, new RegExp(`const ${dep} = [^;]*\\bread\\b`));
+    }
+    // The last ask's answer only, and a retry is a new attempt.
+    assert.match(hook, /if \(!abort\.signal\.aborted\) \{/);
+    assert.match(hook, /retry: \(\) => setAttempt\(\(value\) => value \+ 1\)/);
     assert.match(history, /<ol className="ea-history"/);
     assert.match(history, /fileHistory\(/);
     assert.match(history, /role="status"/);
+  });
+
+  it("says a date as the file's facts beside it say it (one date rule, 18 November 2026)", () => {
+    // Changed 18 November 2026 (design review). Old: the History lines said the browser's
+    // local time ("Uploaded Nov 18, 4:56 PM") beside the facts' "Added Nov 19, 2026" for
+    // the same upload (00:56 UTC on 19 November). New: both say formatDate's UTC date,
+    // as the Evidence Library and the Withdrawn list do, in a <time> with the moment.
+    const read = (path: string) =>
+      readFileSync(new URL(`../apps/web/src/${path}`, import.meta.url), "utf8");
+    const history = read("evidence-history.tsx");
+    assert.match(
+      history,
+      /<time dateTime=\{line\.at\}>\{formatDate\(line\.at\)\}<\/time>/,
+    );
+    assert.doesNotMatch(history, /LocalTime/);
+    // The facts beside it ("Added") use the same rule.
+    assert.match(
+      read("evidence-intelligence-view.tsx"),
+      /formatDate\(file\.createdAt\)/,
+    );
+    // Whatever the browser's zone, the upload at 00:56 UTC on 19 November is that day.
+    assert.equal(formatDate("2026-11-19T00:56:00Z"), "Nov 19, 2026");
+    const upload = historyLines({
+      fileId: file,
+      fileName: "x",
+      events: [
+        {
+          kind: "ADDED",
+          at: "2026-11-19T00:56:00Z",
+          by: "Bo",
+          reason: "",
+          source: "UPLOAD",
+          sizeBytes: null,
+          replaces: null,
+          replacedBy: null,
+          requirementId: null,
+          requirementTitle: null,
+        },
+      ],
+    })[0];
+    assert.equal(formatDate(upload?.at ?? ""), "Nov 19, 2026");
+  });
+});
+
+describe("the control's own file list at a phone's width (18 November 2026)", () => {
+  it("lets every line of a file's card shrink and wrap inside the card", () => {
+    // At 390 each line of a card was 561px, cut at its edge: the summary's grid column
+    // grew to the unwrapped file name.
+    const css = readFileSync(
+      new URL("../apps/web/app/globals.css", import.meta.url),
+      "utf8",
+    ).replace(/\r\n/g, "\n");
+    assert.match(
+      css,
+      /\.evidence-file > summary \{\n {2}grid-template-columns: minmax\(0, 1fr\);\n {2}min-width: 0;\n\}/,
+    );
+    assert.match(
+      css,
+      /\.evidence-file-summary,\n\.evidence-file-serves,\n\.evidence-file-meta \{\n {2}overflow-wrap: anywhere;\n\}/,
+    );
+    assert.match(
+      css,
+      /\.app-groups,\n\.evidence-files,\n\.evidence-file-body,\n\.evidence-file-tools \{\n {2}grid-template-columns: minmax\(0, 1fr\);\n\}/,
+    );
+    // The viewer is never wider than the window, whatever a file's name.
+    assert.match(
+      css,
+      /\.preview-backdrop \{[^}]*grid-template-columns: minmax\(0, 1fr\);/,
+    );
   });
 });
 

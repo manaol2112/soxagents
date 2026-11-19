@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   type FileHistoryBody,
   fileHistory,
@@ -11,8 +11,7 @@ import {
   parseFileHistory,
 } from "./evidence-impact-model";
 import type { WithdrawnFile } from "./evidence-model";
-import { formatBytes } from "./format";
-import { LocalTime } from "./local-time";
+import { formatBytes, formatDate } from "./format";
 
 type Ids = { organizationId: string; projectId: string };
 
@@ -30,13 +29,24 @@ function useFileHistory(
   shown: boolean,
 ): { read: Read | null; retry: () => void } {
   const [read, setRead] = useState<{ fileId: string; read: Read } | null>(null);
+  // A person's "Try again": a new attempt for the same file.
+  const [attempt, setAttempt] = useState(0);
+  // The read under way or done, by file and attempt: the effect depends only on what
+  // asks for a read, never on the read's own state (18 November 2026: it listed whether
+  // the file was known, so setting the loading state aborted its own request).
+  const started = useRef("");
   const { organizationId, projectId } = ids;
-  const known = read !== null && read.fileId === fileId;
   useEffect(() => {
-    if (!shown || known) {
+    if (!shown) {
       return;
     }
+    const key = `${fileId}:${attempt}`;
+    if (started.current === key) {
+      return;
+    }
+    started.current = key;
     const abort = new AbortController();
+    let finished = false;
     setRead({ fileId, read: { status: "loading" } });
     void (async () => {
       let next: Read = { status: "failed" };
@@ -53,16 +63,24 @@ function useFileHistory(
       } catch {
         next = { status: "failed" };
       }
+      // The last ask's answer only: one for another file or attempt is dropped.
       if (!abort.signal.aborted) {
+        finished = true;
         setRead({ fileId, read: next });
       }
     })();
-    return () => abort.abort();
-  }, [shown, known, fileId, organizationId, projectId]);
+    return () => {
+      abort.abort();
+      // Left before its answer (another file, or the effect run again): asked again.
+      if (!finished && started.current === key) {
+        started.current = "";
+      }
+    };
+  }, [shown, attempt, fileId, organizationId, projectId]);
   return {
     read: read !== null && read.fileId === fileId ? read.read : null,
-    // Forgets the failed read: the section, still shown, reads it again.
-    retry: () => setRead(null),
+    // The section, still shown, reads it again.
+    retry: () => setAttempt((value) => value + 1),
   };
 }
 
@@ -87,7 +105,10 @@ function Lines({ ids, lines }: { ids: Ids; lines: readonly HistoryLine[] }) {
             ) : null}
           </span>
           <small>
-            <LocalTime at={line.at} />
+            {/* One date rule on the screen: a file's dates as its facts, the Evidence
+                Library and the Withdrawn list say them (formatDate, the UTC date),
+                never the browser's local time beside them (18 November 2026). */}
+            <time dateTime={line.at}>{formatDate(line.at)}</time>
             {line.by !== "" ? ` by ${line.by}` : ""}
             {line.sizeBytes !== null ? ` · ${formatBytes(line.sizeBytes)}` : ""}
           </small>

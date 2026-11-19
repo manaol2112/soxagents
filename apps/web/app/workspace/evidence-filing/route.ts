@@ -93,6 +93,7 @@ function destinationOf(
   for (const [field, param] of [
     ["organization_id", "organization"],
     ["project_id", "project"],
+    ["tab", "tab"],
     ["queue", "queue"],
     ["q", "q"],
     ["group", "group"],

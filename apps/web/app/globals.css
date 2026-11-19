@@ -8781,9 +8781,17 @@ button.cite-chip.is-open {
   font-size: var(--fs-sm);
 }
 
-/* A refusal under a one-row form (InPlaceForm) takes its own line. */
+/* A refusal under a one-row form (InPlaceForm) takes its own full line under the row,
+   and the row keeps its widths (18 November 2026: the sentence sat in the Move row and
+   squeezed the control's select to 40px). */
+form:has(> .change-problem) {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
 form > .change-problem {
-  flex-basis: 100%;
+  flex: 1 0 100%;
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 
@@ -8797,6 +8805,70 @@ form > .change-problem {
 .change-optional {
   color: var(--text-tertiary);
   font-weight: 400;
+}
+
+/* "Why (optional)" is one label on one line, not two grid rows. */
+.change-form label.change-label-line {
+  display: block;
+}
+
+/* A change form never grows past its container, whatever a file's name: its column
+   shrinks, long names wrap, and the chosen file's name is cut with an ellipsis
+   (18 November 2026: a long chosen name made the Replace form 682px wide at 390). */
+.file-changes,
+.change-form {
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.change-form > *,
+.change-pick > * {
+  min-width: 0;
+}
+
+.change-picked {
+  flex: 1 1 10rem;
+  max-width: 100%;
+}
+
+/* The control's own file list: a long file name is cut inside its card, and Preview and
+   the file's actions drop below it, never past the panel's edge. */
+.app-groups,
+.evidence-files,
+.evidence-file-body,
+.evidence-file-tools {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.evidence-file-item,
+.evidence-file,
+.evidence-file-head > strong,
+.evidence-file-body > *,
+.evidence-file-tools > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* The card's line (name, pills, the agent's note, what it serves, who added it): its
+   grid column is the card's width, never the file name's (18 November 2026: at 390 each
+   line was 561px, cut at the card's edge, because the column grew to the unwrapped
+   name). Every line wraps inside it. */
+.evidence-file > summary {
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+
+.evidence-file > summary > *,
+.evidence-file-pills {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.evidence-file-summary,
+.evidence-file-serves,
+.evidence-file-meta {
+  overflow-wrap: anywhere;
 }
 
 /* What a change to a file would do, in its confirm form (E1, evidence-impact.tsx). */
@@ -10112,6 +10184,9 @@ body.has-dialog {
   inset: 0;
   z-index: 60;
   display: grid;
+  /* The dialog's width is the window's, never its content's (18 November 2026: a long
+     file name in the switcher made the viewer 948px wide at 390). */
+  grid-template-columns: minmax(0, 1fr);
   place-items: center;
   padding: 2rem;
   background: var(--backdrop);
@@ -10119,6 +10194,7 @@ body.has-dialog {
 
 .preview-dialog {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   width: min(1280px, 100%);
   height: min(92vh, 1000px);
