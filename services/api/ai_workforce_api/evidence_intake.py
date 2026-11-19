@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
 from ai_workforce_api.authorization import (
+    AccessDenied,
     Action,
     NotVisible,
     Principal,
@@ -52,7 +53,21 @@ from ai_workforce_api.evidence_receipts import (
     follow_linked,
     release_receipt,
 )
-from ai_workforce_api.evidence_reliance import Change, ImpactBody, check, impact, removal
+from ai_workforce_api.evidence_reliance import (
+    APPLICATIONS_REFUSED,
+    Change,
+    ImpactBody,
+    RelianceRefused,
+    check,
+    check_items_left,
+    impact,
+    lock_served,
+    refusal,
+    reliances,
+    removal,
+    served,
+    shared_items,
+)
 from ai_workforce_api.evidence_review import review_decided
 from ai_workforce_api.evidence_withdrawn import in_force, is_withdrawn
 from ai_workforce_api.evidence_wizard import (
@@ -238,11 +253,11 @@ class FilingBody(BaseModel):
 
 class RemoveFromRequestBody(BaseModel):
     """Take the file off one evidence item (and, through its filing, off that item's
-    request), with why. `version`, when sent, is the link's or the filing's, as the file's
-    impact for REMOVE_FROM_REQUEST names it."""
+    request), with why, at the version the person saw: the link's or the filing's, as the
+    file's impact for REMOVE_FROM_REQUEST names it (`removal.version`)."""
 
     requirement_id: UUID
-    version: int | None = Field(default=None, ge=1)
+    version: int = Field(ge=1)
     reason: str = Field(min_length=3, max_length=500)
 
     @field_validator("reason")
@@ -278,7 +293,7 @@ def register_evidence_intake(
         except StillWithdrawn:
             # Answered by its own handler, with the way to the withdrawn files.
             raise
-        except (IntakeState, WizardState) as error:
+        except (IntakeState, WizardState, RelianceRefused) as error:
             raise HTTPException(status_code=409, detail=error.detail) from None
         except StoreError as error:
             raise HTTPException(status_code=503, detail=error.detail) from None
@@ -918,6 +933,9 @@ def _read_again(
         return None
     if review_decided(cursor.connection, analysis_id):
         return None
+    if refusal(cursor, project_id, file_id, "REREAD") is not None:
+        # Something relies on its reading (E1): the restoration stands, the reading too.
+        return None
     restart_analysis(cursor, analysis_id, actor)
     cursor.execute(
         """
@@ -1042,6 +1060,10 @@ def _restore_for_item(
                 (item, file_id),
             )
             if row[1] is None:
+                return None
+            if refusal(cursor, project_id, file_id, "REREAD") is not None:
+                # Something relies on its reading (E1): the restoration stands, the
+                # reading too.
                 return None
             restart_analysis(cursor, UUID(str(row[1])), principal.id)
             return UUID(str(row[1]))
@@ -1374,7 +1396,9 @@ def _file(
                     "confirmed",
                 )
         else:
-            # Evidence relied on where it is filed stays until that is changed (E1).
+            # Evidence relied on where it is filed stays until that is changed (E1); the
+            # items it serves are held first, so no acceptance lands in between.
+            lock_served(cursor, project_id, file_id)
             check(cursor, project_id, file_id, "MOVE")
             # Off every open sheet that holds it, its family's too: its new reading places
             # it again (before, a moved file stayed on its old control's open sheets).
@@ -1470,6 +1494,8 @@ def _file(
 # Taking a file off one item or request (E1)
 
 REMOVED_FROM_REQUEST = "Removed from its request by a person."
+# What the impact of a change says to a reader who may not make it.
+NOT_YOURS_TO_CHANGE = "you can read this engagement's evidence but not change it"
 
 
 def _remove_from_request(
@@ -1493,7 +1519,14 @@ def _remove_from_request(
     on the file for that item or, through the filing, for that request's items
     (evidence_reliance). Audited as `evidence.removed_from_request`."""
     from ai_workforce_api.evidence_assurance import follow_control
-    from ai_workforce_api.evidence_plans import PlanState, UnlinkBody, unlink_file
+    from ai_workforce_api.evidence_findings import mark_stale_for_request
+    from ai_workforce_api.evidence_plans import (
+        PlanState,
+        UnlinkBody,
+        reset_items_left_without_file,
+        unlink_file,
+    )
+    from ai_workforce_api.evidence_wizard import _repoint
 
     _person(connection, principal, organization_id, project_id, Action.TASK_UPDATE)
     _require_active(connection, organization_id, project_id)
@@ -1511,7 +1544,7 @@ def _remove_from_request(
         if is_withdrawn(cursor, file_id):
             raise IntakeState("this file is withdrawn; restore it first")
         found = removal(cursor, project_id, file_id, body.requirement_id)
-        if body.version is not None and body.version != found.version:
+        if body.version != found.version:
             raise IntakeState("the file changed; refresh and try again")
         if found.link_id is not None:
             try:
@@ -1524,7 +1557,15 @@ def _remove_from_request(
             except PlanState as error:
                 raise IntakeState(error.detail) from None
         elif found.match_id is not None and found.request_id is not None:
+            # The items it serves, and their plans, held before the check (N5); what the
+            # filing served: the request's items and the sibling items it shares (B1).
+            lock_served(cursor, project_id, file_id)
             check(cursor, project_id, file_id, "REMOVE_FROM_REQUEST", body.requirement_id)
+            left = [
+                item
+                for item, via, _control in served(cursor, project_id, file_id)
+                if via in ("FILING", "SHARED")
+            ]
             match = cursor.execute(
                 "SELECT version FROM evidence_matches WHERE id = %s FOR UPDATE",
                 (found.match_id,),
@@ -1549,6 +1590,18 @@ def _remove_from_request(
                     cursor, organization_id, project_id, released.request_id, principal.id,
                     released.before,
                 )  # fmt: skip
+            # The reading names the request it is on now (none), as the wizard's move
+            # does, and the reader's proposals on the request it left are out of date.
+            _repoint(cursor, organization_id, project_id, file_id, derive=False)
+            mark_stale_for_request(
+                cursor, file_id, found.request_id, "The file was removed from this request.",
+                {"requirement_id": str(body.requirement_id)},
+            )  # fmt: skip
+            # An item it alone served loses the judgment on record, as when it leaves.
+            reset_items_left_without_file(
+                cursor, organization_id, project_id, file_id, principal.id,
+                "FILE_REMOVED_FROM_REQUEST", left,
+            )  # fmt: skip
             if wizard is not None:
                 # The wizard's placement follows the file (superseding, kept).
                 follow_filing(cursor, project_id, file_id, principal.id, REMOVED_FROM_REQUEST)
@@ -1585,7 +1638,9 @@ def _impact(
     requirement_id: UUID | None,
 ) -> ImpactBody:
     """What a change to the file would do, read-only (evidence_reliance.impact). Anyone who
-    can read the engagement can ask; another firm's file is not found."""
+    can read the engagement can ask; another firm's file is not found. The change is not
+    allowed where the engagement is not active or the reader may not change its evidence
+    (E1 review, N1): the refusal says which, as the change itself would refuse it."""
     authorize(
         connection,
         principal=principal,
@@ -1593,8 +1648,18 @@ def _impact(
         organization_id=organization_id,
         project_id=project_id,
     )
+    refused: str | None = None
+    try:
+        _person(connection, principal, organization_id, project_id, Action.TASK_UPDATE)
+    except AccessDenied, NotVisible:
+        refused = NOT_YOURS_TO_CHANGE
+    if refused is None:
+        try:
+            _require_active(connection, organization_id, project_id)
+        except IntakeState as error:
+            refused = error.detail
     with transaction(connection) as cursor:
-        return impact(cursor, organization_id, project_id, file_id, action, requirement_id)
+        return impact(cursor, organization_id, project_id, file_id, action, requirement_id, refused)
 
 
 def _audit(
@@ -1653,6 +1718,11 @@ def _set_application(
         ).fetchone()
         if link is None or link[0] is None:
             raise IntakeState("file the evidence to a control first")
+        # What the file serves now on the control's sibling instances, and what relies on
+        # it there, read before the tag changes (B3 of the E1 review).
+        lock_served(cursor, project_id, file_id)
+        shared_before = shared_items(cursor, project_id, file_id)
+        relied = reliances(cursor, project_id, file_id) if shared_before else []
         for application_id in [*named, *([body.application_id] if body.application_id else [])]:
             # Any application of the control's family: the file becomes the evidence of
             # the instance that covers it.
@@ -1684,6 +1754,17 @@ def _set_application(
              body.application_id if body.scope == "ONE" else None,
              named if body.scope == "SOME" else [], principal.id),
         )  # fmt: skip
+        lost = shared_before - shared_items(cursor, project_id, file_id)
+        if lost:
+            # Refused (and the tag rolled back) where a sibling item relies on the file;
+            # otherwise an item it alone served loses the judgment on record.
+            check_items_left(relied, lost, APPLICATIONS_REFUSED)
+            from ai_workforce_api.evidence_plans import reset_items_left_without_file
+
+            reset_items_left_without_file(
+                cursor, organization_id, project_id, file_id, principal.id,
+                "APPLICATIONS_CHANGED", lost,
+            )  # fmt: skip
         for sheet in cursor.execute(
             "SELECT id, status FROM test_sheets WHERE project_id = %s "
             "AND engagement_control_id = ANY(%s) AND status = 'OPEN' AND %s "

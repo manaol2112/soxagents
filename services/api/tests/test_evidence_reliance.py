@@ -32,17 +32,21 @@ _ = migrated
 
 
 C, OTHER_C, R, OTHER_R, Q = uuid4(), uuid4(), uuid4(), uuid4(), uuid4()
-WHERE = ("SAME", "ELSEWHERE", "SAME_REQUEST")
+WHERE = ("SAME", "ELSEWHERE", "SAME_REQUEST", "SIBLING")
 
 
 def _scope(change: reliance.Change, where: str) -> reliance.Scope:
     """The change's reach: on the reliance's own control or item (SAME), on another one
-    (ELSEWHERE), or on another item of the reliance's request (SAME_REQUEST)."""
+    (ELSEWHERE), on another item of the reliance's request (SAME_REQUEST), or on another
+    item while the file also stops serving the reliance's item, a sibling instance's
+    (SIBLING: B1 and B3 of the E1 review)."""
     if change == "MOVE":
         return reliance.Scope(frozenset({C if where == "SAME" else OTHER_C}))
     if change in ("UNLINK", "REMOVE_FROM_REQUEST"):
         if where == "SAME":
             return reliance.Scope(requirement_id=R)
+        if where == "SIBLING":
+            return reliance.Scope(requirement_id=OTHER_R, items=frozenset({R}))
         return reliance.Scope(
             requirement_id=OTHER_R, request_id=Q if where == "SAME_REQUEST" else None
         )
@@ -60,6 +64,8 @@ def _expected(kind: reliance.Kind, change: reliance.Change, where: str) -> bool:
     if kind in ("READING", "SCREENSHOT_SIGNED"):
         return True
     if change == "REMOVE_FROM_REQUEST" and where == "SAME_REQUEST":
+        return True
+    if change in ("UNLINK", "REMOVE_FROM_REQUEST") and where == "SIBLING":
         return True
     return where == "SAME"
 
@@ -153,6 +159,9 @@ class _Design:
     def remove(
         self, file_id: str, item_id: str, client: TestClient | None = None, **body: Any
     ) -> Any:
+        if "version" not in body:
+            seen = self.impact(file_id, "REMOVE_FROM_REQUEST", item_id).json()
+            body["version"] = (seen.get("removal") or {}).get("version") or 1
         return (client or self.client).post(
             f"{self.base}/evidence-files/{file_id}/remove-from-request",
             json={"requirement_id": item_id, "reason": "It answers another item."} | body,
@@ -196,6 +205,16 @@ def _audit(case: _Design, action: str, target: str) -> list[dict[str, Any]]:
             UUID(target),
         )
     ]
+
+
+def _reread(database: Database, client: TestClient, base: str, file_id: str) -> Any:
+    """A person asks for the file to be read again; its reading as it stood."""
+    with connect(database.url) as connection:
+        found = connection.execute(
+            "SELECT id, version FROM evidence_analyses WHERE evidence_file_id = %s", (file_id,)
+        ).fetchone()
+    assert found is not None
+    return client.post(f"{base}/evidence-analyses/{found[0]}/reanalyze", json={"version": found[1]})
 
 
 def test_each_reliance_on_record_keeps_the_file_until_it_is_cleared(migrated: Database) -> None:
@@ -327,6 +346,127 @@ def test_each_reliance_on_record_keeps_the_file_until_it_is_cleared(migrated: Da
     )  # fmt: skip
     assert case.withdraw(served).status_code == 200
 
+    # A finding on it sent to the client.
+    asked = case.add(case.first, "tickets.txt")
+    case.run(
+        """
+        WITH sent AS (
+            INSERT INTO request_messages (
+                organization_id, project_id, pbc_request_id, author_kind, author_user_id, body
+            )
+            VALUES (%s, %s, %s, 'TEAM', %s, 'Please send the approval for REQ-1041.')
+            RETURNING id
+        )
+        INSERT INTO evidence_findings (
+            organization_id, project_id, engagement_control_id, evidence_file_id, analysis_id,
+            requirement_id, pbc_request_id, source, kind, fingerprint, title, status,
+            decided_by, decided_at, sent_message_id
+        )
+        SELECT %s, %s, %s, a.evidence_file_id, a.id, %s, %s, 'READER', 'GAP', %s,
+               'The approval is missing', 'SENT', %s, clock_timestamp(), sent.id
+        FROM evidence_analyses a, sent WHERE a.evidence_file_id = %s
+        """,
+        org, project, case.request_id, owner,
+        org, project, case.control, case.first, case.request_id, "b" * 64, owner, asked,
+    )  # fmt: skip
+    refused(
+        asked,
+        "SENT_FINDING",
+        'the finding "The approval is missing" for ITGC-AC-01 was sent to the client on it; '
+        "close that finding first",
+    )
+
+    # Its screenshot review signed off.
+    shot = case.add(case.first, "screenshot.txt")
+    case.run(
+        """
+        INSERT INTO evidence_reviews (
+            organization_id, project_id, evidence_analysis_id, evidence_file_id, status,
+            proposed, decision, conclusion, decided_by, decided_at
+        )
+        SELECT %s, %s, a.id, a.evidence_file_id, 'NEEDS_PERSON', 'CANNOT_CONCLUDE',
+               'ACCEPTED', 'CANNOT_CONCLUDE', %s, clock_timestamp()
+        FROM evidence_analyses a WHERE a.evidence_file_id = %s
+        """,
+        org, project, owner, shot,
+    )  # fmt: skip
+    refused(shot, "SCREENSHOT_SIGNED", reliance.SCREENSHOT_SIGNED)
+    # File-wide: it is refused off any item too.
+    assert case.remove(shot, case.first).json()["detail"] == (
+        f"the file cannot be removed from this request: {reliance.SCREENSHOT_SIGNED}"
+    )
+
+    # The prepared design workpaper's current version cites it.
+    cited = case.add(case.first, "cited policy.txt")
+    case.run(
+        """
+        WITH paper AS (
+            SELECT id FROM workpapers
+            WHERE project_id = %s AND engagement_control_id = %s AND stage = 'DESIGN'
+        ), written AS (
+            INSERT INTO workpaper_versions (workpaper_id, number, content, source, created_by)
+            SELECT id, 2, jsonb_build_object('walkthrough', %s::text), 'PERSON', %s FROM paper
+            RETURNING workpaper_id
+        )
+        UPDATE workpapers SET current_version = 2, status = 'PREPARED', prepared_by = %s,
+               prepared_at = clock_timestamp(), prepared_version = 2, draft_status = 'IDLE'
+        WHERE id IN (SELECT workpaper_id FROM written)
+        """,
+        project, case.control, f'Managers approve access [cite:{cited} "managers approve"]',
+        owner, owner,
+    )  # fmt: skip
+    refused(
+        cited,
+        "PREPARED_WORKPAPER",
+        "the prepared design workpaper for ITGC-AC-01 cites it; reopen it first",
+    )
+
+
+def test_a_file_on_a_whole_request_comes_off_it_only_when_no_item_relies_on_it(
+    migrated: Database,
+) -> None:
+    """A file filed for the request (no item named) serves each of its items: taking it off
+    one item takes it off the request, so an acceptance of any of them refuses it; once
+    that is reopened, it lets go of the request and stays filed to its control."""
+    case = _Design(migrated, "rel-whole")
+    added = case.client.post(
+        f"{case.base}/evidence-uploads",
+        params={"batch_id": str(uuid4()), "name": "both items.txt",
+                "request_id": case.request_id},
+        content=b"The policy and one approved request, end to end.",
+        headers={"content-type": "text/plain"},
+    )  # fmt: skip
+    assert added.status_code == 200, added.text
+    whole = str(added.json()["file_id"])
+    case.read()
+    assert case.rows(
+        "SELECT requirement_id FROM evidence_matches WHERE evidence_file_id = %s", UUID(whole)
+    ) == [(None,)]
+    case.accept(case.first)
+    seen = case.impact(whole, "REMOVE_FROM_REQUEST", case.second).json()
+    assert (seen["removal"]["via"], seen["allowed"]) == ("FILING", False)
+    refused = case.remove(whole, case.second)
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == (
+        f"the file cannot be removed from this request: the evidence item "
+        f'"{case.item(case.first)["title"]}" was accepted with it; change that decision first'
+    )
+    reopened = case.client.post(
+        f"{case.base}/controls/{case.control}/evidence-requirements/{case.first}/sufficiency",
+        json={"sufficiency": "NOT_REVIEWED", "version": case.item(case.first)["version"]},
+    )
+    assert reopened.status_code == 200, reopened.text
+    removed = case.remove(whole, case.second)
+    assert removed.status_code == 200, removed.text
+    assert case.rows(
+        "SELECT status, pbc_request_id FROM evidence_matches WHERE evidence_file_id = %s",
+        UUID(whole),
+    ) == [("FILED", None)]
+    # The reading names no request now (N6).
+    assert case.rows(
+        "SELECT pbc_request_id FROM evidence_analyses WHERE evidence_file_id = %s", UUID(whole)
+    ) == [(None,)]
+
 
 def test_an_items_reliance_keeps_it_there_and_a_removal_takes_it_off_one_item(
     migrated: Database,
@@ -341,6 +481,8 @@ def test_an_items_reliance_keeps_it_there_and_a_removal_takes_it_off_one_item(
     # Its acceptance on the first item keeps the file in the engagement.
     kept = case.withdraw(rules)
     assert kept.json()["detail"] == f"the file cannot be withdrawn: {accepted}"
+    again = _reread(migrated, case.client, case.base, rules)
+    assert again.json()["detail"] == f"This file's reading is relied on: {accepted}"
     seen = case.impact(rules, "WITHDRAW").json()
     assert seen["allowed"] is False
     assert [(b["kind"], b["requirement_id"]) for b in seen["blocking"]] == [
@@ -433,8 +575,12 @@ def test_an_items_reliance_keeps_it_there_and_a_removal_takes_it_off_one_item(
     from test_design_requests import _member
 
     _reviewer_id, reviewer = _member(migrated, case.team, "REVIEWER")
-    assert case.remove(rules, case.first, client=reviewer).status_code == 403
-    assert case.impact(rules, "WITHDRAW", client=reviewer).status_code == 200
+    assert case.remove(rules, case.first, client=reviewer, version=1).status_code == 403
+    read = case.impact(walkthrough, "WITHDRAW", client=reviewer)
+    assert read.status_code == 200
+    assert (read.json()["allowed"], read.json()["refusal"]) == (
+        False, "you can read this engagement's evidence but not change it",
+    )  # fmt: skip
     _seeded, _project, outsider, _admin = _team(migrated, f"rel-out-{uuid4().hex[:4]}")
     assert case.remove(rules, case.first, client=outsider).status_code == 404
     assert case.impact(rules, "WITHDRAW", client=outsider).status_code == 404
@@ -447,6 +593,22 @@ def test_an_items_reliance_keeps_it_there_and_a_removal_takes_it_off_one_item(
         f"{case.base}/evidence-files/{uuid4()}/impact", params={"action": "WITHDRAW"}
     )
     assert missing.status_code == 404
+    # A version is required (N10): a stale page cannot remove a file.
+    unversioned = case.client.post(
+        f"{case.base}/evidence-files/{rules}/remove-from-request",
+        json={"requirement_id": case.first, "reason": "It answers another item."},
+    )
+    assert unversioned.status_code == 422
+    # An engagement that is not active changes no evidence; its impact says so.
+    case.run("UPDATE projects SET status = 'PAUSED' WHERE id = %s", case.team["project"])
+    paused = case.remove(walkthrough, case.first, version=1)
+    assert (paused.status_code, paused.json()["detail"]) == (
+        409, "the engagement is not active, so it takes no new evidence",
+    )  # fmt: skip
+    seen = case.impact(walkthrough, "WITHDRAW").json()
+    assert (seen["allowed"], seen["refusal"]) == (
+        False, "the engagement is not active, so it takes no new evidence",
+    )  # fmt: skip
 
 
 def test_a_replacement_carries_the_links_and_no_judgment(migrated: Database) -> None:
@@ -525,6 +687,8 @@ def test_a_tickmark_and_a_reliability_decision_keep_the_file(migrated: Database)
     )
     kept = bench.owner.post(f"{files}/withdraw", json={"reason": "Sent in error"})
     assert kept.json()["detail"] == f"the file cannot be withdrawn: {tickmark}"
+    again = _reread(migrated, bench.owner, bench.base, ticket)
+    assert again.json()["detail"] == f"This file's reading is relied on: {tickmark}"
     register = bench.owner.get(f"{bench.base}/evidence-register").json()
     filing = next(f for f in register["files"] if f["id"] == ticket)["filing_version"]
     moved = bench.owner.post(
@@ -541,6 +705,10 @@ def test_a_tickmark_and_a_reliability_decision_keep_the_file(migrated: Database)
     assert kept.json()["detail"] == (
         "the file cannot be withdrawn: a person's decision on whether it is reliable stands "
         f'for "{title}" for ITGC-AC-01; reopen that decision first'
+    )
+    again = _reread(migrated, bench.owner, bench.base, ticket)
+    assert again.json()["detail"].startswith(
+        "This file's reading is relied on: a person's decision on whether it is reliable"
     )
     decision = reliability_tests._on(decided.json(), ticket)["decision"]["id"]
     assert reliability_tests._reopen(bench, ticket, decision).status_code == 200
@@ -586,6 +754,12 @@ def test_signed_testing_and_an_approved_sample_keep_their_files(migrated: Databa
     ).json()
     assert "APPROVED_SAMPLE" in [b["kind"] for b in seen["blocking"]]
     assert seen["refusal"].startswith("the file cannot be replaced: ")
+    drawn = client.post(
+        f"{base}/evidence-files/{population}/withdraw", json={"reason": "Wrong population"}
+    )
+    assert (drawn.status_code, drawn.json()["detail"]) == (
+        409, "the file cannot be withdrawn: the approved sample for ITGC-AC-01 was drawn from it",
+    )  # fmt: skip
 
 
 # A file of a control over several systems, on each instance's open sheet
@@ -786,3 +960,308 @@ def test_the_owner_and_the_attachment_picker_no_longer_see_a_withdrawn_file(
             )
             == []
         )
+
+
+# A policy one system's item holds, shared with a sibling instance (B1, B3)
+
+
+def test_a_sibling_instance_that_relies_on_a_shared_file_keeps_it(migrated: Database) -> None:
+    from test_testing_engine import _controls, _engagement_with_apps, _read_all
+
+    team, client, scheduler = _engagement_with_apps(migrated, "rel-sibling", ["AWS IAM"])
+    base = f"/organizations/{team['org']}/projects/{team['project']}"
+    instances = {
+        row["application_name"]: row
+        for row in _controls(client, team)
+        if row["control_ref"] == "ITGC-AC-05"
+    }
+
+    def design(name: str) -> list[dict[str, Any]]:
+        found: list[dict[str, Any]] = _phase(_plan(client, team, instances[name]["id"]), "DESIGN")[
+            "requirements"
+        ]
+        return found
+
+    sap_item = next(
+        r for r in design("SAP ERP")
+        if "PROCESS_DOCUMENTATION" in r["categories"] and r["request_id"]
+    )  # fmt: skip
+
+    def aws_item() -> dict[str, Any]:
+        return next(r for r in design("AWS IAM") if r["key"] == sap_item["key"])
+
+    apps = {name: row["application_id"] for name, row in instances.items()}
+    added = client.post(
+        f"{base}/evidence-uploads",
+        params={"batch_id": str(uuid4()), "name": "access policy.txt",
+                "request_id": sap_item["request_id"], "requirement_id": sap_item["id"],
+                "applications": f"{apps['SAP ERP']},{apps['AWS IAM']}"},
+        content=b"Access to every system is approved by the user's manager.",
+        headers={"content-type": "text/plain"},
+    )  # fmt: skip
+    assert added.status_code == 200, added.text
+    policy = str(added.json()["file_id"])
+    _read_all(migrated, scheduler)
+    aws = aws_item()
+    assert [f["via"] for f in aws["files"]] == ["SHARED"]
+    sufficiency = (
+        f"{base}/controls/{instances['AWS IAM']['id']}/evidence-requirements/{aws['id']}"
+        "/sufficiency"
+    )
+    accepted = client.post(sufficiency, json={"sufficiency": "ACCEPTED", "version": aws["version"]})
+    assert accepted.status_code == 200, accepted.text
+    held = f'the evidence item "{aws["title"]}" was accepted with it; change that decision first'
+
+    def impact(item_id: str) -> dict[str, Any]:
+        found = client.get(
+            f"{base}/evidence-files/{policy}/impact",
+            params={"action": "REMOVE_FROM_REQUEST", "requirement_id": item_id},
+        )
+        assert found.status_code == 200, found.text
+        body: dict[str, Any] = found.json()
+        return body
+
+    def remove(item_id: str) -> Any:
+        version = (impact(item_id).get("removal") or {}).get("version") or 1
+        return client.post(
+            f"{base}/evidence-files/{policy}/remove-from-request",
+            json={"requirement_id": item_id, "version": version,
+                  "reason": "It belongs to another request."},
+        )  # fmt: skip
+
+    def tag(scope: str, **more: Any) -> Any:
+        return client.post(
+            f"{base}/evidence-files/{policy}/application", json={"scope": scope, **more}
+        )
+
+    # Off the SAP item through its filing is off the AWS item too: its acceptance refuses
+    # it, and the impact names the AWS item as shared.
+    seen = impact(sap_item["id"])
+    assert (seen["allowed"], seen["removal"]["via"]) == (False, "FILING")
+    assert [(b["kind"], b["requirement_id"]) for b in seen["blocking"]] == [
+        ("ACCEPTED_ITEM", aws["id"])
+    ]
+    assert (aws["id"], "SHARED") in {(i["id"], i["via"]) for i in seen["items"]}
+    refused = remove(sap_item["id"])
+    assert refused.json()["detail"] == f"the file cannot be removed from this request: {held}"
+    # The AWS item holds it only through the share.
+    assert remove(aws["id"]).json()["detail"] == reliance.SHARED_ONLY
+    # Nor can the tag drop AWS IAM while that acceptance stands; the tag is as it was.
+    narrowed = tag("ONE", application_id=apps["SAP ERP"])
+    assert narrowed.status_code == 409
+    assert narrowed.json()["detail"] == f"{reliance.APPLICATIONS_REFUSED}{held}"
+    with connect(migrated.url) as connection:
+        assert connection.execute(
+            "SELECT scope FROM evidence_file_applications WHERE evidence_file_id = %s",
+            (policy,),
+        ).fetchall() == [("SOME",)]
+    assert [f["via"] for f in aws_item()["files"]] == ["SHARED"]
+
+    # A record from before the file arrived: an acceptance the file was not part of. The
+    # tag drops AWS IAM, and the AWS item, left with nothing of its own, loses it, on record.
+    def legacy_acceptance() -> None:
+        with connect(migrated.url) as connection:
+            connection.execute(
+                "UPDATE evidence_requirements SET sufficiency = 'ACCEPTED', sufficiency_by = %s, "
+                "sufficiency_at = (SELECT created_at - interval '1 hour' FROM evidence_files "
+                "WHERE id = %s) WHERE id = %s",
+                (team["owner_id"], policy, aws["id"]),
+            )
+
+    def resets() -> list[str]:
+        with connect(migrated.url) as connection:
+            return [
+                str(row[0]["by"])
+                for row in connection.execute(
+                    "SELECT payload FROM audit_events WHERE target_id = %s "
+                    "AND action = 'evidence_requirement.sufficiency_reset' ORDER BY created_at",
+                    (aws["id"],),
+                ).fetchall()
+            ]
+
+    legacy_acceptance()
+    assert tag("ONE", application_id=apps["SAP ERP"]).status_code == 200
+    gone = aws_item()
+    assert (gone["files"], gone["sufficiency"]) == ([], "NOT_REVIEWED")
+    assert resets() == ["APPLICATIONS_CHANGED"]
+
+    # Shared again, and the same record: removed from the SAP item's request, the AWS item
+    # loses it as well; the impact said so first.
+    assert tag("SOME", application_ids=[apps["SAP ERP"], apps["AWS IAM"]]).status_code == 200
+    legacy_acceptance()
+    shared = next(i for i in impact(sap_item["id"])["items"] if i["id"] == aws["id"])
+    assert (shared["via"], shared["resets"]) == ("SHARED", True)
+    removed = remove(sap_item["id"])
+    assert removed.status_code == 200, removed.text
+    assert aws_item()["sufficiency"] == "NOT_REVIEWED"
+    assert resets() == ["APPLICATIONS_CHANGED", "FILE_REMOVED_FROM_REQUEST"]
+
+
+# The evidence wizard's placement (B2)
+
+
+def test_the_wizard_moves_a_file_only_off_an_item_that_does_not_rely_on_it(
+    migrated: Database,
+) -> None:
+    from test_evidence_assurance import POLICY
+    from test_evidence_wizard import _Reader, _Wizard
+
+    case = _Wizard(migrated, "rel-wizard")
+    policy = case.add("access policy.txt", POLICY)
+    case.read_file(policy, _Reader("policy", "low", covers={case.policy["title"]: "COVERED"}))
+    placed = case.place(policy, [case.policy["id"]], 1)
+    assert placed.status_code == 200, placed.text
+    version = placed.json()["placement"]["version"]
+    sufficiency = (
+        f"{case.base}/controls/{case.control}/evidence-requirements/{case.policy['id']}/sufficiency"
+    )
+    accepted = case.client.post(
+        sufficiency,
+        json={"sufficiency": "ACCEPTED", "version": case.item(case.policy["id"])["version"]},
+    )
+    assert accepted.status_code == 200, accepted.text
+    filing = case.filing(policy)
+    moved = case.place(policy, [case.walkthrough["id"]], version)
+    assert moved.status_code == 409
+    assert moved.json()["detail"] == (
+        f'the file cannot be taken off this item: the evidence item "{case.policy["title"]}" '
+        "was accepted with it; change that decision first"
+    )
+    assert case.filing(policy) == filing
+    # A record from before the file arrived: the acceptance does not rest on it, so it
+    # moves, and the item it left loses the judgment on the audit trail.
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE evidence_requirements SET sufficiency_at = (SELECT created_at - "
+            "interval '1 hour' FROM evidence_files WHERE id = %s) WHERE id = %s",
+            (policy, case.policy["id"]),
+        )
+    moved = case.place(policy, [case.walkthrough["id"]], version)
+    assert moved.status_code == 200, moved.text
+    assert case.item(case.policy["id"])["sufficiency"] == "NOT_REVIEWED"
+    events = case.rows(
+        "SELECT payload FROM audit_events WHERE target_id = %s "
+        "AND action = 'evidence_requirement.sufficiency_reset'",
+        UUID(case.policy["id"]),
+    )
+    assert [(e[0]["was"], e[0]["by"], e[0]["evidence_file_id"]) for e in events] == [
+        ("ACCEPTED", "FILE_MOVED", policy)
+    ]
+
+
+# A record from before E1: a file out of force while decisions stood on it (N8)
+
+
+def test_a_file_out_of_force_by_an_earlier_record_still_ends_what_rested_on_it(
+    migrated: Database,
+) -> None:
+    """Since E1 a person cannot take away a file a decision stands on. A file withdrawn by
+    a record from before that, while a reliability decision and a "Shown, on my review"
+    stood on it, still ends both when the chain next follows the control: FILE_GONE and
+    ANNOTATION_GONE, naming nobody, one event per decision."""
+    import test_attribute_dispositions as dispositions
+    import test_file_reliability as reliability_tests
+    from test_evidence_assurance import LOG, _Bench, _reading
+
+    from ai_workforce_api import attribute_dispositions, file_reliability
+    from ai_workforce_api.evidence_assurance import follow_control
+
+    bench = _Bench(migrated, "rel-legacy")
+    _ticket, first = reliability_tests._first_check(bench, B="ABSENT", C="ABSENT", D="ABSENT")
+    ids = dispositions._ids(first)
+    log = bench.add("sap change log.txt", LOG)
+    bench.read_next(_reading("change_history"))
+    reliability_tests._check(
+        bench, "ticket REQ-1041.txt", "sap change log.txt", B="ABSENT", C="ABSENT", D="ABSENT"
+    )
+    decided = reliability_tests._record(bench, log, "NOT_RELIED_ON")
+    assert decided.status_code == 200, decided.text
+    mark = dispositions._annotate(bench, log, ids["B"])
+    shown = dispositions._record(bench, ids["B"], "SHOWN_ON_REVIEW", annotation_id=mark)
+    assert shown.status_code == 200, shown.text
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "INSERT INTO evidence_withdrawals (organization_id, project_id, evidence_file_id, "
+            "reason, withdrawn_by) VALUES (%s, %s, %s, 'Withdrawn before E1.', %s)",
+            (bench.team["org"], bench.team["project"], log, bench.team["owner_id"]),
+        )
+        follow_control(
+            connection, UUID(str(bench.team["project"])), UUID(bench.control), None, None,
+            always=True,
+        )  # fmt: skip
+    [(ended_as, ended_by)] = bench.rows(
+        "SELECT ended_as, ended_by FROM file_reliability_decisions WHERE evidence_file_id = %s",
+        UUID(log),
+    )
+    assert (ended_as, ended_by) == ("FILE_GONE", None)
+    [(actor, agent, _event)] = bench.audit(file_reliability.ENDED_WITH_FILE, bench.item_id)
+    assert (actor, agent) == (None, None)
+    b = dispositions._by_code(bench.entry())["B"]
+    assert b["disposition"] is None
+    ended = b["disposition_history"][0]
+    assert (ended["ended_as"], ended["ended_by_name"]) == ("ANNOTATION_GONE", None)
+    by_check = dispositions._events(bench, attribute_dispositions.ENDED_BY_CHECK)
+    assert [(a, g) for a, g, _payload in by_check] == [(None, None)]
+
+
+# The file's version and withdrawal history
+
+
+def test_a_files_history_reads_its_versions_withdrawals_and_links(migrated: Database) -> None:
+    from test_design_requests import _member
+
+    case = _Design(migrated, "rel-history")
+    files = f"{case.base}/evidence-files"
+    rules = case.add(case.first, "rules.txt")
+    case.link(case.second, rules)
+    assert case.withdraw(rules).status_code == 200
+    restored = case.client.post(f"{files}/{rules}/restore", json={"reason": "It was right."})
+    assert restored.status_code == 200, restored.text
+    replaced = case.client.post(
+        f"{files}/{rules}/replace",
+        params={"name": "rules v2.txt", "reason": "Corrected version"},
+        content=b"rules v2: managers approve each access request.",
+        headers={"content-type": "text/plain"},
+    )
+    assert replaced.status_code == 200, replaced.text
+    newer = replaced.json()["file_id"]
+    case.read()
+    removed = case.remove(newer, case.first)
+    assert removed.status_code == 200, removed.text
+
+    def history(file_id: str, client: TestClient | None = None) -> Any:
+        return (client or case.client).get(f"{files}/{file_id}/history")
+
+    body = history(rules).json()
+    assert body["file_name"] == "rules.txt"
+    kinds = [(e["kind"], e["reason"]) for e in body["events"]]
+    assert kinds == [
+        ("ADDED", ""),
+        ("LINKED", "The rules name who grants access."),
+        ("WITHDRAWN", "Sent in error."),
+        ("RESTORED", "It was right."),
+        ("WITHDRAWN", "Corrected version"),
+    ]
+    added, linked, first_out, back, last_out = body["events"]
+    assert (added["source"], added["by"], added["replaces"]) == ("UPLOAD", back["by"], None)
+    assert added["size_bytes"] > 0 and back["by"]
+    assert linked["requirement_id"] == case.second
+    assert first_out["replaced_by"] is None
+    assert last_out["replaced_by"] == {"id": newer, "name": "rules v2.txt"}
+    stamps = [e["at"] for e in body["events"]]
+    assert stamps == sorted(stamps)
+    later = history(newer).json()["events"]
+    assert [e["kind"] for e in later] == ["ADDED", "LINKED", "REMOVED_FROM_REQUEST"]
+    assert later[0]["replaces"] == {"id": rules, "name": "rules.txt"}
+    assert (later[2]["requirement_id"], later[2]["reason"]) == (
+        case.first, "It answers another item.",
+    )  # fmt: skip
+    # A reader reads it; another firm, or another engagement, finds nothing.
+    _reviewer_id, reviewer = _member(migrated, case.team, "REVIEWER")
+    assert history(rules, reviewer).status_code == 200
+    _seeded, _project, outsider, _admin = _team(migrated, f"rel-hist-{uuid4().hex[:4]}")
+    assert history(rules, outsider).status_code == 404
+    elsewhere = case.client.get(
+        f"/organizations/{case.team['org']}/projects/{uuid4()}/evidence-files/{rules}/history"
+    )
+    assert elsewhere.status_code == 404

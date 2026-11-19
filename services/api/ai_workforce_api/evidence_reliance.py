@@ -28,14 +28,17 @@ The reliances, in the order a refusal names them:
 
 Which reliances a change must respect (`blocks`): a withdrawal or replacement every one; a
 removal from an item or a request, or an unlink, only those on that item (or, for the
-file's filing, on that request's items), with the reading and the screenshot review; a
-move those on the file's control (its family of instances), with the reading and the
-screenshot review; a new reading every one but the reading itself (refused already); a
-restoration none.
+file's filing, on that request's items, and on the sibling instances' items the filing
+shares the file with), with the reading and the screenshot review; a move those on the
+file's control (its family of instances), with the reading and the screenshot review; a
+new reading every one but the reading itself (refused already); a restoration none.
+Changing the applications a file applies to respects those on the sibling items it would
+stop serving (B3 of the E1 review).
+
+A refusal is a RelianceRefused, answered 409 by every route that makes one of these
+changes.
 """
 
-import logging
-from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 from uuid import UUID
@@ -46,15 +49,13 @@ from pydantic import BaseModel
 from ai_workforce_api.authorization import NotVisible
 from ai_workforce_api.control_instances import family_ids
 
-logger = logging.getLogger(__name__)
 
+class RelianceRefused(Exception):
+    """A change refused because something relies on the file, or because the file does
+    not serve the item named: answered 409 with `detail`."""
 
-def _refused(detail: str) -> Exception:
-    """The evidence intake's refusal (IntakeState, answered 409). Imported when raised:
-    the intake imports this module."""
-    from ai_workforce_api.evidence_intake import IntakeState
-
-    return IntakeState(detail)
+    def __init__(self, detail: str) -> None:
+        self.detail = detail
 
 
 Kind = Literal[
@@ -109,6 +110,9 @@ REFUSED: dict[Change, str] = {
     "REREAD": "This file's reading is relied on: ",
     "RESTORE": "the file cannot be restored: ",
 }
+# Not a change the impact route names: the applications a file applies to (the sibling
+# instances it serves) are changed on the file's own panel.
+APPLICATIONS_REFUSED = "the file's applications cannot be changed: "
 
 READING = "the agent is still reading this file; try again in a moment"
 SCREENSHOT_SIGNED = "its screenshot review is signed off"
@@ -131,12 +135,14 @@ class Reliance:
 @dataclass(frozen=True)
 class Scope:
     """Where a change reaches: the controls a move takes the file off, the evidence item an
-    unlink or a removal is for, and the request whose items a removal through the file's
-    filing reaches."""
+    unlink or a removal is for, the request whose items a removal through the file's
+    filing reaches, and the sibling instances' items the file stops serving (`items`: the
+    items its filing shares it with, or that an application change takes it off)."""
 
     control_ids: frozenset[UUID] = frozenset()
     requirement_id: UUID | None = None
     request_id: UUID | None = None
+    items: frozenset[UUID] = frozenset()
 
 
 def blocks(reliance: Reliance, change: Change, scope: Scope) -> bool:
@@ -152,7 +158,9 @@ def blocks(reliance: Reliance, change: Change, scope: Scope) -> bool:
         return True
     if change == "MOVE":
         return reliance.engagement_control_id in scope.control_ids
-    on_item = scope.requirement_id is not None and reliance.requirement_id == scope.requirement_id
+    on_item = (
+        scope.requirement_id is not None and reliance.requirement_id == scope.requirement_id
+    ) or (reliance.requirement_id is not None and reliance.requirement_id in scope.items)
     if change == "UNLINK":
         return on_item
     on_request = scope.request_id is not None and reliance.request_id == scope.request_id
@@ -164,20 +172,6 @@ def blocks(reliance: Reliance, change: Change, scope: Scope) -> bool:
 
 def _id(value: Any) -> UUID | None:
     return None if value is None else UUID(str(value))
-
-
-def _recorded(
-    cursor: psycopg.Cursor[Any], work: Callable[[], list[Reliance]], migration: str
-) -> list[Reliance]:
-    """What `work` reads of person decisions on record; none where the table is not there
-    yet, because its migration is not applied (the code released before it). The savepoint
-    leaves the caller's transaction as it was. Any other error is the caller's."""
-    try:
-        with cursor.connection.transaction():
-            return work()
-    except psycopg.errors.UndefinedTable:
-        logger.warning("reliance on a file not read: migration %s is not applied", migration)
-        return []
 
 
 def reliances(cursor: psycopg.Cursor[Any], project_id: UUID, file_id: UUID) -> list[Reliance]:
@@ -250,8 +244,9 @@ def reliances(cursor: psycopg.Cursor[Any], project_id: UUID, file_id: UUID) -> l
                 _id(control_id),
             )
         )
-    found += _recorded(cursor, lambda: _tickmarks(cursor, file_id), "0162")
-    found += _recorded(cursor, lambda: _reliability(cursor, file_id), "0163")
+    # Migrations 0162 and 0163 are applied: a missing table fails loudly (E1 review, N9).
+    found += _tickmarks(cursor, file_id)
+    found += _reliability(cursor, file_id)
     found += _picks(cursor, file_id)
     found += _concluded(cursor, project_id, file_id)
     found += _findings(cursor, file_id)
@@ -553,7 +548,7 @@ def removal(
         f"AND EXISTS ({shared_from_sibling('1')} AND f.id = %s)",
         (requirement_id, file_id),
     ).fetchone()
-    raise _refused(SHARED_ONLY if shared is not None else NOT_SERVED)
+    raise RelianceRefused(SHARED_ONLY if shared is not None else NOT_SERVED)
 
 
 # Refusing a change
@@ -567,8 +562,9 @@ def scope_of(
     requirement_id: UUID | None = None,
 ) -> Scope:
     """Where the change reaches: for a move, the family of the control the file is filed
-    to; for an unlink, the item; for a removal, the item, and the request when it goes
-    through the file's filing."""
+    to; for an unlink, the item; for a removal, the item, and, when it goes through the
+    file's filing, the request and every sibling instance's item the filing shares the
+    file with (shared_from_sibling rests on the filing's item: it ends with it)."""
     if change == "MOVE":
         row = cursor.execute(
             "SELECT engagement_control_id FROM evidence_matches "
@@ -580,15 +576,85 @@ def scope_of(
         return Scope(frozenset(family_ids(cursor, project_id, UUID(str(row[0])))))
     if change in ("UNLINK", "REMOVE_FROM_REQUEST"):
         if requirement_id is None:
-            raise _refused("choose the evidence item")
+            raise RelianceRefused("choose the evidence item")
         if change == "UNLINK":
             return Scope(requirement_id=requirement_id)
         found = removal(cursor, project_id, file_id, requirement_id)
+        if found.via == "LINK":
+            return Scope(requirement_id=requirement_id)
         return Scope(
             requirement_id=requirement_id,
-            request_id=found.request_id if found.via == "FILING" else None,
+            request_id=found.request_id,
+            items=shared_items(cursor, project_id, file_id),
         )
     return Scope()
+
+
+def shared_items(cursor: psycopg.Cursor[Any], project_id: UUID, file_id: UUID) -> frozenset[UUID]:
+    """The sibling instances' items the file serves through its filing and a person's
+    application tag (evidence_plans.shared_from_sibling), as the evidence plan counts
+    them."""
+    return frozenset(
+        item for item, via, _control in served(cursor, project_id, file_id) if via == "SHARED"
+    )
+
+
+def served(
+    cursor: psycopg.Cursor[Any], project_id: UUID, file_id: UUID
+) -> list[tuple[UUID, str, UUID]]:
+    """Each open item the file serves, how (FILING: on its filing's request, as the plan
+    counts that request's files; LINK: a person's link; SHARED: from a sibling instance's
+    filing), and the item's control, in a stable order."""
+    from ai_workforce_api.evidence_plans import request_file_serves, shared_from_sibling
+
+    rows = cursor.execute(
+        """
+        SELECT q.id, served.via, q.engagement_control_id
+        FROM (
+            SELECT q.id, 'FILING' AS via FROM evidence_matches fm
+            JOIN evidence_requirements q ON q.pbc_request_id = fm.pbc_request_id
+            LEFT JOIN evidence_analyses a ON a.evidence_file_id = fm.evidence_file_id
+            WHERE fm.evidence_file_id = %(file)s AND fm.status = 'FILED'
+              AND {SERVES}
+            UNION
+            SELECT ef.requirement_id, 'LINK' FROM evidence_requirement_files ef
+            WHERE ef.evidence_file_id = %(file)s AND ef.status = 'LINKED'
+            UNION
+            SELECT q.id, 'SHARED' FROM evidence_requirements q
+            WHERE q.project_id = %(project)s AND EXISTS ({SHARED} AND f.id = %(file)s)
+        ) served
+        JOIN evidence_requirements q ON q.id = served.id
+        JOIN engagement_controls c ON c.id = q.engagement_control_id
+        WHERE q.project_id = %(project)s AND q.status NOT IN ('WAIVED', 'REMOVED')
+        ORDER BY c.control_ref, q.created_at, q.id, served.via
+        """.replace("{SERVES}", request_file_serves("fm.evidence_file_id")).replace(
+            "{SHARED}", shared_from_sibling("1")
+        ),
+        {"project": project_id, "file": file_id},
+    ).fetchall()
+    return [(UUID(str(row[0])), str(row[1]), UUID(str(row[2]))) for row in rows]
+
+
+def lock_served(cursor: psycopg.Cursor[Any], project_id: UUID, file_id: UUID) -> list[UUID]:
+    """Before a change reads what relies on the file: the plan rows of every control whose
+    items the file serves, then those items, FOR UPDATE, in the order every writer of a
+    plan takes them (plan row first), so an acceptance cannot land between the check and
+    the change (E1 review, N5). Returns the items."""
+    found = served(cursor, project_id, file_id)
+    controls = sorted({control for _item, _via, control in found}, key=str)
+    for control_id in controls:
+        cursor.execute(
+            "SELECT 1 FROM evidence_plans WHERE project_id = %s AND engagement_control_id = %s "
+            "FOR UPDATE",
+            (project_id, control_id),
+        )
+    items = sorted({item for item, _via, _control in found}, key=str)
+    if items:
+        cursor.execute(
+            "SELECT 1 FROM evidence_requirements WHERE id = ANY(%s) ORDER BY id FOR UPDATE",
+            (items,),
+        )
+    return items
 
 
 def blocking(
@@ -597,12 +663,20 @@ def blocking(
     file_id: UUID,
     change: Change,
     requirement_id: UUID | None = None,
+    *,
+    file_wide: bool = True,
 ) -> list[Reliance]:
-    """The reliances the change would break, in the order a refusal names them."""
+    """The reliances the change would break, in the order a refusal names them. Without
+    `file_wide`, the reading and the screenshot review are left to the caller, whose own
+    checks refuse them first (the evidence wizard's placement)."""
     if change == "RESTORE":
         return []
     scope = scope_of(cursor, project_id, file_id, change, requirement_id)
-    return [r for r in reliances(cursor, project_id, file_id) if blocks(r, change, scope)]
+    return [
+        r
+        for r in reliances(cursor, project_id, file_id)
+        if blocks(r, change, scope) and (file_wide or r.kind not in FILE_WIDE)
+    ]
 
 
 def refusal(
@@ -611,11 +685,13 @@ def refusal(
     file_id: UUID,
     change: Change,
     requirement_id: UUID | None = None,
+    *,
+    file_wide: bool = True,
 ) -> str | None:
     """The sentence the change is refused with (the first reliance it would break), or
     None. For a caller whose own refusal type answers 409 (the evidence plan's, the
-    reading's)."""
-    found = blocking(cursor, project_id, file_id, change, requirement_id)
+    reading's, the wizard's)."""
+    found = blocking(cursor, project_id, file_id, change, requirement_id, file_wide=file_wide)
     return None if not found else REFUSED[change] + found[0].sentence
 
 
@@ -626,11 +702,19 @@ def check(
     change: Change,
     requirement_id: UUID | None = None,
 ) -> None:
-    """Refuse the change (IntakeState, answered 409) when a reliance on the file stands in
-    its way, naming the first one and how to clear it."""
+    """Refuse the change (RelianceRefused, answered 409) when a reliance on the file stands
+    in its way, naming the first one and how to clear it."""
     why = refusal(cursor, project_id, file_id, change, requirement_id)
     if why is not None:
-        raise _refused(why)
+        raise RelianceRefused(why)
+
+
+def check_items_left(found: list[Reliance], items: frozenset[UUID], prefix: str) -> None:
+    """Refuse a change that takes the file off `items` (read before the change, `found`:
+    the reliances as they stood) where a reliance rests on one of them."""
+    for reliance in found:
+        if reliance.kind not in FILE_WIDE and blocks(reliance, "UNLINK", Scope(items=items)):
+            raise RelianceRefused(prefix + reliance.sentence)
 
 
 # What a change would do, before a person makes it
@@ -717,13 +801,13 @@ def impact(
     file_id: UUID,
     change: Change,
     requirement_id: UUID | None = None,
+    refused: str | None = None,
 ) -> ImpactBody:
     """What the change would do to the file, read-only: whether it is allowed, what stands
     in its way, where the file is used, which open test sheets would be tested again, and
     which items' judgments would go back to not reviewed. The caller has authorized the
-    read."""
-    from ai_workforce_api.evidence_intake import IntakeState
-
+    read; `refused` is its own refusal of the change, where it has one (the engagement is
+    not active, or the reader may not change its evidence), and it comes first."""
     found = cursor.execute(
         "SELECT 1 FROM evidence_files WHERE id = %s AND project_id = %s AND organization_id = %s",
         (file_id, project_id, organization_id),
@@ -751,12 +835,12 @@ def impact(
     if change == "REMOVE_FROM_REQUEST" and requirement_id is not None and state is None:
         try:
             found_removal = removal(cursor, project_id, file_id, requirement_id)
-        except IntakeState as error:
+        except RelianceRefused as error:
             state = error.detail
     stands: list[Reliance] = []
     if state is None:
         stands = blocking(cursor, project_id, file_id, change, requirement_id)
-    sentence = state or (None if not stands else REFUSED[change] + stands[0].sentence)
+    sentence = refused or state or (None if not stands else REFUSED[change] + stands[0].sentence)
     seen: set[str] = set()
     shown: list[ImpactReliance] = []
     for reliance in stands:
@@ -855,48 +939,38 @@ def _items(
     requirement_id: UUID | None,
     found_removal: Removal | None,
 ) -> list[ImpactItem]:
-    """The items the file serves: on its filing's request (the items it serves there, as the
-    evidence plan counts them), through a person's link, or shared from a sibling
-    instance; and whether the change takes each item's judgment back to not reviewed."""
-    from ai_workforce_api.evidence_plans import (
-        request_file_serves,
-        shared_from_sibling,
-        unsupported_judgment,
-    )
+    """The items the file serves (served): on its filing's request, through a person's
+    link, or shared from a sibling instance; and whether the change takes each item's
+    judgment back to not reviewed, as the change itself decides it."""
+    from ai_workforce_api.evidence_plans import unsupported_judgment
 
-    rows = cursor.execute(
-        """
-        SELECT q.id, q.title, q.phase, q.engagement_control_id, c.control_ref,
-               q.pbc_request_id, served.via, q.sufficiency, q.created_at
-        FROM (
-            SELECT q.id, 'FILING' AS via FROM evidence_matches fm
-            JOIN evidence_requirements q ON q.pbc_request_id = fm.pbc_request_id
-            LEFT JOIN evidence_analyses a ON a.evidence_file_id = fm.evidence_file_id
-            WHERE fm.evidence_file_id = %(file)s AND fm.status = 'FILED'
-              AND {SERVES}
-            UNION
-            SELECT ef.requirement_id, 'LINK' FROM evidence_requirement_files ef
-            WHERE ef.evidence_file_id = %(file)s AND ef.status = 'LINKED'
-            UNION
-            SELECT q.id, 'SHARED' FROM evidence_requirements q
-            WHERE q.project_id = %(project)s AND EXISTS ({SHARED} AND f.id = %(file)s)
-        ) served
-        JOIN evidence_requirements q ON q.id = served.id
-        JOIN engagement_controls c ON c.id = q.engagement_control_id
-        WHERE q.project_id = %(project)s AND q.status NOT IN ('WAIVED', 'REMOVED')
-        ORDER BY c.control_ref, q.created_at, q.id, served.via
-        """.replace("{SERVES}", request_file_serves("fm.evidence_file_id")).replace(
-            "{SHARED}", shared_from_sibling("1")
-        ),
-        {"project": project_id, "file": file_id},
-    ).fetchall()
-    found: list[ImpactItem] = []
-    for row in rows:
-        item_id, via = UUID(str(row[0])), str(row[6])
+    found = served(cursor, project_id, file_id)
+    if not found:
+        return []
+    details = {
+        UUID(str(row[0])): row
+        for row in cursor.execute(
+            """
+            SELECT q.id, q.title, q.phase, q.engagement_control_id, c.control_ref,
+                   q.pbc_request_id, q.sufficiency
+            FROM evidence_requirements q
+            JOIN engagement_controls c ON c.id = q.engagement_control_id
+            WHERE q.id = ANY(%s)
+            """,
+            ([item for item, _via, _control in found],),
+        ).fetchall()
+    }
+    filing = found_removal is not None and found_removal.via == "FILING"
+    items: list[ImpactItem] = []
+    for item_id, via, _control in found:
+        row = details[item_id]
         resets = False
-        judged = str(row[7]) != "NOT_REVIEWED"
+        judged = str(row[6]) != "NOT_REVIEWED"
         if judged and via == "LINK" and change in ("WITHDRAW", "REPLACE"):
             # As reset_judgments_left_without_file decides once the file is out of force.
+            resets = unsupported_judgment(cursor, item_id, excluding=file_id) is not None
+        elif judged and filing and via in ("FILING", "SHARED"):
+            # As the removal decides for the items its filing served.
             resets = unsupported_judgment(cursor, item_id, excluding=file_id) is not None
         elif (
             judged
@@ -907,15 +981,15 @@ def _items(
             # As unlink_file decides: nothing else linked to the item, and nothing on its
             # request.
             resets = not _others(cursor, item_id, file_id)
-        found.append(
+        items.append(
             ImpactItem(
                 id=item_id, title=str(row[1]), phase=str(row[2]), control_id=row[3],
                 control_ref=str(row[4]), request_id=_id(row[5]),
                 via=via,  # type: ignore[arg-type]
-                sufficiency=str(row[7]), resets=resets,
+                sufficiency=str(row[6]), resets=resets,
             )
         )  # fmt: skip
-    return found
+    return items
 
 
 def _others(cursor: psycopg.Cursor[Any], requirement_id: UUID, file_id: UUID) -> bool:

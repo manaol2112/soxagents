@@ -1285,6 +1285,27 @@ def _file_on(
     match_id = UUID(str(match[0]))
     primary = next((known[item] for item in wanted if known[item].request_id is not None), None)
     target = (None, None) if primary is None else (primary.request_id, primary.requirement_id)
+    leaving = [item for item in before if item not in wanted]
+    if leaving:
+        # Evidence relied on for an item it leaves stays there (E1 review, B2): the same
+        # rule as an unlink (evidence_reliance), and through its filing the sibling items
+        # it shares. The reading and the screenshot review are this flow's own checks.
+        from ai_workforce_api.evidence_reliance import (
+            REFUSED,
+            RelianceRefused,
+            check_items_left,
+            reliances,
+            shared_items,
+        )
+
+        refiled = (match[1], match[2]) != target
+        moving = frozenset(leaving) | (
+            shared_items(cursor, project_id, file_id) if refiled else frozenset()
+        )
+        try:
+            check_items_left(reliances(cursor, project_id, file_id), moving, REFUSED["UNLINK"])
+        except RelianceRefused as error:
+            raise WizardState(error.detail) from None
     released = None
     if (match[1], match[2]) != target:
         released = release_receipt(cursor, match_id)
@@ -1389,19 +1410,31 @@ def _file_on(
             {"evidence_file_id": str(file_id), "link_id": str(saved[0]),
              "by": "AGENT" if person is None else "PERSON", "wizard_batch_id": str(batch.id)},
         )  # fmt: skip
-    # A judgment that rested on the file alone goes back to not reviewed.
-    for requirement_id in [item for item in before if item not in wanted]:
+    # A judgment that rested on the file alone goes back to not reviewed, on the audit
+    # trail as every such reset is (E1 review, B2: it was reset with no event).
+    from ai_workforce_api.evidence_plans import JUDGMENT_RESET
+
+    for requirement_id in leaving:
         if _has_own_evidence(cursor, requirement_id):
             continue
-        cursor.execute(
+        was = cursor.execute(
             """
-            UPDATE evidence_requirements
+            UPDATE evidence_requirements q
             SET sufficiency = 'NOT_REVIEWED', sufficiency_note = '', sufficiency_by = NULL,
-                sufficiency_at = NULL, version = version + 1
-            WHERE id = %s AND sufficiency <> 'NOT_REVIEWED'
+                sufficiency_at = NULL, version = q.version + 1
+            FROM (SELECT id, sufficiency FROM evidence_requirements WHERE id = %s) old
+            WHERE q.id = old.id AND q.sufficiency <> 'NOT_REVIEWED'
+            RETURNING old.sufficiency
             """,
             (requirement_id,),
-        )
+        ).fetchone()
+        if was is not None:
+            _audit(
+                cursor, batch.organization_id, project_id, actor, JUDGMENT_RESET,
+                "evidence_requirement", requirement_id,
+                {"sufficiency": "NOT_REVIEWED", "was": str(was[0]), "by": "FILE_MOVED",
+                 "evidence_file_id": str(file_id), "wizard_batch_id": str(batch.id)},
+            )  # fmt: skip
     if released is not None:
         follow_evidence(
             cursor, batch.organization_id, project_id, released.request_id, actor,

@@ -27,7 +27,7 @@ import hashlib
 import json
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from functools import partial
@@ -5914,16 +5914,50 @@ def reset_judgments_left_without_file(
     hidden, and read again as soon as a different file was linked. The file an item was
     accepted with cannot leave at all (evidence_reliance._accepted); this is for a
     file that came after the acceptance. Returns the items reset."""
+    linked = [
+        UUID(str(row[0]))
+        for row in cursor.execute(
+            """
+            SELECT q.id FROM evidence_requirement_files ef
+            JOIN evidence_requirements q ON q.id = ef.requirement_id
+            WHERE ef.evidence_file_id = %s AND ef.project_id = %s AND ef.status = 'LINKED'
+              AND q.sufficiency <> 'NOT_REVIEWED'
+            """,
+            (file_id, project_id),
+        ).fetchall()
+    ]
+    return reset_items_left_without_file(
+        cursor, organization_id, project_id, file_id, actor, by, linked
+    )
+
+
+FileLeft = Literal[
+    "FILE_WITHDRAWN", "FILE_REPLACED", "FILE_REMOVED_FROM_REQUEST", "APPLICATIONS_CHANGED"
+]
+
+
+def reset_items_left_without_file(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    file_id: UUID,
+    actor: UUID,
+    by: FileLeft,
+    requirement_ids: Collection[UUID],
+) -> list[UUID]:
+    """After the file stopped serving the items named (withdrawn, replaced, removed from
+    its request, or no longer applying to a sibling instance): each that now has no file
+    of its own loses the judgment on record (`unsupported_judgment`), with one
+    JUDGMENT_RESET audit event per item, the person who made the change its actor.
+    Returns the items reset."""
     found: list[UUID] = []
     for requirement_id, plan_id in cursor.execute(
         """
-        SELECT q.id, q.plan_id FROM evidence_requirement_files ef
-        JOIN evidence_requirements q ON q.id = ef.requirement_id
-        WHERE ef.evidence_file_id = %s AND ef.project_id = %s AND ef.status = 'LINKED'
-          AND q.sufficiency <> 'NOT_REVIEWED'
+        SELECT q.id, q.plan_id FROM evidence_requirements q
+        WHERE q.id = ANY(%s) AND q.project_id = %s AND q.sufficiency <> 'NOT_REVIEWED'
         ORDER BY q.plan_id, q.created_at, q.id
         """,
-        (file_id, project_id),
+        (list(requirement_ids), project_id),
     ).fetchall():
         # The plan's row, then the requirement, as every other writer takes them.
         cursor.execute("SELECT 1 FROM evidence_plans WHERE id = %s FOR UPDATE", (plan_id,))

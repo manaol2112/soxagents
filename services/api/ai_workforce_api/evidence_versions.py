@@ -16,7 +16,8 @@ leaving takes itself off every open test sheet that holds it (testing_engine
 
 import asyncio
 from collections.abc import Callable
-from typing import Any
+from datetime import datetime
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 import psycopg
@@ -27,9 +28,11 @@ from starlette.concurrency import run_in_threadpool
 
 from ai_workforce_api.authorization import (
     Action,
+    NotVisible,
     Principal,
     _call,
     _session_principal,
+    authorize,
 )
 from ai_workforce_api.db import transaction
 from ai_workforce_api.evidence import MAX_BYTES, StoreFactory
@@ -55,7 +58,7 @@ from ai_workforce_api.evidence_receipts import (
     follow_linked,
     release_receipt,
 )
-from ai_workforce_api.evidence_reliance import check
+from ai_workforce_api.evidence_reliance import RelianceRefused, check, lock_served
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.storage import StoreError, digest_of, open_store
@@ -105,6 +108,42 @@ class WithdrawBody(BaseModel):
         return cleaned if len(cleaned) >= 3 else NO_REASON
 
 
+class FileRef(BaseModel):
+    id: UUID
+    name: str
+
+
+HistoryKind = Literal[
+    "ADDED", "WITHDRAWN", "RESTORED", "LINKED", "UNLINKED", "REMOVED_FROM_REQUEST"
+]
+
+
+class HistoryEvent(BaseModel):
+    """One event in a file's version and withdrawal history. `by` is the person as the
+    register names them (a team member's display name, or the portal address with
+    "(secure link)" for an owner's upload; none for a file that came by email)."""
+
+    kind: HistoryKind
+    at: datetime
+    by: str | None
+    reason: str = ""
+    # ADDED: how the file came in, and its size.
+    source: Literal["UPLOAD", "MAILBOX", "PORTAL"] | None = None
+    size_bytes: int | None = None
+    # ADDED: the file this one replaced. WITHDRAWN: the file that replaced it.
+    replaces: FileRef | None = None
+    replaced_by: FileRef | None = None
+    # LINKED, UNLINKED, REMOVED_FROM_REQUEST: the evidence item.
+    requirement_id: UUID | None = None
+    requirement_title: str | None = None
+
+
+class HistoryBody(BaseModel):
+    file_id: UUID
+    file_name: str
+    events: list[HistoryEvent]
+
+
 class ReplacedBody(BaseModel):
     replaced: UUID
     file_id: UUID
@@ -124,7 +163,7 @@ def register_evidence_versions(
         principal = _session_principal(request)
         try:
             return _call(settings, lambda connection: work(connection, principal))
-        except IntakeState as error:
+        except (IntakeState, RelianceRefused) as error:
             raise HTTPException(status_code=409, detail=error.detail) from None
         except StoreError as error:
             raise HTTPException(status_code=503, detail=error.detail) from None
@@ -164,6 +203,12 @@ def register_evidence_versions(
         schedule_runs(tests(), runs)
         hand_over_open(settings, analyses, project_id)
         return result
+
+    @app.get(f"{base}/history")
+    def file_history(
+        organization_id: UUID, project_id: UUID, file_id: UUID, request: Request
+    ) -> HistoryBody:
+        return run(request, lambda c, p: history(c, p, organization_id, project_id, file_id))
 
     @app.post(f"{base}/replace")
     async def replace_file(
@@ -304,6 +349,8 @@ def withdraw(
         if _in_force(cursor, file_id) is not None:
             raise IntakeState("this file is already withdrawn")
         request_id, control_id = _link(cursor, project_id, file_id)
+        # The items it serves, and their plans, held before the check (E1 review, N5).
+        lock_served(cursor, project_id, file_id)
         check(cursor, project_id, file_id, "WITHDRAW")
         cursor.execute(
             """
@@ -444,6 +491,10 @@ def replace(
     with discarding(store, key), transaction(connection) as cursor:
         if _in_force(cursor, file_id) is not None:
             raise IntakeState("this file changed; refresh and try again")
+        # Checked again where the change is written (E1 review, N4): the first check ran
+        # before the bytes were stored, outside this transaction.
+        lock_served(cursor, project_id, file_id)
+        check(cursor, project_id, file_id, "REPLACE")
         request_id, control_id = _link(cursor, project_id, file_id)
         cursor.execute(
             """
@@ -621,3 +672,134 @@ def _carry_links(
              "link_id": str(row[0]), "origin": str(origin), "linked_by": "KEPT"}
         )  # fmt: skip
     return carried
+
+
+# History
+
+
+# Who, as the register names them (evidence_intake._REGISTER).
+_ADDED_BY = "coalesce(u.display_name, f.uploaded_by_email::text || ' (secure link)')"
+
+
+def history(
+    connection: psycopg.Connection[Any],
+    principal: Principal,
+    organization_id: UUID,
+    project_id: UUID,
+    file_id: UUID,
+) -> HistoryBody:
+    """A file's version and withdrawal history, oldest first, from the records that hold it
+    (product owner, 18 November 2026: an accessible history): how it came in and what it
+    replaced; each withdrawal (and the replacement that took its place) and each
+    restoration; and the person's links to items, their removal, and its removal from a
+    request through its filing. Anyone who can read the engagement can read it; another
+    firm's or another engagement's file is not found. A link made again after it was
+    removed keeps its latest state only (the link's row is reused)."""
+    authorize(
+        connection,
+        principal=principal,
+        action=Action.TASK_READ,
+        organization_id=organization_id,
+        project_id=project_id,
+    )
+    with transaction(connection) as cursor:
+        file = cursor.execute(
+            f"""
+            SELECT f.file_name, f.created_at, {_ADDED_BY}, f.source,
+                   f.uploaded_by_email IS NOT NULL, f.size_bytes, old.id, old.file_name
+            FROM evidence_files f
+            LEFT JOIN users u ON u.id = f.stored_by
+            LEFT JOIN evidence_withdrawals w ON w.replaced_by_file_id = f.id
+            LEFT JOIN evidence_files old ON old.id = w.evidence_file_id
+            WHERE f.id = %s AND f.project_id = %s AND f.organization_id = %s
+            """,  # noqa: S608
+            (file_id, project_id, organization_id),
+        ).fetchone()
+        if file is None:
+            raise NotVisible()
+        events = [
+            HistoryEvent(
+                kind="ADDED", at=file[1], by=None if file[2] is None else str(file[2]),
+                source="PORTAL" if file[4] else "MAILBOX" if file[3] == "MAILBOX" else "UPLOAD",
+                size_bytes=int(file[5]),
+                replaces=None if file[6] is None else FileRef(id=file[6], name=str(file[7])),
+            )
+        ]  # fmt: skip
+        for row in cursor.execute(
+            """
+            SELECT w.withdrawn_at, wu.display_name, w.reason, nf.id, nf.file_name,
+                   w.restored_at, ru.display_name, w.restore_reason
+            FROM evidence_withdrawals w
+            JOIN users wu ON wu.id = w.withdrawn_by
+            LEFT JOIN users ru ON ru.id = w.restored_by
+            LEFT JOIN evidence_files nf ON nf.id = w.replaced_by_file_id
+            WHERE w.evidence_file_id = %s AND w.project_id = %s
+            ORDER BY w.withdrawn_at, w.id
+            """,
+            (file_id, project_id),
+        ).fetchall():
+            events.append(
+                HistoryEvent(
+                    kind="WITHDRAWN", at=row[0], by=str(row[1]), reason=str(row[2]),
+                    replaced_by=None if row[3] is None else FileRef(id=row[3], name=str(row[4])),
+                )
+            )  # fmt: skip
+            if row[5] is not None:
+                events.append(
+                    HistoryEvent(
+                        kind="RESTORED", at=row[5], by=None if row[6] is None else str(row[6]),
+                        reason=str(row[7] or ""),
+                    )
+                )  # fmt: skip
+        for row in cursor.execute(
+            """
+            SELECT ef.linked_at, lu.display_name, ef.reason, ef.removed_at, xu.display_name,
+                   ef.removed_reason, q.id, q.title, ef.origin
+            FROM evidence_requirement_files ef
+            JOIN evidence_requirements q ON q.id = ef.requirement_id
+            LEFT JOIN users lu ON lu.id = ef.linked_by
+            LEFT JOIN users xu ON xu.id = ef.removed_by
+            WHERE ef.evidence_file_id = %s AND ef.project_id = %s
+              AND ef.status IN ('LINKED', 'REMOVED')
+            ORDER BY ef.linked_at, ef.id
+            """,
+            (file_id, project_id),
+        ).fetchall():
+            item = {"requirement_id": row[6], "requirement_title": str(row[7])}
+            events.append(
+                HistoryEvent(
+                    kind="LINKED", at=row[0], by=None if row[1] is None else str(row[1]),
+                    reason=str(row[2]), **item,
+                )
+            )  # fmt: skip
+            if row[3] is not None:
+                events.append(
+                    HistoryEvent(
+                        kind="UNLINKED", at=row[3], by=None if row[4] is None else str(row[4]),
+                        reason=str(row[5]), **item,
+                    )
+                )  # fmt: skip
+        # A removal through a link is its UNLINKED event above; through the filing, here.
+        for row in cursor.execute(
+            """
+            SELECT e.created_at, u.display_name, e.payload ->> 'reason', q.id, q.title
+            FROM audit_events e
+            LEFT JOIN users u ON u.id = e.actor_user_id
+            LEFT JOIN evidence_requirements q ON q.id::text = e.payload ->> 'requirement_id'
+            WHERE e.action = 'evidence.removed_from_request' AND e.target_id = %s
+              AND e.project_id = %s AND e.payload ->> 'via' = 'FILING'
+            ORDER BY e.created_at, e.id
+            """,
+            (file_id, project_id),
+        ).fetchall():
+            events.append(
+                HistoryEvent(
+                    kind="REMOVED_FROM_REQUEST", at=row[0],
+                    by=None if row[1] is None else str(row[1]), reason=str(row[2] or ""),
+                    requirement_id=row[3],
+                    requirement_title=None if row[4] is None else str(row[4]),
+                )
+            )  # fmt: skip
+    # Oldest first; an event recorded in the same instant keeps the order above.
+    events.sort(key=lambda event: event.at)
+    return HistoryBody(file_id=file_id, file_name=str(file[0]), events=events)

@@ -18,8 +18,11 @@ Audit integrity (critical tier):
   force on the request, a file the check raises no reliability question on, a reason or
   what was relied on out of bounds, a stale page (what stands is not the decision the
   person saw, named by its id);
-- a later check never ends a decision; withdrawing or replacing the file ends it as
-  FILE_GONE in that same act, naming nobody, and restoring the file does not bring it back;
+- a later check never ends a decision; withdrawing or replacing the file is refused while
+  a decision stands on it (E1, 18 November 2026: before, that act ended it as FILE_GONE);
+  reopened first, the file can leave, and restoring it does not bring the decision back;
+  a file out of force by a record from before E1 still ends its decision as FILE_GONE,
+  naming nobody, when the chain next follows the control (test_evidence_reliance);
 - the workpaper: a file established on review counts as reliable for the tickmark, a
   procedure says so, and the check's own sentence about it no longer waits; a file not
   relied on is said so in the evidence index, what rests only on it carries no mark and is
@@ -643,8 +646,9 @@ def test_where_the_migration_is_not_applied_nothing_is_read_or_ended_and_nothing
     migrated: Database,
 ) -> None:
     """The code released before migration 0163: there is no record of a decision, so none
-    is read and none is ended, and the D&I list, a check that finishes, a withdrawal and
-    the workpaper all work as before. Only recording is refused."""
+    is read and none is ended, and the D&I list, a check that finishes and the workpaper
+    all work as before. Recording is refused, and since E1 so is a withdrawal (what relies
+    on the file is read, and the missing table fails loudly)."""
     bench = _Bench(migrated, "fr-unmigrated")
     with connect(migrated.url) as connection:
         connection.execute("DROP TABLE file_reliability_decisions")
@@ -653,10 +657,17 @@ def test_where_the_migration_is_not_applied_nothing_is_read_or_ended_and_nothing
     log = bench.add("sap change log.txt", LOG)
     bench.read_next(_reading("change_history"))
     _check(bench, "ticket REQ-1041.txt")
+    # 18 November 2026 (E1 review, N9): what relies on a file is read on every change to
+    # it, and with migration 0163 applied a missing decisions table fails loudly. Old: the
+    # withdrawal went through as before; new: it is refused (503), and the file stays.
     withdrawn = bench.owner.post(
         f"{bench.base}/evidence-files/{log}/withdraw", json={"reason": "Sent in error"}
     )
-    assert withdrawn.status_code == 200, withdrawn.text
+    assert withdrawn.status_code == 503, withdrawn.text
+    assert (
+        bench.rows("SELECT 1 FROM evidence_withdrawals WHERE evidence_file_id = %s", UUID(log))
+        == []
+    )
     # Section 3.9: old, no DISPOSITION matter; new, no file's line says a decision.
     assert {(e["established"], e["not_relied_on"]) for e in _paper(bench)["evidence"]} == {
         ("", None)
