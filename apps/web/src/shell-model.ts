@@ -253,7 +253,8 @@ export type ShellModel =
       demo: DemoSummary;
       /** Where this person stands in the demo's guided tour (demo-tour-model.ts). */
       tour: TourState;
-      /** The trial's allowances and usage (trial-usage-model.ts); read for Settings. */
+      /** The trial's allowances and usage (trial-usage-model.ts); read for Settings and,
+       * on the trial, for the pages that map controls (readsTrialUsage). */
       trialUsage: TrialUsage | null;
     };
 

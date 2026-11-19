@@ -171,5 +171,7 @@ export function refusalWords(refusal: Refusal): string {
   const [one, many] = nouns;
   const count =
     refusal.allowed === 1 ? `one ${one}` : `${refusal.allowed} ${many}`;
-  return `The free trial includes ${count}. To add more, explore plans.`;
+  // The controls allowance is each engagement's (migration 0128), as Map controls says.
+  const per = refusal.resource === "controls" ? " per engagement" : "";
+  return `The free trial includes ${count}${per}. To add more, explore plans.`;
 }

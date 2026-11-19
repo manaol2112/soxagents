@@ -3,7 +3,11 @@
 // the subscription route (subscriptions.py). Nothing is worked out here but the words
 // and the share of a meter; the server decides the limits and counts the usage.
 
-import { PLANS_HREF, type SubscriptionSummary } from "./trial-model.ts";
+import {
+  PLANS_HREF,
+  parseSubscription,
+  type SubscriptionSummary,
+} from "./trial-model.ts";
 
 export type TrialUsage = {
   state: string;
@@ -312,4 +316,32 @@ export function usageHref(
 /** Whether the firm is on the trial plan at all (the tab, the badge, the menu entry). */
 export function onTrialPlan(subscription: SubscriptionSummary): boolean {
   return subscription.planType === "TRIAL";
+}
+
+/** The pages whose Map controls dialog shows the trial's allowance of controls. */
+const MAPS_CONTROLS = new Set(["controls", "register"]);
+
+/** Whether the page reads the subscription route: Settings for every firm, and the pages
+ * that map controls for a firm on the trial, so Map controls shows the allowance before
+ * anything is chosen (the product owner's fix of 19 November 2026). */
+export function readsTrialUsage(
+  section: string | null,
+  organizations: unknown,
+  organizationId: string,
+): boolean {
+  if (section === "settings") {
+    return true;
+  }
+  if (section === null || !MAPS_CONTROLS.has(section)) {
+    return false;
+  }
+  const firm = Array.isArray(organizations)
+    ? organizations.find(
+        (item): item is Record<string, unknown> =>
+          typeof item === "object" &&
+          item !== null &&
+          item.id === organizationId,
+      )
+    : undefined;
+  return firm !== undefined && onTrialPlan(parseSubscription(firm));
 }

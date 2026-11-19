@@ -12,6 +12,7 @@ import {
   projectIdInList,
   type ShellModel,
 } from "./shell-model";
+import { readsTrialUsage } from "./trial-usage-model";
 
 const SESSION_TOKEN = /^[A-Za-z0-9_-]+$/;
 
@@ -45,9 +46,11 @@ export async function loadWorkspace(
     organizationId !== null && offersDemo(organizations.body, organizationId)
       ? await apiGet(`/organizations/${organizationId}/demo`, session)
       : { status: 0, body: null };
-  // The trial's allowances and usage (Step 6): one more read, for the settings page.
+  // The trial's allowances and usage (Step 6): one more read, for the settings page,
+  // and for a firm on the trial, for the pages whose Map controls shows the allowance.
   const subscription =
-    organizationId !== null && request.section === "settings"
+    organizationId !== null &&
+    readsTrialUsage(request.section, organizations.body, organizationId)
       ? await apiGet(`/organizations/${organizationId}/subscription`, session)
       : { status: 0, body: null };
   // The guided tour's standing (Step 5): one more read, only once the demo exists.
