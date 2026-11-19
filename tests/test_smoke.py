@@ -1,5 +1,6 @@
 """Repository foundation checks. These do not require PostgreSQL."""
 
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -60,19 +61,41 @@ def test_compose_pins_postgres_and_keeps_a_health_check() -> None:
 
 
 def test_start_waits_for_health_and_reset_is_the_only_volume_delete() -> None:
+    # Rewritten 19 November 2026 (docs/test-baseline.md, B10). Old: `down -v` in the `reset`
+    # recipe itself. New: the recipe calls scripts/reset.sh, which holds the delete behind its
+    # confirmation and backup; so the same safeguard is asserted where the delete now lives,
+    # and more widely: no other recipe and no other script deletes a volume.
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
     start = recipe("start", makefile)
     reset = recipe("reset", makefile)
     assert "--wait" in start
-    assert "down -v" not in start
     assert "python -m ai_workforce_api.migrate" in start
-    assert "down -v" in reset
+    assert reset.strip() == '@"$(BASH)" scripts/reset.sh'
+    deletes = re.compile(r"down\s+(?:-v|--volumes)\b|volume\s+(?:rm|prune)\b")
+    reset_script = (ROOT / "scripts" / "reset.sh").read_text(encoding="utf-8")
+    assert re.search(r'^"\$\{compose\[@\]\}" down -v --remove-orphans$', reset_script, re.M)
+    assert not deletes.search(makefile), "the Makefile deletes no volume itself"
+    others = [
+        path.name
+        for path in sorted((ROOT / "scripts").iterdir())
+        if path.is_file() and path.name != "reset.sh"
+        if deletes.search(path.read_text(encoding="utf-8", errors="replace"))
+    ]
+    assert others == [], f"only scripts/reset.sh deletes a volume: {others}"
 
 
 def test_ci_workflow_runs_the_local_baseline() -> None:
+    # Rewritten 19 November 2026 (testing assessment step 3, approved by the product owner).
+    # Old: one job ran `make lint`, `make typecheck` and `make test` in turn. New: the same
+    # targets run as parallel parts of one matrix (`make: <targets>`, run as `make
+    # $MAKE_ARGS`), `make test` as its two halves: the critical tier in parts
+    # (test-critical-shard) and every Node test (test-node). services/api/tests/test_ci_gate.py
+    # checks that the parts cover the critical tier exactly.
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    for command in ("make check", "make install", "make lint", "make typecheck", "make test"):
+    for command in ("make check", "make install", "make $MAKE_ARGS"):
         assert command in workflow
+    for targets in ("lint typecheck", "test-critical-shard SHARD=1 SHARDS=", "test-node"):
+        assert f"make: {targets}" in workflow
     assert "openssl rand -hex 24" in workflow
     assert "::add-mask::" in workflow
     assert "local-dev-only" not in workflow
