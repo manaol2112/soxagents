@@ -79,7 +79,22 @@ question is left for the attributes to ask later. So:
   removal of leavers asks how a leaver's local accounts are found, and direct data changes
   ask how the data owner is identified.
 - A question added after a control's understanding was finished does not hold it (`since`):
-  it is required only of a control still in progress (walkthrough_answers).
+  it is required only of a control still in progress (walkthrough_answers). Known behaviour,
+  as with the questions of B1k: on such a control whose specialist's first read was READY and
+  asked nothing, the questions added since are answered and the understanding then completes
+  without the specialist reading those answers (understanding_review.due_round gives no new
+  read); "Review again" after completion is the way to have them read.
+
+Added on 18 November 2026 (product owner: draft the dedicated walkthrough banks for the IT
+operations library controls, for professional review): the operations family (library keys
+starting "operations-", ITGC-OP-01 to -08 with OP-02.1, OP-03.1 and OP-03.2) has a bank of its
+own for each control, built the same way: only what the control's attributes need, a CHOICE
+or MULTI with the usual answers and Other wherever an answer can be listed, and no Yes/No
+question that opens a follow-up (product owner, 18 November 2026: a Yes/No answer settles its
+fact; where the answer must branch, a CHOICE or MULTI with distinct options does). Every
+attribute of the family says what its criteria need (CRITERIA_NEEDS), met by a question or a
+recorded reason (MET_ELSEWHERE). The questions carry `since` (OPERATIONS_ADDED), so a control
+whose understanding was already finished is not held by them.
 
 Status: draft for professional review, like the rest of the library. Nothing here sets a
 threshold, a deadline or a role on the client's behalf. Pure and deterministic: no database.
@@ -175,7 +190,7 @@ OPTION_LIMIT = 80
 ANSWER_LIMIT = 1000
 NARRATIVE_LIMIT = 220
 
-FAMILIES: dict[str, str] = {"access-": "ACCESS", "change-": "CHANGE"}
+FAMILIES: dict[str, str] = {"access-": "ACCESS", "change-": "CHANGE", "operations-": "OPERATIONS"}
 
 # The kind of fact a question establishes, and an attribute's criteria need (B1l, 16 November
 # 2026): who performs the control (PERFORMER), who approves, reviews or signs it off and their
@@ -191,6 +206,8 @@ FACTS: tuple[Fact, ...] = (
 )  # fmt: skip
 # The day the questions of B1k were added to the bank (see Question.since).
 B1K_ADDED = date(2026, 11, 16)
+# The day the operations family's banks were added (see Question.since).
+OPERATIONS_ADDED = date(2026, 11, 18)
 
 # The only free-text questions (product owner, 11 November 2026: options wherever an answer
 # can be listed), each a narrative no list holds and each asked after a structured question
@@ -515,6 +532,77 @@ _FACTS: dict[str, Fact] = {
     "wt-cm08-reconciliation": "OTHER",
     "wt-cm08-approver-independent": "APPROVER",
     "wt-cm08-extracts-retained": "RECORD",
+    # ITGC-OP-01.
+    "wt-op01-relevant-jobs": "POPULATION",
+    "wt-op01-failure-record": "RECORD",
+    "wt-op01-off-hours": "TIMING",
+    "wt-op01-rerun-check": "RECORD",
+    "wt-op01-resolution": "EXCEPTION",
+    "wt-op01-run-history": "POPULATION",
+    # ITGC-OP-02.
+    "wt-op02-other-actions": "POPULATION",
+    "wt-op02-approval-enforced": "TIMING",
+    "wt-op02-change-log": "RECORD",
+    "wt-op02-request-link": "RECORD",
+    "wt-op02-urgent": "EXCEPTION",
+    # ITGC-OP-02.1.
+    "wt-op021-change-rights": "POPULATION",
+    "wt-op021-generic-accounts": "POPULATION",
+    "wt-op021-removal-check": "RECORD",
+    "wt-op021-own-access": "APPROVER",
+    "wt-op021-decision-record": "RECORD",
+    "wt-op021-listing-source": "POPULATION",
+    # ITGC-OP-03.
+    "wt-op03-data-covered": "SYSTEM",
+    "wt-op03-new-hosts": "SYSTEM",
+    "wt-op03-change-approval": "APPROVER",
+    "wt-op03-history-kept": "RECORD",
+    "wt-op03-config-history": "RECORD",
+    # ITGC-OP-03.1.
+    "wt-op031-what-counts": "POPULATION",
+    "wt-op031-off-hours": "TIMING",
+    "wt-op031-review-record": "RECORD",
+    "wt-op031-resolution": "EXCEPTION",
+    "wt-op031-job-history": "POPULATION",
+    # ITGC-OP-03.2.
+    "wt-op032-what-restored": "SYSTEM",
+    "wt-op032-backup-identified": "RECORD",
+    "wt-op032-comparison": "RECORD",
+    "wt-op032-source-figures": "TIMING",
+    "wt-op032-failed-test": "EXCEPTION",
+    # ITGC-OP-04.
+    "wt-op04-system-link": "POPULATION",
+    "wt-op04-priority-set": "SYSTEM",
+    "wt-op04-targets": "TIMING",
+    "wt-op04-closure": "RECORD",
+    "wt-op04-root-cause-record": "RECORD",
+    # ITGC-OP-05.
+    "wt-op05-hosting": "SYSTEM",
+    "wt-op05-access-list": "POPULATION",
+    "wt-op05-grant-approval": "APPROVER",
+    "wt-op05-removal-record": "RECORD",
+    "wt-op05-soc-coverage": "RECORD",
+    "wt-op05-holders": "POPULATION",
+    "wt-op05-decision-record": "RECORD",
+    # ITGC-OP-06.
+    "wt-op06-mismatch-check": "SYSTEM",
+    "wt-op06-off-hours": "TIMING",
+    "wt-op06-recheck": "RECORD",
+    "wt-op06-review-record": "RECORD",
+    "wt-op06-recovery": "EXCEPTION",
+    "wt-op06-run-log": "POPULATION",
+    # ITGC-OP-07.
+    "wt-op07-carve-out": "POPULATION",
+    "wt-op07-cuec-mapping": "RECORD",
+    "wt-op07-cuec-assurance": "OTHER",
+    "wt-op07-exception-assessment": "EXCEPTION",
+    # ITGC-OP-08.
+    "wt-op08-inventory": "POPULATION",
+    "wt-op08-severity": "POPULATION",
+    "wt-op08-closure": "RECORD",
+    "wt-op08-first-seen": "TIMING",
+    "wt-op08-acceptance-record": "RECORD",
+    "wt-op08-signoff-record": "RECORD",
 }
 
 
@@ -2216,6 +2304,788 @@ _bank(
     ),
 )  # fmt: skip
 
+# The IT operations family (added 18 November 2026, OPERATIONS_ADDED; draft for professional
+# review). What a statement value already asks (the system, the scheduler or tool, the team
+# that performs the control, the approver or reviewer, a time allowed) is not asked again.
+# No Yes/No question opens a follow-up: where the answer must branch, a CHOICE or MULTI does.
+_OPS = OPERATIONS_ADDED
+
+# ITGC-OP-01 Scheduled jobs are monitored and failures resolved.
+_bank(
+    "operations-jobs",
+    _multi(
+        "wt-op01-relevant-jobs", "SCOPE", 10,
+        "How are the financially relevant jobs identified among the scheduler's jobs?",
+        "The job log is the population only for the jobs identified as financially relevant, "
+        "so how they are identified decides whether the failures tested are complete.",
+        ("op01-identified", "SCOPE", "POPULATION"),
+        ("A flag or naming convention in the scheduler",
+         "A list of relevant jobs kept by IT operations",
+         "Every job of the system is treated as relevant", "Not identified separately"),
+        "The financially relevant jobs are identified as follows: {answer}.",
+        since=_OPS,
+    ),
+    _multi(
+        "wt-op01-failure-record", "EXECUTION", 10,
+        "Where is a failed job recorded when it is noted?",
+        "The record of each failure is the evidence that it was noted and logged as an incident "
+        "on the day, and a failure that leaves no record cannot be traced from the job log.",
+        ("op01-identified", "op01-logged", "op01-resolved", "EVIDENCE"),
+        ("An incident raised automatically by the scheduler",
+         "An incident raised by the operator who notes it",
+         "An alert acknowledged in the scheduler", "The daily monitoring log or checklist",
+         "An incident only when a rerun does not fix it"),
+        "A failed job is recorded as follows: {answer}.",
+        since=_OPS,
+    ),
+    _choice(
+        "wt-op01-off-hours", "EXECUTION", 20,
+        "When are failures of jobs that run overnight, at weekends or on holidays acted on?",
+        "The attribute expects an incident on the day of the failure, so a failure acted on "
+        "later is tested against what the procedure allows for those hours.",
+        ("op01-logged", "SAMPLE"),
+        ("As they happen, by an on-call or 24-hour team", "At the start of the next business day",
+         "At the next scheduled check, whatever the day"),
+        "Failures of jobs that run overnight, at weekends or on holidays are acted on {answer}.",
+        since=_OPS,
+    ),
+    _multi(
+        "wt-op01-rerun-check", "EXECUTION", 30,
+        "How is it confirmed that a rerun processed the failed run's data once and completely?",
+        "A successful status alone may not show that no record was skipped or posted twice, so "
+        "the check used is what the completeness attribute is tested against.",
+        ("op01-complete", "EVIDENCE"),
+        ("The rerun's successful status in the scheduler",
+         "Record counts or control totals compared after the rerun",
+         "A check of the output by the business data owner",
+         "A restart from the failure point that the job supports"),
+        "A rerun's processing of the failed run's data is confirmed by {answer}.",
+        since=_OPS,
+    ),
+    _multi(
+        "wt-op01-resolution", "EXCEPTIONS", 10,
+        "How are failed jobs resolved?",
+        "Each way a failure is resolved leaves its own record, which is the evidence requested "
+        "for each failure and decides how the completeness of its data is shown.",
+        ("op01-resolved", "op01-complete", "EVIDENCE"),
+        ("Rerun in the scheduler", "Run by hand outside the scheduler",
+         "Cancelled with the business owner's agreement",
+         "Corrected through a change under change management",
+         "Left for the next scheduled run to pick up"),
+        "Failed jobs are {answer}.",
+        since=_OPS,
+    ),
+    _choice(
+        "wt-op01-run-history", "POPULATION", 10,
+        "What does the scheduler's run history for a day list?",
+        "The run history is the population for each selected day, so a history that leaves out "
+        "some runs needs the schedule itself to show what should have run.",
+        ("op01-identified", "POPULATION", "EVIDENCE"),
+        ("Every scheduled run, including jobs that did not start",
+         "Every run that started, with its status", "Only failed runs", "Only successful runs"),
+        "For a day, the scheduler's run history lists {answer}.",
+        since=_OPS,
+    ),
+)  # fmt: skip
+
+# ITGC-OP-02 Changes to the job schedule are approved.
+_bank(
+    "operations-scheduling",
+    _multi(
+        "wt-op02-other-actions", "SCOPE", 10,
+        "Besides new jobs and changes to a job's timing, parameters or dependencies, which "
+        "schedule actions need an approved request?",
+        "Each action that needs a request is part of the population drawn from the scheduler's "
+        "log, and an action made without one is outside the control.",
+        ("op02-request", "SCOPE", "POPULATION"),
+        ("Deleting or suspending a job", "Holding or skipping a single run",
+         "Running a job once on request", "None of these"),
+        "The other schedule actions that need an approved request are {answer}.",
+        since=_OPS,
+    ),
+    _yes_no(
+        "wt-op02-approval-enforced", "APPROVAL", 10,
+        "Does the scheduler or the change tool stop a schedule change being made until its "
+        "approval is recorded?",
+        "An approval the tool enforces is evidenced by its configuration, while one by "
+        "procedure only is dated against the change in the scheduler's log for each sampled "
+        "change.",
+        ("op02-approved", "EVIDENCE"),
+        yes="The scheduler or the change tool stops a schedule change being made until its "
+        "approval is recorded.",
+        no="Neither the scheduler nor the change tool stops a schedule change being made before "
+        "its approval is recorded.",
+        since=_OPS,
+    ),
+    _choice(
+        "wt-op02-change-log", "RECORDS", 10,
+        "What does the scheduler record of a change to a job's definition?",
+        "The scheduler's own record is the population of schedule changes, and only the old and "
+        "new definition show that the change made is the change approved.",
+        ("op02-matches", "POPULATION", "EVIDENCE"),
+        ("The old and new definition, who changed it and when",
+         "Who changed it and when, without the old and new values",
+         "Only the current definition and the date it last changed", "Nothing about the change"),
+        "For a change to a job's definition, the scheduler records {answer}.",
+        since=_OPS,
+    ),
+    _multi(
+        "wt-op02-request-link", "RECORDS", 20,
+        "How is a change in the scheduler's log linked to its request in the change tool?",
+        "Each change in the log is traced to the request that describes it, and a link by date "
+        "alone does not show that the request is for that change.",
+        ("op02-request", "op02-matches", "EVIDENCE"),
+        ("The request number recorded with the change in the scheduler",
+         "The job and the change described on the request",
+         "One request for each release of schedule changes", "The job name and date only"),
+        "A change in the scheduler's log is linked to its request by {answer}.",
+        since=_OPS,
+    ),
+    _choice(
+        "wt-op02-urgent", "EXCEPTIONS", 10,
+        "How is a schedule change made before its approval, such as an urgent one, approved "
+        "afterwards?",
+        "A schedule change made before its approval passes only under the emergency change "
+        "procedure, so the answer decides whether such changes are tested here or under the "
+        "emergency change control.",
+        ("op02-approved", "POPULATION"),
+        ("Approved afterwards under the emergency change procedure",
+         "Approved afterwards by the approver of schedule changes", "Not approved afterwards",
+         "Not allowed, as every schedule change is approved first"),
+        "A schedule change made before its approval is {answer}.",
+        since=_OPS,
+    ),
+)  # fmt: skip
+
+# ITGC-OP-02.1 Access to change the job schedule is reviewed.
+_bank(
+    "operations-scheduler-access",
+    _multi(
+        "wt-op021-change-rights", "SCOPE", 10,
+        "Which kinds of access let someone change the job schedule?",
+        "Every kind of access that can change the schedule must be on the listing reviewed, so "
+        "a kind left out is a gap in its completeness.",
+        ("op021-complete", "SCOPE", "POPULATION"),
+        ("Scheduler administrator roles", "Rights to create or edit job definitions",
+         "Rights to hold, release or force-start jobs", "Access to the scheduler's server or files",
+         "Access to the scheduler's database tables"),
+        "The job schedule can be changed through {answer}.",
+        since=_OPS,
+    ),
+    _yes_no(
+        "wt-op021-generic-accounts", "SCOPE", 20,
+        "Do any service or generic accounts have rights to change the job schedule?",
+        "A non-personal account with those rights must be on the listing, with its need "
+        "confirmed through a named owner, which the review is tested for.",
+        ("op021-complete", "op021-access"),
+        yes="Some service or generic accounts have rights to change the job schedule.",
+        no="No service or generic account has rights to change the job schedule.",
+        since=_OPS,
+    ),
+    _yes_no(
+        "wt-op021-removal-check", "EXECUTION", 10,
+        "Is each removal the reviewer requests confirmed in the scheduler once it is made?",
+        "A recorded confirmation is evidence the tester inspects, while without one each "
+        "requested removal is traced to the scheduler's own user list.",
+        ("op021-access", "EVIDENCE"),
+        yes="Each removal the reviewer requests is confirmed in the scheduler once it is made.",
+        no="Removals the reviewer requests are not confirmed in the scheduler once they are "
+        "made.",
+        since=_OPS,
+    ),
+    _choice(
+        "wt-op021-own-access", "SEGREGATION", 10,
+        "Who decides whether the reviewer keeps their own access to change the job schedule?",
+        "A reviewer confirming their own access is not an independent decision, so the "
+        "reviewer's own access is tested against whoever decides it.",
+        ("op021-access",),
+        ("The reviewer holds no such access", "The reviewer's manager decides it",
+         "Another member of IT management decides it", "The reviewer decides it"),
+        "As to the reviewer's own access to change the job schedule, {answer}.",
+        since=_OPS,
+    ),
+    _multi(
+        "wt-op021-decision-record", "RECORDS", 10,
+        "How is the reviewer's decision on each user able to change the schedule recorded?",
+        "The attribute requires a decision for each user, so a sign-off of the whole listing "
+        "without one for each user is tested as such.",
+        ("op021-access", "op021-signoff", "EVIDENCE"),
+        ("Against each user in a review tool", "Against each user on the listing, signed and dated",
+         "In a ticket with the marked-up listing attached", "As one sign-off of the whole listing"),
+        "The reviewer's decision on each user is recorded {answer}.",
+        since=_OPS,
+    ),
+    _multi(
+        "wt-op021-listing-source", "POPULATION", 10,
+        "How is the listing of users able to change the job schedule produced?",
+        "The listing is information produced by the entity, so how it is produced decides how "
+        "its completeness is tested against the scheduler's own users.",
+        ("op021-complete", "POPULATION", "EVIDENCE"),
+        ("A standard user and role report in the scheduler",
+         "A custom query of the scheduler's security tables",
+         "The directory groups the scheduler grants rights to", "A listing compiled by hand"),
+        "The listing of users able to change the job schedule comes from {answer}.",
+        since=_OPS,
+    ),
+)  # fmt: skip
+
+# ITGC-OP-03 Backups are configured and scheduled.
+_bank(
+    "operations-backup",
+    _multi(
+        "wt-op03-data-covered", "SCOPE", 10,
+        "Which of the system's data do the backup jobs cover?",
+        "The configuration is tested for every store of the system's financial data, so a store "
+        "the jobs leave out is a gap in the configuration attribute.",
+        ("op03-config", "SCOPE"),
+        ("The production database", "The database's transaction logs",
+         "Application and file servers", "Interface and archive files"),
+        "The backup jobs cover {answer}.",
+        since=_OPS,
+    ),
+    _multi(
+        "wt-op03-new-hosts", "SCOPE", 20,
+        "How is a new server or database of the system added to the backup schedule?",
+        "A server or database added in the period and left out of the schedule is not backed "
+        "up, which the configuration attribute tests for every store of the system.",
+        ("op03-config",),
+        ("Automatically, by a policy that covers every host of the system",
+         "By the backup administrator when the server is built",
+         "Through a step in the server build or change checklist", "Without a set step"),
+        "A new server or database of the system is added to the backup schedule {answer}.",
+        since=_OPS,
+    ),
+    _multi(
+        "wt-op03-change-approval", "APPROVAL", 10,
+        "How is a change to a backup job's scope, schedule or retention approved?",
+        "The attribute passes a change only with an approval under change management, so the "
+        "route a change takes decides where its approval is requested.",
+        ("op03-unchanged", "EVIDENCE"),
+        ("A change under the change management process",
+         "Approval by the IT operations manager, outside change management",
+         "Approval by the backup administrator who makes it", "No approval"),
+        "The route for approving a change to a backup job's scope, schedule or retention is "
+        "{answer}.",
+        since=_OPS,
+    ),
+    _choice(
+        "wt-op03-history-kept", "RECORDS", 10,
+        "How long does the backup tool keep its job history?",
+        "The job history is the evidence that each scheduled backup ran on a day examined, so "
+        "history kept for a short time decides when the days are selected and requested.",
+        ("op03-ran", "EVIDENCE", "SAMPLE"),
+        ("For the whole period or longer", "For about 90 days", "For 30 days or less",
+         "Only until a job completes"),
+        "The backup tool keeps its job history {answer}.",
+        since=_OPS,
+    ),
+    _choice(
+        "wt-op03-config-history", "RECORDS", 20,
+        "What does the backup tool record of a change to a backup job's scope, schedule or "
+        "retention?",
+        "The tool's own change history is the evidence that the configuration stayed in place "
+        "through the period, not only on the day it was inspected.",
+        ("op03-unchanged", "EVIDENCE"),
+        ("The old and new setting, who changed it and when",
+         "Who changed it and when, without the old and new values",
+         "Only the current setting and the date it last changed", "Nothing about the change"),
+        "For a change to a backup job, the backup tool records {answer}.",
+        since=_OPS,
+    ),
+)  # fmt: skip
+
+# ITGC-OP-03.1 Failed backups are resolved.
+_bank(
+    "operations-backup-failures",
+    _multi(
+        "wt-op031-what-counts", "SCOPE", 10,
+        "Which backup results does the daily review treat as failures?",
+        "Each kind of result treated as a failure is part of the population drawn from the job "
+        "history, and a kind left out is tested as a gap in the review.",
+        ("op031-identified", "SCOPE", "POPULATION"),
+        ("Failed jobs", "Jobs that completed with warnings or skipped files",
+         "Jobs that did not start", "Jobs that ran outside their window"),
+        "The daily review treats these results as failures: {answer}.",
+        since=_OPS,
+    ),
+    _choice(
+        "wt-op031-off-hours", "EXECUTION", 10,
+        "When are backups that fail at weekends or on holidays reviewed?",
+        "The attribute expects a failure to be noted on the day it failed, so a failure "
+        "reviewed later is tested against what the procedure allows for those days.",
+        ("op031-identified", "SAMPLE"),
+        ("On the day, by an on-call or 24-hour team", "On the next business day",
+         "At the next weekly check"),
+        "Backups that fail at weekends or on holidays are reviewed {answer}.",
+        since=_OPS,
+    ),
+    _multi(
+        "wt-op031-review-record", "RECORDS", 10,
+        "What record shows the day's review of backup results and the failures it noted?",
+        "The review record is the evidence that each failure was noted on the day, and its form "
+        "decides what is requested for each selected failure.",
+        ("op031-identified", "op031-resolved", "EVIDENCE"),
+        ("Alerts acknowledged in the backup tool",
+         "A daily checklist or shift log signed by the reviewer", "A ticket for each failure",
+         "An email of the day's results with the failures marked"),
+        "The day's review of backup results is shown by {answer}.",
+        since=_OPS,
+    ),
+    _multi(
+        "wt-op031-resolution", "EXCEPTIONS", 10,
+        "How is a failed backup resolved when it cannot be rerun within the time allowed?",
+        "A failure resolved without a successful rerun passes only with a recorded resolution, "
+        "so the ways it is resolved decide what is requested for each failure.",
+        ("op031-resolved", "EVIDENCE"),
+        ("By a backup taken by hand", "By escalating it as an incident",
+         "By the next scheduled backup, with the gap accepted by IT management",
+         "By the next scheduled backup, without a recorded acceptance"),
+        "A failed backup that cannot be rerun within the time allowed is resolved {answer}.",
+        since=_OPS,
+    ),
+    _choice(
+        "wt-op031-job-history", "POPULATION", 10,
+        "Which backups does the backup tool's job history list?",
+        "The job history is the population of failed backups, so a history that leaves out "
+        "backups that did not start needs the schedule itself to show what should have run.",
+        ("op031-identified", "POPULATION", "EVIDENCE"),
+        ("Every scheduled backup, including those that did not start",
+         "Every backup that started, with its result", "Only the latest result of each job",
+         "Only failed backups"),
+        "The backup tool's job history lists {answer}.",
+        since=_OPS,
+    ),
+)  # fmt: skip
+
+# ITGC-OP-03.2 Backups are restored in a test.
+_bank(
+    "operations-restore-test",
+    _multi(
+        "wt-op032-what-restored", "SCOPE", 10,
+        "What does the restore test restore?",
+        "The attribute requires a restore of the system's financial data, so a test of other "
+        "data, or of part of it, is tested against the data stores of the system.",
+        ("op032-restore", "SCOPE"),
+        ("The full production database", "Selected database tables or files",
+         "Application servers or virtual machines",
+         "The whole system, in a disaster recovery exercise"),
+        "The restore test restores {answer}.",
+        since=_OPS,
+    ),
+    _multi(
+        "wt-op032-backup-identified", "EXECUTION", 10,
+        "How does the restore test's record identify the backup it restored?",
+        "The restored backup is agreed to the backup tool's catalog, which needs the test "
+        "record to name it.",
+        ("op032-restore", "EVIDENCE"),
+        ("By its job or catalog ID in the backup tool", "By the date and time of the backup",
+         "By the media or copy it came from", "The backup is not identified"),
+        "The test record identifies the backup restored as follows: {answer}.",
+        since=_OPS,
+    ),
+    _multi(
+        "wt-op032-comparison", "EXECUTION", 20,
+        "How is the restored data compared with the source?",
+        "The comparison is what the attribute tests the restored data against, so a check that "
+        "the data opens without comparing it shows it readable but not complete.",
+        ("op032-compared", "EVIDENCE"),
+        ("Record counts of key tables", "Control totals of amounts",
+         "Checksums of the restored files", "Reports run in the system on the restored data",
+         "A check that the data opens, without a comparison"),
+        "The restored data is compared with the source using {answer}.",
+        since=_OPS,
+    ),
+    _yes_no(
+        "wt-op032-source-figures", "RECORDS", 10,
+        "Are the source figures the restored data is compared with taken as at the date of the "
+        "backup?",
+        "Restored data is complete only against the source as it stood when the backup was "
+        "taken, so figures taken on the day of the test are not a valid comparison.",
+        ("op032-compared", "EVIDENCE"),
+        yes="The source figures the restored data is compared with are taken as at the date of "
+        "the backup.",
+        no="The source figures the restored data is compared with are not taken as at the date "
+        "of the backup.",
+        since=_OPS,
+    ),
+    _multi(
+        "wt-op032-failed-test", "EXCEPTIONS", 10,
+        "What is done when a restore test fails or finds a difference from the source?",
+        "A difference passes only when it is explained, so how failures and differences are "
+        "handled decides what is requested beside the sign-off.",
+        ("op032-compared", "EVIDENCE"),
+        ("The cause is fixed and the test repeated", "An incident or problem record is raised",
+         "The difference is explained in the sign-off", "Nothing beyond the sign-off"),
+        "When a restore test fails or finds a difference, the following is done: {answer}.",
+        since=_OPS,
+    ),
+)  # fmt: skip
+
+# ITGC-OP-04 Incidents are tracked to resolution.
+_bank(
+    "operations-incidents",
+    _multi(
+        "wt-op04-system-link", "SCOPE", 10,
+        "How is an incident linked to the system in the incident tool?",
+        "The population is the incidents logged against the system, so how the link is "
+        "recorded decides how the incidents are selected and whether any are missed.",
+        ("op04-logged", "POPULATION"),
+        ("A configuration item or service chosen on each ticket",
+         "An assignment group that supports only this system",
+         "Keywords in the ticket's description", "No link to the system"),
+        "Incidents are linked to the system as follows: {answer}.",
+        since=_OPS,
+    ),
+    _multi(
+        "wt-op04-priority-set", "EXECUTION", 10,
+        "How is an incident's priority set?",
+        "A priority the tool calculates is tested once through its configuration, while one "
+        "chosen by a person is compared with the procedure's criteria ticket by ticket.",
+        ("op04-priority", "EVIDENCE"),
+        ("Calculated by the tool from the impact and urgency chosen",
+         "Chosen by the service desk analyst against the procedure's criteria",
+         "Taken from the alert's severity in the monitoring tool",
+         "Agreed with the person who reported it"),
+        "An incident's priority is {answer}.",
+        since=_OPS,
+    ),
+    _choice(
+        "wt-op04-targets", "EXECUTION", 20,
+        "What resolution targets does the incident procedure set?",
+        "The attribute fails an incident left unresolved beyond the procedure's target, so the "
+        "targets and how they are tracked decide what each incident is compared with.",
+        ("op04-resolved", "EVIDENCE"),
+        ("Targets by priority, tracked in the incident tool",
+         "Targets by priority, not tracked in the tool", "No resolution targets"),
+        "The incident procedure sets {answer}.",
+        since=_OPS,
+    ),
+    _multi(
+        "wt-op04-closure", "EXECUTION", 30,
+        "How is an incident closed?",
+        "The attribute requires a recorded resolution at closure, so a ticket the tool closes "
+        "without one is tested as an exception rather than as a resolution.",
+        ("op04-resolved", "EVIDENCE"),
+        ("By the support team, with the resolution recorded",
+         "Once the person who reported it confirms the resolution",
+         "Automatically after a set time without a reply", "By the service owner after review"),
+        "An incident is closed {answer}.",
+        since=_OPS,
+    ),
+    _multi(
+        "wt-op04-root-cause-record", "RECORDS", 10,
+        "Where is a major incident's root cause recorded?",
+        "Each major incident is traced to its root-cause record, so where it is kept is the "
+        "evidence requested for each one.",
+        ("op04-root-cause", "EVIDENCE"),
+        ("In a problem record linked to the incident", "In a root-cause field on the incident",
+         "In a post-incident review report", "In the change that fixed it"),
+        "A major incident's root cause is recorded {answer}.",
+        since=_OPS,
+    ),
+)  # fmt: skip
+
+# ITGC-OP-05 Physical access to the data center is restricted. Who controls the access
+# decides what is tested: the company's own badge system and review, or the provider's
+# SOC 1 report; a MULTI, as a system can be hosted in both ways.
+_OP05_OWN = "The company, in a data center, server room or cage it controls"
+_OP05_PROVIDER = "A hosting or cloud provider, in its own data centers"
+_bank(
+    "operations-physical",
+    _multi(
+        "wt-op05-hosting", "SCOPE", 10,
+        "Who controls physical access to the data centers that host the system's servers?",
+        "Access the company controls is tested through its badge system and review, while "
+        "access a provider controls is covered by the provider's SOC 1 report.",
+        ("op05-review", "op05-soc", "SCOPE", "RELIANCE"),
+        (_OP05_OWN, _OP05_PROVIDER),
+        "Physical access to the data centers that host the system's servers is controlled by "
+        "{answer}.",
+        since=_OPS,
+    ),
+    _multi(
+        "wt-op05-access-list", "SCOPE", 0,
+        "How is the list of people with physical access produced for the review?",
+        "The reviewed list must agree to the badge system's at the review date, so how it is "
+        "produced decides how its completeness is tested.",
+        ("op05-review", "op05-authorized", "POPULATION", "EVIDENCE"),
+        ("A badge system report of active badges with data center access",
+         "A query of the badge system's access groups", "A list kept by hand by facilities",
+         "A key or sign-in register kept at the entrance"),
+        "The list of people with physical access comes from {answer}.",
+        when=("wt-op05-hosting", _OP05_OWN), since=_OPS,
+    ),
+    _multi(
+        "wt-op05-grant-approval", "SCOPE", 0,
+        "How is a person's physical access to the data center approved before it is granted?",
+        "Each person on the list is tested against the authorization of their access, so how it "
+        "is approved decides what is requested for each person.",
+        ("op05-authorized", "EVIDENCE"),
+        ("A request approved by the data center or facilities manager",
+         "A request approved by the person's manager",
+         "Granted by facilities on request, without a recorded approval"),
+        "Physical access to the data center is authorized as follows: {answer}.",
+        when=("wt-op05-hosting", _OP05_OWN), since=_OPS,
+    ),
+    _yes_no(
+        "wt-op05-removal-record", "SCOPE", 0,
+        "Does the badge system record when each person's access was removed, and by whom?",
+        "The badge system's record is the evidence that each removal the reviewer decided was "
+        "made, and without it removal is shown by the next list produced.",
+        ("op05-removed", "EVIDENCE"),
+        yes="The badge system records when each person's access was removed, and by whom.",
+        no="The badge system does not record when each person's access was removed.",
+        when=("wt-op05-hosting", _OP05_OWN), since=_OPS,
+    ),
+    _multi(
+        "wt-op05-soc-coverage", "SCOPE", 0,
+        "Which SOC 1 report covers physical access to the provider's data centers?",
+        "Physical access may be carved out of the provider's report to a subservice "
+        "organization, whose own report is then the one requested.",
+        ("op05-soc", "RELIANCE", "EVIDENCE"),
+        ("The provider's own report",
+         "A subservice organization's report, as the provider's report carves it out",
+         "No SOC 1 report"),
+        "Physical access to the provider's data centers is covered by {answer}.",
+        when=("wt-op05-hosting", _OP05_PROVIDER), since=_OPS,
+    ),
+    _multi(
+        "wt-op05-holders", "SCOPE", 20,
+        "Besides IT staff, who can hold physical access to the data center?",
+        "Each group with access must be on the list reviewed and authorized, so a group left "
+        "out is a gap in the list's completeness.",
+        ("op05-authorized", "op05-review", "POPULATION"),
+        ("Facilities and security staff", "Cleaning and maintenance contractors",
+         "Vendor or provider engineers", "Visitors on temporary badges",
+         "No one besides IT staff"),
+        "Besides IT staff, physical access to the data center can be held by {answer}.",
+        since=_OPS,
+    ),
+    _multi(
+        "wt-op05-decision-record", "RECORDS", 10,
+        "How is the reviewer's decision on each person with physical access recorded?",
+        "The attribute requires a decision for each person and a dated sign-off, so a single "
+        "approval of the whole list is tested as such.",
+        ("op05-review", "op05-removed", "EVIDENCE"),
+        ("Against each person on the list, signed and dated",
+         "In the badge system's review function", "In a ticket with the marked-up list attached",
+         "As one approval of the whole list"),
+        "The reviewer's decision on each person is recorded {answer}.",
+        since=_OPS,
+    ),
+)  # fmt: skip
+
+# ITGC-OP-06 Interface failures and mismatches are resolved.
+_bank(
+    "operations-interfaces",
+    _multi(
+        "wt-op06-mismatch-check", "EXECUTION", 10,
+        "How are record-count or control-total mismatches between source and target found?",
+        "The attribute requires every mismatch to be noted, so runs whose counts are not "
+        "compared show only failures and leave mismatches untested.",
+        ("op06-identified", "op06-complete", "EVIDENCE"),
+        ("Compared by the integration tool on each run",
+         "A reconciliation report produced each day",
+         "Compared by hand from the source and target counts",
+         "Not compared, as only failed runs are reviewed"),
+        "Mismatches between source and target are found as follows: {answer}.",
+        since=_OPS,
+    ),
+    _choice(
+        "wt-op06-off-hours", "EXECUTION", 20,
+        "When are interface runs at weekends or on holidays reviewed?",
+        "The attribute expects each failure or mismatch to be noted by the day's review, so "
+        "runs reviewed later are tested against what the procedure allows for those days.",
+        ("op06-identified", "SAMPLE"),
+        ("On the day, by an on-call or 24-hour team", "On the next business day",
+         "At the next weekly check"),
+        "Interface runs at weekends or on holidays are reviewed {answer}.",
+        since=_OPS,
+    ),
+    _yes_no(
+        "wt-op06-recheck", "EXECUTION", 30,
+        "After records are reprocessed or corrected, are the counts sent and received compared "
+        "again?",
+        "The completeness attribute compares the counts after the fix, and a recheck the team "
+        "performs is the evidence of it.",
+        ("op06-complete", "EVIDENCE"),
+        yes="After records are reprocessed or corrected, the counts sent and received are "
+        "compared again.",
+        no="After records are reprocessed or corrected, the counts sent and received are not "
+        "compared again.",
+        since=_OPS,
+    ),
+    _multi(
+        "wt-op06-review-record", "RECORDS", 10,
+        "What record shows the day's review of interface runs and the failures or mismatches it "
+        "noted?",
+        "The review record is the evidence that each failure and mismatch was noted, and its "
+        "form decides what is requested for each selected day.",
+        ("op06-identified", "op06-resolved", "EVIDENCE"),
+        ("Alerts acknowledged in the integration tool",
+         "A daily checklist or log signed by the reviewer",
+         "A ticket for each failure or mismatch",
+         "An email of the day's results with the exceptions marked"),
+        "The day's review of interface runs is shown by {answer}.",
+        since=_OPS,
+    ),
+    _multi(
+        "wt-op06-recovery", "EXCEPTIONS", 10,
+        "How are the records of a failed or mismatched run recovered?",
+        "Each way of recovering records leaves its own record of the cause and the action, "
+        "which is the evidence the resolution attribute is tested from.",
+        ("op06-resolved", "op06-complete", "EVIDENCE"),
+        ("Reprocessed from the integration tool's error queue", "Resent by the source system",
+         "Corrected by hand in the target system",
+         "Corrected through a data change under change management"),
+        "The records of a failed or mismatched run are {answer}.",
+        since=_OPS,
+    ),
+    _choice(
+        "wt-op06-run-log", "POPULATION", 10,
+        "What does the integration tool's run log show for each run of an interface?",
+        "The run log is the population for each selected day, so a log without counts, or "
+        "without runs that did not start, needs another source for mismatches and missed runs.",
+        ("op06-identified", "POPULATION", "EVIDENCE"),
+        ("Each scheduled run, with its status and the counts sent and received",
+         "Each run that started, with its status and counts", "Each run's status, without counts",
+         "Only failed runs"),
+        "For each run of an interface, the run log shows {answer}.",
+        since=_OPS,
+    ),
+)  # fmt: skip
+
+# ITGC-OP-07 Service organization (SOC 1) reports are reviewed. Which report each service
+# organization provides is asked by the universal wt-service-org-report; the organizations
+# themselves are a statement value ({service-orgs}).
+_bank(
+    "operations-soc-reports",
+    _multi(
+        "wt-op07-carve-out", "SCOPE", 10,
+        "When a report carves out a subservice organization, how is that organization's part "
+        "of the service covered?",
+        "A carved-out subservice organization is outside the report's opinion, so the coverage "
+        "attribute is tested against how its part of the service is covered.",
+        ("op07-coverage", "SCOPE", "POPULATION"),
+        ("Its own SOC 1 report is obtained and reviewed",
+         "The service organization's monitoring of it is relied on",
+         "It is not covered further", "No report relied on carves one out"),
+        "A carved-out subservice organization's part of the service is covered as follows: "
+        "{answer}.",
+        since=_OPS,
+    ),
+    _multi(
+        "wt-op07-cuec-mapping", "EXECUTION", 10,
+        "Where is each complementary user entity control mapped to the company control that "
+        "performs it?",
+        "The attribute requires each complementary control to be mapped, and the mapping is "
+        "the evidence requested for each report.",
+        ("op07-cuecs", "EVIDENCE"),
+        ("In the review memo", "In a separate mapping workbook", "In the risk and control matrix",
+         "Nowhere"),
+        "The mapping of complementary user entity controls to company controls is kept "
+        "{answer}.",
+        since=_OPS,
+    ),
+    _multi(
+        "wt-op07-cuec-assurance", "EXECUTION", 20,
+        "How is each mapped company control shown to be in place?",
+        "The attribute passes a mapping only to a control that is in place and tested, so the "
+        "source of that assurance decides what is requested for each mapping.",
+        ("op07-cuecs", "EVIDENCE"),
+        ("It is a control tested in this audit",
+         "It is tested by internal audit or another assurance team",
+         "Its control owner confirms it", "It is not shown"),
+        "Each mapped company control is shown to be in place as follows: {answer}.",
+        since=_OPS,
+    ),
+    _multi(
+        "wt-op07-exception-assessment", "EXCEPTIONS", 10,
+        "How is the effect of an exception a report notes on a control relied on assessed?",
+        "The attribute requires each exception on a control relied on to be assessed for its "
+        "effect, so how it is assessed decides what the memo is tested for.",
+        ("op07-exceptions", "EVIDENCE"),
+        ("Against the company's reliance, recorded in the memo",
+         "With the service organization's response and a compensating company control",
+         "By the owner of the affected process", "Only when the opinion is qualified"),
+        "An exception on a control relied on is assessed {answer}.",
+        since=_OPS,
+    ),
+)  # fmt: skip
+
+# ITGC-OP-08 Vulnerabilities are found and remediated.
+_bank(
+    "operations-vulnerabilities",
+    _multi(
+        "wt-op08-inventory", "SCOPE", 10,
+        "Which inventory lists the system's servers and databases that the scan must cover?",
+        "The scope attribute compares the hosts scanned with the inventory, so the inventory "
+        "named is what the completeness of each month's scan is tested against.",
+        ("op08-scope", "POPULATION", "EVIDENCE"),
+        ("The configuration management database", "The cloud provider's asset listing",
+         "The scanner's own asset discovery", "A spreadsheet of hosts kept by IT"),
+        "The system's servers and databases the scan must cover are listed in {answer}.",
+        since=_OPS,
+    ),
+    _choice(
+        "wt-op08-severity", "SCOPE", 20,
+        "Which rating decides whether a finding is critical or high?",
+        "The rating decides which findings are in the population of critical and high findings "
+        "tested for remediation.",
+        ("op08-remediated", "POPULATION"),
+        ("The scanner's own severity rating", "The CVSS base score",
+         "A rating the security team adjusts for the host's exposure"),
+        "Whether a finding is critical or high is decided by {answer}.",
+        since=_OPS,
+    ),
+    _multi(
+        "wt-op08-closure", "EXECUTION", 10,
+        "How is a finding marked as remediated?",
+        "The attribute accepts a remediation only when a rescan confirms it, so a finding "
+        "closed without a rescan is tested as an exception.",
+        ("op08-remediated", "EVIDENCE"),
+        ("Closed by the scanner when a rescan no longer detects it",
+         "Closed by hand after a rescan is reviewed",
+         "Closed by hand on the remediation team's word, without a rescan"),
+        "Findings are marked as remediated as follows: {answer}.",
+        since=_OPS,
+    ),
+    _choice(
+        "wt-op08-first-seen", "RECORDS", 10,
+        "From which date is a finding's remediation time measured?",
+        "The attribute measures the time allowed from when the finding was first seen, so a "
+        "later starting date makes a late remediation look timely.",
+        ("op08-remediated", "EVIDENCE"),
+        ("The date the scanner first detected it", "The date it was assigned for remediation",
+         "The date of the vendor's patch or advisory"),
+        "A finding's remediation time is measured from {answer}.",
+        since=_OPS,
+    ),
+    _multi(
+        "wt-op08-signoff-record", "RECORDS", 20,
+        "How is the month's review of scan findings signed off?",
+        "The attribute requires a sign-off that refers to the month's scan, so its form decides "
+        "how the sign-off is agreed to that scan.",
+        ("op08-signoff", "EVIDENCE"),
+        ("In the scanner's report workflow", "On the scan report, signed or emailed back",
+         "In the minutes of a monthly vulnerability meeting", "In a ticket for the month's review"),
+        "The month's review of scan findings is signed off {answer}.",
+        since=_OPS,
+    ),
+    _multi(
+        "wt-op08-acceptance-record", "EXCEPTIONS", 10,
+        "Where is a risk acceptance recorded, with its reason and expiry?",
+        "Each acceptance is tested for its approver, reason and expiry, so where it is recorded "
+        "is the evidence requested for each accepted finding.",
+        ("op08-accepted", "op08-remediated", "EVIDENCE"),
+        ("In the scanner, as an exception with an expiry date",
+         "In the security exception register",
+         "In a ticket approved by the approver of risk acceptances", "In an email"),
+        "A risk acceptance is recorded {answer}.",
+        since=_OPS,
+    ),
+)  # fmt: skip
+
 
 def _family(library_key: str) -> str:
     for prefix, name in FAMILIES.items():
@@ -2303,9 +3173,9 @@ def informing(library_key: str, definition_key: str) -> tuple[Question, ...]:
 
 
 # The kinds of fact each attribute's criteria cannot be written without, by attribute
-# definition key, for every attribute of the access and change families. A fact the
-# statement fixes for every item (an order such as "approved before it is applied") is listed
-# where the criterion compares it, with the reason in MET_ELSEWHERE.
+# definition key, for every attribute of the access, change and operations families. A fact
+# the statement fixes for every item (an order such as "approved before it is applied") is
+# listed where the criterion compares it, with the reason in MET_ELSEWHERE.
 CRITERIA_NEEDS: dict[str, tuple[Fact, ...]] = {
     "ac01-request": ("RECORD",),
     "ac01-approver": ("APPROVER",),
@@ -2389,6 +3259,44 @@ CRITERIA_NEEDS: dict[str, tuple[Fact, ...]] = {
     "cm08-reconciled": ("RECORD",),
     "cm08-resolved": ("EXCEPTION",),
     "cm08-approved": ("APPROVER", "TIMING"),
+    # The operations family (18 November 2026; draft for professional review).
+    "op01-identified": ("POPULATION", "RECORD"),
+    "op01-logged": ("RECORD", "TIMING"),
+    "op01-resolved": ("RECORD", "EXCEPTION"),
+    "op01-complete": ("RECORD",),
+    "op02-request": ("RECORD",),
+    "op02-approved": ("APPROVER", "TIMING"),
+    "op02-matches": ("RECORD",),
+    "op021-complete": ("POPULATION",),
+    "op021-signoff": ("APPROVER", "RECORD"),
+    "op021-access": ("APPROVER", "RECORD"),
+    "op03-config": ("SYSTEM", "TIMING"),
+    "op03-ran": ("RECORD",),
+    "op03-unchanged": ("RECORD", "APPROVER"),
+    "op031-identified": ("POPULATION", "RECORD", "TIMING"),
+    "op031-resolved": ("RECORD", "TIMING", "EXCEPTION"),
+    "op032-restore": ("SYSTEM", "RECORD"),
+    "op032-compared": ("RECORD", "TIMING", "EXCEPTION"),
+    "op032-signoff": ("APPROVER", "PERFORMER"),
+    "op04-logged": ("RECORD", "POPULATION"),
+    "op04-priority": ("SYSTEM", "RECORD"),
+    "op04-resolved": ("RECORD", "TIMING"),
+    "op04-root-cause": ("RECORD", "POPULATION"),
+    "op05-authorized": ("APPROVER", "POPULATION"),
+    "op05-review": ("POPULATION", "RECORD", "APPROVER"),
+    "op05-removed": ("RECORD",),
+    "op05-soc": ("SYSTEM", "RECORD"),
+    "op06-identified": ("POPULATION", "RECORD", "TIMING"),
+    "op06-resolved": ("RECORD", "EXCEPTION"),
+    "op06-complete": ("RECORD",),
+    "op07-coverage": ("POPULATION", "RECORD", "TIMING"),
+    "op07-exceptions": ("EXCEPTION",),
+    "op07-cuecs": ("RECORD",),
+    "op07-signoff": ("APPROVER", "TIMING"),
+    "op08-scope": ("POPULATION", "SYSTEM"),
+    "op08-remediated": ("POPULATION", "TIMING", "RECORD"),
+    "op08-accepted": ("APPROVER", "RECORD", "TIMING"),
+    "op08-signoff": ("APPROVER", "RECORD"),
 }
 
 # A need no question informs, with the reason it is met without one: a value the control's
@@ -2454,12 +3362,45 @@ MET_ELSEWHERE: dict[tuple[str, Fact], str] = {
     ("cm08-resolved", "EXCEPTION"): "Each difference and its resolution are recorded on the "
     "reconciliation itself, which the evidence requests for each data object.",
     ("cm08-approved", "TIMING"): f"{_FIXED_ORDER} (approved before cutover).",
+    # The operations family (18 November 2026; draft for professional review).
+    ("op02-approved", "APPROVER"): "{schedule-approver}: the statement asks who approves.",
+    ("op021-signoff", "APPROVER"): "{ops-owner}: the statement names the control owner who "
+    "reviews and signs off each quarter's listing.",
+    ("op03-config", "TIMING"): "{backup-frequency} and {retention}: the statement asks how often "
+    "backups run and how long they are kept.",
+    ("op031-resolved", "TIMING"): "{backup-fix-days}: the statement asks the time allowed to "
+    "resolve a failed backup.",
+    ("op032-signoff", "APPROVER"): "{restore-reviewer}: the statement asks who signs off.",
+    ("op032-signoff", "PERFORMER"): "{ops-role}: the statement names the team that performs "
+    "restore tests, and each test's performer is read from its record.",
+    ("op04-logged", "RECORD"): "{incident-tool}: the statement names the tool each incident is "
+    "logged in, and each ticket's fields are read from it.",
+    ("op04-priority", "RECORD"): "{incident-procedure}: the statement names the procedure whose "
+    "priority criteria each ticket's priority is compared with.",
+    ("op04-root-cause", "POPULATION"): "{major-priority}: the statement asks the priority that "
+    "counts as major, which selects the incidents this attribute tests.",
+    ("op05-review", "APPROVER"): "{facilities-reviewer}: the statement asks who reviews.",
+    ("op07-coverage", "RECORD"): "wt-service-org-report asks which SOC 1 report is provided, and "
+    "each report's period, scope and opinion are read from the report the evidence requests for "
+    "each of {service-orgs}.",
+    ("op07-coverage", "TIMING"): "The statement fixes the cover (a bridge letter for any gap to "
+    "period end), and the report and letter dates are read from each.",
+    ("op07-signoff", "APPROVER"): "{soc-reviewer}: the statement asks who reviews.",
+    ("op07-signoff", "TIMING"): "The statement fixes the review each year, and each memo's "
+    "sign-off date is read from it and compared with the period.",
+    ("op08-scope", "SYSTEM"): "{scan-tool}: the statement names the scanner whose scope "
+    "configuration is compared with the inventory.",
+    ("op08-accepted", "APPROVER"): "{risk-acceptor}: the statement asks who approves risk "
+    "acceptances.",
+    ("op08-accepted", "TIMING"): "Each acceptance's expiry date is read from its record and "
+    "compared with the date of the review.",
+    ("op08-signoff", "APPROVER"): "{vuln-owner}: the statement asks who reviews scan findings.",
 }
 
 
 def criteria_needs(definition_key: str) -> tuple[Fact, ...]:
     """The kinds of fact an attribute's criteria cannot be written without (CRITERIA_NEEDS);
-    empty for an attribute the access and change families do not have. Pure."""
+    empty for an attribute the access, change and operations families do not have. Pure."""
     return CRITERIA_NEEDS.get(definition_key, ())
 
 
@@ -2470,6 +3411,162 @@ def met_elsewhere(definition_key: str, fact: str) -> str:
         if key == definition_key and need == fact:
             return reason
     return ""
+
+
+def met_by_slot(slot_key: str) -> tuple[tuple[str, Fact], ...]:
+    """The (attribute definition key, kind of fact) needs the bank records as met by a value
+    of the statement (MET_ELSEWHERE names "{slot}"), in the record's order: the one reading of
+    which value settles what, for the review's citations (understanding_review.slot_facts)
+    and for a value left as not known (understanding_review.value_informs). Pure."""
+    mark = "{" + slot_key + "}"
+    return tuple(need for need, reason in MET_ELSEWHERE.items() if mark in reason)
+
+
+_PERFORMS: tuple[Fact, ...] = ("PERFORMER",)
+_APPROVES: tuple[Fact, ...] = ("APPROVER",)
+_PERFORMS_AND_APPROVES: tuple[Fact, ...] = ("PERFORMER", "APPROVER")
+
+# What each role slot of the library's statements records, when a value of it is cited for an
+# attribute's need (owner decision, 18 November 2026, after the independent review of the
+# citation rule: "an explicit slot to facts record"). Drafted from each slot's own meaning
+# (its `why`), then decided here one by one; this record, not the slot's words, is the source,
+# and a role slot it does not list records nothing (test_understanding_review_support checks
+# every role slot of the library is listed). The control owner ("Accountable for the
+# control's design and operation") names who answers for the control, never who performs or
+# approves it: nothing. An operator who reviews (an access review's reviewer) performs the
+# control and is its reviewer: both. A preparer, maintainer or operator performs it; a
+# reviewer or approver approves it; who breaches are escalated to is how an exception is
+# handled; the administrators allowed direct access are a population, not a party: nothing.
+ROLE_SLOT_FACTS: dict[str, tuple[Fact, ...]] = {
+    "access-owner": (),
+    "accrual-owner": (),
+    "ap-owner": (),
+    "ar-owner": (),
+    "bank-owner": (),
+    "cash-owner": (),
+    "change-owner": (),
+    "consol-owner": (),
+    "cost-owner": (),
+    "count-owner": (),
+    "credit-owner": (),
+    "customer-owner": (),
+    "cutoff-owner": (),
+    "debt-owner": (),
+    "depreciation-owner": (),
+    "fa-owner": (),
+    "flux-owner": (),
+    "gl-owner": (),
+    "indirect-tax-owner": (),
+    "infra-admin-role": (),
+    "inv-owner": (),
+    "je-owner": (),
+    "memo-owner": (),
+    "ops-owner": (),
+    "payment-owner": (),
+    "payroll-owner": (),
+    "payroll-recon-owner": (),
+    "payroll-run-owner": (),
+    "po-owner": (),
+    "ptp-owner": (),
+    "recon-owner": (),
+    "reserve-owner": (),
+    "revenue-owner": (),
+    "signatory-owner": (),
+    "tax-owner": (),
+    "vendor-owner": (),
+    "accrual-preparer": _PERFORMS,
+    "admin-role": _PERFORMS,
+    "ap-preparer": _PERFORMS,
+    "ar-preparer": _PERFORMS,
+    "bank-preparer": _PERFORMS,
+    "cash-preparer": _PERFORMS,
+    "conduct-owner": _PERFORMS,
+    "consol-preparer": _PERFORMS,
+    "cost-maintainer": _PERFORMS,
+    "count-preparer": _PERFORMS,
+    "count-team": _PERFORMS,
+    "covenant-preparer": _PERFORMS,
+    "credit-release-role": _PERFORMS,
+    "customer-maintainer": _PERFORMS,
+    "cutoff-preparer": _PERFORMS,
+    "data-admin": _PERFORMS,
+    "debt-preparer": _PERFORMS,
+    "depreciation-preparer": _PERFORMS,
+    "euc-owner": _PERFORMS,
+    "fa-preparer": _PERFORMS,
+    "flux-preparer": _PERFORMS,
+    "impairment-preparer": _PERFORMS,
+    "indirect-tax-preparer": _PERFORMS,
+    "interface-owner": _PERFORMS,
+    "inv-preparer": _PERFORMS,
+    "investigator": _PERFORMS,
+    "je-preparer": _PERFORMS,
+    "ops-role": _PERFORMS,
+    "pay-preparer": _PERFORMS,
+    "payroll-maintainer": _PERFORMS,
+    "payroll-recon-preparer": _PERFORMS,
+    "payroll-run-preparer": _PERFORMS,
+    "recon-preparer": _PERFORMS,
+    "release-role": _PERFORMS,
+    "reopen-role": _PERFORMS,
+    "reserve-preparer": _PERFORMS,
+    "rev-preparer": _PERFORMS,
+    "soc-role": _PERFORMS,
+    "tax-preparer": _PERFORMS,
+    "vendor-maintainer": _PERFORMS,
+    "accrual-reviewer": _APPROVES,
+    "bank-reviewer": _APPROVES,
+    "cash-reviewer": _APPROVES,
+    "conduct-oversight": _APPROVES,
+    "config-approver": _APPROVES,
+    "consol-reviewer": _APPROVES,
+    "cost-approver": _APPROVES,
+    "count-reviewer": _APPROVES,
+    "covenant-reviewer": _APPROVES,
+    "customer-approver": _APPROVES,
+    "cutoff-reviewer": _APPROVES,
+    "debt-reviewer": _APPROVES,
+    "depreciation-reviewer": _APPROVES,
+    "disposal-approver": _APPROVES,
+    "dup-reviewer": _APPROVES,
+    "emergency-approver": _APPROVES,
+    "fa-reviewer": _APPROVES,
+    "ff-approver": _APPROVES,
+    "flux-reviewer": _APPROVES,
+    "go-live-approver": _APPROVES,
+    "impairment-reviewer": _APPROVES,
+    "indirect-tax-reviewer": _APPROVES,
+    "it-approver": _APPROVES,
+    "je-approver": _APPROVES,
+    "migration-approver": _APPROVES,
+    "patch-approver": _APPROVES,
+    "payroll-approver": _APPROVES,
+    "payroll-recon-reviewer": _APPROVES,
+    "payroll-run-reviewer": _APPROVES,
+    "pricing-approver": _APPROVES,
+    "recon-reviewer": _APPROVES,
+    "reserve-reviewer": _APPROVES,
+    "restore-reviewer": _APPROVES,
+    "risk-acceptor": _APPROVES,
+    "schedule-approver": _APPROVES,
+    "tax-reviewer": _APPROVES,
+    "vendor-approver": _APPROVES,
+    "wb-oversight": _APPROVES,
+    "account-reviewer": _PERFORMS_AND_APPROVES,
+    "deploy-reviewer": _PERFORMS_AND_APPROVES,
+    "facilities-reviewer": _PERFORMS_AND_APPROVES,
+    "ff-reviewer": _PERFORMS_AND_APPROVES,
+    "infra-reviewer": _PERFORMS_AND_APPROVES,
+    "payment-reviewer": _PERFORMS_AND_APPROVES,
+    "privileged-reviewer": _PERFORMS_AND_APPROVES,
+    "review-owner": _PERFORMS_AND_APPROVES,
+    "signatory-reviewer": _PERFORMS_AND_APPROVES,
+    "soc-reviewer": _PERFORMS_AND_APPROVES,
+    "sod-reviewer": _PERFORMS_AND_APPROVES,
+    "sponsor-reviewer": _PERFORMS_AND_APPROVES,
+    "vuln-owner": _PERFORMS_AND_APPROVES,
+    "covenant-escalation": ("EXCEPTION",),
+}
 
 
 def _parts(value: str) -> list[str]:
@@ -2839,10 +3936,10 @@ def _facts(every: Sequence[Question]) -> list[str]:
 
 
 def _needs() -> list[str]:
-    """Every attribute of the access and change families says what its criteria need, and
-    every need is met by a question informing the attribute with that kind of fact or by a
-    reason in MET_ELSEWHERE, never both; a reason names only the control's statement values
-    and questions of the bank."""
+    """Every attribute of the access, change and operations families says what its criteria
+    need, and every need is met by a question informing the attribute with that kind of fact
+    or by a reason in MET_ELSEWHERE, never both; a reason names only the control's statement
+    values and questions of the bank."""
     from ai_workforce_api.statement_registry import statement_for
 
     found: list[str] = []
@@ -2897,11 +3994,11 @@ def problems() -> list[str]:
     and only a CHOICE or MULTI question takes an Other answer, never as a follow-up's value;
     every question has an explicit place in its topic and no two share one for a control;
     every question informs at least one need, each a known token or an attribute key of every
-    control it is asked for; every question is narrated; every library key in the access and
-    change families has a bank; a free-text question is one of TEXT_KEPT, and each of those
-    is a free-text question of the bank; every question has a kind of fact (_facts); and
-    every need of every family attribute's criteria is met by an informing question or a
-    recorded reason (_needs)."""
+    control it is asked for; every question is narrated; every library key in the access,
+    change and operations families has a bank; a free-text question is one of TEXT_KEPT, and
+    each of those is a free-text question of the bank; every question has a kind of fact
+    (_facts); and every need of every family attribute's criteria is met by an informing
+    question or a recorded reason (_needs)."""
     every = _all()
     found: list[str] = []
     keys = [item.key for item in every]
@@ -2931,7 +4028,7 @@ def problems() -> list[str]:
             found.append(f"{key}: no walkthrough bank")
     for key in CONTROL_QUESTIONS:
         if key not in LIBRARY_KEYS or not _family(key):
-            found.append(f"{key}: bank for a key that is not an access or change library control")
+            found.append(f"{key}: bank for a key that is not a library control of a family")
     for key, members in _LIMITED_TO.items():
         if key not in family_of:
             found.append(f"{key}: limited, but not a family question")

@@ -52,6 +52,7 @@ from test_understanding_once import (
     _completed_at,
     _completed_now,
     _context,
+    _left_open,
     _open_issues,
 )
 
@@ -121,6 +122,9 @@ def test_the_review_asks_before_any_attribute_is_drafted_and_answering_completes
 ) -> None:
     team, control, scheduler, client = _ready(migrated, "ur-asks")
     _answer_required(migrated, team, control, client)
+    # 18 November 2026: who provisions access answered in the person's own words, so the
+    # specialist's PERFORMER question follows it (an option would settle it: not asked).
+    _left_open(team, control, client, "wt-ac01-provisioning", "a contractor provisions it")
     assert _context(team, control, client)["question_pass"] == "CHECKING"
     assert [row[:3] for row in _reviews(migrated, control)] == [(1, "UNDERSTANDING", "PENDING")]
     agents = _Agents(migrated, team, control)
@@ -171,7 +175,12 @@ def test_the_review_asks_before_any_attribute_is_drafted_and_answering_completes
     [asked] = [item for item in body["issues"] if item["status"] == "OPEN"]
     assert asked["from_review"] and asked["review_round"] == 1 and asked["blocks"]
     assert asked["asks"]["fact"] == "PERFORMER" and asked["asks"]["parent_issue_id"] is None
-    assert asked["asks"]["attribute_code"] == given["units"][0]["key"]
+    # 18 November 2026: on the attribute whose criteria need the fact asked (old: always the
+    # first unit, whose criteria on ITGC-AC-01 need nothing more, so it is now assumed).
+    assert "PERFORMER" in next(
+        item["needs"] for item in given["attributes"]
+        if item["unit"] == asked["asks"]["attribute_code"]
+    )  # fmt: skip
     assert body["understanding_completed_at"] is None and body["question_pass"] == "DONE"
     # The model call is the independent reviewer's, under its prompt.
     assert _rows(
@@ -211,6 +220,9 @@ def test_the_second_read_asks_only_follow_ups_of_its_questions_and_there_is_no_t
 ) -> None:
     team, control, _scheduler, client = _ready(migrated, "ur-second")
     _answer_required(migrated, team, control, client)
+    # 18 November 2026: who provisions access answered in the person's own words, so the
+    # specialist's PERFORMER question follows it (an option would settle it: not asked).
+    _left_open(team, control, client, "wt-ac01-provisioning", "a contractor provisions it")
     agents = _Agents(migrated, team, control)
     agents.specialist = lambda given: _asking(given, WHO_APPLIES, "PERFORMER")
     _run(migrated, control, agents)
@@ -281,6 +293,9 @@ def test_not_known_closes_the_question_never_as_an_answer_and_assumes_on_its_att
 ) -> None:
     team, control, _scheduler, client = _ready(migrated, "ur-not-known")
     _answer_required(migrated, team, control, client)
+    # 18 November 2026: who provisions access answered in the person's own words, so the
+    # specialist's PERFORMER question follows it (an option would settle it: not asked).
+    _left_open(team, control, client, "wt-ac01-provisioning", "a contractor provisions it")
     agents = _Agents(migrated, team, control)
     agents.specialist = lambda given: _asking(given, WHO_APPLIES, "PERFORMER")
     _run(migrated, control, agents)
@@ -304,8 +319,12 @@ def test_not_known_closes_the_question_never_as_an_answer_and_assumes_on_its_att
     # Never an answer: no agent reads it as a fact.
     with connect(migrated.url) as connection:
         assert str(question[0]) not in {fact.key for fact in facts(connection, UUID(control))}
-    # The matter is an assumption on the attribute it bears on, the agent's statement.
-    a1_id, a1, _text = _codes(migrated, control)[0]
+    # The matter is an assumption on the attribute it bears on, the agent's statement. 18
+    # November 2026: the attribute whose criteria need the fact (old: the first attribute).
+    [(code,)] = _rows(
+        migrated, "SELECT asks_code FROM control_context_issues WHERE id = %s", question[0]
+    )
+    a1_id, a1, _text = next(row for row in _codes(migrated, control) if row[1] == code)
     [assumed] = _rows(
         migrated,
         "SELECT kind, matter, assumed, attribute_codes, raised_by_agent, source_issue_id, "
@@ -716,6 +735,9 @@ def test_the_replay_of_itgc_cm_06_never_reopens_drafts_no_narrative_and_never_wa
     team, control, _scheduler, client = _ready(migrated, "ur-replay", "ITGC-CM-06")
     # 11 walkthrough answers and the values.
     _answer_required(migrated, team, control, client)
+    # 18 November 2026: who applies patches answered in the person's own words, so the
+    # question that followed on 16 November is still asked (an option now settles it).
+    _left_open(team, control, client, "wt-cm06-who-applies", "a managed service provider")
     # The run raises one question: now the specialist's, in Control Understanding.
     agents = _Agents(migrated, team, control)
     agents.issues = [_GRANT_RECORD]
@@ -852,6 +874,9 @@ def test_a_read_due_while_the_plain_run_is_queued_is_made_by_that_run(
     # The launch's plain run (no stage) is still queued when the last answer is saved.
     _plan_state(migrated, control, "PENDING")
     _answer_required(migrated, team, control, client)
+    # 18 November 2026: who provisions access answered in the person's own words, so the
+    # specialist's PERFORMER question follows it (an option would settle it: not asked).
+    _left_open(team, control, client, "wt-ac01-provisioning", "a contractor provisions it")
     assert _reviews(migrated, control) == []
     agents = _Agents(migrated, team, control)
     agents.specialist = lambda given: _asking(given, WHO_APPLIES, "PERFORMER")

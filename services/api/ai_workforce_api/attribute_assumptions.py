@@ -39,6 +39,7 @@ shown as words, never read as instructions.
 """
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Literal
@@ -54,7 +55,11 @@ from ai_workforce_api.control_context import ContextState, Issue, line, matter_k
 AssumptionStatus = Literal["OPEN", "CONFIRMED", "CHANGED", "ACCEPTED_WITH_ATTRIBUTE", "SUPERSEDED"]
 AssumptionKind = Literal["MISSING", "AMBIGUOUS", "CONFLICT", "NOT_KNOWN"]
 # What the API calls a kind (B1l): a missing or unclear fact is an ASSUMPTION.
-ShownKind = Literal["ASSUMPTION", "CONFLICT", "NOT_KNOWN"]
+ShownKind = Literal["ASSUMPTION", "CONFLICT", "NOT_KNOWN", "UNKNOWN"]
+# How a question an agent could not answer is recorded (sentence_of), and read back as its own
+# kind (UNKNOWN; design review, 19 November 2026: never "The agent assumed:" with "That's
+# right" on a fact nobody knows).
+NOT_YET_KNOWN = " is not yet known."
 
 MATTER_LIMIT = 300
 ASSUMED_LIMIT = 500
@@ -95,13 +100,15 @@ class AssumptionBody(BaseModel):
     kind: ShownKind = "ASSUMPTION"
 
 
-def shown_kind(kind: str) -> ShownKind:
-    """The API's kind of a recorded one: MISSING and AMBIGUOUS read as ASSUMPTION."""
+def shown_kind(kind: str, assumed: str = "") -> ShownKind:
+    """The API's kind of a recorded one: MISSING and AMBIGUOUS read as ASSUMPTION, except one
+    that records a fact as not yet known (sentence_of's NOT_YET_KNOWN), which reads UNKNOWN:
+    the page asks for the answer, never for a confirmation. Pure."""
     if kind == "CONFLICT":
         return "CONFLICT"
     if kind == "NOT_KNOWN":
         return "NOT_KNOWN"
-    return "ASSUMPTION"
+    return "UNKNOWN" if assumed.endswith(NOT_YET_KNOWN) else "ASSUMPTION"
 
 
 class ConfirmBody(BaseModel):
@@ -156,7 +163,47 @@ def drafted(
     kept = tuple(dict.fromkeys(code.strip() for code in codes if _CODE.match(code.strip())))[
         :MAX_CODES
     ]
-    return Draft(chosen, clean_matter, clean_assumed, kept)
+    return Draft(chosen, clean_matter, sentence_of(clean_assumed), kept)
+
+
+def sentence_of(text: str) -> str:
+    """An assumption as a person reads it: a statement, closed by its full stop (screenshot
+    pass, 19 November 2026: an agent's answer stated without one, and a question recorded as
+    what was assumed). A question becomes the statement that its answer is not yet known
+    ("Who leads each investigation?" reads "Who leads each investigation is not yet known.").
+    The one place every recorded assumption passes. Pure."""
+    said = text.rstrip()
+    if said.endswith("?"):
+        said = f"{said.rstrip('?').rstrip()}{NOT_YET_KNOWN}"
+        return said if len(said) <= ASSUMED_LIMIT else text
+    if said.endswith((".", "!", "\u201d", '"')) or len(said) >= ASSUMED_LIMIT:
+        return said
+    return f"{said}."
+
+
+@dataclass(frozen=True)
+class Refused:
+    """What an agent stated that cannot be recorded as an assumption, and why, so record()
+    says so in the audit trail (owner decision, 18 November 2026: nothing left out silently):
+    EMPTY, no matter or nothing assumed; CREDENTIAL, it held a credential, whose words are
+    never kept (`matter` is then "")."""
+
+    reason: Literal["EMPTY", "CREDENTIAL"]
+    matter: str = ""
+
+
+def drafted_or_refused(
+    kind: str, matter: str, assumed: str, codes: list[str] | tuple[str, ...] = ()
+) -> Draft | Refused:
+    """`drafted`, or why it is refused (Refused). Pure."""
+    draft = drafted(kind, matter, assumed, codes)
+    if draft is not None:
+        return draft
+    clean_matter = line(matter, MATTER_LIMIT)
+    clean_assumed = line(assumed, ASSUMED_LIMIT)
+    if clean_matter and clean_assumed and matter_key(clean_matter):
+        return Refused("CREDENTIAL")
+    return Refused("EMPTY", "" if contains_secret({"matter": clean_matter}) else clean_matter)
 
 
 def from_issue(issue: Issue, codes: tuple[str, ...] = ()) -> Draft | None:
@@ -203,7 +250,7 @@ def record(
     organization_id: UUID,
     project_id: UUID,
     control_id: UUID,
-    drafts: list[Draft | None],
+    drafts: Sequence[Draft | Refused | None],
     agent: str,
     call_id: UUID | None,
 ) -> int:
@@ -211,8 +258,14 @@ def record(
     assumed on the control (whatever its status) or already asked there as a question (any
     issue's topic, whatever its status) is not recorded again: the asked-once rule. Since B1l
     a keyed one (asks_fact) is recorded once per key, and one from a question left as not
-    known once per question, whose own topic it carries (migration 0173's indexes).
-    Returns how many were recorded."""
+    known once per question, whose own topic it carries (migration 0173's indexes); one by
+    its matter alone is not recorded where any assumption of the control already has that
+    matter. Returns how many were recorded.
+
+    Nothing is left out silently (owner-approved F2, 18 November 2026; before, a draft the
+    unique indexes refused was skipped with ON CONFLICT DO NOTHING and no record): what is not
+    recorded, and why, is in one audit record on the control (NOT_RECORDED), with the
+    assumption that already holds it where one does."""
     asked = {
         matter_key(str(row[0]))
         for row in cursor.execute(
@@ -220,11 +273,42 @@ def record(
             (control_id,),
         ).fetchall()
     }
+    existing: dict[str, str] = {}
+    for found_id, found_matter in cursor.execute(
+        "SELECT id, matter FROM attribute_assumptions WHERE engagement_control_id = %s "
+        "ORDER BY created_at, id",
+        (control_id,),
+    ).fetchall():
+        existing.setdefault(matter_key(str(found_matter)), str(found_id))
+    approved = approved_codes(cursor, control_id)
+    batch: set[str] = set()
+    left: list[dict[str, Any]] = []
     recorded = 0
-    for draft in shaped(drafts, approved_codes(cursor, control_id)):
-        if not draft.not_known and not draft.after_asked and matter_key(draft.matter) in asked:
+    for given in drafts:
+        if given is None:
+            # Refused by drafted() before it got here: no matter, nothing assumed, or a
+            # credential; said, never its words.
+            left.append({"matter": "", "reason": "UNUSABLE"})
+            continue
+        if isinstance(given, Refused):
+            left.append({"matter": given.matter, "reason": given.reason})
+            continue
+        draft = replace(given, codes=tuple(code for code in given.codes if code in approved))
+        key = matter_key(draft.matter)
+        if key in batch:
+            left.append({"matter": draft.matter, "reason": "REPEATED"})
+            continue
+        batch.add(key)
+        if not draft.not_known and not draft.after_asked and key in asked:
+            left.append({"matter": draft.matter, "reason": "ASKED"})
             continue
         if (draft.kind == "NOT_KNOWN") != draft.not_known:
+            left.append({"matter": draft.matter, "reason": "KIND"})
+            continue
+        if draft.asks_fact is None and not draft.not_known and key in existing:
+            left.append(
+                {"matter": draft.matter, "reason": "ALREADY_RECORDED", "existing": existing[key]}
+            )
             continue
         row = cursor.execute(
             """
@@ -244,7 +328,54 @@ def record(
         ).fetchone()  # fmt: skip
         if row is not None:
             recorded += 1
+            existing.setdefault(key, str(row[0]))
+            continue
+        # The database's once-only index refused it: already recorded, by the one that holds
+        # its key, its question or its matter.
+        holder = _holding(cursor, control_id, draft)
+        left.append(
+            {"matter": draft.matter, "reason": "ALREADY_RECORDED",
+             "existing": None if holder is None else str(holder)}
+        )  # fmt: skip
+    if left:
+        _audit_unattended(
+            cursor, organization_id, project_id, control_id, NOT_RECORDED,
+            {"agent": line(agent, 60) or "agent", "model_call": None if call_id is None
+             else str(call_id), "not_recorded": left[:24], "count": len(left)},
+        )  # fmt: skip
     return recorded
+
+
+# The audit action of what record() did not record (owner-approved F2, 18 November 2026).
+NOT_RECORDED = "attribute_assumptions.not_recorded"
+
+
+def _holding(cursor: psycopg.Cursor[Any], control_id: UUID, draft: Draft) -> UUID | None:
+    """The assumption a once-only index found already holding a draft (migration 0174's
+    indexes): the one of its question left as not known, of its key, or of its matter."""
+    params: tuple[Any, ...]
+    if draft.source_issue is not None:
+        sql, params = "source_issue_id = %s", (draft.source_issue,)
+    elif draft.source_not_known is not None:
+        sql, params = "source_not_known_id = %s", (draft.source_not_known,)
+    elif draft.asks_fact is not None:
+        sql = (
+            "coalesce(asks_code, '') = %s AND asks_fact = %s "
+            "AND source_issue_id IS NULL AND source_not_known_id IS NULL"
+        )
+        params = (draft.asks_code or "", draft.asks_fact)
+    else:
+        sql = (
+            "btrim(regexp_replace(lower(matter), '[^a-z0-9]+', ' ', 'g')) = %s "
+            "AND asks_fact IS NULL AND source_issue_id IS NULL AND source_not_known_id IS NULL"
+        )
+        params = (matter_key(draft.matter),)
+    row = cursor.execute(
+        f"SELECT id FROM attribute_assumptions WHERE engagement_control_id = %s AND {sql} "
+        "ORDER BY created_at LIMIT 1",
+        (control_id, *params),
+    ).fetchone()
+    return None if row is None else UUID(str(row[0]))
 
 
 # What the API gives
@@ -262,7 +393,7 @@ def _bodies(rows: list[Any]) -> list[AssumptionBody]:
             decided_at=row[7],
             attribute_codes=[str(code) for code in (row[8] or []) if isinstance(code, str)],
             version=int(row[9]),
-            kind=shown_kind(str(row[10])),
+            kind=shown_kind(str(row[10]), str(row[2])),
         )
         for row in rows
     ]
@@ -603,6 +734,27 @@ def _audit(
         VALUES (%s, %s, %s, %s, 'attribute_assumption', %s, %s)
         """,
         (organization_id, project_id, actor, action, target, Json(payload)),
+    )
+
+
+def _audit_unattended(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    action: str,
+    payload: dict[str, Any],
+) -> None:
+    """An audit record of what the code did on the control with no person acting (the
+    agent's answer it recorded from is named in the payload)."""
+    cursor.execute(
+        """
+        INSERT INTO audit_events (
+            organization_id, project_id, action, target_type, target_id, payload
+        )
+        VALUES (%s, %s, %s, 'engagement_control', %s, %s)
+        """,
+        (organization_id, project_id, action, control_id, Json(payload)),
     )
 
 
