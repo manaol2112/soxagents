@@ -858,13 +858,18 @@ def mark_stale_for_request(
     points_at: dict[str, Any],
 ) -> int:
     """The file was taken off a request and stays in force (E1, remove from request): its
-    proposed findings on that request are stale. A finding a person decided or sent holds
-    the file there (evidence_reliance), so it never reaches here."""
+    proposed findings on that request, or on one of its items, are stale. A finding a
+    person decided or sent holds the file there (evidence_reliance), so it never reaches
+    here."""
     rows = cursor.execute(
-        "SELECT id, status FROM evidence_findings "
-        "WHERE evidence_file_id = %s AND pbc_request_id = %s AND NOT stale "
-        "AND status = 'PROPOSED'",
-        (file_id, request_id),
+        """
+        SELECT id, status FROM evidence_findings
+        WHERE evidence_file_id = %s AND NOT stale AND status = 'PROPOSED'
+          AND (pbc_request_id = %s
+               OR requirement_id IN (SELECT id FROM evidence_requirements
+                                     WHERE pbc_request_id = %s))
+        """,
+        (file_id, request_id, request_id),
     ).fetchall()
     for finding_id, status in rows:
         _mark_stale(cursor, UUID(str(finding_id)), str(status), reason, points_at)

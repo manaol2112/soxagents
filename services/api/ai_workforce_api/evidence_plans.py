@@ -5932,7 +5932,12 @@ def reset_judgments_left_without_file(
 
 
 FileLeft = Literal[
-    "FILE_WITHDRAWN", "FILE_REPLACED", "FILE_REMOVED_FROM_REQUEST", "APPLICATIONS_CHANGED"
+    "FILE_WITHDRAWN",
+    "FILE_REPLACED",
+    "FILE_REMOVED_FROM_REQUEST",
+    "APPLICATIONS_CHANGED",
+    "FILE_MOVED",
+    "FILE_NARROWED",
 ]
 
 

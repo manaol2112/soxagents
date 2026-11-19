@@ -55,6 +55,7 @@ from ai_workforce_api.evidence_receipts import (
 )
 from ai_workforce_api.evidence_reliance import (
     APPLICATIONS_REFUSED,
+    FILE_WIDE,
     Change,
     ImpactBody,
     RelianceRefused,
@@ -1053,12 +1054,11 @@ def _restore_for_item(
             "WHERE m.evidence_file_id = %s AND m.status = 'FILED' FOR UPDATE OF m",
             (file_id,),
         ).fetchone()
-        if row is not None and row[0] == target[0]:
-            cursor.execute(
-                "UPDATE evidence_matches SET requirement_id = %s, version = version + 1 "
-                "WHERE evidence_file_id = %s AND status = 'FILED'",
-                (item, file_id),
-            )
+        if (
+            row is not None
+            and row[0] == target[0]
+            and _narrowed(cursor, organization_id, project_id, file_id, item, principal.id)
+        ):
             if row[1] is None:
                 return None
             if refusal(cursor, project_id, file_id, "REREAD") is not None:
@@ -1069,6 +1069,43 @@ def _restore_for_item(
             return UUID(str(row[1]))
     _serve_item(connection, principal, organization_id, project_id, target[1], item, file_id)
     return None
+
+
+def _narrowed(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    file_id: UUID,
+    item: UUID,
+    actor: UUID,
+) -> bool:
+    """A restored file added again on one item of its request is filed for that item
+    only, where nothing relies on it for an item that takes away (the request's other
+    items, or the sibling items it shared): those then lose a judgment that rested on it
+    alone, as when it leaves them. Where something does rely on it there, its filing stays
+    as it was (round 2 of the E1 review: the narrowing took the file off them unchecked)
+    and the caller links it to the item instead. Whether it was narrowed."""
+    from ai_workforce_api.evidence_plans import reset_items_left_without_file
+
+    lock_served(cursor, project_id, file_id)
+    relied = reliances(cursor, project_id, file_id)
+    before = {i for i, via, _control in served(cursor, project_id, file_id) if via != "LINK"}
+    try:
+        with cursor.connection.transaction():
+            cursor.execute(
+                "UPDATE evidence_matches SET requirement_id = %s, version = version + 1 "
+                "WHERE evidence_file_id = %s AND status = 'FILED'",
+                (item, file_id),
+            )
+            after = {i for i, _via, _control in served(cursor, project_id, file_id)}
+            left = frozenset(before - after)
+            check_items_left(relied, left, "")
+    except RelianceRefused:
+        return False
+    reset_items_left_without_file(
+        cursor, organization_id, project_id, file_id, actor, "FILE_NARROWED", left
+    )
+    return True
 
 
 def _request_target(
@@ -1722,7 +1759,13 @@ def _set_application(
         # it there, read before the tag changes (B3 of the E1 review).
         lock_served(cursor, project_id, file_id)
         shared_before = shared_items(cursor, project_id, file_id)
-        relied = reliances(cursor, project_id, file_id) if shared_before else []
+        relied = reliances(cursor, project_id, file_id) if shared_before or place_again else []
+        if place_again:
+            # Not while it is read, nor once its screenshot review is signed off (round 2
+            # of the E1 review). A file just added is placed by its reading instead.
+            for found in relied:
+                if found.kind in FILE_WIDE:
+                    raise RelianceRefused(APPLICATIONS_REFUSED + found.sentence)
         for application_id in [*named, *([body.application_id] if body.application_id else [])]:
             # Any application of the control's family: the file becomes the evidence of
             # the instance that covers it.

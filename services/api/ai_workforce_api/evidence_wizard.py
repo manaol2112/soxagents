@@ -1285,23 +1285,33 @@ def _file_on(
     match_id = UUID(str(match[0]))
     primary = next((known[item] for item in wanted if known[item].request_id is not None), None)
     target = (None, None) if primary is None else (primary.request_id, primary.requirement_id)
-    leaving = [item for item in before if item not in wanted]
-    if leaving:
-        # Evidence relied on for an item it leaves stays there (E1 review, B2): the same
-        # rule as an unlink (evidence_reliance), and through its filing the sibling items
-        # it shares. The reading and the screenshot review are this flow's own checks.
-        from ai_workforce_api.evidence_reliance import (
-            REFUSED,
-            RelianceRefused,
-            check_items_left,
-            reliances,
-            shared_items,
-        )
+    from ai_workforce_api.evidence_reliance import (
+        REFUSED,
+        RelianceRefused,
+        check_items_left,
+        reliances,
+        served,
+    )
 
-        refiled = (match[1], match[2]) != target
-        moving = frozenset(leaving) | (
-            shared_items(cursor, project_id, file_id) if refiled else frozenset()
+    leaving = [item for item in before if item not in wanted]
+    # Refiled, the file leaves every item its filing served (D&I or not: a file filed on
+    # an operating request and placed here, round 2 of the E1 review) and the sibling
+    # items it shared through it.
+    refiled = (match[1], match[2]) != target
+    filing_left = (
+        frozenset(
+            item
+            for item, via, _control in served(cursor, project_id, file_id)
+            if via in ("FILING", "SHARED") and item not in wanted
         )
+        if refiled
+        else frozenset()
+    )
+    moving = frozenset(leaving) | filing_left
+    if moving:
+        # Evidence relied on for an item it leaves stays there (E1 review, B2): the same
+        # rule as an unlink (evidence_reliance). The reading and the screenshot review are
+        # this flow's own checks.
         try:
             check_items_left(reliances(cursor, project_id, file_id), moving, REFUSED["UNLINK"])
         except RelianceRefused as error:
@@ -1435,6 +1445,15 @@ def _file_on(
                 {"sufficiency": "NOT_REVIEWED", "was": str(was[0]), "by": "FILE_MOVED",
                  "evidence_file_id": str(file_id), "wizard_batch_id": str(batch.id)},
             )  # fmt: skip
+    # The other items its filing served, and the siblings it shared, as the filing's
+    # removal decides them (round 2 of the E1 review: they were left with their judgment).
+    others = filing_left - frozenset(leaving)
+    if others:
+        from ai_workforce_api.evidence_plans import reset_items_left_without_file
+
+        reset_items_left_without_file(
+            cursor, batch.organization_id, project_id, file_id, actor, "FILE_MOVED", others
+        )
     if released is not None:
         follow_evidence(
             cursor, batch.organization_id, project_id, released.request_id, actor,

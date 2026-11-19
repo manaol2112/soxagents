@@ -456,8 +456,27 @@ def test_a_file_on_a_whole_request_comes_off_it_only_when_no_item_relies_on_it(
         json={"sufficiency": "NOT_REVIEWED", "version": case.item(case.first)["version"]},
     )
     assert reopened.status_code == 200, reopened.text
+    case.run(
+        """
+        INSERT INTO evidence_findings (
+            organization_id, project_id, engagement_control_id, evidence_file_id, analysis_id,
+            requirement_id, source, kind, fingerprint, title, status
+        )
+        SELECT %s, %s, %s, a.evidence_file_id, a.id, %s, 'READER', 'GAP', %s,
+               'The approval date is missing', 'PROPOSED'
+        FROM evidence_analyses a WHERE a.evidence_file_id = %s
+        """,
+        case.team["org"], case.team["project"], case.control, case.first, "c" * 64, whole,
+    )  # fmt: skip
     removed = case.remove(whole, case.second)
     assert removed.status_code == 200, removed.text
+    # Its proposed finding on the request's other item is out of date (round 2, item 6).
+    assert case.rows(
+        "SELECT stale, stale_reason FROM evidence_findings WHERE evidence_file_id = %s "
+        "AND requirement_id = %s AND pbc_request_id IS NULL",
+        UUID(whole),
+        UUID(case.first),
+    ) == [(True, "The file was removed from this request.")]
     assert case.rows(
         "SELECT status, pbc_request_id FROM evidence_matches WHERE evidence_file_id = %s",
         UUID(whole),
@@ -1265,3 +1284,273 @@ def test_a_files_history_reads_its_versions_withdrawals_and_links(migrated: Data
         f"/organizations/{case.team['org']}/projects/{uuid4()}/evidence-files/{rules}/history"
     )
     assert elsewhere.status_code == 404
+
+
+# Round 2 of the E1 review
+
+
+def _wizard_place(
+    client: TestClient, base: str, control: str, batch: str, file_id: str, items: list[str]
+) -> Any:
+    """A person places a file of a wizard session on the items named, at the version shown."""
+    state = client.get(f"{base}/controls/{control}/evidence-batches/{batch}")
+    assert state.status_code == 200, state.text
+    entry = next(f for f in state.json()["files"] if f["file_id"] == file_id)
+    version = (entry.get("placement") or {}).get("version") or 0
+    return client.post(
+        f"{base}/controls/{control}/evidence-batches/{batch}/files/{file_id}/placement",
+        json={"requirement_ids": items, "version": version},
+    )
+
+
+def _drop_again(
+    client: TestClient, base: str, control: str, name: str, content: bytes, ctype: str
+) -> str:
+    """The same file dropped in a new wizard session of the control: a duplicate."""
+    batch = str(uuid4())
+    dropped = client.post(
+        f"{base}/evidence-uploads",
+        params={"batch_id": batch, "name": name, "design_control_id": control},
+        content=content,
+        headers={"content-type": ctype},
+    )
+    assert dropped.status_code == 200, dropped.text
+    assert dropped.json()["duplicate"] is True
+    return batch
+
+
+def _resets(database: Database, item_id: str) -> list[str]:
+    with connect(database.url) as connection:
+        return [
+            str(row[0]["by"])
+            for row in connection.execute(
+                "SELECT payload FROM audit_events WHERE target_id = %s "
+                "AND action = 'evidence_requirement.sufficiency_reset' ORDER BY created_at",
+                (item_id,),
+            ).fetchall()
+        ]
+
+
+def test_the_wizard_refiling_an_operating_file_respects_the_items_it_served(
+    migrated: Database,
+) -> None:
+    """Item 1: a file filed on the control's operating request, dropped in the D&I wizard
+    and placed on a D&I item, would leave the operating items its filing served."""
+    from test_evidence_intake import _accept_population, _engagement, _request
+    from test_testing_engine import _read_all
+
+    team, client, scheduler = _engagement(migrated, f"rel-oe-{uuid4().hex[:4]}")
+    base = f"/organizations/{team['org']}/projects/{team['project']}"
+    control = _control(migrated, team, "ITGC-AC-01")
+    interim = _request(migrated, team, "ITGC-AC-01")
+    name = "access population.csv"
+    content = b"User ID,Name,Date granted\nu0001,Demo User 1,2026-03-10\n"
+    added = client.post(
+        f"{base}/evidence-uploads",
+        params={"batch_id": str(uuid4()), "name": name, "request_id": interim["id"]},
+        content=content,
+        headers={"content-type": "text/csv"},
+    )
+    assert added.status_code == 200, added.text
+    population = str(added.json()["file_id"])
+    _read_all(migrated, scheduler)
+    _accept_population(client, team, control)
+    with connect(migrated.url) as connection:
+        accepted = [
+            str(row[0])
+            for row in connection.execute(
+                "SELECT id FROM evidence_requirements WHERE pbc_request_id = %s "
+                "AND sufficiency = 'ACCEPTED'",
+                (interim["id"],),
+            ).fetchall()
+        ]
+    assert accepted
+    design = next(
+        r for r in _phase(_plan(client, team, control), "DESIGN")["requirements"]
+        if r["state"] not in ("NOT_APPLICABLE", "REMOVED")
+    )  # fmt: skip
+    batch = _drop_again(client, base, control, name, content, "text/csv")
+    refused = _wizard_place(client, base, control, batch, population, [design["id"]])
+    assert refused.status_code == 409
+    assert refused.json()["detail"].startswith(
+        "the file cannot be taken off this item: the evidence item "
+    )
+    with connect(migrated.url) as connection:
+        assert connection.execute(
+            "SELECT pbc_request_id::text FROM evidence_matches WHERE evidence_file_id = %s",
+            (population,),
+        ).fetchall() == [(interim["id"],)]
+        # A record from before the file arrived: the acceptances do not rest on it, so it
+        # moves, and the operating items left with nothing lose them, on record.
+        connection.execute(
+            "UPDATE evidence_requirements SET sufficiency_at = (SELECT created_at - "
+            "interval '1 hour' FROM evidence_files WHERE id = %s) WHERE id = ANY(%s)",
+            (population, accepted),
+        )
+    moved = _wizard_place(client, base, control, batch, population, [design["id"]])
+    assert moved.status_code == 200, moved.text
+    assert all(_resets(migrated, item) == ["FILE_MOVED"] for item in accepted)
+
+
+def test_the_wizard_refiling_a_shared_file_resets_the_sibling_it_leaves(
+    migrated: Database,
+) -> None:
+    """Item 2: placed on another item in the D&I wizard, a policy shared with a sibling
+    instance leaves the sibling's item: refused while it is relied on there, and the
+    sibling's judgment that rested on it alone reset (FILE_MOVED) once it is not."""
+    from test_testing_engine import _controls, _engagement_with_apps, _read_all
+
+    team, client, scheduler = _engagement_with_apps(migrated, "rel-sib-wiz", ["AWS IAM"])
+    base = f"/organizations/{team['org']}/projects/{team['project']}"
+    instances = {
+        row["application_name"]: row
+        for row in _controls(client, team)
+        if row["control_ref"] == "ITGC-AC-05"
+    }
+    sap = instances["SAP ERP"]["id"]
+
+    def design(name: str) -> list[dict[str, Any]]:
+        found: list[dict[str, Any]] = _phase(_plan(client, team, instances[name]["id"]), "DESIGN")[
+            "requirements"
+        ]
+        return found
+
+    sap_items = [r for r in design("SAP ERP") if r["state"] not in ("NOT_APPLICABLE", "REMOVED")]
+    policy_item = next(
+        r for r in sap_items if "PROCESS_DOCUMENTATION" in r["categories"] and r["request_id"]
+    )
+    other = next(r for r in sap_items if r["id"] != policy_item["id"])
+
+    def aws_item() -> dict[str, Any]:
+        return next(r for r in design("AWS IAM") if r["key"] == policy_item["key"])
+
+    apps = {name: row["application_id"] for name, row in instances.items()}
+    content = b"Access to every system is approved by the user's manager."
+    added = client.post(
+        f"{base}/evidence-uploads",
+        params={"batch_id": str(uuid4()), "name": "access policy.txt",
+                "request_id": policy_item["request_id"], "requirement_id": policy_item["id"],
+                "applications": f"{apps['SAP ERP']},{apps['AWS IAM']}"},
+        content=content,
+        headers={"content-type": "text/plain"},
+    )  # fmt: skip
+    assert added.status_code == 200, added.text
+    policy = str(added.json()["file_id"])
+    _read_all(migrated, scheduler)
+    aws = aws_item()
+    accepted = client.post(
+        f"{base}/controls/{instances['AWS IAM']['id']}/evidence-requirements/{aws['id']}"
+        "/sufficiency",
+        json={"sufficiency": "ACCEPTED", "version": aws["version"]},
+    )
+    assert accepted.status_code == 200, accepted.text
+    batch = _drop_again(client, base, sap, "access policy.txt", content, "text/plain")
+    refused = _wizard_place(client, base, sap, batch, policy, [other["id"]])
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == (
+        f'the file cannot be taken off this item: the evidence item "{aws["title"]}" was '
+        "accepted with it; change that decision first"
+    )
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE evidence_requirements SET sufficiency_at = (SELECT created_at - "
+            "interval '1 hour' FROM evidence_files WHERE id = %s) WHERE id = %s",
+            (policy, aws["id"]),
+        )
+    moved = _wizard_place(client, base, sap, batch, policy, [other["id"]])
+    assert moved.status_code == 200, moved.text
+    left = aws_item()
+    assert (left["files"], left["sufficiency"]) == ([], "NOT_REVIEWED")
+    assert _resets(migrated, aws["id"]) == ["FILE_MOVED"]
+
+
+def test_a_restored_file_is_narrowed_to_its_item_only_where_nothing_relies_on_it(
+    migrated: Database,
+) -> None:
+    """Item 4: a withdrawn file added again on one item of its request is filed for that
+    item, unless an item of the request it would leave relies on it: then its filing is
+    kept as it was (the safer choice: the restoration stands and nothing relied on moves),
+    and it still serves the item through it."""
+    case = _Design(migrated, "rel-narrow")
+
+    def whole(name: str) -> str:
+        added = case.client.post(
+            f"{case.base}/evidence-uploads",
+            params={"batch_id": str(uuid4()), "name": name, "request_id": case.request_id},
+            content=f"{name}: the policy and one approved request.".encode(),
+            headers={"content-type": "text/plain"},
+        )
+        assert added.status_code == 200, added.text
+        case.read()
+        return str(added.json()["file_id"])
+
+    def again(name: str, item: str) -> Any:
+        return case.client.post(
+            f"{case.base}/evidence-uploads",
+            params={"batch_id": str(uuid4()), "name": name, "request_id": case.request_id,
+                    "requirement_id": item},
+            content=f"{name}: the policy and one approved request.".encode(),
+            headers={"content-type": "text/plain"},
+        )  # fmt: skip
+
+    def filed_for(file_id: str) -> Any:
+        [(item,)] = case.rows(
+            "SELECT requirement_id FROM evidence_matches WHERE evidence_file_id = %s",
+            UUID(file_id),
+        )
+        return None if item is None else str(item)
+
+    # Nothing relies on it: narrowed to the item it was added on.
+    free = whole("free.txt")
+    assert case.withdraw(free).status_code == 200
+    assert again("free.txt", case.second).status_code == 200
+    assert filed_for(free) == case.second
+
+    # The first item was accepted with it once restored (it was in hand when accepted):
+    # its filing stays on the whole request, and it is in force again.
+    held = whole("held.txt")
+    assert case.withdraw(held).status_code == 200
+    case.add(case.first, "first item.txt")
+    case.accept(case.first)
+    assert again("held.txt", case.second).status_code == 200
+    assert filed_for(held) is None
+    assert (
+        case.rows(
+            "SELECT 1 FROM evidence_withdrawals "
+            "WHERE evidence_file_id = %s AND restored_at IS NULL",
+            UUID(held),
+        )
+        == []
+    )
+    assert case.item(case.first)["sufficiency"] == "ACCEPTED"
+    assert held in [f["file_id"] for f in case.item(case.second)["files"]]
+
+
+def test_an_application_change_waits_for_the_reading_and_a_signed_review(
+    migrated: Database,
+) -> None:
+    """Item 5: the two file-wide guards apply to a person's application change."""
+    case = _Design(migrated, "rel-tag")
+    files = f"{case.base}/evidence-files"
+    reading = case.add(case.first, "reading.txt", read=False)
+    changed = case.client.post(f"{files}/{reading}/application", json={"scope": "ALL"})
+    assert (changed.status_code, changed.json()["detail"]) == (
+        409, f"{reliance.APPLICATIONS_REFUSED}{reliance.READING}",
+    )  # fmt: skip
+    case.read()
+    case.run(
+        """
+        INSERT INTO evidence_reviews (
+            organization_id, project_id, evidence_analysis_id, evidence_file_id, status,
+            proposed, decision, conclusion, decided_by, decided_at
+        )
+        SELECT %s, %s, a.id, a.evidence_file_id, 'NEEDS_PERSON', 'CANNOT_CONCLUDE',
+               'ACCEPTED', 'CANNOT_CONCLUDE', %s, clock_timestamp()
+        FROM evidence_analyses a WHERE a.evidence_file_id = %s
+        """,
+        case.team["org"], case.team["project"], case.team["owner_id"], reading,
+    )  # fmt: skip
+    changed = case.client.post(f"{files}/{reading}/application", json={"scope": "ALL"})
+    assert (changed.status_code, changed.json()["detail"]) == (
+        409, f"{reliance.APPLICATIONS_REFUSED}{reliance.SCREENSHOT_SIGNED}",
+    )  # fmt: skip
