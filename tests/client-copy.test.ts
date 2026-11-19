@@ -1,29 +1,7 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { describe, it } from "node:test";
-
-// Phrases that belong to the build, not to the people using it. A page that shows one
-// of these is not client-ready: environment variables, storage details, internal
-// identifiers, and placeholder plurals.
-const INTERNAL = [
-  /MODEL_PROVIDER|MODEL_API_KEY|PREVIEW_LOGIN|GOOGLE_CLIENT/,
-  /next deploy/i,
-  /test mailbox/i,
-  /checks? the hash|declared hash|is immutable/i,
-  /OCR engine/i,
-  /model provider/i,
-  /Claude re-performed/,
-  /control instances?\b/i,
-  /registered actions/i,
-  /reviewed (?:keyword )?rules/i,
-  /\b(?:note|item|request|control|file)\(s\)/,
-  /Secret-looking/,
-  /agent definition/i,
-  /managed by the platform/i,
-  / tier`/,
-  /\bAcme\b/,
-  /\bClaude\b/,
-];
+import { INTERNAL } from "./copy-rules.ts";
 
 const VIEWS = new URL("../apps/web/src/", import.meta.url);
 
