@@ -151,6 +151,10 @@ describe("Every field the contract names is read where the API sends it", () => 
     review_request: null,
     review_not_run: "",
     review_due: true,
+    // 18 November 2026 (owner decision, "Completion waits for a person"): null unless HELD.
+    review_held: null,
+    review_reason_needed: false,
+    review_proceeded: null,
     ...extra,
   });
 
@@ -168,6 +172,18 @@ describe("Every field the contract names is read where the API sends it", () => 
     assert.equal(parsed.approved[0]?.code, "A2");
     assert.equal(parsed.reviewDue, true);
     assert.equal(parsed.questionPass, "CHECKING");
+    assert.equal(parsed.reviewHeld, null);
+    const held = parseContext(
+      body({
+        question_pass: "HELD",
+        review_held: { not_reviewed: ["A2"], run_again: false },
+      }),
+    );
+    assert.equal(held?.questionPass, "HELD");
+    assert.deepEqual(held?.reviewHeld, {
+      notReviewed: ["A2"],
+      runAgain: false,
+    });
     // The hold is read on the attributes only: a top-level flag is not the API's.
     const off = body({ set_held_by_conflict: true });
     (off.attributes as Record<string, unknown>).set_held_by_conflict = false;
@@ -267,6 +283,105 @@ describe("Every field the contract names is read where the API sends it", () => 
         ["auth-settings", "AUTH", ""],
       ],
     );
+  });
+
+  it("reads a QUESTION need's own question, every field the contract names", () => {
+    // 18 November 2026 (seen on ITGC-AC-03): the review's question was asked from the page's
+    // list of issues, read at another time, so a reviewed question showed as "Answer with the
+    // planner". The need now carries its issue, read by the context's own parse.
+    assert.ok((CONTRACT.fields.NeedBody ?? []).includes("issue"));
+    const issue = {
+      id: "018f0000-0000-7000-8000-0000000000cc",
+      origin: "ATTRIBUTES",
+      kind: "MISSING",
+      topic: "Reviewer of own access",
+      detail: "Who signs off the review of the owner's own access?",
+      why: "Names who signs.",
+      resolve: "",
+      quotes: [],
+      status: "OPEN",
+      resolution_note: "",
+      version: 2,
+      question: "Who signs off the review of the owner's own access?",
+      suggestions: ["The System administrator signs it off."],
+      proposal: "The IT Security Manager signs it off.",
+      proposal_basis: "TYPICAL",
+      raised_by: "AGENT",
+      wording_reviewed: true,
+      wording_pending: false,
+      interview: [
+        {
+          key: "s1",
+          question: "Who signs off the review of the owner's own access?",
+          why: "Names who signs.",
+          usual: "IT Security Manager",
+          basis: "TYPICAL",
+          answers: [
+            {
+              label: "IT Security Manager",
+              says: "The IT Security Manager signs it off.",
+              next: "",
+            },
+            {
+              label: "System administrator",
+              says: "The System administrator signs it off.",
+              next: "",
+            },
+          ],
+        },
+      ],
+      from_review: true,
+      review_round: 1,
+      asks: { attribute_code: "A2", fact: "APPROVER", parent_issue_id: null },
+      blocks: "The A2 criterion names who signs.",
+    };
+    for (const field of CONTRACT.fields.IssueBody ?? []) {
+      assert.ok(field in issue, `the fixture sends ${field}`);
+    }
+    const parsed = parseReview({
+      control_ref: "ITGC-AC-03",
+      system: "BlackLine",
+      other_systems: [],
+      statement: [],
+      needs: [
+        {
+          key: issue.id,
+          kind: "QUESTION",
+          label: issue.topic,
+          question: issue.question,
+          value: "",
+          options: [],
+          why: issue.why,
+          status: "MISSING",
+          source: "AGENT",
+          needed_for: ["EVIDENCE", "ATTRIBUTES"],
+          issue,
+        },
+      ],
+      evidence: { ready: true, missing: [] },
+      attributes: { ready: true, missing: [] },
+    });
+    const read = parsed?.needs[0]?.issue;
+    assert.ok(read !== undefined);
+    assert.equal(read.id, issue.id);
+    assert.equal(read.origin, "ATTRIBUTES");
+    assert.equal(read.kind, "MISSING");
+    assert.equal(read.topic, issue.topic);
+    assert.equal(read.status, "OPEN");
+    assert.equal(read.version, 2);
+    assert.equal(read.question, issue.question);
+    assert.deepEqual(read.suggestions, issue.suggestions);
+    assert.equal(read.proposal, issue.proposal);
+    assert.equal(read.proposalBasis, "TYPICAL");
+    assert.equal(read.raisedBy, "AGENT");
+    assert.equal(read.wordingReviewed, true);
+    assert.equal(read.wordingPending, false);
+    assert.deepEqual(
+      read.interview?.map((step) => step.answers.map((a) => a.label)),
+      [["IT Security Manager", "System administrator"]],
+    );
+    assert.equal(read.fromReview, true);
+    assert.equal(read.blocks, issue.blocks);
   });
 
   it("keeps apart exactly the not-known kinds the API reads, never a document", () => {

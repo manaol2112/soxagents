@@ -74,9 +74,13 @@ describe("the Attributes step never sends the person back to Control Understandi
       panel,
       /beforeComplete && working === null \? \(\s*<p className="ta-run-note" role="status">\s*<UiIcon name="info" size=\{13\} \/>\s*<span>\{DRAFTED_ONCE_COMPLETE\}<\/span>\s*<\/p>/,
     );
+    // Rewritten 19 November 2026 (q_ui4). Old: before completion only while the pass read
+    // WAITING or CHECKING, so with questions still open (the pass DONE), held or failed the
+    // step said nothing although the understanding was not complete. New: from the
+    // completion alone, as every other place reads it.
     assert.match(
       panel,
-      /const beforeComplete =\s*\(context\.understandingCompletedAt \?\? null\) === null &&\s*\(context\.questionPass === "WAITING" \|\| context\.questionPass === "CHECKING"\);/,
+      /const beforeComplete =\s*\(context\.understandingCompletedAt \?\? null\) === null &&\s*context\.questionPass !== null &&\s*context\.questionPass !== undefined;/,
     );
   });
 });

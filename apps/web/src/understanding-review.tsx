@@ -15,10 +15,11 @@ import { AgentQuestionPoint } from "./agent-question-point";
 import { AuthenticationPoint } from "./authentication-point";
 import { useAction } from "./control-context-view";
 import {
-  agentQuestions,
   confirmPlan,
   NO_DOCUMENT,
+  PREPARING_QUESTION,
   type Prefill,
+  questionState,
   type RowPicks,
   type SetupIssue,
 } from "./control-setup-model";
@@ -48,9 +49,11 @@ import {
   extendInterview,
   foldChip,
   followUpShown,
+  heldTopicsEnd,
   type Interview,
   ignoredNote,
   interviewProgress,
+  laterLine,
   type MultiplePick,
   multipleAnswer,
   multipleProblem,
@@ -91,16 +94,17 @@ import {
   stepRequired,
   stepTopic,
   toggleMultiple,
-  topicAsks,
   topicBlocked,
   topicDone,
   topicHint,
   topicLeft,
   topicName,
+  topicOnRecordHint,
   topicQuestions,
   topicSave,
   topicShown,
   topicStep,
+  topicStepAsks,
   understoodLede,
   WALKTHROUGH_TEXT_MAX,
   type WalkthroughAnswer,
@@ -138,6 +142,7 @@ import {
   runReview,
 } from "./understanding-specialist";
 import {
+  askedAttributeChip,
   blocksLine,
   courseWithout,
   FOLLOW_EVERY_MS,
@@ -145,9 +150,16 @@ import {
   followsReview,
   fromReview,
   heldByFailedReview,
+  heldLede,
   type NotKnownTarget,
   notKnownKeys,
   notKnownTarget,
+  notReviewedLine,
+  PROCEEDED_REASON_THERE,
+  preparingTitle,
+  proceededLine,
+  proceededReason,
+  REVIEW_FAILED_LEDE,
   RUN_REVIEW,
   reviewView,
   targetKey,
@@ -1170,6 +1182,34 @@ export function UnderstandingReview({
   );
   const complete = end === "complete" && once.completedAt !== null;
   const failedReview = reviewView(once.questionPass, once.review ?? null);
+  // The review left attributes not reviewed (owner decision, 18 November 2026): the same
+  // words in the lede, the review's own line and the choice that ends the course.
+  const heldLine =
+    end === "held"
+      ? (notReviewedLine(
+          once.review?.notReviewed ?? once.held?.notReviewed ?? [],
+          once.approved ?? [],
+          once.review?.notReviewedItems ?? [],
+          true,
+        ) ?? "Some attributes were not reviewed.")
+      : "";
+  const heldRunAgain = once.held?.runAgain === true;
+  // After a person proceeded without the review of some units: the header, the lede, the
+  // review's line, the end of the course and the workflow say the same sentence (screenshot
+  // pass, 19 November 2026: the lede read "Every point ... is on record").
+  // The reason, said once: at the end of the course, in the body's weight.
+  const proceededWhy =
+    end === "complete" && once.proceeded
+      ? proceededReason(once.proceeded)
+      : null;
+  const proceededSaid =
+    end === "complete" && once.proceeded
+      ? proceededLine(
+          once.proceeded,
+          once.approved ?? [],
+          once.review?.notReviewedItems ?? [],
+        )
+      : null;
   // Where the answers start from: another system's, proposed below, or none.
   const banner = startFromBanner(review);
   // A question left as not known (B1l point 1) is never counted as confirmed.
@@ -1206,6 +1246,14 @@ export function UnderstandingReview({
     wtRecord.reduce((sum, group) => sum + group.needs.length, 0) +
     leftNotKnownList.length;
   const wtSteps = plan.filter((item) => stepTopic(item) !== null);
+  // The last step Back can show: a topic, last year's, or a point still in the review.
+  const backTo = plan.reduce(
+    (last, item, index) =>
+      item === CARRIED || stepTopic(item) !== null || byKey.has(item)
+        ? index
+        : last,
+    -1,
+  );
   const reopened = Object.keys(wtReopened).filter(
     (key) => wtReopened[key] === true,
   );
@@ -1651,6 +1699,19 @@ export function UnderstandingReview({
                     {paragraph.parts.map((part, at) => {
                       const need =
                         part.key === null ? undefined : byKey.get(part.key);
+                      if (part.answeredAt !== undefined) {
+                        // A later answer told in place of the walkthrough's sentence.
+                        return (
+                          <span
+                            // biome-ignore lint/suspicious/noArrayIndexKey: the paragraph's parts in order
+                            key={at}
+                            className="ur-later"
+                            suppressHydrationWarning
+                          >
+                            {laterLine(part.text, part.answeredAt)}
+                          </span>
+                        );
+                      }
                       if (need === undefined) {
                         // biome-ignore lint/suspicious/noArrayIndexKey: the paragraph's parts in order
                         return <span key={at}>{part.text}</span>;
@@ -1825,6 +1886,9 @@ export function UnderstandingReview({
         request={once.request ?? null}
         notRun={once.notRun ?? null}
         approved={once.approved ?? []}
+        documentsHref={documentsHref}
+        onProcess={onProcess}
+        proceeded={once.proceeded ?? null}
       />
 
       <ul
@@ -1841,8 +1905,9 @@ export function UnderstandingReview({
               complete,
               review.attributesProposed,
               end === "checking",
+              checkingNow,
             ),
-            end === "failed",
+            end === "failed" || end === "held",
           ),
           openForEvidence,
           openKeys.length,
@@ -1929,6 +1994,8 @@ export function UnderstandingReview({
               at,
               open: openKeys,
               settled: countingOpen,
+              topics: wtSteps,
+              confirmed: progress,
             })}
             {skip ? (
               <button
@@ -2081,10 +2148,10 @@ export function UnderstandingReview({
         : choice;
     const unchanged = onFile && answer === need.value;
     // A question the agents' pass added for the attributes (B1j) says so, in the same course.
-    const raised =
-      need.kind === "QUESTION"
-        ? issues.find((issue) => issue.id === need.key)
-        : undefined;
+    // Read from the need itself, never from the page's list of issues, which is read at
+    // another time (18 November 2026).
+    const asking = need.kind === "QUESTION" ? questionState(need) : null;
+    const raised = asking?.issue;
     const forAttributes =
       raised !== undefined &&
       (addedForAttributes(raised) || fromReview(raised));
@@ -2096,6 +2163,18 @@ export function UnderstandingReview({
       <div className="ur-kicker">
         {need.kind === "QUESTION" ? (
           <span className="ur-chip is-accent">{raisedChip(raised)}</span>
+        ) : null}
+        {need.kind === "QUESTION" &&
+        askedAttributeChip(
+          need.issue?.asks?.attributeCode,
+          once.approved ?? [],
+        ) !== null ? (
+          <span className="ur-chip">
+            {askedAttributeChip(
+              need.issue?.asks?.attributeCode,
+              once.approved ?? [],
+            )}
+          </span>
         ) : null}
         {need.source === "USUAL" && !onFile ? (
           <span className="ur-chip is-warm">Usual practice</span>
@@ -2173,13 +2252,21 @@ export function UnderstandingReview({
         </>
       );
     }
-    // A question the agents raised is answered here, from its own choices; the planner's
-    // conversation stays one click away (12 November 2026).
-    const row =
-      need.kind === "QUESTION"
-        ? agentQuestions(issues.filter((issue) => issue.id === need.key))[0]
-        : undefined;
-    if (row !== undefined && row.source !== "RECORDED") {
+    // A question the agents raised is asked here, as the same short interview as every other
+    // point, from the question its need carries (12 and 18 November 2026). It is never handed
+    // to another screen: until its wording is ready it says it is being prepared.
+    if (asking !== null) {
+      if (asking.state === "preparing") {
+        return (
+          <PreparingQuestion
+            key={need.key}
+            chips={chips}
+            title={title}
+            onRead={read}
+          />
+        );
+      }
+      const row = asking.row;
       return (
         <AgentQuestionPoint
           key={need.key}
@@ -2189,6 +2276,7 @@ export function UnderstandingReview({
           saving={saving === need.key}
           chips={chips}
           title={title}
+          titleText={need.question || need.label}
           reason={blocks}
           why={why}
           foot={(primary) => foot(primary, true, asked)}
@@ -2202,21 +2290,15 @@ export function UnderstandingReview({
     }
     if (need.kind !== "ANSWER") {
       const lead =
-        need.kind === "QUESTION"
-          ? "The planner asks it as a short interview, with a proposed answer to confirm."
-          : need.kind === "PROCESS"
-            ? "The process understanding is confirmed in its own screen: the steps, the hand-offs and where this control sits."
-            : need.source === "SYSTEM" && need.value !== ""
-              ? `"${need.value}" governs this system's other controls. Optional: choose the governing policy for this control in D&I Evidence.`
-              : need.source === "OTHER_SYSTEM" && need.value !== ""
-                ? `"${need.value}" governs the same control on another system. Optional: choose the governing policy for this control in D&I Evidence.`
-                : "Optional. The governing policy is linked as a D&I evidence item.";
+        need.kind === "PROCESS"
+          ? "The process understanding is confirmed in its own screen: the steps, the hand-offs and where this control sits."
+          : need.source === "SYSTEM" && need.value !== ""
+            ? `"${need.value}" governs this system's other controls. Optional: choose the governing policy for this control in D&I Evidence.`
+            : need.source === "OTHER_SYSTEM" && need.value !== ""
+              ? `"${need.value}" governs the same control on another system. Optional: choose the governing policy for this control in D&I Evidence.`
+              : "Optional. The governing policy is linked as a D&I evidence item.";
       const act =
-        need.kind === "QUESTION" ? (
-          <button type="button" className="btn btn-primary" onClick={onTalk}>
-            Answer with the planner <UiIcon name="arrow" size={14} />
-          </button>
-        ) : need.kind === "PROCESS" && onProcess !== null ? (
+        need.kind === "PROCESS" && onProcess !== null ? (
           <button type="button" className="btn btn-primary" onClick={onProcess}>
             Confirm the process <UiIcon name="arrow" size={14} />
           </button>
@@ -2505,7 +2587,9 @@ export function UnderstandingReview({
                   <span className="ur-wt-box" aria-hidden="true">
                     {on ? <UiIcon name="check" size={11} /> : null}
                   </span>
-                ) : null}
+                ) : (
+                  <span className="ur-wt-dot" aria-hidden="true" />
+                )}
                 <span>{option}</span>
               </label>
             );
@@ -2689,16 +2773,20 @@ export function UnderstandingReview({
   /** A walkthrough topic as one step: its open questions together, one save for them all. */
   const topicStepView = (named: WalkthroughTopic) => {
     const all = topicQuestions(review, named);
-    const asked = topicAsks(review, named, reopened);
+    // Its open questions; once all are on record (come back to with Back), every one with
+    // its answer, to change or to continue past.
+    const { asked, onRecord } = topicStepAsks(review, named, reopened);
     // What the step shows now: a follow-up only while its parent's pick opens it.
     const shown = topicShown(asked, wtPicks, review.needs);
     const label = topicName(review, named);
-    const onFile = all.filter(
-      (need) =>
-        need.status === "CONFIRMED" &&
-        !reopened.includes(need.key) &&
-        followUpShown(need, asked, wtPicks, review.needs),
-    ).length;
+    const onFile = onRecord
+      ? 0
+      : all.filter(
+          (need) =>
+            need.status === "CONFIRMED" &&
+            !reopened.includes(need.key) &&
+            followUpShown(need, asked, wtPicks, review.needs),
+        ).length;
     const count = Object.keys(topicSave(asked, wtPicks, review.needs)).length;
     const blocked = topicBlocked(asked, wtPicks, review.needs);
     const blockedOn =
@@ -2725,7 +2813,7 @@ export function UnderstandingReview({
               Topic {position} of {wtSteps.length}
             </span>
           ) : null}
-          {done && shown.length > 0 ? (
+          {done && shown.length > 0 && !onRecord ? (
             <span className="ur-chip is-ok">Required answers on record</span>
           ) : null}
         </div>
@@ -2733,7 +2821,7 @@ export function UnderstandingReview({
           {label}
         </h3>
         <p className="ur-hint" id="ur-wt-hint">
-          {topicHint(shown, label)}
+          {onRecord ? topicOnRecordHint(shown.length) : topicHint(shown, label)}
         </p>
         {shown.length > 0 ? (
           <ol className="ur-wt">{shown.map(walkthroughQuestion)}</ol>
@@ -2801,17 +2889,43 @@ export function UnderstandingReview({
   const heldSteps = plan
     .map((key, index) => ({ key, index }))
     .filter((item) => stepRequired(review, interview, item.key));
-  const leftListOf = (items: ReadonlyArray<{ key: string; index: number }>) =>
+  // How many points are still open, in the header's own count ("x of y confirmed"), never
+  // the number of steps that hold them (a topic holds several).
+  const stillOpen = Math.max(0, progress.total - progress.done);
+  // Only walkthrough topics hold it: counted as topics, with each one's questions, under one
+  // label (design review, 19 November 2026, O1).
+  const heldTopics = heldTopicsEnd(
+    review,
+    heldSteps.map((item) => item.key),
+  );
+  const leftListOf = (
+    items: ReadonlyArray<{ key: string; index: number }>,
+    left: Record<string, number> | null = null,
+  ) =>
     items.length > 0 ? (
-      <ul className="ur-left">
+      <ul
+        className="ur-left"
+        aria-label={left !== null ? "Walkthrough topics" : undefined}
+      >
         {items.map((item) => {
           const need = byKey.get(item.key);
+          const topic = left !== null ? stepTopic(item.key) : null;
+          const count = left?.[item.key] ?? 0;
           return (
             <li key={item.key}>
               <span>
-                {item.key === CARRIED
-                  ? carriedCopy(interview, 0).step
-                  : stepLabel(item.key, need)}
+                {topic !== null ? (
+                  <>
+                    {topicName(review, topic)}
+                    <small className="ur-left-count">
+                      {count} {count === 1 ? "question" : "questions"}
+                    </small>
+                  </>
+                ) : item.key === CARRIED ? (
+                  carriedCopy(interview, 0).step
+                ) : (
+                  stepLabel(item.key, need)
+                )}
               </span>
               <button
                 type="button"
@@ -2836,13 +2950,9 @@ export function UnderstandingReview({
           <UiIcon name="check" size={22} />
         </span>
         <h3 className="ur-q">Next: review the attributes</h3>
+        {/* The way on alone: when it was completed, and a review left partial, are the
+            lede's (design review, 19 November 2026: said two or three times). */}
         <div className="ur-complete">
-          <p role="status">
-            <UiIcon name="check" size={15} />
-            <span suppressHydrationWarning>
-              {completeLine(once.completedAt ?? "")}
-            </span>
-          </p>
           {onToAttributes ? (
             <a className="btn btn-primary" href={attributesHref ?? "#"}>
               Go to the attributes <UiIcon name="arrow" size={14} />
@@ -2853,6 +2963,9 @@ export function UnderstandingReview({
             </a>
           ) : null}
         </div>
+        {proceededWhy !== null ? (
+          <p className="ur-hint ur-proceeded-why">{proceededWhy}</p>
+        ) : null}
         {openSteps.length > 0 ? (
           <>
             <p className="ur-hint">
@@ -2863,11 +2976,11 @@ export function UnderstandingReview({
           </>
         ) : null}
         <div className="ur-foot-actions">
-          {plan.length > 0 ? (
+          {backTo >= 0 ? (
             <button
               type="button"
               className="btn btn-secondary"
-              onClick={() => go(Math.max(0, plan.length - 1))}
+              onClick={() => go(backTo)}
             >
               <UiIcon name="back" size={14} /> Back
             </button>
@@ -2875,20 +2988,25 @@ export function UnderstandingReview({
         </div>
         <p className="ur-hint ur-once">{ONCE_COMPLETE_NOTE}</p>
       </div>
-    ) : end === "failed" ? (
-      // The specialist's review could not be used (B1l point 7): never a dead end.
+    ) : end === "failed" || end === "held" ? (
+      // The specialist's review could not be used (B1l point 7), or left attributes not
+      // reviewed (owner decision, 18 November 2026): never a dead end, the same two choices.
       <>
         <ReviewFailed
           ids={ids}
           canAct={canAct}
           failure={failedReview.state === "failed" ? failedReview.failure : ""}
+          held={
+            end === "held" ? { line: heldLine, runAgain: heldRunAgain } : null
+          }
+          reasonNeeded={once.reasonNeeded === true}
         />
         <div className="ur-foot-actions">
-          {plan.length > 0 ? (
+          {backTo >= 0 ? (
             <button
               type="button"
               className="btn btn-secondary"
-              onClick={() => go(Math.max(0, plan.length - 1))}
+              onClick={() => go(backTo)}
             >
               <UiIcon name="back" size={14} /> Back
             </button>
@@ -2919,11 +3037,11 @@ export function UnderstandingReview({
           </p>
         ) : null}
         <div className="ur-foot-actions">
-          {plan.length > 0 ? (
+          {backTo >= 0 ? (
             <button
               type="button"
               className="btn btn-secondary"
-              onClick={() => go(Math.max(0, plan.length - 1))}
+              onClick={() => go(backTo)}
             >
               <UiIcon name="back" size={14} /> Back
             </button>
@@ -2938,11 +3056,11 @@ export function UnderstandingReview({
         <h3 className="ur-q">Next: review the attributes</h3>
         <p className="ur-hint">{status.text}</p>
         <div className="ur-foot-actions">
-          {plan.length > 0 ? (
+          {backTo >= 0 ? (
             <button
               type="button"
               className="btn btn-secondary"
-              onClick={() => go(Math.max(0, plan.length - 1))}
+              onClick={() => go(backTo)}
             >
               <UiIcon name="back" size={14} /> Back
             </button>
@@ -2961,12 +3079,30 @@ export function UnderstandingReview({
     ) : (
       <div className="ur-end">
         <h3 className="ur-q">
-          {heldSteps.length === 0
-            ? "Waiting for the understanding to be read again"
-            : `${heldSteps.length} ${heldSteps.length === 1 ? "point is" : "points are"} still open`}
+          {checkingNow > 0
+            ? preparingTitle(checkingNow)
+            : heldSteps.length === 0
+              ? "Waiting for the understanding to be read again"
+              : heldTopics !== null
+                ? heldTopics.title
+                : `${stillOpen} ${stillOpen === 1 ? "point is" : "points are"} still open`}
         </h3>
-        <p className="ur-hint">{status.text}</p>
-        {leftListOf(heldSteps)}
+        {/* One count, one source: the header's (screenshot pass, 19 November 2026). While
+            questions are being prepared the header's checking line says so, once, for the
+            whole page; the pane names the state only (re-shoot r9, 19 November 2026). */}
+        {checkingNow > 0 ? null : (
+          <p className="ur-hint">
+            {heldTopics !== null ? heldTopics.text : status.text}
+          </p>
+        )}
+        {checkingNow > 0 ? null : heldTopics !== null ? (
+          <>
+            <p className="ur-label">Walkthrough</p>
+            {leftListOf(heldSteps, heldTopics.left)}
+          </>
+        ) : (
+          leftListOf(heldSteps)
+        )}
       </div>
     );
 
@@ -3038,26 +3174,46 @@ export function UnderstandingReview({
         <div className="ur-head-text">
           <p className="ur-eyebrow">{eyebrow}</p>
           <h2 id="ur-title">
-            {complete || (status.done && end !== "checking" && end !== "failed")
-              ? `${review.controlRef} is understood`
+            {/* Never "understood" while the reviewer agent checks new questions: they are
+                still to be asked (design review, 18 November 2026). */}
+            {complete ||
+            (status.done &&
+              checkingNow === 0 &&
+              end !== "checking" &&
+              end !== "failed" &&
+              end !== "held")
+              ? proceededSaid !== null
+                ? `${review.controlRef} is understood, without the full review`
+                : `${review.controlRef} is understood`
               : `Confirm how ${review.controlRef} runs`}
           </h2>
           <p className="ur-lede">
             {complete ? (
               <span suppressHydrationWarning>
-                {understoodLede({
-                  done: status.done,
-                  completeLine: completeLine(once.completedAt ?? ""),
-                  open: openKeys.length,
-                  optional: openOptional,
-                  statusText: status.text,
-                })}
+                {proceededSaid !== null
+                  ? `${completeLine(once.completedAt ?? "")}. ${proceededSaid}${proceededWhy !== null ? ` ${PROCEEDED_REASON_THERE}` : ""}`
+                  : understoodLede({
+                      done: status.done,
+                      completeLine: completeLine(once.completedAt ?? ""),
+                      open: openKeys.length,
+                      optional: openOptional,
+                      statusText: status.text,
+                      checking: checkingNow,
+                    })}
               </span>
             ) : end === "checking" ? (
-              `${draftedFrom(groups, interview)}. The agents are checking what else the attributes need: anything they ask is added here, not later.`
+              // The end card says the agents are checking (design review, 19 November
+              // 2026: said twice).
+              `${draftedFrom(groups, interview)}.`
             ) : end === "failed" ? (
-              `${draftedFrom(groups, interview)}. The review of the questions asked could not run: run it again, or proceed without it.`
-            ) : status.done ? (
+              `${draftedFrom(groups, interview)}. ${REVIEW_FAILED_LEDE}`
+            ) : end === "held" ? (
+              `${draftedFrom(groups, interview)}. ${heldLede(
+                once.review?.notReviewed ?? once.held?.notReviewed ?? [],
+                once.approved ?? [],
+                once.review?.notReviewedItems ?? [],
+              )}`
+            ) : status.done && checkingNow === 0 ? (
               understoodLede({
                 done: true,
                 completeLine: null,
@@ -3065,6 +3221,14 @@ export function UnderstandingReview({
                 optional: openOptional,
                 statusText: status.text,
               })
+            ) : status.done ? (
+              // Every point so far is confirmed; the questions still being checked are the
+              // rest (nothing to confirm until they appear).
+              `${draftedFrom(groups, interview)}. Every point so far is confirmed; the new questions below complete it.`
+            ) : checkingNow > 0 && openKeys.length === 0 ? (
+              // Nothing to confirm until the questions being prepared appear (re-shoot r8,
+              // 19 November 2026): the checking line under the header says so, once.
+              `${draftedFrom(groups, interview)}.`
             ) : (
               `${draftedFrom(groups, interview)}. Confirm it, so the D&I evidence can be requested and the attributes finalized.`
             )}
@@ -3105,10 +3269,18 @@ export function UnderstandingReview({
             </span>
           </div>
         ) : null}
-        {end !== "checking" && checkingNow > 0 ? (
-          <p className="ur-hint ur-checking" role="status">
-            <span className="spinner small" aria-hidden="true" />{" "}
-            {checkingLine(checkingNow)}
+        {/* The live region is always there, so a screen reader announces the line when
+            it appears (WCAG 4.1.3); the visible line below says the same. */}
+        <p className="sr-only" role="status">
+          {end !== "checking" && checkingNow > 0
+            ? checkingLine(checkingNow)
+            : ""}
+        </p>
+        {/* A completed understanding says it in its lede (understoodLede), not twice. */}
+        {end !== "checking" && checkingNow > 0 && !complete ? (
+          <p className="ur-hint ur-checking" aria-hidden="true">
+            <span className="spinner small" />
+            <span>{checkingLine(checkingNow)}</span>
           </p>
         ) : null}
       </header>
@@ -3128,6 +3300,7 @@ export function UnderstandingReview({
               done: status.done,
               complete,
               open: openKeys.length,
+              end,
             })}
           </span>
           <UiIcon name="chevron" size={16} />
@@ -3298,5 +3471,41 @@ export function UnderstandingReview({
         </RecordDialog>
       ) : null}
     </section>
+  );
+}
+
+/** How often a question being prepared is read again, until its wording is ready. */
+const PREPARING_READ_MS = 4000;
+
+/**
+ * An agents' question whose wording is not ready yet (18 November 2026): it says so in place
+ * of the interview and reads the review again shortly, so it is asked here once ready, never
+ * handed to another screen.
+ */
+function PreparingQuestion({
+  chips,
+  title,
+  onRead,
+}: {
+  chips: ReactNode;
+  title: ReactNode;
+  onRead: () => unknown;
+}) {
+  // Read again every few seconds while the wording is not ready: one read that finds it
+  // still being prepared arms the next (round 3 of the review, 18 November 2026: before, one
+  // timer read once and the question could wait for ever).
+  useEffect(() => {
+    const timer = window.setInterval(onRead, PREPARING_READ_MS);
+    return () => window.clearInterval(timer);
+  }, [onRead]);
+  return (
+    <>
+      {chips}
+      {title}
+      <p className="ur-hint ur-checking" role="status">
+        <span className="spinner small" aria-hidden="true" />
+        <span>{PREPARING_QUESTION}</span>
+      </p>
+    </>
   );
 }

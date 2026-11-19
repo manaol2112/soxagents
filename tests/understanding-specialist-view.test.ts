@@ -58,9 +58,13 @@ describe("the specialist's review under the understanding", () => {
     // Rewritten (B1l review fixes, 16 November 2026). Old: the section was given the pass,
     // the review and the completion only. New: also the read a person asked for after
     // completion, why no review ran, and the approved attributes (named by letter).
+    // Rewritten again 19 November 2026 (screenshot pass): also the proceed record, so the
+    // review's line says it was completed without the review, with the reason.
+    // Rewritten again 18 November 2026 (owner decision, "Show the support"): old, it ended at
+    // `approved`; new, also where the support's documents and process narrative open.
     assert.match(
       pane,
-      /<QuestionReviewSection\s+ids=\{ids\}\s+canAct=\{canAct\}\s+pass=\{once\.questionPass\}\s+review=\{once\.review \?\? null\}\s+completedAt=\{once\.completedAt\}\s+request=\{once\.request \?\? null\}\s+notRun=\{once\.notRun \?\? null\}\s+approved=\{once\.approved \?\? \[\]\}\s*\/>/,
+      /<QuestionReviewSection\s+ids=\{ids\}\s+canAct=\{canAct\}\s+pass=\{once\.questionPass\}\s+review=\{once\.review \?\? null\}\s+completedAt=\{once\.completedAt\}\s+request=\{once\.request \?\? null\}\s+notRun=\{once\.notRun \?\? null\}\s+approved=\{once\.approved \?\? \[\]\}\s+documentsHref=\{documentsHref\}\s+onProcess=\{onProcess\}\s+proceeded=\{once\.proceeded \?\? null\}\s*\/>/,
     );
   });
 
@@ -95,9 +99,14 @@ describe("the specialist's review under the understanding", () => {
     // Rewritten in the second fix round of B1k: old, notReviewedLine(shown.notReviewed,
     // approved) mapped by an AttributeBody.code the API did not send; new, the API's own
     // not_reviewed_items are passed too, and place each attribute by its id.
+    // Rewritten 18 November 2026 (owner decision, "Completion waits for a person"). Old: the
+    // three arguments alone. New: a fourth, whether the pass is HELD before completion, so the
+    // line says only what was not reviewed while the understanding waits on a person (the
+    // choice says what happens next); the naming is unchanged. tests/understanding-review-
+    // held.test.ts pins the held words.
     assert.match(
       section,
-      /notReviewedLine\(shown\.notReviewed, approved, shown\.notReviewedItems\)/,
+      /notReviewedLine\(\s*shown\.notReviewed,\s*approved,\s*shown\.notReviewedItems,\s*pass === "HELD" && completedAt === null,\s*\)/,
     );
     assert.match(
       setupCss,
@@ -166,6 +175,16 @@ describe("the review's questions in the same course", () => {
     // The suggested answer is preselected only as today's suggestions are: the question
     // point is unchanged in how it picks.
     assert.match(question, /const screens = inlineScreens\(row, picks\);/);
+    // Design review, 19 November 2026 (C1): "selected" only when it is, and a step's question
+    // that repeats the title is read, not shown twice.
+    assert.match(
+      question,
+      /: suggestionSelected\(screens\[0\]\)\s*\? "The agents' answer is selected\./,
+    );
+    assert.match(
+      question,
+      /screen\.question\.trim\(\) === titleText\.trim\(\)\s*\? "ur-ask-q sr-only"/,
+    );
   });
 });
 
@@ -267,31 +286,47 @@ describe("Not known yet, proceed", () => {
 
 describe("a review that could not run", () => {
   it("ends the course with one line, the failure sentence and two choices", () => {
+    // Rewritten 18 November 2026 (owner decision, "Completion waits for a person"). Old:
+    // the end for a failed review only, headed REVIEW_FAILED, posting with no fields. New:
+    // the same component also ends a held review (`held`, REVIEW_HELD, with a reason); a
+    // failed one reads as before (tests/understanding-review-held.test.ts for the held one).
     assert.match(
       review,
-      /\) : end === "failed" \? \([\s\S]{0,200}<ReviewFailed\s+ids=\{ids\}\s+canAct=\{canAct\}/,
+      /\) : end === "failed" \|\| end === "held" \? \([\s\S]{0,300}<ReviewFailed\s+ids=\{ids\}\s+canAct=\{canAct\}/,
     );
     const failed = component(specialist, "ReviewFailed");
-    assert.match(failed, /<h3 className="ur-q">\{REVIEW_FAILED\}<\/h3>/);
-    assert.match(failed, /\{failure\}/);
+    assert.match(
+      failed,
+      /<h3 className="ur-q">\{held === null \? REVIEW_FAILED : REVIEW_HELD\}<\/h3>/,
+    );
+    assert.match(failed, /\? failure/);
     assert.match(failed, /"Proceeding…" : PROCEED_WITHOUT\}/);
     assert.match(failed, /"Requesting…" : RUN_AGAIN\}/);
-    assert.ok(
-      failed.indexOf("await post(ids, intent)") <
-        failed.indexOf("PROCEED_SENT"),
-    );
+    assert.ok(failed.indexOf("await post(") < failed.indexOf("PROCEED_SENT"));
     // Never headed as understood, and the attributes wait on the person's choice.
+    // Rewritten 18 November 2026 (design review): the title also waits for the questions
+    // the reviewer agent is still checking. Old: `(status.done && end !== "checking" &&
+    // end !== "failed")`. New: the same with `checkingNow === 0`; the failed run still
+    // never heads it as understood.
+    // Rewritten 18 November 2026 (owner decision): old, `end !== "failed")` closed the
+    // condition and the attributes were held on `end === "failed"`; new, a held review too.
     assert.match(
       review,
-      /\(status\.done && end !== "checking" && end !== "failed"\)/,
+      /\(status\.done &&\s*checkingNow === 0 &&\s*end !== "checking" &&\s*end !== "failed" &&\s*end !== "held"\)/,
     );
     assert.match(
       review,
-      /heldByFailedReview\([\s\S]{0,240}end === "failed",\s*\)/,
+      /heldByFailedReview\([\s\S]{0,240}end === "failed" \|\| end === "held",\s*\)/,
     );
+    // Rewritten (design review, 19 November 2026): the lede states only the state; the
+    // end of the course carries the two choices.
     assert.match(
       review,
-      /end === "failed" \? \(\s*`\$\{draftedFrom\(groups, interview\)\}\. The review of the questions asked could not run/,
+      /end === "failed" \? \(\s*`\$\{draftedFrom\(groups, interview\)\}\. \$\{REVIEW_FAILED_LEDE\}`/,
+    );
+    assert.equal(
+      words.REVIEW_FAILED_LEDE,
+      "The review of the questions asked could not run.",
     );
   });
 
@@ -357,8 +392,10 @@ describe("the Attributes step", () => {
       assumptions,
       /\{conflict \? <p className="tas-kicker">\{CONFLICT_LEAD\}<\/p> : null\}/,
     );
-    assert.match(assumptions, /\? CONFLICT_STANDS\s*: "That's right"/);
-    assert.match(assumptions, />\s*Change…\s*</);
+    // Rewritten (design review, 19 November 2026: a fact not yet known). Old: the literal
+    // choices inline. New: by kind, from one source (confirmWords, changeWords).
+    assert.match(assumptions, /: confirmWords\(item\.kind\)\}/);
+    assert.match(assumptions, /\{changeWords\(item\.kind\)\}/);
     assert.match(listCss, /\.tas-open\.is-conflict \{/);
   });
 });
@@ -411,6 +448,47 @@ describe("the words", () => {
     assert.match(
       setupCss,
       /@media \(prefers-reduced-motion: reduce\) \{\s*\.ur-notknown \{\s*animation: none;/,
+    );
+  });
+});
+
+// Regression, 18 November 2026 (the product owner's screenshot: "The UI here is terrible"):
+// while the reviewer agent checked the wording of new questions, its line fell into the
+// header grid's first, auto-sized column and widened it to the sentence, crushing the title
+// to one word a line. Every line below the head row spans the full width.
+describe("the understanding's header while questions are checked", () => {
+  it("spans every line below the head row across the grid", () => {
+    assert.match(
+      setupCss,
+      /\.ur-head > :not\(\.ur-tile, \.ur-head-text, \.ur-head-tools\) \{\s*grid-column: 1 \/ -1;/,
+    );
+    // In the header it is a row of the grid: no extra margin, the full width.
+    assert.match(
+      setupCss,
+      /\.ur-head > \.ur-checking \{\s*max-width: none;\s*margin-top: 0;/,
+    );
+    const view = read("src/understanding-review.tsx");
+    // The checking line is a direct child of the header, so the rule reaches it; the
+    // live region announcing it is always rendered (WCAG 4.1.3).
+    assert.match(
+      view,
+      /<p className="sr-only" role="status">\s*\{end !== "checking" && checkingNow > 0\s*\? checkingLine\(checkingNow\)\s*: ""\}\s*<\/p>\s*\{\/\* A completed understanding says it in its lede \(understoodLede\), not twice\. \*\/\}\s*\{end !== "checking" && checkingNow > 0 && !complete \? \(\s*<p className="ur-hint ur-checking" aria-hidden="true">/,
+    );
+  });
+
+  it("never says the control is understood while new questions are being checked", () => {
+    const view = read("src/understanding-review.tsx");
+    // One screen, one story (design review, 18 November 2026): the title and its lede
+    // wait for the questions the reviewer agent is still checking.
+    // Rewritten 18 November 2026 (owner decision): a held review never heads it as
+    // understood either (old: the condition ended at `end !== "failed"`).
+    assert.match(
+      view,
+      /\(status\.done &&\s*checkingNow === 0 &&\s*end !== "checking" &&\s*end !== "failed" &&\s*end !== "held"\)\s*\? proceededSaid !== null\s*\? `\$\{review\.controlRef\} is understood, without the full review`\s*: `\$\{review\.controlRef\} is understood`/,
+    );
+    assert.match(
+      view,
+      /\) : status\.done && checkingNow === 0 \? \(\s*understoodLede\(/,
     );
   });
 });

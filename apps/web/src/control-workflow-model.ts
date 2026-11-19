@@ -36,7 +36,11 @@ import {
   completeStatus,
   whenWords,
 } from "./understanding-once-model.ts";
-import { REVIEW_FAILED_STATUS } from "./understanding-specialist-model.ts";
+import {
+  PROCEEDED_STATUS,
+  REVIEW_FAILED_STATUS,
+  REVIEW_HELD_STATUS,
+} from "./understanding-specialist-model.ts";
 
 export type StepKey =
   | "setup"
@@ -216,6 +220,9 @@ export type WorkflowInput = {
     /** Approved attributes with no criteria a person owns, tailored to the control
      * (11 November 2026). */
     untailored?: number;
+    /** Of those, the rows that read "To accept": tailored by the agent for a person to
+     * accept (control-context-model.toAcceptCount). The rest need criteria. */
+    toAccept?: number;
   };
   /** The test plan. `drafting`: the planner is drawing it up, or a reviewer returned it to
    * the preparer; any other plan that exists and is not approved waits on its approval (the
@@ -234,6 +241,13 @@ export type WorkflowInput = {
     completedAt: string | null;
     questionPass: QuestionPass | null;
     rulesOpen?: number;
+    /** Completed by a person's proceed without the review of some units. */
+    proceeded?: boolean;
+    /** While the review waits on a person's choice (HELD or FAILED): the end of the
+     * course's state and choice in one line (reviewChoiceLine), the step's note. */
+    choice?: string;
+    /** That choice's action, as the end card offers it (reviewChoiceAction). */
+    choiceAction?: string;
   } | null;
   /** The evidence items, each in its phase (DESIGN, INTERIM, ROLLFORWARD), in the state
    * the server gives: an item that waited for an earlier one and has a file of its own
@@ -345,6 +359,8 @@ export type WorkflowStep = (typeof STEPS)[number] & {
   /** The step's one line, where its own records word it (the D&I requests list: what the
    * server says an accepted list still waits for). Absent where the status says it all. */
   note?: string;
+  /** The action for the review's choice while the step's note is that choice. */
+  choiceAction?: string;
   /** What the step needs from the person, where its own list words it (the D&I evidence
    * list once its requests are drafted): one line, with no action of its own. */
   need?: EvidenceWorkflowHeader["need"];
@@ -416,7 +432,14 @@ function understandingState(input: WorkflowInput): State {
   // later still shows in Control Understanding with its own count; it does not reopen it.
   const once = input.understanding ?? null;
   if (once !== null && once.completedAt !== null) {
-    return { tone: "done", status: completeStatus(once.completedAt) };
+    // After a proceed without the review of some, said as the page says it.
+    return {
+      tone: "done",
+      status:
+        once.proceeded === true
+          ? PROCEEDED_STATUS
+          : completeStatus(once.completedAt),
+    };
   }
   // The question pass: the agents check what else the attributes need, and their questions
   // join the same course.
@@ -427,6 +450,11 @@ function understandingState(input: WorkflowInput): State {
   // in Control Understanding: Run again, or Proceed without it. Nothing waits on it.
   if (once?.questionPass === "FAILED") {
     return { tone: "attention", status: REVIEW_FAILED_STATUS };
+  }
+  // The review left attributes not reviewed (owner decision, 18 November 2026): a person
+  // runs it again or proceeds without it, with a reason, before the understanding completes.
+  if (once?.questionPass === "HELD") {
+    return { tone: "attention", status: REVIEW_HELD_STATUS };
   }
   const open = input.setup.find(
     (step) =>
@@ -671,6 +699,17 @@ function designConclusionState(input: WorkflowInput): State {
   };
 }
 
+/** The approved attributes not owned by a person, as their rows read them: tailored by the
+ * agent and to accept, or still needing criteria. */
+export function criteriaCounts(attributes: WorkflowInput["attributes"]): {
+  toAccept: number;
+  missing: number;
+} {
+  const untailored = Math.max(attributes.untailored ?? 0, 0);
+  const toAccept = Math.min(Math.max(attributes.toAccept ?? 0, 0), untailored);
+  return { toAccept, missing: untailored - toAccept };
+}
+
 /** The attributes, settled before both branches (11 November 2026), as the D&I release
  * reads them (phase_release.attribute_waits): approved, none proposed, no open question. */
 function attributesState(input: WorkflowInput, understanding: State): State {
@@ -706,12 +745,17 @@ function attributesState(input: WorkflowInput, understanding: State): State {
     return { tone: "attention", status: "None approved yet" };
   }
   // The testers judge evidence against each attribute's tailored criteria.
-  const untailored = input.attributes.untailored ?? 0;
-  if (untailored > 0) {
+  // In the rows' own words (design review, 19 November 2026): "Needs criteria" for one
+  // with none tailored, "To accept" for one the agent tailored.
+  const { missing, toAccept } = criteriaCounts(input.attributes);
+  if (missing > 0) {
     return {
       tone: "attention",
-      status: `${untailored} need${untailored === 1 ? "s" : ""} criteria`,
+      status: `${missing} need${missing === 1 ? "s" : ""} criteria`,
     };
+  }
+  if (toAccept > 0) {
+    return { tone: "attention", status: `${toAccept} to accept` };
   }
   // The counts say settled, but the server still waits: the agent is updating them.
   if (input.designRelease?.waitingOn === "ATTRIBUTES") {
@@ -971,6 +1015,17 @@ export function workflowOf(input: WorkflowInput): WorkflowStep[] {
     next: false,
     ...(step.key === "designevidence" && designNote !== ""
       ? { note: designNote }
+      : {}),
+    ...(step.key === "understanding" &&
+    (states.understanding.status === REVIEW_HELD_STATUS ||
+      states.understanding.status === REVIEW_FAILED_STATUS) &&
+    (input.understanding?.choice ?? "") !== ""
+      ? {
+          note: input.understanding?.choice ?? "",
+          ...(input.understanding?.choiceAction
+            ? { choiceAction: input.understanding.choiceAction }
+            : {}),
+        }
       : {}),
     ...(step.key === "understanding" &&
     (input.understanding?.completedAt ?? null) !== null

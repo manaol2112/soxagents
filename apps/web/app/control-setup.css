@@ -1429,6 +1429,22 @@
   border-bottom: 1px solid var(--border-subtle);
 }
 
+/* Below the head row (tile, text, tools), every line spans the full width: the progress,
+   the start banner, and the reviewer agent's "checking the wording" line. Placed in the
+   first, auto-sized column instead, that line widened it to the sentence's length and
+   crushed the title to one word a line (the product owner's report, 18 November 2026). */
+.ur-head > :not(.ur-tile, .ur-head-text, .ur-head-tools) {
+  grid-column: 1 / -1;
+}
+
+/* In the header the checking line is one of its rows: the grid's gap is its spacing, and
+   it runs the full width under the progress bar. */
+.ur-head > .ur-checking {
+  max-width: none;
+  margin-top: 0;
+  text-wrap: pretty;
+}
+
 .ur-tile {
   display: grid;
   place-items: center;
@@ -1881,6 +1897,126 @@
 @media (prefers-reduced-motion: reduce) {
   .ur-notknown {
     animation: none;
+  }
+}
+
+/* What each established point rests on (owner decision, 18 November 2026, "Show the
+   support"): a quiet list under the review, one point at a time, each item its kind as the
+   small label, then what it is and what it says; the way to view its source and the point's
+   Challenge on the right, stacked under it on a phone. */
+.ur-review-support {
+  display: grid;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ur-support-list {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ur-support-point {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ur-support-name {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+}
+
+.ur-support-items {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ur-support-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 6px 16px;
+  padding: 8px 12px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.ur-support-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ur-support-kind {
+  color: var(--text-tertiary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ur-support-label {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.ur-support-said {
+  color: var(--text);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* The way to view the source, in a row under what the item says (screenshot pass, 19
+   November 2026: beside it, the title and the quote were squeezed at 1440); the same link
+   style for a document and the narrative. */
+.ur-support-open {
+  justify-self: start;
+  font-size: var(--fs-sm);
+}
+
+.ur-support-open button.text-link {
+  padding: 0;
+  font: inherit;
+  font-weight: 500;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.ur-support-challenge {
+  justify-content: flex-start;
+}
+
+@media (max-width: 640px) {
+  .ur-support-item {
+    padding: 8px 10px;
+  }
+}
+
+/* A field's problem in the danger tone, inside its muted hint. */
+.ur-hint-problem {
+  color: var(--danger);
+  font-weight: 500;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ur-review-support,
+  .ur-support-point {
+    animation: none;
+    transition: none;
   }
 }
 
@@ -2589,6 +2725,19 @@
   min-width: 0;
 }
 
+/* Arrived at from the next step's "Run again or proceed": the whole action row stays clear
+   of the viewport's edge when it is scrolled into view (re-shoot r11, 19 November 2026). */
+.ur-review-failed [data-arrive-view] {
+  scroll-margin-bottom: 24px;
+}
+
+/* A walkthrough topic's own count, under its name (design review, 19 November 2026). */
+.ur-left-count {
+  display: block;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
 /* Walkthrough notes, in a dialog. */
 .record-dialog.ur-notes-dialog {
   width: min(660px, 100%);
@@ -2883,6 +3032,27 @@
 .ur-wt-chip.is-on .ur-wt-box {
   background: var(--accent);
   border-color: var(--accent);
+}
+
+/* One answer of several: a round marker, filled when chosen (screenshot pass, 19 November
+   2026: a single choice showed no marker at all). */
+.ur-wt-dot {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--border-control);
+  border-radius: 50%;
+}
+
+.ur-wt-chip.is-on .ur-wt-dot {
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 3px var(--surface);
+}
+
+.ur-wt-chips.is-proposed .ur-wt-chip.is-on .ur-wt-dot {
+  background: var(--ai);
+  border-color: var(--ai);
 }
 
 /* Yes or No (product owner, 11 November 2026: "Feels cheap"): one pill-shaped track holding
@@ -3550,9 +3720,15 @@
 /* The agents' new question while the reviewer agent checks its wording (14 November 2026). */
 .ur-checking {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.4rem;
   margin: 0.5rem 0 0;
+}
+
+/* The spinner sits on the first line of a sentence that wraps. */
+.ur-checking > .spinner {
+  flex: none;
+  margin-top: calc((1.5em - 12px) / 2);
 }
 
 /* The understanding complete once (B1j): the time it was recorded, and the way on. */

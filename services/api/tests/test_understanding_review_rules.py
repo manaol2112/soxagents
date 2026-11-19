@@ -10,6 +10,7 @@ the understanding is complete (accepted attributes, a question left as not known
 the prompt with hostile answers inert, and the D&I workpaper's point from an assumption. The
 rules on the database are in test_understanding_review.py."""
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -50,9 +51,17 @@ from ai_workforce_api.understanding_review import (
 
 ROOT = Path(ai_workforce_api.__file__).parent
 MIGRATION = ROOT.parent.parent.parent / "migrations" / "0174_understanding_review.sql"
+# What each unit's ESTABLISHED verdict must cite (Unit.support, as the inputs list its
+# needs). Rewritten 18 November 2026 (owner decision: a citation for each fact the attribute
+# needs, also where the bank records none). Old: any one valid citation was enough for a unit
+# with no recorded needs. New: A2 is held to who approves it, which W1 establishes.
 UNITS = [Unit("A1", "A1", "The change is approved before it is applied."),
-         Unit("A2", "A2", "The change is tested.")]  # fmt: skip
-W1 = Parent("W1", question_key="wt-change-approver")
+         Unit("A2", "A2", "The change is tested.", support=("APPROVER",))]  # fmt: skip
+# The walkthrough answer of who approves a change: it establishes the APPROVER fact
+# (owner-approved F1, 18 November 2026: a cited walkthrough answer covers the need its own
+# kind of fact names; old: a parent carried no fact, as nothing checked an ESTABLISHED
+# verdict's citations).
+W1 = Parent("W1", question_key="wt-change-approver", fact="APPROVER")
 R1 = Parent("R1", issue_id=UUID("018f0000-0000-7000-8000-000000000001"), round_one=True)
 PARENTS = {"W1": W1, "R1": R1}
 
@@ -129,7 +138,11 @@ def test_a_verdict_for_every_attribute_and_a_question_for_every_gap_with_what_it
 
 
 def test_a_skipped_attribute_is_corrected_once_then_marked_not_reviewed_never_invented() -> None:
-    skipping = _answer(verdicts=[{"attribute": "A2", "verdict": "ESTABLISHED", "rests_on": []}])
+    # Rewritten 18 November 2026 (owner-approved F1). Old: A2's ESTABLISHED verdict rested on
+    # nothing ("rests_on": []) and was accepted. New: an ESTABLISHED verdict cites what
+    # establishes it, so A2 cites W1; what this test is about (a skipped A1) is unchanged.
+    skipping = _answer(verdicts=[{"attribute": "A2", "verdict": "ESTABLISHED",
+                                  "rests_on": ["W1"]}])  # fmt: skip
     with pytest.raises(ValueError, match="no verdict for A1"):
         check(skipping, UNITS, PARENTS, 1, strict=True)
     kept = check(skipping, UNITS, PARENTS, 1, strict=False)
@@ -137,11 +150,13 @@ def test_a_skipped_attribute_is_corrected_once_then_marked_not_reviewed_never_in
 
 
 def test_a_gap_naming_no_question_or_nothing_it_blocks_is_refused_then_not_reviewed() -> None:
+    # Rewritten 18 November 2026 (owner-approved F1): A2's ESTABLISHED verdict cites W1 (old:
+    # it rested on nothing); the rule under test is A1's.
     for question in (None, {**_question(), "blocks": "  "}):
         bare = _answer(verdicts=[
             {"attribute": "A1", "verdict": "NOT_ESTABLISHED", "rests_on": [],
              "question": question},
-            {"attribute": "A2", "verdict": "ESTABLISHED", "rests_on": []},
+            {"attribute": "A2", "verdict": "ESTABLISHED", "rests_on": ["W1"]},
         ])  # fmt: skip
         with pytest.raises(ValueError, match="names no question"):
             check(bare, UNITS, PARENTS, 1, strict=True)
@@ -177,7 +192,20 @@ def test_a_follow_up_names_an_answer_given_and_in_the_second_read_only_a_first_r
     assert [item.topic for item in first.asked if item.follow_up] == [
         "Vendor agreement", "Who at the vendor",
     ]  # fmt: skip
-    assert len(first.dropped) == 2
+    # Rewritten 18 November 2026 (owner-approved F2: nothing disappears silently). Old: the
+    # follow-ups naming no answer given or no attribute of the control were dropped with a
+    # note only. New: each is kept as an assumption by its matter, never asked, with its note.
+    notes = [note for note in first.dropped if note.startswith("follow_ups")]
+    assert len(notes) == 2 and all("so it is assumed" in note for note in notes)
+    # A1 cites W9, which the inputs do not give: said too (owner-approved F1).
+    assert (
+        "verdicts: A1 cites W9, which the inputs do not give as an answer, a value or an "
+        "answered question" in first.dropped
+    )
+    kept = [item for item in first.asked if item.by_matter]
+    assert [(item.topic, item.code, item.assume_only, item.follow_up) for item in kept] == [
+        ("Unknown parent", None, True, False), ("Unknown attribute", None, True, False),
+    ]  # fmt: skip
     second = check(_answer(follow_ups=follow_ups), UNITS, PARENTS, 2, strict=True)
     # The second read asks only the follow-up of its own question; the rest are assumed.
     planned = plan(second.asked, set(), 2)
@@ -185,7 +213,9 @@ def test_a_follow_up_names_an_answer_given_and_in_the_second_read_only_a_first_r
     assert (only.topic, only.parent_issue_id, only.round_one) == (
         "Who at the vendor", R1.issue_id, True,
     )  # fmt: skip
-    assert {item.topic for item in planned.assume} == {"Who applies patches", "Vendor agreement"}
+    assert {item.topic for item in planned.assume} == {
+        "Who applies patches", "Vendor agreement", "Unknown parent", "Unknown attribute",
+    }  # fmt: skip
     # A follow-up of a walkthrough answer is keyed on the answer: one per answer.
     vendor = next(item for item in first.asked if item.topic == "Vendor agreement")
     assert vendor.key == ("ANSWER", "wt-change-approver", "")
@@ -195,7 +225,7 @@ def test_a_question_with_a_credential_is_never_asked() -> None:
     leaking = _answer(verdicts=[
         {"attribute": "A1", "verdict": "NOT_ESTABLISHED", "rests_on": [],
          "question": {**_question(), "suggested": "password=hunter2secret"}},
-        {"attribute": "A2", "verdict": "ESTABLISHED", "rests_on": []},
+        {"attribute": "A2", "verdict": "ESTABLISHED", "rests_on": ["W1"]},
     ])  # fmt: skip
     assert check(leaking, UNITS, PARENTS, 1, strict=False).asked == ()
 
@@ -209,9 +239,13 @@ def test_a_key_already_asked_is_refused_whatever_its_wording() -> None:
     held = {key_of("A1", "PERFORMER", None, "")}
     planned = plan([reworded, _asked("APPROVER", 1)], held, 1)
     assert [item.fact for item in planned.ask] == ["APPROVER"] and planned.repeated == 1
-    # Twice in one answer: asked once.
+    # Twice in one answer: asked once. Rewritten 18 November 2026 (owner-approved F2). Old:
+    # the second was dropped, counted as repeated. New: it is assumed by its matter, so it is
+    # seen, and the key-once index never swallows it.
     twice = plan([first, reworded], set(), 1)
-    assert len(twice.ask) == 1 and twice.repeated == 1
+    assert twice.ask == (first,) and twice.repeated == 0
+    assert twice.assume == (replace(reworded, by_matter=True),)
+    assert review._assumption_of(twice.assume[0]).asks_fact is None
     # A follow-up is keyed on the answer it follows, never on its own words.
     assert key_of("A1", "OTHER", R1.issue_id, "") == ("ISSUE", str(R1.issue_id), "")
 
@@ -342,7 +376,23 @@ def test_hostile_answers_stay_data_inside_the_one_block_of_escaped_json() -> Non
     # kind of fact and what the agents assumed; every safety line is kept word for word.
     # Old: "understanding-review/2". New: "understanding-review/3" (18 November 2026, owner-approved
     # S1: the data's tags are made inert, nothing else changed).
-    assert review.PROMPT_VERSION == "understanding-review/3" and review.AGENT == (
+    # Old: "understanding-review/3". New: "understanding-review/4" (18 November 2026,
+    # owner-approved F1 and F3: documents and the confirmed narrative have refs, attributes
+    # carry their engagement criteria, and an ESTABLISHED verdict cites what establishes each
+    # need); every safety line is kept word for word.
+    # Old: "understanding-review/4". New: "understanding-review/5" (18 November 2026, owner
+    # decision "Tighten citations": a value counts only for what its slot records, an
+    # answered question for the fact it asked, and a document or the narrative only through
+    # cites with a passage quoted word for word); every safety line is kept word for word.
+    assert "In cites, for a document" in review.SYSTEM_PROMPT
+    assert "copied word for word from that document's summary or that" in review.SYSTEM_PROMPT
+    # Old: "understanding-review/5". New: "understanding-review/6" (19 November 2026, the
+    # screenshot pass: the narrative never speaks of the review's own process).
+    assert "Say nothing of this review itself or of what happens next" in review.SYSTEM_PROMPT
+    # Old: "understanding-review/6". New: "understanding-review/7" (19 November 2026, design
+    # review: the narrative names an attribute by what it tests, never by its code).
+    assert "never by its key or code (A1, A2)" in review.SYSTEM_PROMPT
+    assert review.PROMPT_VERSION == "understanding-review/7" and review.AGENT == (
         "independent-reviewer"
     )
 
@@ -456,10 +506,14 @@ def test_a_follow_up_naming_no_attribute_on_a_control_with_attributes_is_only_as
     assert planned.ask == () and vendor in planned.assume
     # A control with no attributes: a follow-up for the control as a whole is asked.
     facts = review.units_of([])
+    # Each kind of fact's verdict cites W1 (owner-approved F1; old: it rested on nothing).
+    # Read once corrected (strict False, 18 November 2026): each kind of fact now needs a
+    # citation of that fact, which W1 (APPROVER) is only for one of them; what this test is
+    # about, the follow-up for the control as a whole, is unchanged.
     whole = check(
-        _answer(verdicts=[{"attribute": u.key, "verdict": "ESTABLISHED", "rests_on": []}
+        _answer(verdicts=[{"attribute": u.key, "verdict": "ESTABLISHED", "rests_on": ["W1"]}
                           for u in facts], follow_ups=follow_ups),
-        facts, PARENTS, 2, strict=True,
+        facts, PARENTS, 2, strict=False,
     )  # fmt: skip
     [asked] = plan(whole.asked, set(), 2).ask
     assert asked.topic == "Who at the vendor" and not asked.assume_only
@@ -470,7 +524,7 @@ def test_a_question_with_no_suggested_answer_and_no_options_is_never_an_essay_qu
     essay = {**_question(), "suggested": "", "options": []}
     bare = _answer(verdicts=[
         {"attribute": "A1", "verdict": "NOT_ESTABLISHED", "rests_on": [], "question": essay},
-        {"attribute": "A2", "verdict": "ESTABLISHED", "rests_on": []},
+        {"attribute": "A2", "verdict": "ESTABLISHED", "rests_on": ["W1"]},
     ])  # fmt: skip
     with pytest.raises(ValueError, match="a suggested answer or two options"):
         check(bare, UNITS, PARENTS, 1, strict=True)
@@ -489,12 +543,22 @@ def test_a_question_with_no_suggested_answer_and_no_options_is_never_an_essay_qu
 
 def test_a_key_the_bank_holds_becomes_a_follow_up_of_its_answer_or_an_assumption() -> None:
     # Finding (loop, model): "Asked once by key does not cover the walkthrough bank's
-    # questions". The bank's wt-cm06-who-applies (PERFORMER, informs the attribute) answered:
-    # a PERFORMER question on that attribute is a follow-up of that answer, once.
-    held = {key_of("A1", "PERFORMER", None, ""): review.Holder("BANK", "wt-cm06-who-applies")}
+    # questions". The bank's wt-cm06-who-applies (PERFORMER, informs the attribute) answered.
+    # Rewritten 18 November 2026 (product owner, seen on ITGC-AC-03: a follow-up is raised
+    # only when it is truly needed and not already answered). Old: any standing answer made a
+    # PERFORMER question on that attribute its follow-up. New: only an answer that opens one
+    # (Holder.opens: Other text, a "no one", "not handled" or "No" answer, the vendor only);
+    # an answer that opens none establishes the fact (next test). The once-per-answer and the
+    # unanswered cases are as before.
+    held = {
+        key_of("A1", "PERFORMER", None, ""): review.Holder(
+            "BANK", "wt-cm06-who-applies", opens=True, ref="W1"
+        )
+    }
     first = plan([_asked("PERFORMER", 0)], held, 1)
     [follow] = first.ask
     assert follow.follow_up and follow.key == ("ANSWER", "wt-cm06-who-applies", "")
+    assert first.answered == ()
     # Its answer's follow-up already asked: assumed, never asked again, never dropped.
     taken = {**held, ("ANSWER", "wt-cm06-who-applies", ""): review.Holder("ASKED")}
     again = plan([_asked("PERFORMER", 0)], taken, 1)
@@ -504,6 +568,216 @@ def test_a_key_the_bank_holds_becomes_a_follow_up_of_its_answer_or_an_assumption
     assert plan([_asked("PERFORMER", 0)], unanswered, 1).ask == ()
 
 
+def test_a_key_a_walkthrough_answer_settles_is_never_asked_again() -> None:
+    # Product owner, 18 November 2026, on ITGC-AC-03: "Does someone other than the Application
+    # owner review the owner's own access?" was raised as a follow-up of the walkthrough answer
+    # "Reviewed by someone else" (wt-ac03-own-access, APPROVER, informs A2), which already says
+    # it. An answer that opens no follow-up is not asked again: counted as already asked, in
+    # every read. Rewritten 18 November 2026 (owner-approved F2). Old: the answer "established"
+    # the fact (Plan.established), and told() then rewrote the verdict ESTABLISHED. New: it is
+    # returned in Plan.answered, and _apply records it as an assumption showing the answer
+    # (walkthrough_gap); the plan itself neither asks nor assumes it.
+    holder = review.Holder("BANK", "wt-ac03-own-access", opens=False, ref="W6")
+    held = {key_of("A2", "APPROVER", None, ""): holder}
+    item = _asked("APPROVER", 0, code="A2")
+    for round_, after in ((1, False), (2, False), (1, True)):
+        planned = plan([item], held, round_, after)
+        assert (planned.ask, planned.assume, planned.repeated) == ((), (), 1)
+        assert planned.answered == ((item, holder),)
+
+
+def test_which_walkthrough_answers_open_a_follow_up() -> None:
+    # Rewritten 18 November 2026 (product owner, "Yes/No always settles"). Old: a "No", and a
+    # chosen option that says no one does it or it is not handled ("No one (...)", "Not
+    # handled separately"), opened a follow-up. New: a Yes or a No always settles its fact,
+    # and so does any option of the bank chosen as offered; only the person's own words (an
+    # Other part, a free-text answer) or the vendor alone open one. Why: the review found
+    # about 10 of the bank's 47 Yes/No questions where No is the good answer (such as
+    # wt-ac04-reviewer-holds, "Does the reviewer hold any of the privileged access being
+    # reviewed?"), so "No opens" asked again what the answer had settled. A gap such an answer
+    # shows becomes a design finding or an assumption through their own paths.
+    opens = review.opens_follow_up
+    # Settles the fact: a named answer, a Yes or a No, the options of a MULTI answer, and an
+    # option chosen as offered whatever its first word.
+    assert not opens("MULTI", "Reviewed by someone else")
+    assert not opens("YES_NO", "Yes")
+    assert not opens("YES_NO", "No")
+    assert not opens("YES_NO", "Other: sometimes")
+    assert not opens("MULTI", "Employee accounts; Service accounts")
+    assert not opens("CHOICE", "IT Security Manager")
+    assert not opens("MULTI", "Not handled separately")
+    assert not opens("CHOICE", "No one (it is kept without approval)")
+    assert not opens("CHOICE", "Not allowed, as every patch is approved first")
+    # Leaves something open: the person's own words, the vendor only.
+    assert opens("CHOICE", "Other: the regional controller signs it")
+    assert opens("MULTI", "Employee accounts; Other: a contractor list")
+    assert opens("CHOICE", "The vendor")
+    assert opens("CHOICE", "Only by the vendor, before release")
+    assert not opens("MULTI", "The vendor; IT support staff")
+    # A free-text answer is the person's own words, as an Other part is.
+    assert opens("TEXT", "Within 30 days of quarter end.")
+    assert not opens("TEXT", "  ")
+    assert not opens("CHOICE", "")
+
+
+def test_a_no_to_whether_the_reviewer_holds_the_access_raises_no_follow_up() -> None:
+    # Owner decision, 18 November 2026 ("Yes/No always settles"): "No" is the good answer to
+    # wt-ac04-reviewer-holds, and it settles who is independent of the access (APPROVER on
+    # ac04-independent). Neither the specialist's question on that fact nor its own follow-up
+    # of that answer is asked. Rewritten 18 November 2026 (owner-approved F2). Old: both were
+    # "established by it". New: both are returned as answered by it, for _apply to record as
+    # assumptions showing the answer, never as established.
+    from ai_workforce_api import walkthrough_questions
+
+    bank = walkthrough_questions.question("wt-ac04-reviewer-holds")
+    assert bank is not None and bank.kind == "YES_NO"
+    assert walkthrough_questions.fact_of(bank) == "APPROVER"
+    assert "ac04-independent" in bank.informs
+    holder = review.Holder("BANK", bank.key, review.opens_follow_up(bank.kind, "No"), "W3")
+    assert holder.opens is False
+    held = {key_of("A4", "APPROVER", None, ""): holder}
+    asked = _asked("APPROVER", 0, code="A4")
+    written = replace(_asked("APPROVER", 1, code="A4"), parent_key=bank.key, follow_up=True)
+    planned = plan([asked, written], held, 1)
+    assert planned.ask == () and planned.assume == ()
+    assert planned.answered == ((asked, holder), (written, holder))
+
+
+def test_a_follow_up_the_specialist_writes_of_an_answer_settling_its_fact_is_not_asked() -> None:
+    # Review finding B2 (18 November 2026): a follow-up the specialist writes itself, naming a
+    # walkthrough answer as its parent, is keyed on that answer, so the key's own check let it
+    # through even where that answer settles the very fact it asks (W6 "Reviewed by someone
+    # else", A2, APPROVER on ITGC-AC-03). It is held to the fact's key: not asked (returned
+    # as answered by that answer).
+    units = [Unit("A2", "A2", "The reviewer is independent.", needs=("APPROVER",))]
+    # The answer establishes APPROVER, the need A2's ESTABLISHED verdict cites it for
+    # (owner-approved F1, 18 November 2026; old: the parent carried no fact).
+    w6 = Parent("W6", question_key="wt-ac03-own-access", fact="APPROVER")
+    written = {**_question("Reviewer of the owner's own access", "APPROVER"),
+               "parent": "W6", "attribute": "A2"}  # fmt: skip
+    answer = _answer(
+        verdicts=[{"attribute": "A2", "verdict": "ESTABLISHED", "rests_on": ["W6"]}],
+        follow_ups=[written],
+    )
+    checked = check(answer, units, {"W6": w6}, 1, strict=True)
+    [item] = checked.asked
+    assert item.key == ("ANSWER", "wt-ac03-own-access", "") and not item.assume_only
+    settles = review.Holder("BANK", "wt-ac03-own-access", opens=False, ref="W6")
+    held = {key_of("A2", "APPROVER", None, ""): settles}
+    for round_, after in ((1, False), (2, False), (1, True)):
+        planned = plan(checked.asked, held, round_, after)
+        assert (planned.ask, planned.assume, planned.repeated) == ((), (), 1)
+        assert planned.answered == ((item, settles),)
+    # The answer opens one (the person's own words): the follow-up is asked as before.
+    opened = {key_of("A2", "APPROVER", None, ""): replace(settles, opens=True)}
+    assert plan(checked.asked, opened, 1).ask == (item,)
+    # Another answer holds the fact: this answer does not settle it, so it is asked.
+    other = {key_of("A2", "APPROVER", None, ""): replace(settles, answer="wt-ac03-coverage")}
+    assert plan(checked.asked, other, 1).ask == (item,)
+    # A follow-up on another fact (a contradiction, a new name) is unaffected.
+    performer = replace(item, fact="PERFORMER")
+    assert plan([performer], held, 1).ask == (performer,)
+    # One of a question asked on the control (an R or Q parent) is never held this way.
+    of_issue = replace(item, parent_issue_id=R1.issue_id, parent_key="")
+    assert plan([of_issue], held, 1).ask == (of_issue,)
+
+
+def test_a_follow_up_on_a_fact_its_attribute_does_not_need_is_assumed() -> None:
+    # Review finding B2, fix 3 applied to follow-ups: a follow-up that names an attribute is
+    # held to what that attribute's criteria need, as a verdict's question is. A fact of no
+    # named kind (OTHER) is never assumed by that filter (review finding N1), and an
+    # attribute whose needs the bank does not record (needs None) is not held to it.
+    # A2's verdict is held to what the inputs list for it, who approves it (18 November 2026).
+    units = [Unit("A1", "A1", "The change is approved.", needs=("APPROVER",)),
+             Unit("A2", "A2", "A tailored attribute.", support=("APPROVER",))]  # fmt: skip
+    follow_ups = [
+        {**_question("Where it is recorded", "RECORD"), "parent": "W1", "attribute": "A1"},
+        {**_question("Something else", "OTHER"), "parent": "W1", "attribute": "A1"},
+        {**_question("Who tests", "PERFORMER"), "parent": "W1", "attribute": "A2"},
+    ]
+    answer = _answer(
+        verdicts=[{"attribute": "A1", "verdict": "ESTABLISHED", "rests_on": ["W1"]},
+                  {"attribute": "A2", "verdict": "ESTABLISHED", "rests_on": ["W1"]}],
+        follow_ups=follow_ups,
+    )  # fmt: skip
+    checked = check(answer, units, PARENTS, 1, strict=True)
+    assert [(item.code, item.fact, item.assume_only) for item in checked.asked] == [
+        ("A1", "RECORD", True), ("A1", "OTHER", False), ("A2", "PERFORMER", False),
+    ]  # fmt: skip
+    assert any("RECORD of A1" in note for note in checked.dropped)
+
+
+def test_a_verdict_question_on_a_fact_of_no_named_kind_is_never_assumed_by_the_needs() -> None:
+    # Review finding N1: OTHER is in no needs set, so the filter assumed every OTHER question.
+    units = [Unit("A1", "A1", "The change is approved.", needs=("APPROVER",))]
+    answer = _answer(verdicts=[
+        {"attribute": "A1", "verdict": "NOT_ESTABLISHED", "rests_on": [],
+         "question": _question("Something else", "OTHER")},
+    ])  # fmt: skip
+    [item] = check(answer, units, PARENTS, 1, strict=True).asked
+    assert item.fact == "OTHER" and not item.assume_only
+
+
+def test_a_question_on_a_fact_the_criteria_do_not_need_is_assumed() -> None:
+    # Product owner, 18 November 2026 ("Record as assumption"), seen on ITGC-AC-03: A6
+    # (ac03-investigated needs only EXCEPTION) was asked where each investigation is recorded
+    # (RECORD). A NOT_ESTABLISHED question whose fact its attribute's criteria do not need is an
+    # assumption on the attribute, never a question; its verdict is kept.
+    units = [Unit("A1", "A1", "The change is approved.", needs=("APPROVER",)),
+             Unit("A2", "A2", "The change is tested.", needs=())]  # fmt: skip
+    record = _question("Where the record is kept", "RECORD")
+    answer = _answer(verdicts=[
+        {"attribute": "A1", "verdict": "NOT_ESTABLISHED", "rests_on": [], "question": record},
+        {"attribute": "A2", "verdict": "NOT_ESTABLISHED", "rests_on": [],
+         "question": _question("Who tests", "PERFORMER")},
+    ])  # fmt: skip
+    for strict in (True, False):
+        checked = check(answer, units, PARENTS, 1, strict=strict)
+        assert [(item.code, item.fact, item.assume_only) for item in checked.asked] == [
+            ("A1", "RECORD", True), ("A2", "PERFORMER", True),
+        ]  # fmt: skip
+        assert [verdict["verdict"] for verdict in checked.verdicts] == ["NOT_ESTABLISHED"] * 2
+        assert any("criteria do not need" in note for note in checked.dropped)
+        planned = plan(checked.asked, set(), 1)
+        assert planned.ask == () and len(planned.assume) == 2
+        assert review._assumption_of(planned.assume[0]).asks_fact == "RECORD"
+    # A fact the criteria need is asked; a unit whose needs are not known is not held to them.
+    needed = check(_answer(), [Unit("A1", "A1", "x", needs=("PERFORMER",))], PARENTS, 1, True)
+    assert [item.assume_only for item in needed.asked] == [False]
+    unknown = check(_answer(), [Unit("A1", "A1", "x")], PARENTS, 1, True)
+    assert [item.assume_only for item in unknown.asked] == [False]
+
+
+def test_the_narrative_says_what_the_answers_establish_never_the_reviews_own_process() -> None:
+    # Rewritten 19 November 2026 (screenshot pass of q_ui3), narrowed the same day. Old:
+    # told() replaced "These are asked now." with the code's own closing sentence ("No other
+    # question is needed before the attributes are drafted."), which then stood while a
+    # challenged point was open. First fix: any sentence with words such as "reference",
+    # "proceed" or "correction" was left out, which also dropped ordinary control facts. New:
+    # only what is unambiguously the review's own is left out, a cited ref of its inputs (W3)
+    # or a closing sentence the code or prompt used to emit; each is counted for the audit.
+    narrative = (
+        "The answers establish that the review covers every account. The reviewer records a "
+        "reference to the ticket. Requests proceed only after approval. The correction is "
+        "approved by the IT manager. W3 shows the approver is the CAB chair. They do not yet "
+        "establish who reviews the application owner's own access, which attribute A2 depends "
+        "on. These are asked now. No other question is needed before the attributes are drafted."
+    )
+    kept, dropped = review.narrative_kept(narrative)
+    assert kept == (
+        "The answers establish that the review covers every account. The reviewer records a "
+        "reference to the ticket. Requests proceed only after approval. The correction is "
+        "approved by the IT manager. They do not yet establish who reviews the application "
+        "owner's own access, which attribute A2 depends on."
+    )
+    assert dropped == ("REF", "CLOSING", "CLOSING")
+    checked = check(_answer(narrative=narrative), UNITS, PARENTS, 1, strict=True)
+    assert checked.narrative == kept and checked.narrative_dropped == dropped
+    # Only the review's own sentences: refused once, as an empty review.
+    with pytest.raises(ValueError, match="describe only how the control runs"):
+        check(_answer(narrative="These are asked now."), UNITS, PARENTS, 1, strict=True)
+
+
 def test_what_a_later_read_still_finds_not_established_on_a_key_asked_is_assumed() -> None:
     # Finding (loop): "What the second read still finds not established on a key already
     # asked is dropped, not assumed". Old: counted as repeated and dropped. New: assumed.
@@ -511,10 +785,14 @@ def test_what_a_later_read_still_finds_not_established_on_a_key_asked_is_assumed
     for round_, after in ((2, False), (1, True), (1, False)):
         planned = plan([_asked("PERFORMER", 0)], asked_before, round_, after)
         assert planned.ask == () and [item.still_open for item in planned.assume] == [True]
-    # One already assumed is not assumed again.
+    # One already assumed is not assumed again on its key. Rewritten 18 November 2026
+    # (owner-approved F2). Old: it was dropped, counted as repeated, recorded nowhere. New: it
+    # is assumed by its matter, so record() keeps it visible, or says in the audit trail which
+    # assumption already holds that matter.
     assumed = {key_of("A1", "PERFORMER", None, ""): review.Holder("ASSUMED")}
     planned = plan([_asked("PERFORMER", 0)], assumed, 2)
-    assert planned.assume == () and planned.repeated == 1
+    assert planned.repeated == 1 and [item.by_matter for item in planned.assume] == [True]
+    assert review._assumption_of(planned.assume[0]).asks_fact is None
     # The assumption of such a matter is recorded although its matter was asked.
     [item] = plan([_asked("PERFORMER", 0)], asked_before, 2).assume
     draft = review._assumption_of(item)
@@ -541,7 +819,14 @@ def test_a_question_left_as_not_known_is_never_the_parent_of_a_follow_up() -> No
     follow = [{**_question("Who at the vendor"), "parent": "N1", "attribute": "A1"}]
     checked = check(_answer(follow_ups=follow), UNITS, PARENTS, 2, strict=True)
     assert [item for item in checked.asked if item.follow_up] == []
-    assert checked.dropped == ("follow_ups[0]: names no answer given",)
+    # Rewritten 18 November 2026 (owner-approved F2). Old: dropped with a note only. New: it
+    # is never asked, and kept as an assumption by its matter, with its note.
+    assert [note for note in checked.dropped if note.startswith("follow_ups")] == [
+        "follow_ups[0]: names no answer given, so it is assumed"
+    ]
+    assert [(i.topic, i.assume_only, i.by_matter) for i in checked.asked if i.by_matter] == [
+        ("Who at the vendor", True, True)
+    ]
 
 
 def test_the_bank_says_what_an_attribute_needs_and_what_is_met_elsewhere() -> None:
@@ -901,7 +1186,11 @@ def test_a_read_due_that_nothing_could_start_ends_failed_and_proceed_takes_it() 
     assert "queue(cursor, project_id, control_id, round_" in source
     assert "end_pending(cursor, control_id, NOT_STARTED_SENTENCE)" in source
     assert review.NOT_STARTED_SENTENCE.endswith(".")
-    assert 'if not (state.latest == "FAILED" or state.stale):' in inspect.getsource(review.proceed)
+    # Since 18 November 2026 (owner decision "Completion waits for a person") proceed also
+    # takes a read held on attributes not reviewed (`holding`); a failed read as before.
+    assert 'if not (state.latest == "FAILED" or state.stale or holding):' in inspect.getsource(
+        review.proceed
+    )
     assert "fail_if_unqueued(connection, project_id, control_id)" in inspect.getsource(
         review.follow
     )

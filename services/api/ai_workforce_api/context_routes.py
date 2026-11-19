@@ -147,8 +147,20 @@ class ContextBody(BaseModel):
     # The question pass, since B1k the IT audit specialist's review of the questions asked
     # (understanding_review.pass_state): WAITING while what it reads is not in; CHECKING while
     # a read waits or works; DONE once read or once the understanding is completed; FAILED
-    # when the last read could not be used (the page offers Run again and Proceed without it).
+    # when the last read could not be used (the page offers Run again and Proceed without it);
+    # HELD when the last read left attributes not reviewed (owner decision, 18 November 2026:
+    # the page offers Run again, while review_held.run_again, and Proceed without it, with a
+    # reason; the understanding completes only after one of them).
     question_pass: understanding_once.QuestionPass = "WAITING"
+    # While question_pass is HELD: the units not reviewed and whether a run again is left;
+    # null otherwise (understanding_review.held_body).
+    review_held: understanding_review.ReviewHeldBody | None = None
+    # Proceed without it takes a reason now: a read before completion left attributes not
+    # reviewed (owner decision, 18 November 2026), held or since failed.
+    review_reason_needed: bool = False
+    # After completion by a person's proceed without the review: who, when, the reason they
+    # recorded and the attributes not reviewed (understanding_review.proceeded); null otherwise.
+    review_proceeded: understanding_review.ProceededBody | None = None
     # The review of the control's questions the page shows (understanding_review.body): the
     # latest read before completion; once completed the latest READY one, or null.
     review: understanding_review.ReviewBody | None = None
@@ -671,15 +683,42 @@ def register_control_context(
 
     @app.post(f"{control}/understanding/review/proceed")
     def review_proceed(
-        organization_id: UUID, project_id: UUID, control_id: UUID, request: Request
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        request: Request,
+        body: understanding_review.ProceedBody | None = None,
     ) -> ContextBody:
-        """Proceed without a review that could not be used: the understanding completes by
-        the rules, and the attributes follow it."""
+        """Proceed without a review that could not be used, or past attributes it left not
+        reviewed with the person's reason (owner decision, 18 November 2026): the
+        understanding completes, and the attributes follow it."""
+        reason = "" if body is None else body.reason
 
         def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
             _allowed(c, p, organization_id, project_id, control_id)
-            understanding_review.proceed(c, project_id, control_id, p.id)
+            understanding_review.proceed(c, project_id, control_id, p.id, reason)
             changed(c, project_id, control_id, p.id)
+            return _body(c, project_id, control_id)
+
+        return run(request, work)
+
+    @app.post(f"{control}/understanding/review/challenge")
+    def review_challenge(
+        organization_id: UUID,
+        project_id: UUID,
+        control_id: UUID,
+        request: Request,
+        body: understanding_review.ChallengeBody,
+    ) -> ContextBody:
+        """A person challenges what a point the review found established rests on (owner
+        decision, 18 November 2026, "Show the support"): asked again as a question in Control
+        Understanding, once; completion waits for its answer."""
+
+        def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
+            _allowed(c, p, organization_id, project_id, control_id)
+            understanding_review.challenge(
+                c, model(), organization_id, project_id, control_id, p.id, body
+            )
             return _body(c, project_id, control_id)
 
         return run(request, work)
@@ -1667,7 +1706,9 @@ def _body(
     agent_notes = notes_for(connection, control_id)
     revision_pending, criteria_pending = pending_criteria(connection, control_id)
     _by_code, for_set = attribute_assumptions.shown(connection, control_id)
-    question_pass, review_due = understanding_review.page_state(connection, project_id, control_id)
+    question_pass, review_due, review_held, reason_needed = understanding_review.page_state(
+        connection, project_id, control_id
+    )
     return ContextBody(
         control_id=control_id,
         classifications=current,
@@ -1696,6 +1737,9 @@ def _body(
         ),
         understanding_completed_at=understanding_once.completed_at(connection, control_id),
         question_pass=question_pass,
+        review_held=review_held,
+        review_reason_needed=reason_needed,
+        review_proceeded=understanding_review.proceeded(connection, control_id),
         review=understanding_review.body(connection, control_id),
         review_request=understanding_review.request_body(connection, control_id),
         review_not_run=understanding_review.not_run(connection, control_id),

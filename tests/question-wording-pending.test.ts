@@ -113,9 +113,11 @@ describe("an agent's question the reviewer agent is still checking", () => {
         ?.questionsChecking,
       0,
     );
+    // Reworded 18 November 2026 (design review). Old: "It appears here once it reads
+    // clearly." New: when the check is complete.
     assert.equal(
       checkingLine(1),
-      "The reviewer agent is checking the wording of a new question. It appears here once it reads clearly.",
+      "The reviewer agent is checking the wording of a new question. It will appear here when the check is complete.",
     );
     assert.match(
       checkingLine(2),
@@ -125,7 +127,10 @@ describe("an agent's question the reviewer agent is still checking", () => {
       new URL("../apps/web/src/understanding-review.tsx", import.meta.url),
       "utf8",
     );
-    assert.match(view, /checkingNow > 0 \?/);
+    // 18 November 2026 (design review): the line is said in the header's live region, and
+    // shown below the progress until the understanding is complete (then in its lede).
+    assert.match(view, /checkingNow > 0\s*\?\s*checkingLine\(checkingNow\)/);
+    assert.match(view, /checkingNow > 0 && !complete \?/);
     assert.match(
       view,
       /window\.setTimeout\(\(\) => \{\s*void read\(\);\s*\}, 4000\)/,

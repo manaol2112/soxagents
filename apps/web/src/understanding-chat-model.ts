@@ -6,9 +6,16 @@
  * questions, the same draft, the same saves; only the way they are asked changes.
  */
 
-import type { Draft, Prefill, Screen } from "./control-setup-model.ts";
+import { type ContextIssue, parseIssue } from "./control-context-model.ts";
+import type {
+  Draft,
+  Prefill,
+  Screen,
+  SetupIssue,
+} from "./control-setup-model.ts";
 import { ONE_SCREEN } from "./control-setup-model.ts";
 import { failureNoteOf, plainNote } from "./run-failure.ts";
+import { dayWords } from "./understanding-once-model.ts";
 
 export const AGENT_NAME = "Engagement planner";
 
@@ -472,6 +479,10 @@ export type Need = {
   multiple: boolean;
   /** A walkthrough question's own facts (kind WALKTHROUGH only). */
   walkthrough?: Walkthrough;
+  /** The agents' question itself (kind QUESTION only; 18 November 2026): its id, version,
+   * reviewed interview, statement and alternatives, read with the need, so the screen asks it
+   * from this one body. Absent on a body from before, or when the API leaves it out. */
+  issue?: ContextIssue;
 };
 
 /** A walkthrough topic, as the API names it (SCOPE, APPROVAL, ...). The order topics are
@@ -535,8 +546,17 @@ export type Walkthrough = {
 export type NarrativeTopic = {
   topic: WalkthroughTopic;
   label: string;
-  parts: Array<{ text: string; key: string | null }>;
+  /** `answeredAt`: a later person's answer on the same fact told in place of the
+   * walkthrough's sentence (understanding_chat.later_answers); absent otherwise. */
+  parts: Array<{ text: string; key: string | null; answeredAt?: string }>;
 };
+
+/** A later answer as the section tells it: "Answered Nov 19: …" (design review, 19 November
+ * 2026, S5), or the answer alone where its time is not given. */
+export function laterLine(text: string, at: string, timeZone?: string): string {
+  const day = dayWords(at, timeZone);
+  return day === "" ? text : `Answered ${day}: ${text}`;
+}
 
 /** The same control on another system whose answers the review can start from (product
  * owner, 11 November 2026), and how many of this control's open questions it answers. */
@@ -837,6 +857,12 @@ export function parseReview(body: unknown): Review | null {
       required: need.required !== false,
       multiple: kind === "ANSWER" && need.multiple === true,
       ...(walkthrough === undefined ? {} : { walkthrough }),
+      ...(kind === "QUESTION" &&
+      typeof need.issue === "object" &&
+      need.issue !== null &&
+      !Array.isArray(need.issue)
+        ? { issue: parseIssue(need.issue as Record<string, unknown>) }
+        : {}),
     });
   }
   const statement: Review["statement"] = [];
@@ -960,7 +986,17 @@ function readNarrative(raw: unknown): NarrativeTopic[] {
       ) {
         continue;
       }
-      parts.push({ text: part.text, key });
+      const answeredAt =
+        key === null &&
+        typeof part.answered_at === "string" &&
+        part.answered_at !== ""
+          ? part.answered_at
+          : undefined;
+      parts.push(
+        answeredAt === undefined
+          ? { text: part.text, key }
+          : { text: part.text, key, answeredAt },
+      );
     }
     if (parts.length === 0) {
       continue;
@@ -1251,20 +1287,39 @@ export function courseWhere(facts: {
   at: number;
   open: readonly string[];
   settled: boolean;
+  /** The steps that are walkthrough topics: a course of topics only says "Topic". */
+  topics?: readonly string[];
+  /** The header's own count ("x of y confirmed"), said beside the place in the course so
+   * the two read as one (screenshot pass, 19 November 2026: "0 of 9 confirmed" against
+   * "Step 1 of 6"). */
+  confirmed?: { done: number; total: number };
 }): string | null {
   const step = facts.plan[facts.at];
   if (step !== undefined && facts.changing.includes(step)) {
     return "Changing an answer on record";
   }
+  const counted = facts.settled
+    ? facts.open
+    : facts.plan.filter((key) => !facts.changing.includes(key));
+  const unit =
+    counted.length > 0 &&
+    counted.every((key) => (facts.topics ?? []).includes(key))
+      ? "Topic"
+      : "Step";
+  const of = facts.confirmed;
+  const withCount = (place: string) =>
+    of === undefined || facts.settled || of.total === 0
+      ? place
+      : `${place} · ${of.done} of ${of.total} confirmed`;
   if (facts.settled) {
     const index = step === undefined ? -1 : facts.open.indexOf(step);
     return facts.open.length > 1 && index >= 0
-      ? `Step ${index + 1} of ${facts.open.length}`
+      ? `${unit} ${index + 1} of ${facts.open.length}`
       : null;
   }
   const total = facts.plan.length - facts.changing.length;
   return facts.plan.length > 1
-    ? `Step ${Math.min(facts.at + 1, total)} of ${total}`
+    ? withCount(`${unit} ${Math.min(facts.at + 1, total)} of ${total}`)
     : null;
 }
 
@@ -1324,7 +1379,7 @@ export function openQuestionsLine(
     optional > 0 && !all
       ? `, ${optional === 1 ? "1 of them" : `${optional} of them`} optional`
       : "";
-  return `${open} ${noun}${raisedSince ? " raised since" : ""} ${one ? "is" : "are"} open ${where}${some}; ${one ? "it does" : "they do"} not hold the attributes.`;
+  return `${open} ${noun}${raisedSince ? " raised since" : ""} ${one ? "is" : "are"} open ${where}${some}; ${one ? "it does" : "they do"} not affect the attributes.`;
 }
 
 /** The header's line once the gates read understood, or the understanding is complete
@@ -1337,6 +1392,9 @@ export function understoodLede(facts: {
   /** How many of the open questions are optional. */
   optional?: number;
   statusText: string;
+  /** New questions the reviewer agent is still checking: until they appear, not every
+   * point is on record (design review, 18 November 2026). */
+  checking?: number;
 }): string {
   const onRecord =
     "Every point the evidence and the attributes rely on is on record.";
@@ -1347,24 +1405,35 @@ export function understoodLede(facts: {
           facts.optional ?? 0,
           facts.completeLine !== null && !facts.done,
         )
-      : facts.done
-        ? onRecord
-        : facts.statusText;
+      : (facts.checking ?? 0) > 0
+        ? checkingLine(facts.checking ?? 0)
+        : facts.done
+          ? onRecord
+          : facts.statusText;
   return facts.completeLine === null ? rest : `${facts.completeLine}. ${rest}`;
 }
 
 /** The chip on the understanding's fold (shown at narrow widths): the header's count while
- * the header counts, the open questions while any is open, and "Confirmed" only when none
- * is. */
+ * the header counts, the open questions while any is open, the review's hold while it waits
+ * on a person (design review, 19 November 2026: "Confirmed" stood under "The review is not
+ * complete"), and "Confirmed" only when none is. Once complete, the lede gives the date. */
 export function foldChip(facts: {
   progress: { done: number; total: number };
   done: boolean;
   complete: boolean;
   open: number;
+  /** The end of the course: "held" (attributes not reviewed) or "failed" (could not run). */
+  end?: string;
 }): string {
   const { progress } = facts;
   if (countsOpen(facts) && facts.open > 0) {
     return `${facts.open} open`;
+  }
+  if (!facts.complete && facts.end === "held") {
+    return "Held";
+  }
+  if (!facts.complete && facts.end === "failed") {
+    return "Review failed";
   }
   if (progress.total > 0) {
     return `${progress.done} of ${progress.total}`;
@@ -2055,6 +2124,51 @@ export function topicDone(review: Review, topic: WalkthroughTopic): boolean {
   );
 }
 
+/** A topic's required questions not on record, as the header's "x of y confirmed" counts them
+ * (topicLeft counts a step's shown ones against its picks). */
+export function topicStillOpen(
+  review: Review,
+  topic: WalkthroughTopic,
+): number {
+  return topicQuestions(review, topic).filter(
+    (need) => need.required && need.status !== "CONFIRMED",
+  ).length;
+}
+
+/** The end of the course while only walkthrough topics hold the understanding (design
+ * review, 19 November 2026, O1: "9 points are still open" and "9 points left" over six
+ * topic rows): the heading counts the topics, the line under it the questions, and each
+ * row its own. Null while any other step holds it, which the general end says. */
+export function heldTopicsEnd(
+  review: Review,
+  steps: readonly string[],
+): { title: string; text: string; left: Record<string, number> } | null {
+  const topics = steps.map((step) => stepTopic(step));
+  if (topics.length === 0) {
+    return null;
+  }
+  const left: Record<string, number> = {};
+  let questions = 0;
+  for (const [at, topic] of topics.entries()) {
+    const step = steps[at];
+    if (topic === null || step === undefined) {
+      return null;
+    }
+    left[step] = topicStillOpen(review, topic);
+    questions += left[step] ?? 0;
+  }
+  const n = topics.length;
+  return {
+    title: `${n} walkthrough ${n === 1 ? "topic is" : "topics are"} open`,
+    text: `${questions} ${questions === 1 ? "question" : "questions"} left before ${
+      review.evidence.ready
+        ? "the attributes can be finalized"
+        : "the evidence can be requested"
+    }.`,
+    left,
+  };
+}
+
 /** The questions a topic's step shows, in the server's order (an optional question stays
  * where the server put it): those not on record, and any on record the person chose to
  * change (`reopened`). An answer on record is never asked again unless the person asks to
@@ -2067,6 +2181,27 @@ export function topicAsks(
   return topicQuestions(review, topic).filter(
     (need) => need.status !== "CONFIRMED" || reopened.includes(need.key),
   );
+}
+
+/** The questions a topic's step shows: its open ones (topicAsks); and where none is open (a
+ * topic answered, then come back to with Back), every one of its questions with its answer
+ * on record, to change or to continue past (owner bug, 19 November 2026: Back landed on
+ * "Every question on approval is on record." with nothing to change). Never an empty step
+ * in the Back and Continue path. */
+export function topicStepAsks(
+  review: Review,
+  topic: WalkthroughTopic,
+  reopened: readonly string[] = [],
+): { asked: Need[]; onRecord: boolean } {
+  const open = topicAsks(review, topic, reopened);
+  return open.length > 0
+    ? { asked: open, onRecord: false }
+    : { asked: topicQuestions(review, topic), onRecord: true };
+}
+
+/** The line under a topic step that shows its answers on record. */
+export function topicOnRecordHint(count: number): string {
+  return `${count} ${count === 1 ? "answer is" : "answers are"} on record. Change any here, or continue.`;
 }
 
 // "Other" (product owner, 11 November 2026: "The questions in control understanding do not
@@ -2656,11 +2791,72 @@ export function toggleMultiple(
 /** Why a pick on a question that takes more than one answer cannot be saved, in words that
  * say how to recover; "" when nothing holds it back. Nothing chosen is not a problem here:
  * the save waits for a choice. */
+/**
+ * The agents' open questions as the review's needs carry them (18 November 2026), for the
+ * planner's conversation: the same records the draft to review asks from, read at the same
+ * time. One read earlier in the visit and gone from this one (answered, or closed) stays as
+ * settled, so the summary still shows what was answered here but nothing asks it again.
+ */
+export function questionIssues(
+  review: Pick<Review, "needs">,
+  before: readonly SetupIssue[] = [],
+): SetupIssue[] {
+  const now = review.needs.flatMap((need) =>
+    need.kind === "QUESTION" &&
+    need.issue !== undefined &&
+    need.issue.id === need.key
+      ? [need.issue]
+      : [],
+  );
+  const read = new Set(now.map((issue) => issue.id));
+  return [
+    ...now,
+    ...before
+      .filter((issue) => !read.has(issue.id))
+      .map((issue) =>
+        issue.status === "OPEN" ? { ...issue, status: "RESOLVED" } : issue,
+      ),
+  ];
+}
+
+/** What the planner's conversation says once nothing is left to answer in it: "Every point
+ * is on record." only when the review was read and has no question left to ask, none being
+ * prepared either (18 November 2026). */
+export function chatEnd(
+  finished: boolean,
+  asked: { checking: number } | null,
+): string {
+  if (finished) {
+    return "Recorded. The understanding is confirmed.";
+  }
+  if (asked === null) {
+    return "Reading the points on record…";
+  }
+  if (asked.checking > 0) {
+    return checkingLine(asked.checking);
+  }
+  return "Every point is on record.";
+}
+
+/** What the planner's conversation says when the review could not be read (review finding
+ * N3, 18 November 2026), beside Try again. */
+export const REVIEW_UNREAD = "The points on record could not be read.";
+
+/** The review as the route answered it: null when the route failed (`ok` false), answered
+ * with no review (its own status not 200, so no body), or sent a body that is not the
+ * review. Pure. */
+export function readReview(ok: boolean, answer: unknown): Review | null {
+  if (!ok || typeof answer !== "object" || answer === null) {
+    return null;
+  }
+  return parseReview((answer as { body?: unknown }).body ?? null);
+}
+
 /** What the screen says while the reviewer agent checks the agents' new questions. */
 export function checkingLine(count: number): string {
   return count === 1
-    ? "The reviewer agent is checking the wording of a new question. It appears here once it reads clearly."
-    : `The reviewer agent is checking the wording of ${count} new questions. They appear here once they read clearly.`;
+    ? "The reviewer agent is checking the wording of a new question. It will appear here when the check is complete."
+    : `The reviewer agent is checking the wording of ${count} new questions. They will appear here when the check is complete.`;
 }
 
 export function multipleProblem(need: Need, pick: MultiplePick): string {

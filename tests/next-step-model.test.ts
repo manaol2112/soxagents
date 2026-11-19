@@ -398,3 +398,142 @@ describe("the next-step card while the planner drafts the test plan", () => {
     assert.doesNotMatch(scope.title, /^Approve/);
   });
 });
+
+describe("the next step while the review waits on a person's choice", () => {
+  it("offers that choice, never 'Start: Control Understanding'", () => {
+    // Re-shoot r9, 19 November 2026 (H1, H2, F1): the card's title and line were the
+    // review's, but its action still read "Start: Control Understanding".
+    const choice =
+      "The review is held on attribute B: run it again, or proceed without it and record the reason.";
+    for (const questionPass of ["HELD", "FAILED"] as const) {
+      const input = fresh({
+        setup: understood,
+        understanding: { completedAt: null, questionPass, choice },
+      });
+      const next = nextStep(workflowOf(input), input, about);
+      assert.equal(next.mode, "next");
+      if (next.mode !== "next") {
+        return;
+      }
+      const [action] = next.actions;
+      assert.ok(action !== undefined);
+      assert.equal(action.key, "understanding");
+      assert.equal(action.detail, choice);
+      assert.equal(action.label, "Run again or proceed");
+      assert.equal(action.anchor, "ur-review-choice");
+      assert.doesNotMatch(action.label, /^Start:/);
+    }
+  });
+});
+
+describe("the next step's card", () => {
+  it("opens the place its action names, and the review's choice carries that place", async () => {
+    const { readFileSync } = await import("node:fs");
+    const card = readFileSync(
+      new URL("../apps/web/src/next-step.tsx", import.meta.url),
+      "utf8",
+    );
+    assert.match(card, /`\$\{hrefs\[action\.key\]\}#\$\{action\.anchor\}`/);
+    const failed = readFileSync(
+      new URL("../apps/web/src/understanding-specialist.tsx", import.meta.url),
+      "utf8",
+    );
+    assert.match(
+      failed,
+      /className="ur-end ur-review-failed"\s*id=\{REVIEW_CHOICE_ANCHOR\}/,
+    );
+  });
+});
+
+describe("the next step when the review can only proceed", () => {
+  it("offers the end card's own action", async () => {
+    // Re-shoot r10, 19 November 2026 (H2): after two reads the end card offers only
+    // Proceed, and the next step said "Run again or proceed".
+    const words = await import(
+      "../apps/web/src/understanding-specialist-model.ts"
+    );
+    assert.equal(words.runsAgain(null), true);
+    assert.equal(words.runsAgain({ runAgain: false }), false);
+    assert.equal(words.reviewChoiceAction(false), "Proceed without it");
+    assert.equal(words.reviewChoiceAction(false), words.PROCEED_WITHOUT);
+    assert.equal(words.reviewChoiceAction(true), "Run again or proceed");
+    const input = fresh({
+      setup: understood,
+      understanding: {
+        completedAt: null,
+        questionPass: "HELD",
+        choice:
+          "The review is held on attribute B. It has run twice and cannot run again: proceed without it and record the reason.",
+        choiceAction: words.reviewChoiceAction(false),
+      },
+    });
+    const next = nextStep(workflowOf(input), input, about);
+    assert.ok(next.mode === "next");
+    assert.equal(next.actions[0]?.label, "Proceed without it");
+  });
+
+  it("lands on the end card's first useful control, its actions in view", async () => {
+    const { readFileSync } = await import("node:fs");
+    const read = (path: string) =>
+      readFileSync(new URL(`../apps/web/src/${path}`, import.meta.url), "utf8");
+    const panel = read("control-workflow.tsx");
+    // Rewritten (re-shoot r11, 19 November 2026: in the browser the end card renders about a
+    // second after the panel opens, so a check on open found nothing and focus stayed on the
+    // title). Old: one check as the panel opened. New: the title first, then the panel
+    // watches until the place renders (watchArrival), and focuses its marked control while
+    // focus is still on the title, the link just clicked, or nowhere. Rewritten again (the
+    // same day): also with the panel already open, on a link to a place on the page or a
+    // change of the address's place.
+    assert.match(
+      panel,
+      /useEffect\(\(\) => \{\s*heading\.current\?\.focus\(\);[\s\S]{0,400}start\(window\.location\.hash\.slice\(1\), null\);/,
+    );
+    assert.match(panel, /window\.addEventListener\("hashchange", onHash\);/);
+    assert.match(panel, /document\.addEventListener\("click", onClick\);/);
+    assert.match(
+      panel,
+      /if \(to\.hash\.length > 1 && to\.pathname === window\.location\.pathname\) \{\s*start\(decodeURIComponent\(to\.hash\.slice\(1\)\), link\);/,
+    );
+    assert.match(panel, /watchArrival\(id, root, \[heading\.current, from\]\)/);
+    assert.match(
+      panel,
+      /if \(at === null \|\| at === document\.body \|\| from\.includes\(at\)\) \{\s*control\.focus\(\{ preventScroll: true \}\);/,
+    );
+    assert.match(
+      panel,
+      /querySelector\("\[data-arrive-view\]"\) \?\? place\)\.scrollIntoView\(\{\s*block: "end",/,
+    );
+    assert.match(
+      panel,
+      /const timer = window\.setTimeout\(\(\) => stop\(\), ARRIVE_MS\);/,
+    );
+    // One scroll owner: the router does not scroll to the place.
+    const nextCard = read("next-step.tsx");
+    assert.match(nextCard, /scroll=\{false\}/);
+    const css = readFileSync(
+      new URL("../apps/web/app/control-setup.css", import.meta.url),
+      "utf8",
+    );
+    assert.match(
+      css,
+      /\.ur-review-failed \[data-arrive-view\] \{\s*scroll-margin-bottom: 24px;/,
+    );
+    const card = read("understanding-specialist.tsx");
+    // The reason box when proceeding needs one; else Run again; else Proceed.
+    assert.match(
+      card,
+      /value=\{reason\}\s*disabled=\{sending !== null \|\| done\}\s*data-arrive=""/,
+    );
+    assert.match(
+      card,
+      /data-arrive=\{!asksReason && !runAgain \? "" : undefined\}/,
+    );
+    assert.match(card, /data-arrive=\{asksReason \? undefined : ""\}/);
+    assert.match(card, /<div className="ur-foot-actions" data-arrive-view="">/);
+    assert.match(card, /const runAgain = runsAgain\(held\);/);
+    assert.match(
+      read("controls-view.tsx"),
+      /choiceAction: reviewChoiceAction\(\s*runsAgain\(/,
+    );
+  });
+});

@@ -58,6 +58,7 @@ from ai_workforce_api.models import ModelConfig, ModelRaw, ModelRequest
 from ai_workforce_api.pbc_drafting import load_context
 from ai_workforce_api.phase_release import attribute_waits, understanding_waits
 from ai_workforce_api.understanding_authority import facts
+from ai_workforce_api.understanding_review import opens_follow_up
 
 __all__ = ["migrated"]
 
@@ -89,30 +90,62 @@ def _asking(
     given: dict[str, Any], topic: str, fact: str = "RECORD", text: str = "",
     follow_ups: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:  # fmt: skip
-    """The IT audit specialist's answer (B1k): the first unit not established, with one
-    question on `topic`; every other unit established."""
+    """The IT audit specialist's answer (B1k): one unit not established, with one question on
+    `topic`; every other unit established.
+
+    The unit is the first whose criteria need `fact` and that the walkthrough leaves open on
+    it: no answer of that kind of fact stands there, or one that opens a follow-up does
+    (else the first unit). Changed 18 November 2026: a question on a fact its attribute's
+    criteria do not need is assumed, and one a standing walkthrough answer settles is not
+    asked (product owner, ITGC-AC-03). Old: always the first unit, which on ITGC-AC-01
+    (ac01-request, everything met elsewhere) is now assumed, not asked."""
     units = [str(unit["key"]) for unit in given["units"]]
+
+    def open_on(item: dict[str, Any]) -> bool:
+        answers = [q["answer"] for q in item["questions"] if q["fact"] == fact and q["answer"]]
+        return not answers or any(opens_follow_up("CHOICE", answer) for answer in answers)
+
+    at = next(
+        (
+            index
+            for index, unit in enumerate(units)
+            for item in given.get("attributes", [])
+            if item["unit"] == unit and fact in item["needs"] and open_on(item)
+        ),
+        0,
+    )
     answer = understanding_review.established(
         given,
         f"The questions answered establish how the control runs. They do not yet establish "
-        f"{topic.lower()}, on which {units[0]} depends. This is asked now.",
+        f"{topic.lower()}, on which {units[at]} depends. This is asked now.",
     )
     answer["marked"] = [topic.lower()]
-    answer["verdicts"][0] = {
-        "attribute": units[0],
+    answer["verdicts"][at] = {
+        "attribute": units[at],
         "verdict": "NOT_ESTABLISHED",
         "rests_on": [],
         "question": {
             "topic": topic,
             "text": text or f"{topic}?",
             "fact": fact,
-            "blocks": f"The criteria of {units[0]} cannot name the record without it.",
+            "blocks": f"The criteria of {units[at]} cannot name the record without it.",
             "suggested": "The ServiceNow ticket records it.",
             "options": ["The ServiceNow ticket records it.", "A spreadsheet records it."],
         },
     }
     answer["follow_ups"] = follow_ups or []
     return answer
+
+
+def _left_open(team: dict[str, Any], control: str, client: TestClient, key: str, text: str) -> None:
+    """A walkthrough answer in the person's own words ("Other: ..."), which leaves its fact
+    open for the specialist's follow-up (18 November 2026: an answer from the options settles
+    it, and the review never asks it again)."""
+    saved = client.put(
+        f"{_path(team, control)}/walkthrough-answers",
+        json={"answers": {key: {"value": f"Other: {text}", "not_applicable": False}}},
+    )
+    assert saved.status_code == 200, saved.text
 
 
 def _context(team: dict[str, Any], control: str, client: TestClient | None = None) -> Any:
@@ -215,6 +248,14 @@ def test_the_question_pass_asks_in_one_go_and_the_understanding_then_stays_compl
     body = _context(team, control, client)
     assert (body["question_pass"], body["understanding_completed_at"]) == ("WAITING", None)
     _answer_required(migrated, team, control, client)
+    # Re-based 18 November 2026 (product owner, "Yes/No always settles"). Old: the
+    # walkthrough's "No" to wt-ac-change-logging (RECORD on ac01-before) left the grant
+    # record open, so the specialist's RECORD question was asked as its follow-up. New: a
+    # "No" settles it (about 10 of the bank's 47 Yes/No questions have No as the good
+    # answer, and "No opens" asked again what the answer had settled); the record is left
+    # open by the source of dates answered in the person's own words, which still opens
+    # one. What this test is about is unchanged.
+    _left_open(team, control, client, "wt-ac-change-logging-gap", "the HR system's audit trail")
     plan_id, status, stage = _plan_run(migrated, control)
     assert (status, stage) == ("PENDING", "ATTRIBUTES") and scheduler.plans == [plan_id]
     assert _context(team, control, client)["question_pass"] == "CHECKING"

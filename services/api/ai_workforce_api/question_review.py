@@ -46,8 +46,11 @@ logger = logging.getLogger(__name__)
 
 # /2 and /4 (18 November 2026, owner-approved S1): every tag-shaped token in the items and
 # the control's context is made inert (prompt_data.neutral); the wording is as before.
-WRITER_LABEL = "question-interview/2"
-REVIEWER_LABEL = "question-review/4"
+# /3 and /5 (18 November 2026, owner-approved, seen on ITGC-AC-03): both agents are given the
+# walkthrough's confirmed answers and, for a follow-up, the answer it follows, and are told
+# never to ask either again; a step that does is sent back (_repeats_answered).
+WRITER_LABEL = "question-interview/3"
+REVIEWER_LABEL = "question-review/5"
 # The first pass, then one more for what the checks sent back.
 ROUNDS = 2
 MAX_ITEMS = 12
@@ -115,8 +118,10 @@ as given with its grammar and spelling corrected.
 Facts:
 - Never add a person's name, a system, a figure, a threshold or a document title that is not in \
 the item, the control context or the sources. Name people by role.
-- Do not ask again what the control context or the client's answers already say, in any step. \
-Where they settle part of the fact, ask only the rest.
+- Do not ask again what the control context, the client's answers or the walkthrough answers \
+(control_context.walkthrough_answers) already say, in any step, in other words or as a yes-or-no \
+question. An item with follows asks what that answer leaves open: never ask again what it \
+says. Where they settle part of the fact, ask only the rest.
 
 The shape, on an unrelated control, to learn the form and not the words:
 s1 "Does anyone review the bank reconciliations?" Yes -> s2 ("A reviewer checks each bank \
@@ -140,6 +145,9 @@ Correct whatever falls short of these:
 rewritten or the step is removed. "Who" is answered by a role, "how often" by a frequency.
 - A follow-up makes sense after the answer that leads to it, and asks something that answer has \
 not already settled. A step that adds nothing is removed.
+- No step asks again, in other words or as a yes-or-no question, what the walkthrough answers \
+(control_context.walkthrough_answers) or the answer an item follows (follows) already say. Such \
+a step is removed, and the interview asks only what is left open.
 - The question is grammatical, asks one thing, and is in plain words at most \
 {MAX_QUESTION_WORDS} words long. Yes-or-no questions are welcome.
 - usual is how a well-run control of this kind operates. Where the question asks about a failure, \
@@ -255,6 +263,8 @@ class _Held:
     problems: list[str]
     # The writer's interview, for the reviewer to read; the fields it would be kept with.
     drafted: dict[str, Any] | None = None
+    # A follow-up: the question and answer it follows (18 November 2026); None otherwise.
+    follows: dict[str, str] | None = None
 
 
 def _why_problems(why: str) -> list[str]:
@@ -292,6 +302,62 @@ def _repeats_itself(steps: list[dict[str, Any]]) -> list[str]:
                         f'Step {then["key"]}: what "{later["label"]}" says repeats the sentence '
                         f'before it ("{answer["says"]}"): say only what it adds.'
                     )
+    return found
+
+
+# Words that say nothing of the matter a question asks.
+_PLAIN = frozenset(
+    {"does", "doesn't", "than", "that", "this", "these", "those", "with", "what", "which",
+     "when", "where", "there", "their", "they", "them", "have", "each", "every", "from",
+     "into", "onto", "about", "anyone", "else's"}
+)  # fmt: skip
+
+
+def _stems(text: str) -> set[str]:
+    """The matter words of a sentence, each cut to a rough stem ("reviewer's", "reviewed" and
+    "reviews" read as one), the plain words left out."""
+    found: set[str] = set()
+    for word in re.findall(r"[a-z0-9']+", text.lower()):
+        word = word.removesuffix("'s").strip("'")
+        for suffix in ("ing", "ed", "er", "es", "s"):
+            if word.endswith(suffix) and len(word) - len(suffix) >= 4:
+                word = word[: -len(suffix)]
+                break
+        if len(word) > 3 and word not in _PLAIN:
+            found.add(word)
+    return found
+
+
+def _overlaps(first: str, second: str) -> bool:
+    one, two = _stems(first), _stems(second)
+    if len(one) < 3 or len(two) < 3:
+        return False
+    return len(one & two) / min(len(one), len(two)) > REPEAT_SHARE
+
+
+def _repeats_answered(steps: list[dict[str, Any]], answered: list[dict[str, str]]) -> list[str]:
+    """A step that asks again what the walkthrough, or the answer a follow-up follows, already
+    says (seen on ITGC-AC-03, 18 November 2026: "Does someone other than the Application owner
+    review the owner's own access?" over the answer "Reviewed by someone else"): a question in
+    the same words as one answered, or a yes-or-no question about the matter the answered
+    question or its answer's sentence states. A question of who, where or when asks what an
+    answer left open, so only those words in full are judged. Pure."""
+    from ai_workforce_api.control_context import matter_key
+
+    found: list[str] = []
+    for step in steps:
+        question = str(step["question"])
+        yes_no = {answer["label"] for answer in step["answers"]} == {"Yes", "No"}
+        for item in answered:
+            said = [text for text in (item["question"], item.get("reads", "")) if text]
+            same = matter_key(question) == matter_key(item["question"])
+            if same or (yes_no and any(_overlaps(question, text) for text in said)):
+                found.append(
+                    f'Step {step["key"]} asks again what is already answered ("{item["question"]}" '
+                    f'"{item["answer"]}"): ask only what that answer leaves open, or remove the '
+                    "step."
+                )
+                break
     return found
 
 
@@ -396,7 +462,79 @@ def statement_along_usual(steps: list[dict[str, Any]]) -> tuple[str, str]:
     return " ".join(said), (basis or "TYPICAL") if said else ""
 
 
-def _open(connection: psycopg.Connection[Any], control_id: UUID) -> list[_Held]:
+def answered_walkthrough(
+    connection: psycopg.Connection[Any], control_id: UUID
+) -> list[dict[str, str]]:
+    """The walkthrough's confirmed answers that stand (walkthrough_answers.stands), in the
+    asking order: each question's key, its words, the answer, and the sentence the answer
+    reads as in the understanding (walkthrough_questions.narrate; "" when it is not
+    narrated). Not applicable is left out. What the interview agents are given, and what a
+    step must not ask again (_repeats_answered)."""
+    from ai_workforce_api.walkthrough_answers import answers_of, questions_asked, stands
+    from ai_workforce_api.walkthrough_questions import narrate
+
+    rows = answers_of(connection, control_id)
+    asked = questions_asked(connection, control_id, rows)
+    standing = [
+        item
+        for item in asked
+        if stands(rows.get(item.key), item) and not rows[item.key].not_applicable
+    ]
+    values = {item.key: rows[item.key].value for item in standing}
+    reads: dict[str, str] = {}
+    for _topic, parts in narrate(asked, values):
+        texts: list[str] = []
+        key: str | None = None
+        for text, part_key in [*parts, (" ", None)]:
+            if (text, part_key) == (" ", None):
+                if key is not None:
+                    reads[key] = "".join(texts).strip()
+                texts, key = [], None
+                continue
+            texts.append(text)
+            key = key or part_key
+    return [
+        {"key": item.key, "question": item.text, "answer": line(values[item.key], 300),
+         "reads": line(reads.get(item.key, ""), 400)}
+        for item in standing
+    ]  # fmt: skip
+
+
+def _follows(
+    connection: psycopg.Connection[Any],
+    parent_key: str,
+    parent_id: Any,
+    answered: list[dict[str, str]],
+) -> dict[str, str] | None:
+    """The question and answer a follow-up follows: a walkthrough answer (by its key) or a
+    settled question (by its id); None when it follows none, or one not settled."""
+    from ai_workforce_api.control_context import SETTLED_QUESTION_SQL, settled_answer
+
+    if parent_key:
+        found = next((item for item in answered if item["key"] == parent_key), None)
+        if found is None:
+            return None
+        return {"question": found["question"], "answer": found["answer"]}
+    if parent_id is None:
+        return None
+    row = connection.execute(
+        "SELECT i.question, i.topic, i.status, i.resolution_note FROM control_context_issues i "
+        f"WHERE i.id = %s AND {SETTLED_QUESTION_SQL}",
+        (parent_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    return {
+        "question": line(str(row[0]) or str(row[1]), 400),
+        "answer": line(settled_answer(str(row[2]), str(row[3])), 400),
+    }
+
+
+def _open(
+    connection: psycopg.Connection[Any],
+    control_id: UUID,
+    answered: list[dict[str, str]] | None = None,
+) -> list[_Held]:
     return [
         _Held(
             id=UUID(str(row[0])),
@@ -412,11 +550,12 @@ def _open(connection: psycopg.Connection[Any], control_id: UUID) -> list[_Held]:
             why=str(row[8]),
             detail=str(row[9]),
             problems=[],
+            follows=_follows(connection, str(row[10] or ""), row[11], answered or []),
         )
         for row in connection.execute(
             """
             SELECT id, version, kind, topic, question, proposal, proposal_basis, suggestions,
-                   why, detail
+                   why, detail, asks_parent_key, asks_parent_id
             FROM control_context_issues
             WHERE engagement_control_id = %s AND status = 'OPEN' AND raised_by = 'AGENT'
               AND NOT wording_reviewed
@@ -476,10 +615,21 @@ def _cleaned(item: _Item, held: _Held) -> dict[str, Any]:
     }
 
 
-def _judge(fields: dict[str, Any], held: _Held, known: str) -> list[str]:
-    """What holds the agent's interview back. The item's own words count as known."""
+def _judge(
+    fields: dict[str, Any],
+    held: _Held,
+    known: str,
+    answered: list[dict[str, str]] | None = None,
+) -> list[str]:
+    """What holds the agent's interview back. The item's own words count as known. A step
+    that asks again what the walkthrough's answers (`answered`) or the answer the item follows
+    already say is sent back (18 November 2026)."""
     steps = fields["interview"]
     problems = interview_problems(held.kind, steps, fields["why"])
+    already = [*(answered or [])]
+    if held.follows is not None:
+        already.append({**held.follows, "reads": held.follows["answer"]})
+    problems.extend(_repeats_answered(steps, already))
     pieces = [
         fields["why"],
         fields["detail"],
@@ -555,6 +705,7 @@ def _ask_agent(
                     "detail": item.detail,
                 }
             ),
+            **({"follows": item.follows} if item.follows is not None else {}),
             **({"problems": item.problems} if item.problems else {}),
         }
         for ref, item in held.items()
@@ -657,6 +808,7 @@ def _pass(
     sources: list[Source],
     known: str,
     fixes: list[str],
+    answered: list[dict[str, str]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """One agent's turn over a batch: asked, its answer checked, and what fails sent back once.
     Returns what passed, by ref; what did not stays in waiting, with its problems."""
@@ -677,7 +829,7 @@ def _pass(
                 held.problems = ["This item was not returned."]
                 continue
             fields = _cleaned(item, held)
-            held.problems = _judge(fields, held, known)
+            held.problems = _judge(fields, held, known, answered)
             if not held.problems:
                 passed[ref] = fields
                 del waiting[ref]
@@ -698,10 +850,21 @@ def review_open_questions(
 ) -> int:
     """Write and review the interview for the control's open agent questions that have none, and
     keep what passes. Returns how many were cleared. Without a model nothing is cleared: the
-    questions stand as drafted and say so."""
-    pending = _open(connection, control_id)
+    questions stand as drafted and say so.
+
+    Both agents read the walkthrough's confirmed answers with the control's context, and a
+    follow-up's item the answer it follows (18 November 2026); the shared context_package is
+    left as it is for the other agents."""
+    answered = answered_walkthrough(connection, control_id)
+    pending = _open(connection, control_id, answered)
     if provider is None or not pending:
         return 0
+    package = {
+        **package,
+        "walkthrough_answers": [
+            {"question": item["question"], "answer": item["answer"]} for item in answered
+        ],
+    }
     known = " ".join(
         [
             json.dumps(package, ensure_ascii=False, default=str),
@@ -717,7 +880,7 @@ def review_open_questions(
         waiting = dict(batch)
         written = _pass(
             connection, provider, "engagement-planner", INTERVIEW_PROMPT, WRITER_LABEL, ids,
-            waiting, package, sources, known, fixes,
+            waiting, package, sources, known, fixes, answered,
         )  # fmt: skip
         left.extend(waiting.values())
         # What the writer could not clear never reaches the reviewer; nothing passes without it.
@@ -730,7 +893,7 @@ def review_open_questions(
             continue
         reviewed = _pass(
             connection, provider, "independent-reviewer", INTERVIEW_REVIEW_PROMPT, REVIEWER_LABEL,
-            ids, reading, package, sources, known, fixes,
+            ids, reading, package, sources, known, fixes, answered,
         )  # fmt: skip
         left.extend(reading.values())
         cleared.extend((batch[ref], fields) for ref, fields in reviewed.items())

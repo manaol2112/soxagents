@@ -85,25 +85,33 @@ describe("Control Understanding: one pass, complete once", () => {
     // made after completion, why no review ran, and the approved attributes.
     // Rewritten again (the second fix round of B1k): old, `notRun` then `approved`; new, the
     // server's review_due between them, which the page follows up (review/follow).
+    // Rewritten again (owner decision, 18 November 2026, "Completion waits for a person"):
+    // old, reviewDue then approved; new, the held review between them (review_held), which
+    // ends the course on its two choices; and (round 3, same day) whether a proceed takes a
+    // reason, also after a later read could not run.
     assert.match(
       setup,
-      /once=\{\{\s*completedAt: conversation\.completedAt \?\? null,\s*questionPass: conversation\.questionPass \?\? null,\s*review: conversation\.review \?\? null,\s*request: conversation\.reviewRequest \?\? null,\s*notRun: conversation\.reviewNotRun \?\? null,\s*reviewDue: conversation\.reviewDue === true,\s*approved: conversation\.approved \?\? \[\],\s*\}\}/,
+      /once=\{\{\s*completedAt: conversation\.completedAt \?\? null,\s*questionPass: conversation\.questionPass \?\? null,\s*review: conversation\.review \?\? null,\s*request: conversation\.reviewRequest \?\? null,\s*notRun: conversation\.reviewNotRun \?\? null,\s*reviewDue: conversation\.reviewDue === true,\s*held: conversation\.reviewHeld \?\? null,\s*reasonNeeded: conversation\.reviewReasonNeeded === true,\s*proceeded: conversation\.reviewProceeded \?\? null,\s*approved: conversation\.approved \?\? \[\],\s*\}\}/,
     );
     assert.match(
       controls,
       /understanding:\s*context === null\s*\? null\s*: \{\s*completedAt: context\.understandingCompletedAt \?\? null,\s*questionPass: context\.questionPass \?\? null,\s*rulesOpen: rulesOpen\(context\.issues\),/,
     );
+    // Rewritten (design review, 19 November 2026). Old: busy only while the pass checks.
+    // New: also while a question the agents raised is still being worded, not shown yet.
     assert.match(
       controls,
-      /context\?\.questionPass === "CHECKING" &&[\s\S]{0,120}busy\.add\("understanding"\)/,
+      /context\?\.questionPass === "CHECKING" \|\|\s*\(setupInput\?\.preparingQuestions \?\? 0\) > 0\)[\s\S]{0,120}busy\.add\("understanding"\)/,
     );
   });
 
   it("while the agents check, says so and reads the page and the course again in place", () => {
-    // Said once in the lede and once where the course ends, with no way on.
+    // Rewritten (design review, 19 November 2026: said twice). Old: the lede said the agents
+    // were checking, and so did the end of the course. New: said once, where the course
+    // ends, with no way on; the lede states only where the understanding was drafted from.
     assert.match(
       review,
-      /\) : end === "checking" \? \(\s*`\$\{draftedFrom\(groups, interview\)\}\. The agents are checking what else the attributes need/,
+      /\) : end === "checking" \? \([\s\S]{0,200}?`\$\{draftedFrom\(groups, interview\)\}\.`\s*\) : end === "failed"/,
     );
     assert.match(
       review,
@@ -140,11 +148,18 @@ describe("Control Understanding: one pass, complete once", () => {
   it("offers 'Go to the attributes' only once complete", () => {
     assert.doesNotMatch(review, /Finalize the attributes/);
     assert.equal(review.match(/Go to the attributes/g)?.length, 2);
-    // The completed end, with its time and the note under it.
+    // Rewritten (design review, 19 November 2026: the time said in the lede and in the
+    // green box). Old: the completed end showed its time above the way on. New: the way on
+    // alone, then the note; the time is the lede's.
     assert.match(
       review,
-      /const endStep = \(\) =>\s*complete \? \([\s\S]*?completeLine\(once\.completedAt \?\? ""\)[\s\S]*?Go to the attributes[\s\S]*?\{ONCE_COMPLETE_NOTE\}/,
+      /const endStep = \(\) =>\s*complete \? \([\s\S]*?<div className="ur-complete">\s*\{onToAttributes \? \([\s\S]*?Go to the attributes[\s\S]*?\{ONCE_COMPLETE_NOTE\}/,
     );
+    const completed = review.slice(
+      review.indexOf("const endStep = () =>"),
+      review.indexOf('end === "failed" || end === "held" ? ('),
+    );
+    assert.doesNotMatch(completed, /completeLine\(|\{proceededSaid\}/);
     // The understood end from before B1j offers it only where the pass says nothing.
     assert.match(
       review,
@@ -181,12 +196,21 @@ describe("the assumption on the attribute", () => {
     // Rewritten (B1l: a question left as not known reads as such). Old: `{ASSUMED_LEAD}`
     // alone. New: the agent's lead for an assumption, the not-known lead for a question a
     // person left as not known; a conflict is led by "A conflict to decide".
+    // Rewritten again (design review, 19 November 2026: a fact not yet known read "The agent
+    // assumed:" with "That's right"). Old: the inline lead and the literal "That's right" and
+    // "Change…". New: the lead and both choices come from one source by kind
+    // (assumptionLead, confirmWords, changeWords), which words a fact not yet known as
+    // "Not yet known:" with "Add the answer" and "Leave unanswered".
     assert.match(
       assumptions,
-      /\{item\.kind === "NOT_KNOWN" \? NOT_KNOWN_LEAD : ASSUMED_LEAD\}/,
+      /<strong>\{assumptionLead\(item\.kind\)\}<\/strong>/,
     );
-    assert.match(assumptions, /"That's right"/);
-    assert.match(assumptions, />\s*Change…\s*</);
+    assert.match(assumptions, /: confirmWords\(item\.kind\)\}/);
+    assert.match(assumptions, /\{changeWords\(item\.kind\)\}/);
+    assert.doesNotMatch(
+      assumptions,
+      /[?:] "That's right"|ASSUMED_LEAD|NOT_KNOWN_LEAD/,
+    );
     assert.match(assumptions, /maxLength=\{ASSUMPTION_TEXT_MAX\}/);
     assert.match(assumptions, /characterCount\(words, ASSUMPTION_TEXT_MAX\)/);
     assert.match(

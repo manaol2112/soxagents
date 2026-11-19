@@ -18,6 +18,7 @@ import json
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
@@ -26,7 +27,12 @@ from pydantic import BaseModel, Field, ValidationError
 
 from ai_workforce_api import authentication_profile, walkthrough_answers
 from ai_workforce_api.actions import contains_secret
-from ai_workforce_api.control_context import WORDING_PENDING_SQL, ContextState, linked_documents
+from ai_workforce_api.control_context import (
+    ContextState,
+    IssueBody,
+    issues_for,
+    linked_documents,
+)
 from ai_workforce_api.control_design import CopyBody, SlotBody, copy_values, design_for
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.model_providers import call_note
@@ -497,12 +503,21 @@ class NeedBody(BaseModel):
     # slot_options.MULTIPLE_SLOTS, 12 November 2026), saved as one English list ("A and B")
     # through the same values save.
     multiple: bool = False
+    # QUESTION only: the agents' question itself, as the control's issues show it (its id,
+    # version, reviewed interview, statement and alternatives), so the screen asks it from this
+    # one body (18 November 2026: two sources read at different times hid a reviewed question
+    # behind "Answer with the planner"). None for every other kind.
+    issue: IssueBody | None = None
 
 
 class StatementPart(BaseModel):
     text: str
     # The question whose answer this part shows; None for the statement's own words.
     key: str | None = None
+    # A later person's answer on the same fact that holds over the walkthrough answer's
+    # sentence (later_answers): when it was answered; None for every other part. The page
+    # reads it "Answered <date>: <text>".
+    answered_at: datetime | None = None
 
 
 class NarrativeBody(BaseModel):
@@ -1038,27 +1053,23 @@ def understanding_review(
     # whose wording the reviewer agent is still checking is not a point yet: it is counted
     # (questions_checking) and appears once checked (control_context.WORDING_PENDING_SQL).
     checking = 0
-    for issue_id, origin, question, topic, why, pending in connection.execute(
-        """
-        SELECT id, origin, question, topic, why, """
-        + WORDING_PENDING_SQL
-        + """
-        FROM control_context_issues i
-        WHERE engagement_control_id = %s AND status = 'OPEN' ORDER BY created_at
-        """,
-        (control_id,),
-    ).fetchall():
-        if pending:
+    # Read once, through the issues' own builder (control_context.issues_for): the need and
+    # the question it asks are the same record, read at the same time.
+    for issue in issues_for(connection, control_id):
+        if issue.status != "OPEN":
+            continue
+        if issue.wording_pending:
             checking += 1
             continue
         for_issue: list[NeededFor] = ["EVIDENCE"]
-        if str(origin) in ("ATTRIBUTES", "SOURCES"):
+        if issue.origin in ("ATTRIBUTES", "SOURCES"):
             for_issue.append("ATTRIBUTES")
         needs.append(
             NeedBody(
-                key=str(issue_id), kind="QUESTION", label=str(topic or "Question"),
-                question=str(question or topic or ""), value="", options=[],
-                why=str(why or ""), status="MISSING", source="AGENT", needed_for=for_issue,
+                key=str(issue.id), kind="QUESTION", label=issue.topic or "Question",
+                question=issue.question or issue.topic, value="", options=[],
+                why=issue.why, status="MISSING", source="AGENT", needed_for=for_issue,
+                issue=issue,
             )
         )  # fmt: skip
 
@@ -1082,6 +1093,9 @@ def understanding_review(
     walkthrough_needs, narrative = _walkthrough(
         walk_rows, walk_asked, started.walkthrough, started.detail
     )
+    # A later person's answer on a fact a walkthrough sentence tells holds over it (design
+    # review, 19 November 2026, S5).
+    narrative = with_later(narrative, later_answers(connection, control_id, walk_asked))
     needs += walkthrough_needs
     # What a person left as not known yet, and no answer superseded since, reads so (B1l
     # point 1): the page leaves it out of the course and out of the count.
@@ -1202,6 +1216,103 @@ _DRIVE_FOR: dict[str, NeededFor] = {
     "SCOPE": "TESTING",
 }
 _FOR_ORDER: tuple[NeededFor, ...] = ("EVIDENCE", "ATTRIBUTES", "TESTING")
+
+
+def later_answers(
+    connection: psycopg.Connection[Any], control_id: UUID, asked: Sequence[Question]
+) -> dict[str, tuple[str, datetime | None]]:
+    """Each walkthrough question asked whose confirmed answer a later answer of a person holds
+    over, with that answer and when it was given (design review, 19 November 2026, S5: the
+    review's support said the listing's count is agreed to the system, from a question the
+    person answered, while "Population for testing" still told the walkthrough's "No").
+
+    An answered agent question replaces the one walkthrough question it answers, and only
+    when that question is identified: among the questions asked that inform the attribute it
+    asks about (asks_code, by its definition key) and record the fact it asks (asks_fact,
+    walkthrough_questions.fact_of), less the walkthrough question it follows (asks_parent_key:
+    a follow-up adds to its parent's answer, it never replaces it), exactly one must be left.
+    Two or more left is ambiguous and nothing is replaced (final design review, 19 November
+    2026, N1: the listing-completeness answer, a follow-up of the coverage answer, also
+    replaced "The review includes contractor accounts kept on a separate list.", which the
+    review's support still cited). Which answer holds is understanding_authority's rule, not
+    a second one (holds_over: a person's over the records', otherwise the later). Read at
+    read time; nothing is written. A question on the control as a whole (no attribute) maps
+    to none."""
+    from ai_workforce_api import understanding_authority
+    from ai_workforce_api.understanding_review import _approved_attributes
+    from ai_workforce_api.walkthrough_questions import fact_of
+
+    asking = connection.execute(
+        "SELECT id, asks_code, asks_fact, asks_parent_key FROM control_context_issues "
+        "WHERE engagement_control_id = %s AND status = 'RESOLVED' AND resolved_by IS NOT NULL "
+        "AND asks_code IS NOT NULL AND asks_fact IS NOT NULL",
+        (control_id,),
+    ).fetchall()
+    if not asking:
+        return {}
+    keys = {code: key for _id, code, _text, key in _approved_attributes(connection, control_id)}
+    found = understanding_authority.facts(connection, control_id)
+    told = {fact.key: fact for fact in found if fact.kind == "WALKTHROUGH_ANSWER"}
+    answered = {fact.key: fact for fact in found if fact.kind == "ANSWERED_QUESTION"}
+    later: dict[str, understanding_authority.Fact] = {}
+    for issue_id, code, asked_fact, parent in asking:
+        fact = answered.get(str(issue_id))
+        definition = keys.get(str(code), "")
+        if fact is None or fact.confirmed_by != "PERSON" or not definition:
+            continue
+        answers = [
+            item
+            for item in asked
+            if definition in item.informs
+            and fact_of(item) == asked_fact
+            and item.key != str(parent or "")
+        ]
+        if len(answers) != 1:
+            continue
+        [item] = answers
+        walked = told.get(item.key)
+        if walked is None or not understanding_authority.holds_over(fact, walked):
+            continue
+        held = later.get(item.key)
+        if held is None or understanding_authority.holds_over(fact, held):
+            later[item.key] = fact
+    return {key: (fact.answer, fact.confirmed_at) for key, fact in later.items()}
+
+
+def with_later(
+    narrative: list[NarrativeBody], later: Mapping[str, tuple[str, datetime | None]]
+) -> list[NarrativeBody]:
+    """The narrative with each sentence that tells a walkthrough answer a later answer holds
+    over (later_answers) told by that answer instead, once in its topic, dated. A sentence is
+    the run of parts between narrate's single-space separators. Pure."""
+    if not later:
+        return narrative
+    shown: list[NarrativeBody] = []
+    for topic in narrative:
+        sentences: list[list[StatementPart]] = [[]]
+        for part in topic.parts:
+            if part.key is None and part.text == " ":
+                sentences.append([])
+            else:
+                sentences[-1].append(part)
+        told: list[list[StatementPart]] = []
+        said: set[tuple[str, datetime | None]] = set()
+        for sentence in sentences:
+            held = next(
+                (later[p.key] for p in sentence if p.key is not None and p.key in later), None
+            )
+            if held is None:
+                told.append(sentence)
+            elif held not in said:
+                said.add(held)
+                told.append([StatementPart(text=held[0], key=None, answered_at=held[1])])
+        parts: list[StatementPart] = []
+        for sentence in told:
+            if parts:
+                parts.append(StatementPart(text=" ", key=None))
+            parts.extend(sentence)
+        shown.append(topic.model_copy(update={"parts": parts}))
+    return shown
 
 
 def _walkthrough(

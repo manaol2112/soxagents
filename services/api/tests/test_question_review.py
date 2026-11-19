@@ -4,6 +4,7 @@ question on each screen and the next chosen by the answer. It adds no fact, dete
 hold its answer, and a question it could not clear says so.
 """
 
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from test_outbound import migrated
 from test_testing_engine import _base
 
 import ai_workforce_api
+from ai_workforce_api import question_review
 from ai_workforce_api.context_routes import review_control
 from ai_workforce_api.control_context import AnswerIssue, checked_issues, raise_issues
 from ai_workforce_api.db import connect
@@ -277,17 +279,19 @@ def test_an_agents_question_becomes_an_interview_before_a_person_sees_it(
         ).fetchone()
         calls = connection.execute(
             "SELECT agent_key, prompt_version FROM model_calls WHERE target_id = %s "
-            # Old ('question-interview/1', 'question-review/3'); new /2 and /4 (18 November
-            # 2026, owner-approved S1: the data's tags are made inert, nothing else changed).
-            "AND prompt_version IN ('question-interview/2', 'question-review/4') "
+            # Old ('question-interview/1', 'question-review/3'); /2 and /4 (18 November 2026,
+            # owner-approved S1: the data's tags are made inert, nothing else changed); now /3
+            # and /5 (18 November 2026, owner-approved: both agents read the walkthrough's
+            # answers and a follow-up's answer, and never ask either again).
+            "AND prompt_version IN ('question-interview/3', 'question-review/5') "
             "ORDER BY created_at",
             (cid,),
         ).fetchall()
     assert audit is not None and audit[0]["reviewed"] == 1 and audit[0]["unreviewed"] == 0
     assert audit[0]["fixes"] == ["Split the question into two steps."]
     assert calls == [
-        ("engagement-planner", "question-interview/2"),
-        ("independent-reviewer", "question-review/4"),
+        ("engagement-planner", "question-interview/3"),
+        ("independent-reviewer", "question-review/5"),
     ]
     # Written once: another review of the control does not pay to write it again.
     again = _Provider([{"attributes": [], "issues": []}])
@@ -353,6 +357,94 @@ def test_a_question_raised_without_its_wording_gets_it(migrated: Database) -> No
     assert (found["question"], found["proposal"], found["proposal_basis"]) == (
         QUESTION, ON_LIST, "TYPICAL",
     )  # fmt: skip
+
+
+def _yes_no(question: str) -> dict[str, Any]:
+    return {
+        "key": "s1", "question": question, "why": WHY, "usual": "Yes", "basis": "TYPICAL",
+        "answers": [{"label": "Yes", "says": ON_LIST, "next": ""},
+                    {"label": "No", "says": OFF_LIST, "next": ""}],
+    }  # fmt: skip
+
+
+def _who(question: str) -> dict[str, Any]:
+    return {
+        "key": "s1", "question": question, "why": WHY, "usual": "", "basis": "",
+        "answers": [{"label": "IT Security Manager", "says": ON_LIST, "next": ""},
+                    {"label": "System administrator", "says": OFF_LIST, "next": ""}],
+    }  # fmt: skip
+
+
+# The ITGC-AC-03 walkthrough of 18 November 2026, as answered_walkthrough gives it.
+AC03_ANSWERED = [
+    {"key": "wt-ac03-own-access", "question": "How is a reviewer's own access reviewed?",
+     "answer": "Reviewed by someone else",
+     "reads": "A reviewer's own access is reviewed by someone else."},
+    {"key": "wt-ac03-investigation",
+     "question": "When the review finds access that should not have been held, is its use "
+     "checked for unauthorized activity?", "answer": "Yes",
+     "reads": "Access the review finds inappropriate is checked for unauthorized activity "
+     "performed with it."},
+    {"key": "wt-ac03-remediation-check",
+     "question": "Does anyone confirm in the system that each requested removal or change was "
+     "made?", "answer": "No",
+     "reads": "No one confirms in the system that each removal or change the reviewer "
+     "requested was made."},
+]  # fmt: skip
+
+
+def test_a_step_that_asks_again_what_the_walkthrough_answered_is_found() -> None:
+    # Product owner, 18 November 2026, on ITGC-AC-03: the interview writer opened two of the
+    # review's questions with a yes-or-no step the walkthrough had already answered.
+    repeats = question_review._repeats_answered
+    asked_again = [
+        "Does someone other than the Application owner review the owner's own access?",
+        "Is inappropriate access investigated for unauthorized activity?",
+        "How is a reviewer's own access reviewed?",
+    ]
+    for question in asked_again[:2]:
+        [problem] = repeats([_yes_no(question)], AC03_ANSWERED)
+        assert "asks again what is already answered" in problem
+    # The same words as a question answered, whatever the shape of its answers.
+    assert repeats([_who(asked_again[2])], AC03_ANSWERED)
+    # What an answer leaves open is asked: who, where, and a new yes-or-no matter.
+    left_open = [
+        _who("Who signs off the review of the owner's own access?"),
+        _who("Who reviews the owner's own access?"),
+        _who("Where are the investigation and its outcome recorded?"),
+        _yes_no("Does the System administrator record each completed change?"),
+    ]
+    for step in left_open:
+        assert repeats([step], AC03_ANSWERED) == [], step["question"]
+
+
+def test_the_writer_reads_the_walkthrough_and_is_sent_back_for_asking_it_again(
+    migrated: Database, monkeypatch: Any
+) -> None:
+    answered = [{"key": "wt-contractors", "question": QUESTION, "answer": "Yes",
+                 "reads": ON_LIST}]  # fmt: skip
+    monkeypatch.setattr(question_review, "answered_walkthrough", lambda *_args: answered)
+    where = _steps_of()[1:]
+    where[0] = {**where[0], "key": "s1"}
+    fixed = _reviewed(steps=where)
+    # The writer opens with the question the walkthrough answered: sent back once, then fixed.
+    provider = _Provider([DRAFT, _answer(_reviewed()), _answer(fixed), _answer(fixed)])
+    client, team, cid = _raised(provider, migrated, "wt-repeat")
+    writing = [r for r in provider.requests if r.system == INTERVIEW_PROMPT]
+    assert len(writing) == 2
+    package = json.loads(
+        writing[0].prompt.split("<control_context>\n", 1)[1].split("\n</control_context>")[0]
+    )
+    assert package["walkthrough_answers"] == [{"question": QUESTION, "answer": "Yes"}]
+    assert "asks again what is already answered" in writing[1].prompt
+    reviewing = next(r for r in provider.requests if r.system == INTERVIEW_REVIEW_PROMPT)
+    assert '"walkthrough_answers"' in reviewing.prompt
+    found = _gap(client, team, cid)
+    assert found["wording_reviewed"] is True
+    assert [step["question"] for step in found["interview"]] == ["Where are they tracked?"]
+    # Both agents are told not to ask either again.
+    assert "walkthrough answers" in INTERVIEW_PROMPT and "follows" in INTERVIEW_PROMPT
+    assert "walkthrough answers" in INTERVIEW_REVIEW_PROMPT
 
 
 def test_what_fails_the_checks_goes_back_once_then_keeps_its_draft(migrated: Database) -> None:
