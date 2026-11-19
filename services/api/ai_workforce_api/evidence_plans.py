@@ -608,11 +608,17 @@ def persist(
     facts: PlanFacts,
     requester: UUID | None,
     settle: bool = False,
+    on_behalf: dict[str, Any] | None = None,
 ) -> Changes:
     """Store a plan, merging it into the existing one. Idempotent for the same plan.
 
     With `settle`, a plan that took effect with no approver goes back to proposed once
-    something in it needs a person's judgment. A plan is never approved here."""
+    something in it needs a person's judgment. A plan is never approved here.
+
+    `on_behalf`: the plan is drawn up by the workspace for a person who did not act now
+    (the worker-start catch-up, scope_changes.start_waiting_scope): its audit record names
+    no person as the actor and carries these facts instead (who authorized it, what
+    triggered it). The plan's `generated_by` stays the requester its later runs act for."""
     output = planned.output
     understanding = output.understanding.model_dump(mode="json") | {
         "missing_information": output.missing_information,
@@ -744,9 +750,12 @@ def persist(
         ),
     )  # fmt: skip
     _audit(
-        cursor, organization_id, project_id, requester, "evidence_plan.generated",
-        "evidence_plan", plan_id,
-        {"source": planned.source, **{k: len(v) for k, v in changes.as_json().items()}},
+        cursor, organization_id, project_id, requester if on_behalf is None else None,
+        "evidence_plan.generated", "evidence_plan", plan_id,
+        {
+            "source": planned.source, **{k: len(v) for k, v in changes.as_json().items()},
+            **(on_behalf or {}),
+        },
     )  # fmt: skip
     if settle and not person_approved:
         settle_automatically(cursor, organization_id, project_id, plan_id)
@@ -1638,6 +1647,7 @@ def issue(
     requester: UUID,
     source: str,
     only: list[UUID] | None = None,
+    on_behalf: dict[str, Any] | None = None,
 ) -> Issued:
     """Request every planned requirement of the control's applicable phases. With `only`,
     just those requirements, under the same gates, and nothing else of the control is
@@ -1752,7 +1762,7 @@ def issue(
             target = _create_request(
                 cursor, organization_id, project_id, control_id, str(phase), recipient,
                 str(control[0]), int(control[4]), int(control[5]), int(control[6]), end,
-                requester, source,
+                requester, source, on_behalf,
             )  # fmt: skip
             created.append(target)
         else:
@@ -1826,6 +1836,7 @@ def _create_request(
     phase_end: date | None,
     requester: UUID,
     source: str,
+    on_behalf: dict[str, Any] | None = None,
 ) -> UUID:
     from ai_workforce_api.onboarding import pbc_reference
 
@@ -1861,9 +1872,11 @@ def _create_request(
     ).fetchone()  # fmt: skip
     assert row is not None
     request_id = UUID(str(row[0]))
+    # `on_behalf` (persist): drafted by the workspace for a person who did not act now.
     _audit(
-        cursor, organization_id, project_id, requester, "pbc.updated", "pbc_request", request_id,
-        {"status": "DRAFT", "source": source, "phase": phase},
+        cursor, organization_id, project_id, requester if on_behalf is None else None,
+        "pbc.updated", "pbc_request", request_id,
+        {"status": "DRAFT", "source": source, "phase": phase, **(on_behalf or {})},
     )  # fmt: skip
     return request_id
 
@@ -2325,17 +2338,18 @@ def plan_and_issue(
     requester: UUID,
     source: str,
     agent: bool = False,
+    on_behalf: dict[str, Any] | None = None,
 ) -> list[UUID]:
     """Plan a control with the rules (no model call inside a transaction), and, when the
     planner agent is available, leave it to refine the plan in the background. The plan
     waits for a person either way, so nothing is requested until they approve it.
-    Returns the new requests, for the coordinator to draft."""
+    Returns the new requests, for the coordinator to draft. `on_behalf`: as persist."""
     facts = load_facts(cursor.connection, project_id, control_id)
     planned = Planned(check_plan(rules_plan(facts), facts), "RULES", "", None)
     # The rules' plan is stored now. Approving it, later, is what requests evidence.
     persist(
         cursor, organization_id, project_id, control_id, planned, facts, requester,
-        settle=False,
+        settle=False, on_behalf=on_behalf,
     )  # fmt: skip
     if agent:
         # The planner agent refines the rules' plan after the launch commits.
@@ -2346,7 +2360,9 @@ def plan_and_issue(
             (control_id,),
         )
     # Only what the planning gate allows is requested: nothing from a plan that waits.
-    return issue(cursor, organization_id, project_id, control_id, requester, source).created
+    return issue(
+        cursor, organization_id, project_id, control_id, requester, source, on_behalf=on_behalf
+    ).created
 
 
 # The planner agent's run on a launched control (migration 0077)

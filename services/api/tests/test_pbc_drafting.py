@@ -676,6 +676,76 @@ def test_the_local_worker_runs_as_many_jobs_at_once_as_configured() -> None:
         default.shutdown()
 
 
+def test_a_plan_run_that_finished_is_never_run_again_when_its_follow_up_cannot_be_handed_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression (18 November 2026, the investigation of B8): the hand-off of a finished
+    plan run's follow-up work (its released drafts, the checks it planned, the run its end
+    queued) sat inside the run's retries, so a hand-off that failed (the worker's pool shut
+    down while the job ended, as when the local API stops or reloads) counted as a failed
+    run: the planner was called again, up to its attempts, and the run then ended failed.
+    Now the run is called once, and the failed hand-off is logged with its cause."""
+    from ai_workforce_api import pbc_drafting
+    from ai_workforce_api.pbc_drafting import LocalDraftScheduler
+
+    calls: list[UUID] = []
+
+    def plan(found: UUID) -> str:
+        calls.append(found)
+        return "DONE"
+
+    failed: list[UUID] = []
+    monkeypatch.setattr(
+        "ai_workforce_api.evidence_plans.fail_plan_run",
+        lambda _connection, plan_id: failed.append(plan_id),
+    )
+    # The retry path's reset would reach the database: it is recorded, not run, so the
+    # test fails on the calls it counts, never on a connection.
+    resets: list[UUID] = []
+
+    class _Resets:
+        def __enter__(self) -> _Resets:
+            return self
+
+        def __exit__(self, *_: object) -> None:
+            return None
+
+        def execute(self, sql: str, params: tuple[Any, ...]) -> Any:
+            # Only the retry path's own statements: whether the run is out of attempts, and
+            # its reset to waiting.
+            if "run_attempts >=" in sql or "SET run_status = 'PENDING'" in sql:
+                resets.append(params[0])
+
+            class _Row:
+                def fetchone(self) -> None:
+                    return None
+
+            return _Row()
+
+    monkeypatch.setattr(pbc_drafting, "connect", lambda _url: _Resets())
+    scheduler = LocalDraftScheduler(Settings(database_url=""), plan=plan)
+    scheduler.shutdown()
+
+    def hand_off(_plan_id: UUID) -> None:
+        # What the drafts' hand-off does: submit to the pool, which is shut down.
+        scheduler._pool.submit(lambda: None)
+
+    monkeypatch.setattr(scheduler, "_draft_released", hand_off)
+    logged: list[str] = []
+    monkeypatch.setattr(
+        pbc_drafting.logger, "exception", lambda message, *args: logged.append(message % args)
+    )
+    plan_id = uuid4()
+    scheduler._attempt_plan(plan_id)
+    # Old: the planner ran three times and the run ended failed. New: once, never failed,
+    # no retry reset, and the failed hand-off is logged.
+    assert calls == [plan_id] and failed == [] and resets == []
+    assert logged == [
+        "a finished plan run's follow-up work could not be handed on; it stays queued for "
+        "the worker's start"
+    ]
+
+
 # Bug hunt, 9 November 2026
 
 

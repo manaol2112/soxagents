@@ -3965,7 +3965,7 @@ def _audit(
     cursor: psycopg.Cursor[Any],
     organization_id: UUID,
     project_id: UUID,
-    actor_id: UUID,
+    actor_id: UUID | None,
     action: str,
     payload: dict[str, Any],
 ) -> None:
@@ -3978,13 +3978,15 @@ def _audit_target(
     cursor: psycopg.Cursor[Any],
     organization_id: UUID,
     project_id: UUID,
-    actor_id: UUID,
+    actor_id: UUID | None,
     action: str,
     target_type: str,
     target_id: UUID,
     payload: dict[str, Any],
 ) -> None:
-    """Audit payloads hold decisions and counts, never owner contacts or evidence text."""
+    """Audit payloads hold decisions and counts, never owner contacts or evidence text. No
+    actor where the workspace acted with no person acting now (the worker-start catch-up),
+    as an agent's own records name none either."""
     cursor.execute(
         """
         INSERT INTO audit_events (
