@@ -17,7 +17,7 @@ else
 BASH := bash
 endif
 
-.PHONY: help toolchain check check-tesseract install install-tesseract start free-ports go awake stop status format lint typecheck api web migrate test test-fast test-critical test-demo test-changed test-full ci reset test-node check-changed test-files prove test-critical-shard test-fast-only web-build backup restore backup-verify
+.PHONY: help toolchain check check-tesseract install install-tesseract start free-ports go awake stop status format lint typecheck api web migrate test test-fast test-critical test-demo test-changed test-full ci reset test-node check-changed test-files prove test-critical-shard test-fast-only web-build backup restore backup-verify seed-review-states scratch-stack scratch-status scratch-stop browser-check
 
 help:
 	@echo "make toolchain  Show pinned Node.js, pnpm, Python, and uv versions"
@@ -185,7 +185,7 @@ FAST_NODE ?= tests/button-hover.test.ts tests/attributes-handoff-model.test.ts t
 # call's containment, and a pass standing only on cited evidence.
 CRITICAL_PICKED := $(addprefix $(API_TESTS)/,test_evidence_plans.py::test_the_agent_plans_when_its_plan_passes_the_checks test_evidence_analysis.py::test_a_rejected_model_answer_falls_back_to_the_rules test_pbc_drafting.py::test_a_bad_or_failed_model_draft_falls_back_to_the_rules test_evidence_reading.py::test_claude_receives_images_as_base64_blocks_before_the_prompt test_console.py::test_a_failed_answer_can_be_retried_in_place test_console.py::test_a_busy_model_is_tried_again_before_the_turn_gives_up test_system_applicability.py::test_a_report_waits_for_a_model_and_uploads_are_checked test_control_context.py::test_a_pass_stands_only_on_cited_evidence test_sampling.py::test_a_population_gets_a_proposed_test_plan_that_a_person_approves)
 CRITICAL_NODE := tests/no-autofill.test.ts tests/control-understanding-contract.test.ts
-CRITICAL_PY := $(addprefix $(API_TESTS)/,test_authentication_profile.py test_agent_answers.py test_design_traceability.py test_design_requests.py test_design_evidence.py test_evidence_assurance.py test_evidence_wizard.py test_planner_reliability.py test_control_details.py test_understanding_chat.py test_methodology.py test_access.py test_actions.py test_agents.py test_approvals.py test_auth.py test_authorization.py test_execution.py test_security.py test_policy.py test_schema.py test_migrations.py test_independence.py test_control_reviews.py test_design_conclusions.py test_design_release.py test_control_conclusions.py test_round_reviews.py test_plan_impact.py test_round_readiness.py test_round_basis.py test_queue.py test_signoff_history.py test_planning_gate.py test_master_plans.py test_evidence_flow.py test_evidence_versions.py test_evidence.py test_engagement_integrity.py test_handoffs.py test_outbound.py test_smtp_mailbox.py test_support_notifications.py test_subscriptions.py test_demo.py test_mailbox.py test_inbound.py test_health.py test_control_journey.py test_test_rounds.py test_workspace.py test_phase_release.py test_test_citations.py test_console_citations.py test_evidence_review.py test_testing_engine.py test_workpapers.py test_google.py test_invitations.py test_demo_requests.py test_evidence_portal.py test_projects.py test_tasks.py test_workflows.py test_failures.py test_durable.py test_agent_execution.py test_provenance.py test_evidence_corpus.py test_grounded_testing.py test_reliability.py test_hostile_evidence.py test_plan_evaluation.py test_shared_plans.py test_evidence_catalog.py test_evidence_groups.py test_evidence_owners.py test_evidence_status.py test_registration_hardening.py test_storage_cleanup.py test_archived_guard.py test_evidence_findings.py test_evidence_dialog.py test_evidence_workspace.py test_sample_traces.py test_trial_hardening.py test_demo_reset.py test_engagement_close.py test_test_infrastructure.py test_assurance_upgrade.py test_attribute_dispositions.py test_file_reliability.py test_workpaper_drafts.py test_design_conclusion_choice.py test_workpaper_review_notes.py test_design_review_requests.py test_design_points.py test_design_narrative_prompt.py test_workpaper_redraft_model.py test_workpaper_redraft.py test_understanding_once_rules.py test_understanding_once.py test_understanding_review_rules.py test_understanding_review.py test_walkthrough_since.py test_control_understanding_contract.py test_prompt_data.py test_reliability_audit.py test_secret_text.py test_test_tiers.py test_ci_gate.py test_run_tests_script.py test_changed_tests.py test_route_authorization.py test_web_calls_api_routes.py test_scheduler_parity.py test_request_status_moves.py test_prompt_neutral_everywhere.py) tests/test_smoke.py $(CRITICAL_PICKED)
+CRITICAL_PY := $(addprefix $(API_TESTS)/,test_authentication_profile.py test_agent_answers.py test_design_traceability.py test_design_requests.py test_design_evidence.py test_evidence_assurance.py test_evidence_wizard.py test_planner_reliability.py test_control_details.py test_understanding_chat.py test_methodology.py test_access.py test_actions.py test_agents.py test_approvals.py test_auth.py test_authorization.py test_execution.py test_security.py test_policy.py test_schema.py test_migrations.py test_independence.py test_control_reviews.py test_design_conclusions.py test_design_release.py test_control_conclusions.py test_round_reviews.py test_plan_impact.py test_round_readiness.py test_round_basis.py test_queue.py test_signoff_history.py test_planning_gate.py test_master_plans.py test_evidence_flow.py test_evidence_versions.py test_evidence.py test_engagement_integrity.py test_handoffs.py test_outbound.py test_smtp_mailbox.py test_support_notifications.py test_subscriptions.py test_demo.py test_mailbox.py test_inbound.py test_health.py test_control_journey.py test_test_rounds.py test_workspace.py test_phase_release.py test_test_citations.py test_console_citations.py test_evidence_review.py test_testing_engine.py test_workpapers.py test_google.py test_invitations.py test_demo_requests.py test_evidence_portal.py test_projects.py test_tasks.py test_workflows.py test_failures.py test_durable.py test_agent_execution.py test_provenance.py test_evidence_corpus.py test_grounded_testing.py test_reliability.py test_hostile_evidence.py test_plan_evaluation.py test_shared_plans.py test_evidence_catalog.py test_evidence_groups.py test_evidence_owners.py test_evidence_status.py test_registration_hardening.py test_storage_cleanup.py test_archived_guard.py test_evidence_findings.py test_evidence_dialog.py test_evidence_workspace.py test_sample_traces.py test_trial_hardening.py test_demo_reset.py test_engagement_close.py test_test_infrastructure.py test_assurance_upgrade.py test_attribute_dispositions.py test_file_reliability.py test_workpaper_drafts.py test_design_conclusion_choice.py test_workpaper_review_notes.py test_design_review_requests.py test_design_points.py test_design_narrative_prompt.py test_workpaper_redraft_model.py test_workpaper_redraft.py test_understanding_once_rules.py test_understanding_once.py test_understanding_review_rules.py test_understanding_review.py test_walkthrough_since.py test_control_understanding_contract.py test_prompt_data.py test_reliability_audit.py test_secret_text.py test_test_tiers.py test_ci_gate.py test_run_tests_script.py test_changed_tests.py test_route_authorization.py test_web_calls_api_routes.py test_scheduler_parity.py test_request_status_moves.py test_prompt_neutral_everywhere.py test_review_guard.py) tests/test_smoke.py $(CRITICAL_PICKED)
 
 # Test files that run only in the full suite (make test-full), by decision rather than by
 # omission: every pytest file is in the fast, critical or demo tier or is named here, and
@@ -269,6 +269,32 @@ test-full: require-env
 	set -a && . ./.env && set +a && $(PYTEST) -rsw
 
 ci: lint typecheck test
+
+# Synthetic review states, a guarded scratch stack and the browser checks (testing
+# assessment, 19 November 2026, steps 4 and 5). The scripts refuse any database that is not
+# a marked synthetic one (scripts/review_guard.py). A worktree has no .venv of its own:
+# pass PY=<path to the main checkout's .venv python> there.
+#   make seed-review-states DB=ai_workforce_states_ui3
+#   make scratch-stack DB=ai_workforce_states_ui3 [API_PORT=8030 WEB_PORT=3030 WORKER=1]
+#   make browser-check DB=ai_workforce_states_ui3     make scratch-status   make scratch-stop
+PY ?= $(firstword $(wildcard .venv/Scripts/python.exe .venv/bin/python) python3)
+API_PORT ?= 8030
+WEB_PORT ?= 3030
+
+seed-review-states:
+	$(PY) scripts/seed_review_states.py create --db $(DB)
+
+scratch-stack:
+	$(PY) scripts/scratch_stack.py start --db $(DB) --api-port $(API_PORT) --web-port $(WEB_PORT) $(if $(WORKER),--worker,)
+
+scratch-status:
+	$(PY) scripts/scratch_stack.py status
+
+scratch-stop:
+	$(PY) scripts/scratch_stack.py stop
+
+browser-check:
+	REVIEW_DB=$(DB) REVIEW_WEB=http://127.0.0.1:$(WEB_PORT) pnpm exec node --test --test-concurrency=1 tests/browser/*.browser.ts
 
 # Data protection (docs/operations.md, "Backup and restore"). A backup is one database,
 # written to backups/ (git-ignored, not encrypted). A restore only goes into a database
