@@ -678,6 +678,27 @@ SINGLE = (
     # Added 16 November 2026 (B1k): a patch applied without prior approval is approved
     # afterwards in one way, or not at all, or is not allowed.
     "wt-cm06-unapproved",
+    # Added 18 November 2026 (the operations family's banks). Old: SINGLE listed the access
+    # and change questions only. New: it lists the operations questions whose options exclude
+    # each other too (one timing, one record level, one route afterwards, one decider, one
+    # rating, one starting date). Justification: the owner's rule (11 November 2026) is
+    # unchanged, a CHOICE only where its options exclude each other, and the operations banks
+    # follow it; the assertion still compares the bank's CHOICE questions with this list
+    # exactly.
+    "wt-op01-off-hours",
+    "wt-op01-run-history",
+    "wt-op02-change-log",
+    "wt-op02-urgent",
+    "wt-op021-own-access",
+    "wt-op03-history-kept",
+    "wt-op03-config-history",
+    "wt-op031-off-hours",
+    "wt-op031-job-history",
+    "wt-op04-targets",
+    "wt-op06-off-hours",
+    "wt-op06-run-log",
+    "wt-op08-severity",
+    "wt-op08-first-seen",
 )
 
 

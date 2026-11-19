@@ -96,6 +96,58 @@ function useNarrow(): boolean {
   );
 }
 
+/** How long the panel watches for the place it was opened at to render. */
+const ARRIVE_MS = 10_000;
+
+/**
+ * Focus on arriving at a place on a step (#ur-review-choice): once the place has rendered
+ * (it may render a second after the panel opens, re-shoot r11), focus goes to its control
+ * marked data-arrive and its actions (data-arrive-view) are scrolled into view. Only while
+ * focus is on one of `from` (the panel's title, the link just clicked) or nowhere: a person
+ * who has moved on keeps their place. Tried first on the next frame, after the browser's own
+ * move to the place, then as the panel's content changes, for ARRIVE_MS. A small local
+ * focus on arrival, not a general mechanism. Returns the way to stop watching.
+ */
+export function watchArrival(
+  id: string,
+  root: Node,
+  from: ReadonlyArray<Element | null>,
+): () => void {
+  const arrive = (): boolean => {
+    const place = document.getElementById(id);
+    const control = place?.querySelector<HTMLElement>("[data-arrive]") ?? null;
+    if (place === null || control === null) {
+      return false;
+    }
+    const at = document.activeElement;
+    if (at === null || at === document.body || from.includes(at)) {
+      control.focus({ preventScroll: true });
+      (place.querySelector("[data-arrive-view]") ?? place).scrollIntoView({
+        block: "end",
+      });
+    }
+    return true;
+  };
+  const watch = new MutationObserver(() => {
+    if (arrive()) {
+      stop();
+    }
+  });
+  const frame = window.requestAnimationFrame(() => {
+    if (arrive()) {
+      stop();
+    }
+  });
+  const timer = window.setTimeout(() => stop(), ARRIVE_MS);
+  function stop() {
+    watch.disconnect();
+    window.cancelAnimationFrame(frame);
+    window.clearTimeout(timer);
+  }
+  watch.observe(root, { childList: true, subtree: true });
+  return stop;
+}
+
 export function StatusChip({ tone }: { tone: Tone }) {
   return <span className={`wf-chip tone-${tone}`}>{TONE_LABELS[tone]}</span>;
 }
@@ -490,8 +542,42 @@ export function WorkflowPanel({
   const focusClass = focus ? " is-focus" : "";
   // The person's focus moves to the step they opened (the panel is keyed by its step, so it
   // mounts again for each).
+  // Arrived at a place on the step (the next step's "Run again or proceed",
+  // #ur-review-choice; re-shoot r10 and r11, 19 November 2026): the title takes focus as the
+  // panel opens, and the panel watches for the place (watchArrival). Also while the panel is
+  // already open: a link to a place on this page (the next step's, the panel's own bar) or a
+  // change of the address's place starts the same watch, never reopening the panel.
   useEffect(() => {
     heading.current?.focus();
+    const root = heading.current?.closest("aside") ?? document.body;
+    let stop = () => {};
+    const start = (id: string, from: Element | null) => {
+      stop();
+      stop =
+        id === "" ? () => {} : watchArrival(id, root, [heading.current, from]);
+    };
+    start(window.location.hash.slice(1), null);
+    const onHash = () => start(window.location.hash.slice(1), null);
+    const onClick = (event: MouseEvent) => {
+      const link =
+        event.target instanceof Element
+          ? event.target.closest("a[href]")
+          : null;
+      if (!(link instanceof HTMLAnchorElement)) {
+        return;
+      }
+      const to = new URL(link.href, window.location.href);
+      if (to.hash.length > 1 && to.pathname === window.location.pathname) {
+        start(decodeURIComponent(to.hash.slice(1)), link);
+      }
+    };
+    window.addEventListener("hashchange", onHash);
+    document.addEventListener("click", onClick);
+    return () => {
+      stop();
+      window.removeEventListener("hashchange", onHash);
+      document.removeEventListener("click", onClick);
+    };
   }, []);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {

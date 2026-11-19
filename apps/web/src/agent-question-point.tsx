@@ -8,6 +8,7 @@ import {
   type Pick,
   type Prefill,
   type RowPicks,
+  suggestionSelected,
 } from "./control-setup-model";
 import { UiIcon } from "./ui-icon";
 
@@ -25,6 +26,7 @@ export function AgentQuestionPoint({
   saving,
   chips,
   title,
+  titleText = "",
   reason = "",
   why,
   foot,
@@ -37,6 +39,9 @@ export function AgentQuestionPoint({
   saving: boolean;
   chips: ReactNode;
   title: ReactNode;
+  /** The title's words: a step's question that only repeats them is read to a screen reader
+   * as the options' label, not shown twice. */
+  titleText?: string;
   /** What cannot be written without the fact (B1l point 5: the attribute criterion or the
    * evidence request), under the question; "" for none. */
   reason?: string;
@@ -75,7 +80,7 @@ export function AgentQuestionPoint({
       <p className="ur-hint" id="ur-hint">
         {conflict
           ? "The sources disagree. Choose the one that reflects how the control runs, or say it in your own words."
-          : screens[0]?.suggested !== ""
+          : suggestionSelected(screens[0])
             ? "The agents' answer is selected. Confirm it holds for this organization, or choose another."
             : "Choose the answer that holds for this organization."}{" "}
         <button
@@ -103,7 +108,14 @@ export function AgentQuestionPoint({
         return (
           <div key={screen.step} className="ur-ask">
             {screen.question !== "" ? (
-              <p className="ur-ask-q" id={legend}>
+              <p
+                className={
+                  screen.question.trim() === titleText.trim()
+                    ? "ur-ask-q sr-only"
+                    : "ur-ask-q"
+                }
+                id={legend}
+              >
                 {screen.question}
               </p>
             ) : null}

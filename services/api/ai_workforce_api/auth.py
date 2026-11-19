@@ -68,6 +68,16 @@ FLOW_BINDING_KEY = "aw_binding"
 # provider returns to localhost (or the other way round) moves to the callback's name first,
 # once (the query flag stops a second move).
 LOGIN_HOP = "aw_hop"
+# Where the person was going when the workspace sent them to sign in (19 November 2026):
+# `next` on the sign-in start or the preview, kept in the attempt row with the state, and
+# where the callback sends them. Only a workspace address on the web app is kept: "/" or
+# "/?..." in printable ASCII with no backslash, 2000 characters at most; anything else
+# (another site, "//host", a scheme, a backslash, whitespace or a control character) is
+# dropped and the person lands on the workspace home.
+RETURN_PARAM = "next"
+FLOW_RETURN_KEY = "aw_return"
+RETURN_PATH = re.compile(r"/(?:\?[\x21-\x5b\x5d-\x7e]*)?")
+MAX_RETURN_PATH = 2000
 # Mailbox domains that say nothing about the firm. A workspace made for such an
 # address is named after the person instead.
 PUBLIC_MAIL_DOMAINS = frozenset(
@@ -190,7 +200,10 @@ def register_auth(
         except psycopg.Error:
             logger.warning("preview session failed")
             raise HTTPException(status_code=503, detail="authentication unavailable") from None
-        destination = settings.app_base_url or "http://localhost:3000"
+        destination = _app_address(
+            settings.app_base_url or "http://localhost:3000",
+            return_path(request.query_params.get(RETURN_PARAM)),
+        )
         response: Response = RedirectResponse(destination, status_code=303)
         response.set_cookie(
             SESSION_COOKIE,
@@ -242,21 +255,28 @@ def _begin_login(
 ) -> Response:
     if provider is None:
         raise HTTPException(status_code=503, detail="authentication is not configured")
-    hop = _callback_host(request, redirect_uri)
+    returning = return_path(request.query_params.get(RETURN_PARAM))
+    hop = _callback_host(request, redirect_uri, returning)
     if hop is not None:
         return RedirectResponse(hop, status_code=302)
     # A network address starts only so many sign-ins in a window (Step 7); the count is
     # kept with the login attempts, failing open if it cannot be kept.
     address = client_address(request, settings)
     if settings.database_url != "" and _throttled(settings, "login", address):
-        return _login_failed(settings, "throttled")
+        return _login_failed(settings, "throttled", returning)
     binding = secrets.token_urlsafe(32)
+    kept = {} if returning is None else {FLOW_RETURN_KEY: returning}
     try:
         started = provider.begin(redirect_uri=redirect_uri)
         _save_attempt(
             settings,
             started.state,
-            {**started.flow, FLOW_PROVIDER_KEY: issuer, FLOW_BINDING_KEY: token_hash(binding)},
+            {
+                **started.flow,
+                FLOW_PROVIDER_KEY: issuer,
+                FLOW_BINDING_KEY: token_hash(binding),
+                **kept,
+            },
         )
     except IdentityError:
         logger.warning("oidc login could not start: %s", issuer)
@@ -297,33 +317,39 @@ def _finish_login(
     except psycopg.Error:
         logger.warning("login attempt lookup failed")
         raise HTTPException(status_code=503, detail="authentication unavailable") from None
-    if flow is None or flow.pop(FLOW_PROVIDER_KEY, None) != issuer:
+    if flow is None:
+        return _login_failed(settings, "failed")
+    # Checked again on the way out: the row is this API's own, but the rule is one rule.
+    returning = return_path(flow.pop(FLOW_RETURN_KEY, None))
+    if flow.pop(FLOW_PROVIDER_KEY, None) != issuer:
         return _login_failed(settings, "failed")
     if not _same_browser(flow.pop(FLOW_BINDING_KEY, None), request.cookies.get(LOGIN_COOKIE)):
         logger.warning("oidc callback from another browser: %s", issuer)
-        return _login_failed(settings, "failed")
+        return _login_failed(settings, "failed", returning)
     callback_values = {key: request.query_params[key] for key in request.query_params}
     try:
         identity = provider.complete(flow=flow, callback=callback_values)
     except IdentityError:
         logger.warning("oidc callback failed: %s", issuer)
-        return _login_failed(settings, "failed")
+        return _login_failed(settings, "failed", returning)
     try:
         raw_token = _open_session(settings, identity, address)
     except RateLimited:
-        return _login_failed(settings, "throttled")
+        return _login_failed(settings, "throttled", returning)
     except AccountLinkError:
-        return _login_failed(settings, "unlinked")
+        return _login_failed(settings, "unlinked", returning)
     except psycopg.Error:
         logger.warning("session creation failed")
         raise HTTPException(status_code=503, detail="authentication unavailable") from None
     if raw_token is None:
-        return _login_failed(settings, "disabled")
+        return _login_failed(settings, "disabled", returning)
     if tasks is not None:
         # A new sign-up is announced to support once the person is on their way in.
         tasks.add_task(deliver_held, settings)
     if settings.app_base_url != "":
-        response: Response = RedirectResponse(settings.app_base_url, status_code=303)
+        response: Response = RedirectResponse(
+            _app_address(settings.app_base_url, returning), status_code=303
+        )
     else:
         response = JSONResponse({"status": "authenticated"})
     _set_session_cookie(response, settings, raw_token)
@@ -342,9 +368,27 @@ def _from_this_machine(request: Request, settings: Settings) -> bool:
         return False
 
 
-def _callback_host(request: Request, redirect_uri: str) -> str | None:
+def return_path(value: object) -> str | None:
+    """The workspace address to land on after signing in, or None for the workspace home.
+    The web app applies the same rule (apps/web/src/sign-in-model.ts, returnAddress)."""
+    if (
+        not isinstance(value, str)
+        or len(value) > MAX_RETURN_PATH
+        or RETURN_PATH.fullmatch(value) is None
+    ):
+        return None
+    return value
+
+
+def _app_address(base: str, path: str | None) -> str:
+    """The web app's address, or the workspace address on it the person was going to."""
+    return base if path is None else f"{base.rstrip('/')}{path}"
+
+
+def _callback_host(request: Request, redirect_uri: str, returning: str | None) -> str | None:
     """The same start on the callback's host, when this machine was reached under another
-    loopback name; None to start here. Only loopback names move, and only once."""
+    loopback name; None to start here. Only loopback names move, and only once, keeping
+    where the person was going."""
     target = urlsplit(redirect_uri)
     if (
         request.url.hostname not in LOOPBACK_HOSTS
@@ -354,7 +398,8 @@ def _callback_host(request: Request, redirect_uri: str) -> str | None:
         or LOGIN_HOP in request.query_params
     ):
         return None
-    return f"{target.scheme}://{target.netloc}{request.url.path}?{LOGIN_HOP}=1"
+    query = {LOGIN_HOP: "1"} if returning is None else {LOGIN_HOP: "1", RETURN_PARAM: returning}
+    return f"{target.scheme}://{target.netloc}{request.url.path}?{urlencode(query)}"
 
 
 def _same_browser(kept: object, presented: str | None) -> bool:
@@ -374,11 +419,15 @@ def _clear_login_cookie(response: Response, settings: Settings) -> None:
     )
 
 
-def _login_failed(settings: Settings, failure: LoginFailure) -> Response:
-    """Send the person back to the sign-in page when there is one; otherwise answer."""
+def _login_failed(
+    settings: Settings, failure: LoginFailure, returning: str | None = None
+) -> Response:
+    """Send the person back to the sign-in page when there is one, still on their way to
+    the page they asked for; otherwise answer."""
     if settings.app_base_url != "":
         base = settings.app_base_url.rstrip("/")
-        query = urlencode({"notice": failure})
+        kept = {} if returning is None else {RETURN_PARAM: returning}
+        query = urlencode({"notice": failure, **kept})
         response: Response = RedirectResponse(f"{base}/sign-in?{query}", status_code=303)
         _clear_login_cookie(response, settings)
         return response

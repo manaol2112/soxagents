@@ -36,6 +36,7 @@ import {
   wizardProblem,
 } from "./onboarding-model";
 import { SocAssessment, SocReports, SocUpload } from "./soc-view";
+import { refusalFrom } from "./trial-model";
 import { UiIcon } from "./ui-icon";
 import { isTopmostDialog, useFocusTrap } from "./use-focus-trap";
 
@@ -234,6 +235,7 @@ function Wizard({
     let status = 0;
     let detail = "";
     let onboarding: unknown = null;
+    let refusal: ReturnType<typeof refusalFrom> = null;
     try {
       const response = await fetch("/workspace/system-wizard", {
         method: "POST",
@@ -250,15 +252,17 @@ function Wizard({
         status?: unknown;
         detail?: unknown;
         onboarding?: unknown;
+        refusal?: unknown;
       };
       status = typeof body.status === "number" ? body.status : 0;
       detail = typeof body.detail === "string" ? body.detail : "";
       onboarding = body.onboarding ?? null;
+      refusal = refusalFrom(status, body.refusal);
     } catch {
       status = 0;
     }
     setBusy("");
-    const message = wizardProblem(status, detail);
+    const message = wizardProblem(status, detail, refusal);
     setProblem(message);
     if (message === null) {
       startTransition(() => router.refresh());

@@ -16,6 +16,7 @@ import {
   type SetupSystem,
 } from "./onboarding-model";
 import { DiscardBar } from "./scope-actions";
+import { type Refusal, refusalFrom, refusalWords } from "./trial-model";
 import { type IconName, UiIcon } from "./ui-icon";
 import { isTopmostDialog, useFocusTrap } from "./use-focus-trap";
 
@@ -56,7 +57,11 @@ const EMPTY_PROCESS: Draft = {
   primary: "",
 };
 
-function problemFor(status: number): string {
+function problemFor(status: number, refusal: Refusal | null): string {
+  // The subscription refused it: what the trial allows, never a retry line.
+  if (refusal !== null) {
+    return refusalWords(refusal);
+  }
   if (status === 409) {
     return "A process with this name is already in scope.";
   }
@@ -196,7 +201,7 @@ function AddProcessWizard({
   async function send(
     intent: string,
     extra: Record<string, unknown> = {},
-  ): Promise<{ status: number; answer: unknown }> {
+  ): Promise<{ status: number; answer: unknown; refusal: Refusal | null }> {
     try {
       const response = await fetch("/workspace/system-wizard", {
         method: "POST",
@@ -217,13 +222,16 @@ function AddProcessWizard({
       const answer = (await response.json()) as {
         status?: unknown;
         onboarding?: unknown;
+        refusal?: unknown;
       };
+      const status = typeof answer.status === "number" ? answer.status : 0;
       return {
-        status: typeof answer.status === "number" ? answer.status : 0,
+        status,
         answer: answer.onboarding ?? null,
+        refusal: refusalFrom(status, answer.refusal),
       };
     } catch {
-      return { status: 0, answer: null };
+      return { status: 0, answer: null, refusal: null };
     }
   }
 
@@ -276,10 +284,12 @@ function AddProcessWizard({
   async function add() {
     setBusy(true);
     setProblem(null);
-    const { status } = await send("process-add", { approved_areas: approved });
+    const { status, refusal } = await send("process-add", {
+      approved_areas: approved,
+    });
     setBusy(false);
     if (status !== 200) {
-      setProblem(problemFor(status));
+      setProblem(problemFor(status, refusal));
       return;
     }
     document.dispatchEvent(new Event(PROCESS_SAVED_EVENT));

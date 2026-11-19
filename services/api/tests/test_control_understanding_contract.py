@@ -20,6 +20,7 @@ import ai_workforce_api
 from ai_workforce_api import (
     attribute_assumptions,
     control_attributes,
+    control_context,
     understanding_chat,
     understanding_once,
     understanding_review,
@@ -41,6 +42,9 @@ MODELS: dict[str, Any] = {
     "ReviewRequestBody": understanding_review.ReviewRequestBody,
     "AssumptionBody": attribute_assumptions.AssumptionBody,
     "NeedBody": understanding_chat.NeedBody,
+    # 18 November 2026: a QUESTION need carries its issue, read by the same parse as the
+    # context's issues (control-context-model.parseIssue).
+    "IssueBody": control_context.IssueBody,
 }
 
 

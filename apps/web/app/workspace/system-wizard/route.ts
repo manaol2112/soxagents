@@ -6,7 +6,10 @@ import { wizardWrite } from "../../../src/onboarding-model";
 
 /** The system wizard's calls: create a system, its details, the agent's suggested
  * details, the magic wand, the saved selection, and removing a SOC report. Called in the background; answers as JSON with
- * the setup snapshot, so the wizard keeps its own state while the page refreshes. */
+ * the setup snapshot, so the wizard keeps its own state while the page refreshes. A
+ * change the subscription refused (402) passes on the API's structured reason as it
+ * came, for the wizard to read with refusalFrom (trial-model.ts), so it can say what was
+ * refused and what to do. */
 export async function POST(request: Request) {
   let fields: Record<string, unknown> = {};
   try {
@@ -25,6 +28,7 @@ export async function POST(request: Request) {
   let status = 0;
   let detail = "";
   let onboarding: unknown = null;
+  let refusal: unknown = null;
   try {
     const headers = new Headers({ "content-type": "application/json" });
     if (session !== undefined) {
@@ -40,6 +44,9 @@ export async function POST(request: Request) {
     });
     status = response.status;
     const body = (await response.json()) as unknown;
+    if (status === 402) {
+      refusal = body;
+    }
     if (status === 200) {
       onboarding = body;
     } else if (typeof body === "object" && body !== null && "detail" in body) {
@@ -49,5 +56,5 @@ export async function POST(request: Request) {
   } catch {
     status = status === 0 ? 0 : status;
   }
-  return NextResponse.json({ status, detail, onboarding });
+  return NextResponse.json({ status, detail, onboarding, refusal });
 }

@@ -12,7 +12,7 @@ from psycopg import sql
 from support import Database
 from temporalio.testing import WorkflowEnvironment
 
-from ai_workforce_api import independence
+from ai_workforce_api import evidence_assurance, independence
 from ai_workforce_api.settings import loopback_database_url
 
 # The tests read DATABASE_URL from the environment directly: the same localhost-to-127.0.0.1
@@ -57,7 +57,7 @@ def temporal_test_server_start_retried() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
-def workflow_address_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+def workflow_address_unset(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.setenv("WORKFLOW_ADDRESS", "")
     monkeypatch.setenv("WORKFLOW_PROVIDER", "")
     monkeypatch.setenv("EMAIL_PROVIDER", "")
@@ -95,6 +95,13 @@ def workflow_address_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GOOGLE_REDIRECT_URL", "")
     monkeypatch.setenv("DNS_NAMESERVERS", "")
     independence.configure(True)
+    # The process's settings read once (evidence_assurance._process_settings) are read again
+    # under this test's environment, never kept from outside it: filled before the variables
+    # above were blanked, they held the developer's live model (18 November 2026), and a
+    # basis made from them named another model than the run's.
+    evidence_assurance._process_settings.cache_clear()
+    yield
+    evidence_assurance._process_settings.cache_clear()
 
 
 def _fresh_database(

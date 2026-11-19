@@ -359,6 +359,18 @@ describe("a step's panel frame", () => {
 });
 
 describe("the agent's strip", () => {
+  it("counts the attributes to accept in the rows' own word", () => {
+    // Design review, 19 November 2026: "6 attributes approved" above six "To accept" rows.
+    const input = midway({
+      setup: midway().setup,
+      attributes: { approved: 6, proposed: 0, untailored: 6, toAccept: 6 },
+    });
+    const step = workflowOf(input).find((item) => item.key === "attributes");
+    assert.ok(step !== undefined);
+    assert.equal(step.status, "6 to accept");
+    assert.deepEqual(agentNote(step, input).found, ["6 attributes to accept."]);
+  });
+
   it("says what the agent did and found, from the records only", () => {
     const input = midway();
     const steps = workflowOf(input);
@@ -722,4 +734,23 @@ describe("a step's panel never contradicts itself", () => {
       }
     });
   }
+});
+
+describe("the next step while the review waits on a person's choice", () => {
+  it("says the end of the course's state and choice, never to confirm proposed answers", () => {
+    // Re-shoot r8, 19 November 2026 (H1, H2, F1).
+    const choice =
+      "The review is held on attribute B: run it again, or proceed without it and record the reason.";
+    const input = midway({
+      understanding: { completedAt: null, questionPass: "HELD", choice },
+    });
+    const steps = workflowOf(input);
+    const step = steps.find((item) => item.key === "understanding");
+    assert.ok(step !== undefined);
+    assert.equal(step.note, choice);
+    const need = panelFrame("understanding", steps, null).need;
+    assert.equal(need.detail, choice);
+    assert.equal(need.title, "The review is not complete");
+    assert.doesNotMatch(need.detail, /proposed answer/);
+  });
 });

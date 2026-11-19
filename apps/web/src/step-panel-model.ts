@@ -5,6 +5,7 @@
  */
 
 import {
+  criteriaCounts,
   STEPS,
   type StepKey,
   type Tone,
@@ -23,6 +24,13 @@ import { requestsNeed } from "./design-requests-model.ts";
 import { DW_SECTION } from "./design-workpaper-sections.ts";
 import { STEP_DRAFT, STEP_RETURNED } from "./review-request-model.ts";
 import { CHECKING_LINE, CHECKING_STATUS } from "./understanding-once-model.ts";
+import {
+  REVIEW_CHOICE_ACTION,
+  REVIEW_CHOICE_ANCHOR,
+  REVIEW_FAILED,
+  REVIEW_FAILED_STATUS,
+  REVIEW_HELD,
+} from "./understanding-specialist-model.ts";
 
 export type PanelNeed = {
   /** act: a person decides; agent: an agent is working; wait: an earlier step holds it;
@@ -222,6 +230,19 @@ function needOf(step: WorkflowStep, steps: readonly WorkflowStep[]): PanelNeed {
       title: CHECKING_LINE,
       detail:
         "The agents are checking the answers for anything else the attributes need. A question they add joins this course.",
+    };
+  }
+  // The review waits on a person's choice (HELD or FAILED): the end of the course's state
+  // and choice, never "confirm the proposed answers" (re-shoot r8, 19 November 2026).
+  if (step.key === "understanding" && step.note !== undefined) {
+    return {
+      kind: "act",
+      title: step.status === REVIEW_FAILED_STATUS ? REVIEW_FAILED : REVIEW_HELD,
+      detail: step.note,
+      action: {
+        label: step.choiceAction ?? REVIEW_CHOICE_ACTION,
+        anchor: REVIEW_CHOICE_ANCHOR,
+      },
     };
   }
   if (step.agent) {
@@ -480,6 +501,7 @@ export function agentNote(
         (input.understanding?.completedAt ?? null) !== null
           ? 0
           : (input.attributes.questions ?? 0);
+      const criteria = criteriaCounts(input.attributes);
       // Held by the understanding, the line says what the agent does; with criteria still to
       // tailor, it never claims each one is tailored (17 November 2026).
       return {
@@ -488,16 +510,20 @@ export function agentNote(
           : (input.attributes.untailored ?? 0) > 0
             ? "Started from the standard's attributes and proposed what the understanding changes."
             : "Started from the standard's attributes, proposed what the understanding changes, and tailored each one's pass/fail criteria to this control.",
+        // In the rows' own words, as the node counts them (design review, 19 November
+        // 2026: "6 attributes approved" over six "To accept" rows).
         found: [
-          `${count(input.attributes.approved, "attribute")} approved${input.attributes.proposed > 0 ? `, ${input.attributes.proposed} proposed to decide` : ""}.`,
+          criteria.toAccept > 0
+            ? `${count(criteria.toAccept, "attribute")} to accept${input.attributes.proposed > 0 ? `, ${input.attributes.proposed} proposed to decide` : ""}.`
+            : `${count(input.attributes.approved, "attribute")} approved${input.attributes.proposed > 0 ? `, ${input.attributes.proposed} proposed to decide` : ""}.`,
           ...(questions > 0
             ? [`${count(questions, "question")} on them open.`]
             : []),
-          ...((input.attributes.untailored ?? 0) > 0
+          ...(criteria.missing > 0
             ? [
-                `${count(input.attributes.untailored ?? 0, "attribute")} without pass/fail criteria tailored to this control.`,
+                `${count(criteria.missing, "attribute")} without pass/fail criteria tailored to this control.`,
               ]
-            : input.attributes.approved > 0
+            : criteria.toAccept === 0 && input.attributes.approved > 0
               ? ["Each approved attribute has tailored criteria a person owns."]
               : []),
         ],

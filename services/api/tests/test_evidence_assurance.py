@@ -2253,6 +2253,39 @@ def test_a_model_change_is_a_new_basis_and_never_reuses_a_run(
     assert [r[4] for r in bench.runs()] == [None, None]
 
 
+def test_a_runs_basis_names_the_models_of_its_own_settings_not_the_process_copy(
+    migrated: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Intermittent failure of the test above (18 November 2026): the process's settings, read
+    # once (_process_settings), held another model than the run's settings, and the run's
+    # basis was made from them, so the run's models differed from those it ran with. The
+    # basis a run checks is made from the settings the run uses.
+    bench = _Bench(migrated, "model-copy")
+    bench.add("ticket REQ-1041.txt", TICKET)
+    bench.read_next(_reading("walkthrough"))
+    [(domain,)] = bench.rows(
+        "SELECT domain FROM engagement_controls WHERE id = %s", UUID(bench.control)
+    )
+    # Queued under this test's settings; then the process's copy is read with a live provider
+    # (a placeholder key, never used: nothing is called with it).
+    monkeypatch.setenv("MODEL_PROVIDER", "anthropic")
+    monkeypatch.setenv("MODEL_API_KEY", "placeholder-not-a-key")
+    chain_module._process_settings.cache_clear()
+    cached = chain_module._process_settings()
+    monkeypatch.setenv("MODEL_PROVIDER", "")
+    monkeypatch.setenv("MODEL_API_KEY", "")
+    assert chain_module._process_settings() is cached
+    own = chain_module.expected_models(domain, _settings(migrated))
+    assert chain_module.expected_models(domain) != own
+    readings = _Readings(_first_met_rest("MET"), _first_met_rest("MET"))
+    assert bench.check(readings) == ["READY"]
+    [(ran_with, models)] = bench.rows(
+        "SELECT ran_with, models FROM evidence_assessments WHERE requirement_id = %s",
+        UUID(bench.item_id),
+    )
+    assert ran_with == models == own
+
+
 def test_after_a_reading_only_that_engagements_runs_are_scheduled(migrated: Database) -> None:
     """Review item 15."""
     first, second = _Bench(migrated, "scope-a"), _Bench(migrated, "scope-b")

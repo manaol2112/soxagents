@@ -731,12 +731,16 @@ def test_the_table_keeps_answers_to_their_shape(migrated: Database) -> None:
 
 
 def _narrative_json(questions: list[Question], answers: dict[str, str]) -> list[dict[str, Any]]:
-    """What the review's narrative reads for these questions and answers, as JSON."""
+    """What the review's narrative reads for these questions and answers, as JSON.
+
+    Rewritten 19 November 2026 (design review, S5). Old: each part was its text and key. New:
+    also `answered_at`, None for every part narrate gives (a later answer told in place of a
+    sentence carries its time; understanding_chat.with_later)."""
     return [
         {
             "topic": topic,
             "label": TOPIC_LABELS[topic],
-            "parts": [{"text": text, "key": key} for text, key in parts],
+            "parts": [{"text": text, "key": key, "answered_at": None} for text, key in parts],
         }
         for topic, parts in narrate(questions, answers)
         if parts

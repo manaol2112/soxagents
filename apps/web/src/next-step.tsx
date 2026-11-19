@@ -84,7 +84,14 @@ export function NextStepCard({
   const open = (action: NextAction, primary: boolean) => (
     <Link
       className={`btn ${primary ? "btn-primary" : "btn-secondary"}`}
-      href={hrefs[action.key]}
+      href={
+        action.anchor === undefined
+          ? hrefs[action.key]
+          : `${hrefs[action.key]}#${action.anchor}`
+      }
+      // A place on the step (the review's Run again or Proceed choice) is brought into view
+      // by the panel's arrival watch (control-workflow watchArrival); the router never
+      // scrolls, so the two never fight.
       scroll={false}
     >
       {action.label}

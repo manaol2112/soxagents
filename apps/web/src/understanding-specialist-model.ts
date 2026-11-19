@@ -26,10 +26,13 @@ import {
   attributeLetter,
   contextProblem,
   type NotReviewedItem,
+  PROCEED_REASON_MIN,
   type QuestionPass,
   type QuestionReview,
   type ReviewNotRun,
+  type ReviewPoint,
   type ReviewRequest,
+  type SupportItem,
   type UnifiedRow,
   unifiedState,
 } from "./control-context-model.ts";
@@ -52,13 +55,165 @@ export const REVIEW_FAILED = "The review could not run";
 /** The workflow node's status (a node holds 28 characters). */
 export const REVIEW_FAILED_STATUS = "The review could not run";
 export const RUN_AGAIN = "Run again";
+/** While the review is held on attributes it did not review (owner decision, 18 November
+ * 2026): the workflow node's status (a node holds 28 characters), the end of the course's
+ * title, its choice, and the reason to proceed. */
+export const REVIEW_HELD_STATUS = "Attributes not reviewed";
+export const REVIEW_HELD = "The review is not complete";
+export const REVIEW_HELD_CHOICE =
+  "Run the review again, or proceed without it and record the reason.";
+export const REVIEW_HELD_NO_RUN =
+  "The review has run twice and cannot run again. Proceed without it and record the reason.";
+export const PROCEED_REASON_LABEL = "Reason for proceeding without the review";
+/** What the reason needs, said before anything is typed (design review, 19 November 2026:
+ * Proceed was disabled at 0 characters with only a count under the field). */
+const PROCEED_REASON_NEEDS = `Give the reason (at least ${PROCEED_REASON_MIN} characters) to proceed.`;
+export const PROCEED_REASON_HINT = `${PROCEED_REASON_NEEDS} Recorded in the audit trail with the attributes not reviewed.`;
+/** The same hint where no attribute not reviewed is named on the screen. */
+export const PROCEED_REASON_HINT_PLAIN = `${PROCEED_REASON_NEEDS} Recorded in the audit trail.`;
+/** The workflow node once a person proceeded without the review of some (28 characters at
+ * most). */
+// "Without the full review" (design review, 19 November 2026; old "Completed without review"):
+// the panel title's words within the node's 28 characters.
+export const PROCEEDED_STATUS = "Without the full review";
+/** The end of the course while the questions the agents raised are having their wording
+ * checked: the same count as the header's (screenshot pass, 19 November 2026). */
+export function preparingTitle(count: number): string {
+  return count === 1 ? "Preparing the question…" : "Preparing the questions…";
+}
+/** After a challenge the server refused because the review changed: it is read again. */
+export const CHALLENGE_REREAD =
+  "The review was updated in the meantime. Check the point before challenging it.";
+export const PROCEED_HELD_SENT =
+  "Completed without the review of these attributes. The reason is recorded in the audit trail.";
+export const RUN_AGAIN_SENT = "Running the review again…";
+
+// What each established point rests on, and a person's challenge of it (owner decision, 18
+// November 2026, "Show the support").
+export const SUPPORT_TITLE = "What the review rests on";
+export const CHALLENGE_ACTION = "Challenge";
+export const CHALLENGE_NEED_LABEL = "Fact to ask again";
+export const CHALLENGE_NOTE_LABEL = "What does not hold (optional)";
+export const CHALLENGE_NOTE_HINT =
+  "The point is asked again in the questions below; the understanding is completed once it is answered.";
+export const CHALLENGE_SEND = "Ask again";
+export const CHALLENGE_SENT =
+  "Challenged. The understanding is completed once the new question is answered.";
+/** A challenged point's state, as one line (design review, 19 November 2026): while its
+ * question is still being worded it is not in the questions yet. */
+export const CHALLENGE_PREPARING =
+  "Challenged: a new question is being prepared.";
+export const CHALLENGE_OPEN = "Challenged: asked again in the questions.";
+export const CHALLENGE_ANSWERED = "Challenged and answered.";
+
+/** What a challenged point says of its question; null when it is not challenged. */
+export function challengeLine(state: ReviewPoint["challenge"]): string | null {
+  return state === "PREPARING"
+    ? CHALLENGE_PREPARING
+    : state === "OPEN"
+      ? CHALLENGE_OPEN
+      : state === "ANSWERED"
+        ? CHALLENGE_ANSWERED
+        : null;
+}
+export const OPEN_DOCUMENT = "View the documents";
+export const OPEN_NARRATIVE = "View the process narrative";
+const SUPPORT_KIND_WORDS: Record<SupportItem["kind"], string> = {
+  WALKTHROUGH: "Walkthrough answer",
+  VALUE: "Statement value",
+  QUESTION: "Answered question",
+  DOCUMENT: "Document",
+  NARRATIVE: "Process narrative",
+};
+
+/** One thing a point rests on, in three parts: what kind it is (the small label), what it
+ * is (the question asked, the value's label, the document's title; "" for the narrative),
+ * and what it says (the answer, the value, or the passage in quotation marks). */
+export function supportLine(item: SupportItem): {
+  kind: string;
+  label: string;
+  said: string;
+} {
+  const quoted = item.kind === "DOCUMENT" || item.kind === "NARRATIVE";
+  return {
+    kind: SUPPORT_KIND_WORDS[item.kind],
+    label: item.kind === "NARRATIVE" ? "" : item.label,
+    said: item.said === "" ? "" : quoted ? `“${item.said}”` : item.said,
+  };
+}
+
+/** A point named as the Attributes step names it: "Attribute B" by its place, or a kind of
+ * fact in words for a control with no attributes yet, or its own wording. */
+export function pointName(
+  point: Pick<ReviewPoint, "key" | "kind" | "attributeId" | "code" | "text">,
+  approved: ReadonlyArray<Pick<Attribute, "id" | "code" | "definition">> = [],
+): string {
+  if (point.kind === "FACT") {
+    const fact = (Object.keys(FACT_WORDS) as AskedFact[]).find(
+      (each) => each === point.key,
+    );
+    const words = fact === undefined ? point.text : FACT_WORDS[fact];
+    return `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
+  }
+  const at = approved.findIndex(
+    (item) =>
+      (point.attributeId !== null && item.id === point.attributeId) ||
+      (point.code !== null &&
+        item.code !== undefined &&
+        item.code !== "" &&
+        item.code === point.code) ||
+      item.definition?.key === point.key,
+  );
+  return at >= 0 ? `Attribute ${attributeLetter(at)}` : point.text;
+}
+
+/** A kind of fact in words, capitalised, as a choice reads it ("Who approves it"). */
+export function factWords(fact: string): string {
+  const known = (Object.keys(FACT_WORDS) as AskedFact[]).find(
+    (each) => each === fact,
+  );
+  const words = known === undefined ? fact : FACT_WORDS[known];
+  return `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
+}
+
+/** Whether a person may challenge a point now: before completion, not challenged yet, and
+ * with a need it rests on to ask again. */
+export function offersChallenge(
+  point: Pick<ReviewPoint, "challenge" | "needs">,
+  canAct: boolean,
+  completed: boolean,
+): boolean {
+  return (
+    canAct && !completed && point.challenge === "" && point.needs.length > 0
+  );
+}
+
+/** Why a challenge was not taken, or null once the server confirmed it (200). */
+export function challengeProblem(status: number, detail = ""): string | null {
+  if (status === 200) {
+    return null;
+  }
+  if (status === 409) {
+    return (
+      sentenceOf(detail) ??
+      "The review changed while you were working. Refresh and try again."
+    );
+  }
+  if (status === 422) {
+    return "Keep the note to 500 characters, with no password or key.";
+  }
+  return contextProblem(status, detail);
+}
 export const PROCEED_WITHOUT = "Proceed without it";
 export const REVIEW_AGAIN = "Review again";
 export const REVIEW_AGAIN_SENT =
   "Review requested. What it finds is stated on the attributes as assumptions, never as new questions here.";
 export const PROCEED_SENT =
   "Completed by the rules, without the review. Any gap the agents find is stated on the attributes as an assumption.";
-const FAILURE_FALLBACK = "The specialist's answer could not be used.";
+// The sentence when a failed read gives none (final design review, 19 November 2026, N3): the
+// server's FAILED_SENTENCE without its lead, as failureDetail shows it.
+export const FAILURE_FALLBACK =
+  "The IT audit specialist's review could not be completed.";
 /** Without a model (B1k): the review is not run, and says so in one line. */
 export const REVIEW_NOT_RUN =
   "The specialist's review was not run: no model is configured. The understanding follows the rules.";
@@ -283,11 +438,14 @@ function listed(items: readonly string[]): string {
  * attributes yet, by the kind of fact: each is read back to a letter, or to the fact's
  * words. One the page cannot place is counted, never shown as a code.
  */
-export function notReviewedLine(
+/** Where each unit not reviewed sits as the page names it: an approved attribute by its
+ * letter, a kind of fact (on a control with no attributes) by its words, or counted when the
+ * page cannot place it. The one placing every line about units not reviewed reads. Pure. */
+export function placeNotReviewed(
   codes: readonly string[],
   approved: ReadonlyArray<Pick<Attribute, "id" | "code" | "definition">> = [],
   items: ReadonlyArray<NotReviewedItem> = [],
-): string | null {
+): { letters: string[]; facts: string[]; unplaced: number } {
   // The server's own naming first (ReviewBody.not_reviewed_items): an approved attribute by
   // its id, so its letter is placed whatever its code; the unit key otherwise.
   const byKey = new Map(items.map((item) => [item.key, item]));
@@ -296,7 +454,7 @@ export function notReviewedLine(
     .filter((code) => code !== "")
     .map((code) => byKey.get(code)?.attributeId ?? code);
   if (named.length === 0) {
-    return null;
+    return { letters: [], facts: [], unplaced: 0 };
   }
   const letters: string[] = [];
   const facts: string[] = [];
@@ -322,28 +480,210 @@ export function notReviewedLine(
       unplaced += 1;
     }
   }
+  return { letters, facts, unplaced };
+}
+
+/** The units not reviewed, named for a sentence ("attribute B", "attributes A and B", "who
+ * approves it", "1 attribute"); null for none. Pure. */
+export function notReviewedNames(
+  codes: readonly string[],
+  approved: ReadonlyArray<Pick<Attribute, "id" | "code" | "definition">> = [],
+  items: ReadonlyArray<NotReviewedItem> = [],
+): string | null {
+  const { letters, facts, unplaced } = placeNotReviewed(codes, approved, items);
+  const parts = [
+    ...(letters.length === 0
+      ? []
+      : [
+          `${letters.length === 1 ? "attribute" : "attributes"} ${listed(letters)}`,
+        ]),
+    ...facts,
+    ...(unplaced === 0
+      ? []
+      : [`${unplaced} ${unplaced === 1 ? "attribute" : "attributes"}`]),
+  ];
+  return parts.length === 0 ? null : listed(parts);
+}
+
+/** After a person proceeded without the review of some units (ContextBody.review_proceeded):
+ * the one sentence the header's lede, the review's line, the end of the course's status line
+ * and the workflow say it with. Null when nothing was left not reviewed. Pure. */
+export function proceededLine(
+  proceeded: { notReviewed: string[] },
+  approved: ReadonlyArray<Pick<Attribute, "id" | "code" | "definition">> = [],
+  items: ReadonlyArray<NotReviewedItem> = [],
+): string | null {
+  const names = notReviewedNames(proceeded.notReviewed, approved, items);
+  return names === null ? null : `Completed without the review of ${names}.`;
+}
+
+/** Where the lede and the review's line point to the reason, said once at the end of the
+ * course (q_ui4, 19 November 2026: it was repeated three times). */
+export const PROCEEDED_REASON_THERE =
+  "The reason is recorded with the completion.";
+
+/** The reason a person recorded, who and when: said once, at the end of the course, in the
+ * body's weight. Null when none was recorded. Pure. */
+export function proceededReason(
+  proceeded: { by: string; at: string; reason: string },
+  timeZone?: string,
+): string | null {
+  const reason = proceeded.reason.replace(/[.!?]+$/, "");
+  if (reason === "") {
+    return null;
+  }
+  const when = whenWords(proceeded.at, timeZone);
+  const who = [proceeded.by, when].filter((part) => part !== "").join(", ");
+  return `Reason recorded${who === "" ? "" : ` by ${who}`}: “${reason}”.`;
+}
+
+/** A validation line under a field: its count, the problem when there is one, then the hint;
+ * one full stop between each, never two (screenshot pass, 19 November 2026: "at least 3
+ * characters.."). Pure. */
+export function hintParts(
+  count: string,
+  problem: string | null,
+  hint: string,
+): { count: string; problem: string | null; hint: string } {
+  return {
+    count,
+    problem: problem === null ? null : problem.replace(/[.\s]+$/, ""),
+    hint,
+  };
+}
+
+/** A failure sentence under the title that already says the review could not run: the
+ * reason alone, never the title again ("The review could not run: it stopped before it
+ * finished." under "The review could not run"). Pure. */
+export function failureDetail(failure: string): string {
+  const rest = failure.replace(/^The review could not run:\s*/i, "").trim();
+  return rest === ""
+    ? failure
+    : `${rest.charAt(0).toUpperCase()}${rest.slice(1)}`;
+}
+
+export function notReviewedLine(
+  codes: readonly string[],
+  approved: ReadonlyArray<Pick<Attribute, "id" | "code" | "definition">> = [],
+  items: ReadonlyArray<NotReviewedItem> = [],
+  /** The understanding waits on a person for them (the pass is HELD): the line says only
+   * what was not reviewed, as the choice that follows says what happens next. */
+  held = false,
+): string | null {
+  const { letters, facts, unplaced } = placeNotReviewed(codes, approved, items);
+  if (letters.length + facts.length + unplaced === 0) {
+    return null;
+  }
   const parts: string[] = [];
+  const onIt = held ? "." : "; the agent states its assumptions on it.";
+  const onThem = held ? "." : "; the agent states its assumptions on them.";
   if (letters.length > 0) {
     parts.push(
       letters.length === 1
-        ? `Attribute ${letters[0]} was not reviewed; the agent states its assumptions on it.`
-        : `Attributes ${listed(letters)} were not reviewed; the agent states its assumptions on them.`,
+        ? `Attribute ${letters[0]} was not reviewed${onIt}`
+        : `Attributes ${listed(letters)} were not reviewed${onThem}`,
     );
   }
   if (facts.length > 0) {
     parts.push(
-      `Not reviewed: ${listed(facts)}; the agent states its assumptions on the attributes.`,
+      `Not reviewed: ${listed(facts)}${held ? "." : "; the agent states its assumptions on the attributes."}`,
     );
   }
   if (unplaced > 0) {
     parts.push(
       unplaced === 1
-        ? `${letters.length > 0 ? "One more attribute" : "One attribute"} was not reviewed; the agent states its assumptions on it.`
-        : `${unplaced} ${letters.length > 0 ? "more " : ""}attributes were not reviewed; the agent states its assumptions on them.`,
+        ? `${letters.length > 0 ? "One more attribute" : "One attribute"} was not reviewed${onIt}`
+        : `${unplaced} ${letters.length > 0 ? "more " : ""}attributes were not reviewed${onThem}`,
     );
   }
   return parts.join(" ");
 }
+
+/** The chip naming the attribute a review question asks about ("Attribute B"), by the
+ * page's letter: the same order the server letters the challenge question by
+ * (understanding_review.letters_of: the approved attributes by position). Null for a
+ * question on no attribute, or one no longer approved (final design review, 19 November
+ * 2026, N2: "What shows the items it covers for this attribute?" named none). */
+export function askedAttributeChip(
+  code: string | null | undefined,
+  approved: ReadonlyArray<Pick<Attribute, "code">>,
+): string | null {
+  if (code === null || code === undefined || code === "") {
+    return null;
+  }
+  const at = approved.findIndex((item) => item.code === code);
+  return at < 0 ? null : `Attribute ${attributeLetter(at)}`;
+}
+
+/** The lede while the review is held (design review, 19 November 2026: the lede, the end
+ * card and the review's line said the same choice three times): only the state, "The review
+ * is held on attribute B."; the end of the course carries the choice. */
+export function heldLede(
+  codes: readonly string[],
+  approved: ReadonlyArray<Pick<Attribute, "id" | "code" | "definition">> = [],
+  items: ReadonlyArray<NotReviewedItem> = [],
+): string {
+  const { letters, facts, unplaced } = placeNotReviewed(codes, approved, items);
+  const names = [
+    ...(letters.length === 0
+      ? []
+      : [
+          letters.length === 1
+            ? `attribute ${letters[0]}`
+            : `attributes ${listed(letters)}`,
+        ]),
+    ...facts,
+    ...(unplaced === 0
+      ? []
+      : [
+          `${unplaced} ${letters.length > 0 ? "more " : ""}${unplaced === 1 ? "attribute" : "attributes"}`,
+        ]),
+  ];
+  return names.length === 0
+    ? "The review is held."
+    : `The review is held on ${listed(names)}.`;
+}
+
+/** The next step's line while the review waits on a person's choice (re-shoot r8, 19
+ * November 2026: the card said to confirm proposed answers while the choice was Run again or
+ * Proceed): the same state the end of the course shows (heldLede, or a review that could not
+ * run) and the choice it offers. */
+export function reviewChoiceLine(state: {
+  failed: boolean;
+  /** heldLede's sentence for a held review. */
+  held: string;
+  runAgain: boolean;
+}): string {
+  const said = state.failed
+    ? REVIEW_FAILED_LEDE
+    : state.held || "The review is held.";
+  return state.runAgain
+    ? `${said.replace(/\.$/, "")}: run it again, or proceed without it and record the reason.`
+    : `${said} It has run twice and cannot run again: proceed without it and record the reason.`;
+}
+
+/** The next step's title and button while the review waits on that choice, and where it
+ * opens: the end of the course that offers Run again and Proceed (ReviewFailed). */
+export const REVIEW_CHOICE_ACTION = "Run again or proceed";
+
+/** Whether the end of the course offers Run again: always after a review that could not run
+ * (`held` null), and while a held one has a read left. One source for the end card's
+ * buttons and the next step's action (re-shoot r10, 19 November 2026: H2 can only proceed,
+ * and its card said "Run again or proceed"). */
+export function runsAgain(held: { runAgain: boolean } | null): boolean {
+  return held === null || held.runAgain;
+}
+
+/** The next step's action for that choice, as the end card offers it. */
+export function reviewChoiceAction(runAgain: boolean): string {
+  return runAgain ? REVIEW_CHOICE_ACTION : PROCEED_WITHOUT;
+}
+export const REVIEW_CHOICE_ANCHOR = "ur-review-choice";
+
+/** The lede once the review could not run: only the state, as the end card carries the
+ * choice. */
+export const REVIEW_FAILED_LEDE =
+  "The review of the questions asked could not run.";
 
 /** Whether "Review again" is offered: a person's request, once the understanding is
  * complete and no review is running; never without a model. After a read that could not
@@ -483,6 +823,9 @@ export function withoutNotKnown<
   };
 }
 
+/** The attributes line while the review waits on a person's choice. */
+export const REVIEW_TO_DECIDE = "Review to run again, or proceed";
+
 /** What the understanding is ready for while the review could not run (B1l point 7): the
  * attributes wait on the person's choice, Run again or Proceed without it, whatever the gates
  * read. */
@@ -491,7 +834,7 @@ export function heldByFailedReview<
 >(lines: readonly T[], failed: boolean): T[] {
   return lines.map((line) =>
     failed && line.key === "attributes"
-      ? { ...line, ready: false, note: "Review to run or skip" }
+      ? { ...line, ready: false, note: REVIEW_TO_DECIDE }
       : line,
   );
 }
@@ -517,6 +860,12 @@ export const CONFLICT_LEAD = "A conflict to decide";
 export const CONFLICT_STANDS = "The confirmed understanding stands";
 export const NOT_KNOWN_LEAD = "Left as not known in Control Understanding:";
 export const ASSUMED_LEAD_TEXT = "The agent assumed:";
+/** A fact no agent could propose (UNKNOWN): never "The agent assumed:" with "That's right"
+ * (design review, 19 November 2026). */
+export const UNKNOWN_LEAD = "Not yet known:";
+export const UNKNOWN_ADD = "Add the answer";
+// Not "Leave open": "open" names a question still to answer (the words' rule, tests).
+export const UNKNOWN_LEAVE = "Leave unanswered";
 
 /** How an open assumption is led, by its kind. */
 export function assumptionLead(kind: Assumption["kind"] | undefined): string {
@@ -524,13 +873,71 @@ export function assumptionLead(kind: Assumption["kind"] | undefined): string {
     ? `${CONFLICT_LEAD}:`
     : kind === "NOT_KNOWN"
       ? NOT_KNOWN_LEAD
-      : ASSUMED_LEAD_TEXT;
+      : kind === "UNKNOWN"
+        ? UNKNOWN_LEAD
+        : ASSUMED_LEAD_TEXT;
 }
 
 /** The confirming choice's words, by kind: for a conflict, the confirmed understanding
- * stands. */
+ * stands; for a fact not yet known, the person leaves it open (recorded as their decision,
+ * never as a confirmed fact of an answer). */
 export function confirmWords(kind: Assumption["kind"] | undefined): string {
-  return kind === "CONFLICT" ? CONFLICT_STANDS : "That's right";
+  return kind === "CONFLICT"
+    ? CONFLICT_STANDS
+    : kind === "UNKNOWN"
+      ? UNKNOWN_LEAVE
+      : "That's right";
+}
+
+/** How the server records a fact no agent could propose (attribute_assumptions.NOT_YET_KNOWN):
+ * the question it asked, as a statement. */
+export const NOT_YET_KNOWN = " is not yet known.";
+
+/** The question a fact not yet known asked ("Who leads each investigation?"), from what the
+ * server recorded ("Who leads each investigation is not yet known."); null for any other. */
+export function unknownQuestion(assumed: string): string | null {
+  const said = assumed.trim();
+  if (!said.endsWith(NOT_YET_KNOWN)) {
+    return null;
+  }
+  const asked = said.slice(0, -NOT_YET_KNOWN.length).trim();
+  return asked === "" ? null : `${asked}?`;
+}
+
+/** What an open assumption says after its lead (re-shoot r8, 19 November 2026: "Not yet
+ * known: Who leads ... is not yet known." said it twice): for a fact not yet known, the
+ * question as a noun phrase ("who leads each investigation."); otherwise as recorded. */
+export function assumptionText(
+  item: Pick<Assumption, "kind" | "assumed">,
+): string {
+  const asked = item.kind === "UNKNOWN" ? unknownQuestion(item.assumed) : null;
+  if (asked === null) {
+    return item.assumed;
+  }
+  const phrase = asked.slice(0, -1);
+  // An acronym that opens it keeps its case ("IT ..."); a word is lowered.
+  const lowered = /^[A-Z][a-z]/.test(phrase)
+    ? `${phrase.charAt(0).toLowerCase()}${phrase.slice(1)}`
+    : phrase;
+  return `${lowered}.`;
+}
+
+/** The label over the answer box: the question itself for a fact not yet known (re-shoot
+ * r8: "What is the case on Investigation owner?"), else the matter's. */
+export function changePrompt(
+  item: Pick<Assumption, "kind" | "assumed" | "matter">,
+): string {
+  const asked = item.kind === "UNKNOWN" ? unknownQuestion(item.assumed) : null;
+  if (asked !== null) {
+    return asked;
+  }
+  const matter = item.matter.trim();
+  return matter === "" ? "What is the case?" : `What is the case on ${matter}?`;
+}
+
+/** The changing choice's words, by kind: a fact not yet known is answered, not changed. */
+export function changeWords(kind: Assumption["kind"] | undefined): string {
+  return kind === "UNKNOWN" ? UNKNOWN_ADD : "Change…";
 }
 
 /**
@@ -625,6 +1032,8 @@ export function acceptAllNote(words: {
 
 /** A person's request of the review: run it (again), or proceed without a failed one. */
 export type ReviewIntent = "review-run" | "review-proceed";
+/** A person's challenge of an established point. */
+export type ChallengeIntent = "review-challenge";
 /** The page's own follow-up of a read due by the rules (followsReview). */
 export type FollowIntent = "review-follow";
 

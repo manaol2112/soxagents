@@ -21,7 +21,6 @@ import {
 } from "./control-context-model";
 import {
   ACCEPTED_UNCONFIRMED,
-  ASSUMED_LEAD,
   CHANGE_REOPENS,
   characterCount,
   decidableAssumptions,
@@ -32,9 +31,12 @@ import {
   versionLine,
 } from "./understanding-once-model";
 import {
+  assumptionLead,
+  assumptionText,
   CONFLICT_LEAD,
-  CONFLICT_STANDS,
-  NOT_KNOWN_LEAD,
+  changePrompt,
+  changeWords,
+  confirmWords,
 } from "./understanding-specialist-model";
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
@@ -182,12 +184,8 @@ function OpenAssumption({
       {conflict ? <p className="tas-kicker">{CONFLICT_LEAD}</p> : null}
       {accepted ? <p className="tas-kicker">{ACCEPTED_UNCONFIRMED}</p> : null}
       <p className="tas-assumed">
-        {conflict ? null : (
-          <strong>
-            {item.kind === "NOT_KNOWN" ? NOT_KNOWN_LEAD : ASSUMED_LEAD}
-          </strong>
-        )}{" "}
-        {item.assumed}
+        {conflict ? null : <strong>{assumptionLead(item.kind)}</strong>}{" "}
+        {assumptionText(item)}
       </p>
       {canAct && !changing ? (
         <div className="tas-acts">
@@ -197,11 +195,7 @@ function OpenAssumption({
             disabled={locked || busy !== ""}
             onClick={() => void send("assumption-confirm")}
           >
-            {busy === "confirm"
-              ? "Recording…"
-              : conflict
-                ? CONFLICT_STANDS
-                : "That's right"}
+            {busy === "confirm" ? "Recording…" : confirmWords(item.kind)}
           </button>
           <button
             type="button"
@@ -213,7 +207,7 @@ function OpenAssumption({
               setChanging(true);
             }}
           >
-            Change…
+            {changeWords(item.kind)}
           </button>
         </div>
       ) : null}
@@ -229,10 +223,7 @@ function OpenAssumption({
             }
           }}
         >
-          <label htmlFor={`${boxId}-words`}>
-            What is the case
-            {item.matter.trim() !== "" ? ` on ${item.matter.trim()}` : ""}?
-          </label>
+          <label htmlFor={`${boxId}-words`}>{changePrompt(item)}</label>
           <textarea
             id={`${boxId}-words`}
             ref={box}

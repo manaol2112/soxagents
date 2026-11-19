@@ -13,6 +13,7 @@ import {
   carriedCopy,
   carriedSource,
   chatRequest,
+  checkingLine,
   chosenStart,
   composeAnswer,
   composeMultiple,
@@ -30,8 +31,10 @@ import {
   foldChip,
   followUpShown,
   greeting,
+  heldTopicsEnd,
   ignoredNote,
   interviewProgress,
+  laterLine,
   multipleAnswer,
   multipleProblem,
   multipleStart,
@@ -84,9 +87,11 @@ import {
   topicHint,
   topicLeft,
   topicName,
+  topicOnRecordHint,
   topicSave,
   topicShown,
   topicStep,
+  topicStepAsks,
   understoodLede,
   walkthroughOutcome,
   walkthroughRecord,
@@ -3715,30 +3720,30 @@ describe("Control Understanding never contradicts itself (design review, 17 Nove
     assert.equal(openQuestionsLine(0), "");
     assert.equal(
       openQuestionsLine(1),
-      "1 question is open below; it does not hold the attributes.",
+      "1 question is open below; it does not affect the attributes.",
     );
     assert.equal(
       openQuestionsLine(1, 1),
-      "1 optional question is open below; it does not hold the attributes.",
+      "1 optional question is open below; it does not affect the attributes.",
     );
     assert.equal(
       openQuestionsLine(2, 2),
-      "2 optional questions are open below; they do not hold the attributes.",
+      "2 optional questions are open below; they do not affect the attributes.",
     );
     assert.equal(
       openQuestionsLine(2, 1),
-      "2 questions are open below, 1 of them optional; they do not hold the attributes.",
+      "2 questions are open below, 1 of them optional; they do not affect the attributes.",
     );
     assert.equal(
       openQuestionsLine(3, 2, false, "here"),
-      "3 questions are open here, 2 of them optional; they do not hold the attributes.",
+      "3 questions are open here, 2 of them optional; they do not affect the attributes.",
     );
     assert.equal(
       openQuestionsLine(2, 0, true),
-      "2 questions raised since are open below; they do not hold the attributes.",
+      "2 questions raised since are open below; they do not affect the attributes.",
     );
     // Rewritten 17 November 2026 (design review). Old: complete with a gate open read "A
-    // question raised since is open below; it does not hold the attributes." whatever the
+    // question raised since is open below; it does not affect the attributes." whatever the
     // count, and complete with the gates read understood read "Every point … is on record."
     // over an open question. New: the count of the open steps, singular or plural.
     assert.equal(
@@ -3748,7 +3753,7 @@ describe("Control Understanding never contradicts itself (design review, 17 Nove
         open: 2,
         statusText: "",
       }),
-      `${COMPLETE}. 2 questions raised since are open below; they do not hold the attributes.`,
+      `${COMPLETE}. 2 questions raised since are open below; they do not affect the attributes.`,
     );
     // Understood without a recorded completion (a body from before B1j): the same rule.
     assert.equal(
@@ -3758,7 +3763,7 @@ describe("Control Understanding never contradicts itself (design review, 17 Nove
         open: 1,
         statusText: "",
       }),
-      "1 question is open below; it does not hold the attributes.",
+      "1 question is open below; it does not affect the attributes.",
     );
     assert.equal(
       understoodLede({
@@ -3819,6 +3824,196 @@ describe("Control Understanding never contradicts itself (design review, 17 Nove
         open: 0,
       }),
       "Draft",
+    );
+  });
+
+  it("names the review's hold on the chip, never Confirmed under it", () => {
+    // Design review, 19 November 2026: the chip read "Confirmed" under "The review is not
+    // complete".
+    const settled = { progress: { done: 0, total: 0 }, done: true, open: 0 };
+    assert.equal(
+      foldChip({ ...settled, complete: false, end: "held" }),
+      "Held",
+    );
+    assert.equal(
+      foldChip({ ...settled, complete: false, end: "failed" }),
+      "Review failed",
+    );
+    assert.equal(
+      foldChip({ ...settled, complete: true, end: "complete" }),
+      "Confirmed",
+    );
+  });
+});
+
+// One screen, one story (design review, 18 November 2026): a completed understanding whose
+// agents are checking new questions never says every point is on record.
+describe("the understood lede while new questions are checked", () => {
+  it("says the questions are coming instead of on record", () => {
+    const lede = understoodLede({
+      done: true,
+      completeLine: "Understanding completed on Nov 18, 2026",
+      open: 0,
+      statusText: "",
+      checking: 3,
+    });
+    assert.ok(!lede.includes("is on record"), lede);
+    assert.ok(lede.endsWith(checkingLine(3)), lede);
+    assert.ok(
+      understoodLede({
+        done: true,
+        completeLine: null,
+        open: 0,
+        statusText: "",
+      }).includes("is on record"),
+    );
+  });
+});
+
+// Design review, 19 November 2026 (O1, every walkthrough question skipped): "9 points are
+// still open" and "9 points left" over six topic rows, each prefixed "Walkthrough:".
+describe("the end of the course while only walkthrough topics hold it", () => {
+  const wt = (
+    key: string,
+    topic: string,
+    extra: Record<string, unknown> = {},
+  ) => ({
+    key,
+    kind: "WALKTHROUGH",
+    question: `${key}?`,
+    value: "",
+    why: "",
+    status: "MISSING",
+    source: "NONE",
+    needed_for: [],
+    required: true,
+    topic,
+    answer_kind: "CHOICE",
+    options: ["Yes", "No"],
+    drives: [],
+    quote: "",
+    ...extra,
+  });
+  const review = parseReview({
+    control_ref: "ITGC-AC-01",
+    system: "SAP ERP",
+    statement: [],
+    needs: [
+      wt("wt-a1", "APPROVAL"),
+      wt("wt-a2", "APPROVAL"),
+      wt("wt-a3", "APPROVAL", { required: false }),
+      wt("wt-r1", "EXCEPTIONS"),
+      wt("wt-r2", "EXCEPTIONS", {
+        status: "CONFIRMED",
+        source: "PERSON",
+        value: "Yes",
+      }),
+    ],
+    evidence: { ready: false, missing: ["wt-a1", "wt-a2", "wt-r1"] },
+    attributes: { ready: false, missing: [] },
+  });
+
+  it("counts the topics in the heading, the questions under it, and each row's own", () => {
+    assert.ok(review !== null);
+    const end = heldTopicsEnd(review, [
+      topicStep("APPROVAL"),
+      topicStep("EXCEPTIONS"),
+    ]);
+    assert.deepEqual(end, {
+      title: "2 walkthrough topics are open",
+      text: "3 questions left before the evidence can be requested.",
+      left: { [topicStep("APPROVAL")]: 2, [topicStep("EXCEPTIONS")]: 1 },
+    });
+    // Any other step holding it: the general end says it.
+    assert.equal(
+      heldTopicsEnd(review, [topicStep("APPROVAL"), "ANSWER:x"]),
+      null,
+    );
+    assert.equal(heldTopicsEnd(review, []), null);
+  });
+});
+
+// Design review, 19 November 2026 (S5): a later person's answer on the same fact is told in
+// place of the walkthrough's sentence, dated.
+describe("a later answer in the walkthrough's section", () => {
+  it("is read with its time and told as answered that day", () => {
+    const review = parseReview({
+      control_ref: "ITGC-AC-03",
+      system: "SAP ERP",
+      statement: [],
+      needs: [],
+      narrative: [
+        {
+          topic: "POPULATION",
+          label: "Population for testing",
+          parts: [
+            { text: "The listing comes from a report.", key: null },
+            { text: " ", key: null },
+            {
+              text: "The reviewer compares the listing's count to the system.",
+              key: null,
+              answered_at: "2026-11-19T10:00:00Z",
+            },
+          ],
+        },
+      ],
+      evidence: { ready: false, missing: [] },
+      attributes: { ready: false, missing: [] },
+    });
+    assert.ok(review !== null);
+    const parts = review.narrative[0]?.parts ?? [];
+    assert.equal(parts[0]?.answeredAt, undefined);
+    assert.equal(parts[2]?.answeredAt, "2026-11-19T10:00:00Z");
+    assert.equal(
+      laterLine(parts[2]?.text ?? "", parts[2]?.answeredAt ?? "", "UTC"),
+      "Answered Nov 19: The reviewer compares the listing's count to the system.",
+    );
+    assert.equal(laterLine("Said.", ""), "Said.");
+  });
+});
+
+// Owner bug, 19 November 2026: in the walkthrough interview, Back from the next topic landed
+// on "Every question on approval is on record." with nothing to change.
+describe("a topic answered, then come back to with Back", () => {
+  it("shows its questions with the saved answers, to change or continue past", () => {
+    const review = parseReview({
+      control_ref: "ITGC-AC-01",
+      system: "SAP ERP",
+      statement: [],
+      needs: [
+        {
+          key: "wt-approver",
+          kind: "WALKTHROUGH",
+          question: "Who approves each request?",
+          value: "Manager",
+          why: "",
+          status: "CONFIRMED",
+          source: "PERSON",
+          needed_for: [],
+          required: true,
+          topic: "APPROVAL",
+          answer_kind: "CHOICE",
+          options: ["Manager", "Owner"],
+          drives: [],
+          quote: "",
+        },
+      ],
+      evidence: { ready: false, missing: [] },
+      attributes: { ready: false, missing: [] },
+    });
+    assert.ok(review !== null);
+    const step = topicStepAsks(review, "APPROVAL");
+    assert.equal(step.onRecord, true);
+    assert.deepEqual(
+      step.asked.map((need) => [need.key, need.value]),
+      [["wt-approver", "Manager"]],
+    );
+    // The saved answer is the one picked, and unchanged it saves nothing: Continue moves on.
+    assert.deepEqual(proposedPick(step.asked[0] as Need), ["Manager"]);
+    assert.deepEqual(topicSave(step.asked, {}, review.needs), {});
+    assert.equal(
+      topicOnRecordHint(step.asked.length),
+      "1 answer is on record. Change any here, or continue.",
     );
   });
 });

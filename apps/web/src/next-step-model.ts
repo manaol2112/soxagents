@@ -7,6 +7,7 @@
  * starts.
  */
 
+import { isPreparingSummary } from "./control-setup-model.ts";
 import {
   KIND_LABELS,
   type StepKey,
@@ -30,6 +31,9 @@ export type NextAction = {
   kindLabel: string;
   /** The button that opens the step. */
   label: string;
+  /** Where on the step it opens, when the step's need names a place (the review's Run again
+   * or Proceed choice); absent: the step itself. */
+  anchor?: string;
   /** The words on the step's node. */
   flag: string;
 };
@@ -71,6 +75,13 @@ function actionOf(
   fresh: boolean,
 ): NextAction {
   const need = panelFrame(step.key, steps, null).need;
+  // The review waits on a person's choice (held or failed): the card's one action is the
+  // step need's own, Run again or proceed, opening that choice (re-shoot r9, 19 November
+  // 2026: the card offered "Start: Control Understanding").
+  const choice =
+    step.key === "understanding" &&
+    step.note !== undefined &&
+    need.action !== undefined;
   // An agent is at work on the step, or the step only waits on one (a settled D&I
   // requests list the server releases itself): nothing is asked of the person.
   const kind: NextKind =
@@ -82,8 +93,12 @@ function actionOf(
   const on = about.system === "" ? "" : ` on ${about.system}`;
   const title =
     kind === "agent"
-      ? `${step.title} is being prepared`
-      : step.key === "understanding"
+      ? // A question being prepared is named as the node names it (design review, 19
+        // November 2026: "Preparing 1 question" until it is shown).
+        step.key === "understanding" && isPreparingSummary(step.status)
+        ? step.status
+        : `${step.title} is being prepared`
+      : step.key === "understanding" && step.note === undefined
         ? `Confirm how ${about.ref} runs${on}`
         : step.key === "setup" && need.kind === "act"
           ? `Complete ${about.ref}'s details`
@@ -102,8 +117,12 @@ function actionOf(
     facts: agentNote(step, input).found.filter((line) => line !== ""),
     kind,
     kindLabel: KIND_LABELS[step.kind],
-    label:
-      kind === "agent" || waits
+    ...(choice && need.action?.anchor !== undefined
+      ? { anchor: need.action.anchor }
+      : {}),
+    label: choice
+      ? (need.action?.label ?? `Open ${step.title}`)
+      : kind === "agent" || waits
         ? `Open ${step.title}`
         : several
           ? (need.action?.label ?? `Open ${step.title}`)

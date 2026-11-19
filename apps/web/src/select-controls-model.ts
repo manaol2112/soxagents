@@ -4,6 +4,8 @@
 
 import { selectionCategory } from "./controls-guide-model.ts";
 import type { Onboarding, SetupSystem } from "./onboarding-model.ts";
+import { type Refusal, refusalWords } from "./trial-model.ts";
+import type { TrialUsage } from "./trial-usage-model.ts";
 
 export type LibraryOption = {
   libraryKey: string;
@@ -284,4 +286,209 @@ export function clickRow(
   return on
     ? [...new Set([...chosen, ...keys])]
     : chosen.filter((item) => !keys.includes(item));
+}
+
+/** The free trial's allowance of controls for this engagement (the product owner's fix
+ * of 19 November 2026: offer only what can succeed). The allowance is the subscription
+ * route's (trial-usage-model.ts); what it counts is the database's own rule (migration
+ * 0128, enforce_trial_controls): the engagement's distinct control references, every row
+ * of them, and a reference the engagement already holds uses none of it again. The
+ * engagement's rows are the setup snapshot's, which lists every one. A firm off the
+ * trial, and the firm's demo engagement, have no allowance here. */
+export type ControlAllowance = {
+  allowed: number;
+  used: number;
+  left: number;
+  /** The control references the engagement holds now. */
+  held: readonly string[];
+};
+
+export function controlAllowance(
+  usage: TrialUsage | null,
+  demo: boolean,
+  engagementRefs: readonly string[],
+): ControlAllowance | null {
+  if (usage === null || usage.planType !== "TRIAL" || demo) {
+    return null;
+  }
+  const allowed = usage.limits.controls;
+  if (allowed === null) {
+    return null;
+  }
+  const held = [...new Set(engagementRefs)];
+  return {
+    allowed,
+    used: held.length,
+    left: Math.max(0, allowed - held.length),
+    held,
+  };
+}
+
+/** How much of the allowance the chosen controls would use: each reference the
+ * engagement does not hold yet, once. */
+export function allowanceTaken(
+  allowance: ControlAllowance,
+  chosen: readonly Pick<LibraryOption, "controlRef">[],
+): number {
+  const held = new Set(allowance.held);
+  return new Set(
+    chosen.map((item) => item.controlRef).filter((ref) => !held.has(ref)),
+  ).size;
+}
+
+const controlsWord = (count: number) =>
+  `${count} control${count === 1 ? "" : "s"}`;
+
+export type AllowanceCheck = {
+  /** "Your trial includes 5 controls per engagement · 0 used · 5 left". */
+  line: string;
+  /** Why Map is held, or null when the selection fits. */
+  held: string | null;
+  tone: "info" | "warning";
+};
+
+/** The allowance line above the list, and whether the selection fits in what is left. */
+export function allowanceCheck(
+  allowance: ControlAllowance,
+  chosen: readonly Pick<LibraryOption, "controlRef">[],
+): AllowanceCheck {
+  const line = `Your trial includes ${controlsWord(allowance.allowed)} per engagement · ${allowance.used} used · ${allowance.left} left`;
+  if (allowanceTaken(allowance, chosen) <= allowance.left) {
+    return {
+      line,
+      held: null,
+      tone: allowance.left === 0 ? "warning" : "info",
+    };
+  }
+  return {
+    line,
+    held:
+      allowance.left === 0
+        ? `The trial's ${controlsWord(allowance.allowed)} for this engagement are in use. Explore plans to add more.`
+        : `Select up to ${controlsWord(allowance.left)} on the trial.`,
+    tone: "warning",
+  };
+}
+
+/** Accept recommended within the allowance: the recommended controls in the list's
+ * order, as many as the allowance has room for, and a line saying how many were left
+ * out. Without an allowance, every recommended control, as acceptRecommended. */
+export function acceptRecommendedWithin(
+  chosen: readonly string[],
+  options: readonly LibraryOption[],
+  advice: SystemAdvice | null,
+  allowance: ControlAllowance | null,
+): { chosen: string[]; note: string | null } {
+  const all = acceptRecommended(chosen, options, advice);
+  if (allowance === null) {
+    return { chosen: all, note: null };
+  }
+  const byKey = new Map(options.map((item) => [item.libraryKey, item]));
+  const pick = (keys: readonly string[]) =>
+    keys
+      .map((key) => byKey.get(key))
+      .filter((item): item is LibraryOption => item !== undefined);
+  const next = [...chosen];
+  const offered = all.filter((key) => !chosen.includes(key));
+  for (const key of offered) {
+    if (allowanceTaken(allowance, pick([...next, key])) <= allowance.left) {
+      next.push(key);
+    }
+  }
+  const added = next.length - chosen.length;
+  const skipped = offered.length - added;
+  if (skipped === 0) {
+    return { chosen: next, note: null };
+  }
+  return {
+    chosen: next,
+    note: `${added} of ${offered.length} recommended controls selected, the most the trial allows. Swap any in the list to choose others.`,
+  };
+}
+
+/** Why Accept recommended is held: recommended controls are left to choose and the
+ * allowance has room for none of them, said of the engagement when nothing is left and
+ * of the selection otherwise. Null when it can add one, or has none to add. */
+export function acceptHeld(
+  chosen: readonly string[],
+  options: readonly LibraryOption[],
+  advice: SystemAdvice | null,
+  allowance: ControlAllowance | null,
+): string | null {
+  const offered = acceptRecommended(chosen, options, advice).length;
+  const within = acceptRecommendedWithin(chosen, options, advice, allowance);
+  if (
+    allowance === null ||
+    offered <= chosen.length ||
+    within.chosen.length > chosen.length
+  ) {
+    return null;
+  }
+  return allowance.left === 0
+    ? `The trial's ${controlsWord(allowance.allowed)} for this engagement are in use.`
+    : `The selection already uses the ${controlsWord(allowance.left)} left on the trial.`;
+}
+
+/** The footer's one reason, and what Map is described by: a refusal while it is shown
+ * (its own words say what to do), otherwise why Map is held. A refusal is cleared when
+ * the selection changes, and the held reason is then the only one. */
+export function footReason(
+  problem: string | null,
+  held: string | null,
+): "problem" | "held" | null {
+  return problem !== null ? "problem" : held !== null ? "held" : null;
+}
+
+/** What a failed Map says (the product owner's fix of 19 November 2026: the server's
+ * real reason, never a retry line for a refusal a retry cannot fix). A trial refusal is
+ * read once, by refusalFrom in trial-model.ts; `plans` says to make the words' "explore
+ * plans" the plans link. */
+export function mapProblem(
+  status: number,
+  detail: string,
+  refusal: Refusal | null,
+): { words: string; plans: boolean } {
+  if (refusal?.kind === "limit" && refusal.resource === "controls") {
+    return {
+      words: `Nothing was mapped. The free trial includes ${controlsWord(refusal.allowed)} per engagement, and this selection exceeds what is left. Select fewer controls, or explore plans to map more.`,
+      plans: true,
+    };
+  }
+  if (refusal !== null) {
+    return {
+      // Its words already say where to go (the plans, or support).
+      words: `Nothing was mapped. ${refusalWords(refusal)}`,
+      plans: false,
+    };
+  }
+  if (status === 409) {
+    const other = / is in scope for another process$/.exec(detail);
+    return {
+      words:
+        detail === "bring the system back into scope first"
+          ? "Bring this system back into scope before mapping controls to it."
+          : other !== null
+            ? `${detail.slice(0, other.index)} is in scope for another process. Leave it out, or map it from that process.`
+            : "One of the controls is already in scope elsewhere. Refresh and try again.",
+      plans: false,
+    };
+  }
+  if (status === 403) {
+    return {
+      words: "Only the engagement's managers can select controls.",
+      plans: false,
+    };
+  }
+  if (status === 422) {
+    return {
+      words:
+        "One of the controls does not apply to this system or process. Refresh and try again.",
+      plans: false,
+    };
+  }
+  return {
+    words:
+      "The controls could not be mapped. Check the connection and try again.",
+    plans: false,
+  };
 }

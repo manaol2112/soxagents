@@ -20,16 +20,22 @@ import {
   workStartLine,
 } from "./controls-guide-model";
 import {
-  acceptRecommended,
+  acceptHeld,
+  acceptRecommendedWithin,
   adviceSourceLine,
+  allowanceCheck,
+  type ControlAllowance,
   clickRow,
+  footReason,
   libraryView,
+  mapProblem,
   pickCategory,
   type SourceKey,
   type SystemAdvice,
   toggleVisible,
 } from "./select-controls-model";
 import { selectTargetFor } from "./system-added-model";
+import { PLANS_HREF, refusalFrom, refusalWords } from "./trial-model";
 import { type IconName, UiIcon } from "./ui-icon";
 import { isTopmostDialog, useFocusTrap } from "./use-focus-trap";
 
@@ -211,9 +217,27 @@ export function Drawer({
   );
 }
 
-async function call(
-  body: Record<string, unknown>,
-): Promise<{ status: number; answer: unknown }> {
+/** A refusal's words with their "explore plans" as the plans link. */
+function PlansWords({ words }: { words: string }) {
+  const at = words.indexOf("explore plans");
+  if (at < 0) {
+    return <>{words}</>;
+  }
+  return (
+    <>
+      {words.slice(0, at)}
+      <a href={PLANS_HREF}>explore plans</a>
+      {words.slice(at + "explore plans".length)}
+    </>
+  );
+}
+
+async function call(body: Record<string, unknown>): Promise<{
+  status: number;
+  answer: unknown;
+  detail: string;
+  refusal: ReturnType<typeof refusalFrom>;
+}> {
   try {
     const response = await fetch("/workspace/system-wizard", {
       method: "POST",
@@ -222,14 +246,20 @@ async function call(
     });
     const answer = (await response.json()) as {
       status?: unknown;
+      detail?: unknown;
       onboarding?: unknown;
+      refusal?: unknown;
     };
+    const status = typeof answer.status === "number" ? answer.status : 0;
     return {
-      status: typeof answer.status === "number" ? answer.status : 0,
+      status,
       answer: answer.onboarding ?? null,
+      detail: typeof answer.detail === "string" ? answer.detail : "",
+      // The subscription's refusal, as the API structured it (trial-model.ts).
+      refusal: refusalFrom(status, answer.refusal),
     };
   } catch {
-    return { status: 0, answer: null };
+    return { status: 0, answer: null, detail: "", refusal: null };
   }
 }
 
@@ -280,6 +310,7 @@ export function SelectControls({
   rcm,
   started,
   advice = {},
+  allowance = null,
 }: {
   organizationId: string;
   projectId: string;
@@ -290,6 +321,9 @@ export function SelectControls({
   started: boolean;
   /** The agent's review of each system, by its id (adviceBySystem). */
   advice?: Record<string, SystemAdvice>;
+  /** The free trial's allowance of controls for this engagement (controlAllowance);
+   * null for a firm off the trial. */
+  allowance?: ControlAllowance | null;
 }) {
   const drawer = useDrawer(SELECT_CONTROLS_EVENT);
   if (!drawer.open) {
@@ -309,6 +343,7 @@ export function SelectControls({
       rcm={rcm}
       started={started}
       advice={advice}
+      allowance={allowance}
       onClose={drawer.close}
     />
   );
@@ -322,6 +357,7 @@ function SelectControlsDrawer({
   rcm,
   started,
   advice,
+  allowance,
   onClose,
 }: {
   organizationId: string;
@@ -331,6 +367,7 @@ function SelectControlsDrawer({
   rcm: boolean;
   started: boolean;
   advice: Record<string, SystemAdvice>;
+  allowance: ControlAllowance | null;
   onClose: () => void;
 }) {
   const router = useRouter();
@@ -348,6 +385,14 @@ function SelectControlsDrawer({
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  // A refusal a retry cannot fix offers the plans (mapProblem).
+  const [plans, setPlans] = useState(false);
+  // Accept recommended said how many it left out for the trial's allowance; the line
+  // stands while the selection is the one it made.
+  const [accepted, setAccepted] = useState<{
+    chosen: string;
+    note: string;
+  } | null>(null);
   const latest = useRef(0);
   // The row last clicked, where a Shift-click range starts.
   const anchor = useRef<string | null>(null);
@@ -390,6 +435,7 @@ function SelectControlsDrawer({
     latest.current = ask;
     setOptions(null);
     setChosen([]);
+    setAccepted(null);
     anchor.current = null;
     setAsking(false);
     setRecommendedOnly(false);
@@ -408,6 +454,7 @@ function SelectControlsDrawer({
       const parsed = status === 200 ? parseOptions(answer) : null;
       if (parsed === null) {
         setProblem("The library controls could not be loaded. Try again.");
+        setPlans(false);
         setOptions([]);
         return;
       }
@@ -439,8 +486,29 @@ function SelectControlsDrawer({
     },
     advised,
   );
+  // The trial's allowance: Map is held, with the reason, while the selection passes it.
+  const check =
+    allowance === null ? null : allowanceCheck(allowance, view.selected);
+  const held = check?.held ?? null;
+  const acceptHold = acceptHeld(chosen, all, advised, allowance);
+  // One reason in the footer: a refusal while shown, otherwise why Map is held.
+  const reason = footReason(problem, held);
+  const reasonId =
+    reason === null
+      ? undefined
+      : `${id}-${reason === "problem" ? "problem" : "held"}`;
+  const acceptNote =
+    accepted !== null && accepted.chosen === chosen.join(" ")
+      ? accepted.note
+      : null;
+  // A change to the selection clears a refusal that described the one before.
+  const choose = (update: (current: string[]) => string[]) => {
+    setProblem(null);
+    setPlans(false);
+    setChosen(update);
+  };
   const toggle = (key: string) =>
-    setChosen((current) =>
+    choose((current) =>
       current.includes(key)
         ? current.filter((item) => item !== key)
         : [...current, key],
@@ -452,14 +520,21 @@ function SelectControlsDrawer({
       return;
     }
     setProblem(null);
-    const { status } = await call({
+    setPlans(false);
+    const { status, refusal } = await call({
       organization_id: organizationId,
       project_id: projectId,
       intent: "assess",
       system_id: target.id,
     });
     if (status !== 200) {
-      setProblem("The agent could not be asked. Try again.");
+      // The AI allowance, or a trial that has ended, is said as such: a retry cannot help.
+      setProblem(
+        refusal !== null
+          ? refusalWords(refusal)
+          : "The agent could not be asked. Try again.",
+      );
+      setPlans(false);
       return;
     }
     setAsking(true);
@@ -467,12 +542,13 @@ function SelectControlsDrawer({
   }
 
   async function add() {
-    if (target === null || chosen.length === 0) {
+    if (target === null || chosen.length === 0 || held !== null) {
       return;
     }
     setBusy(true);
     setProblem(null);
-    const { status } = await call({
+    setPlans(false);
+    const { status, detail, refusal } = await call({
       organization_id: organizationId,
       project_id: projectId,
       intent: "scope-select",
@@ -483,13 +559,13 @@ function SelectControlsDrawer({
     });
     setBusy(false);
     if (status !== 200) {
-      setProblem(
-        status === 409
-          ? "One of the controls is already in scope elsewhere. Refresh and try again."
-          : status === 403
-            ? "Only the engagement's managers can select controls."
-            : "The controls could not be added. Try again.",
-      );
+      const said = mapProblem(status, detail, refusal);
+      setProblem(said.words);
+      setPlans(said.plans);
+      if (refusal !== null) {
+        // The allowance line reads the server's figures again.
+        startTransition(() => router.refresh());
+      }
       return;
     }
     document.dispatchEvent(new Event(CONTROLS_SAVED_EVENT));
@@ -614,15 +690,21 @@ function SelectControlsDrawer({
       }
       footer={
         <>
-          {problem !== null ? (
-            <p className="as-problem" role="alert">
-              {problem}
-            </p>
-          ) : (
+          <span className="mc-foot-status">
+            {problem !== null ? (
+              <p id={`${id}-problem`} className="as-problem" role="alert">
+                {plans ? <PlansWords words={problem} /> : problem}
+              </p>
+            ) : null}
             <span className="sc-count">
               {chosen.length} control{chosen.length === 1 ? "" : "s"} selected
+              {reason === "held" ? (
+                <span id={`${id}-held`} className="mc-held">
+                  {held}
+                </span>
+              ) : null}
             </span>
-          )}
+          </span>
           <span className="as-foot-actions">
             <button
               type="button"
@@ -636,6 +718,10 @@ function SelectControlsDrawer({
               type="button"
               className="btn"
               disabled={busy || chosen.length === 0}
+              // Held while the selection passes the trial's allowance: still focusable,
+              // and the footer's one reason (a refusal, or why it is held) says why.
+              aria-disabled={held !== null ? "true" : undefined}
+              aria-describedby={reasonId}
               onClick={() => void add()}
             >
               {busy
@@ -660,6 +746,25 @@ function SelectControlsDrawer({
             <h3 id={`${id}-available`} className="mc-eyebrow">
               Available controls
             </h3>
+            {check !== null ? (
+              <div className={`mc-allowance tone-${check.tone}`}>
+                <UiIcon
+                  name={check.tone === "warning" ? "risk" : "info"}
+                  size={14}
+                />
+                <span className="mc-allowance-text">
+                  <strong>{check.line}</strong>
+                  {acceptNote !== null ? (
+                    <small id={`${id}-accept`}>{acceptNote}</small>
+                  ) : acceptHold !== null && held === null ? (
+                    <small id={`${id}-accept`}>{acceptHold}</small>
+                  ) : null}
+                </span>
+                <a className="mc-allowance-link" href={PLANS_HREF}>
+                  Explore plans
+                </a>
+              </div>
+            ) : null}
             {target?.kind === "system" ? (
               <div className="mc-advice" role="status">
                 <span className="mc-advice-icon" aria-hidden="true">
@@ -727,11 +832,38 @@ function SelectControlsDrawer({
                       type="button"
                       className="btn-sm"
                       disabled={view.recommended === 0}
-                      onClick={() =>
-                        setChosen((current) =>
-                          acceptRecommended(current, all, advised),
-                        )
+                      // Held, with the reason under the allowance line, when the trial
+                      // has room for none of the recommended controls.
+                      aria-disabled={acceptHold !== null ? "true" : undefined}
+                      aria-describedby={
+                        acceptHold === null
+                          ? undefined
+                          : held !== null
+                            ? reasonId
+                            : `${id}-accept`
                       }
+                      onClick={() => {
+                        if (acceptHold !== null) {
+                          return;
+                        }
+                        // Within the trial's allowance: as many as it has room for,
+                        // and a line saying how many were left out.
+                        const within = acceptRecommendedWithin(
+                          chosen,
+                          all,
+                          advised,
+                          allowance,
+                        );
+                        choose(() => within.chosen);
+                        setAccepted(
+                          within.note === null
+                            ? null
+                            : {
+                                chosen: within.chosen.join(" "),
+                                note: within.note,
+                              },
+                        );
+                      }}
                     >
                       Accept recommended
                     </button>
@@ -776,7 +908,7 @@ function SelectControlsDrawer({
                   checked={view.allChosen}
                   disabled={view.open.length === 0}
                   onChange={() =>
-                    setChosen((current) => toggleVisible(current, view))
+                    choose((current) => toggleVisible(current, view))
                   }
                 />
                 Select all visible
@@ -799,7 +931,7 @@ function SelectControlsDrawer({
                           checked={view.allChosen}
                           disabled={view.open.length === 0}
                           onChange={() =>
-                            setChosen((current) => toggleVisible(current, view))
+                            choose((current) => toggleVisible(current, view))
                           }
                         />
                       </th>
@@ -825,7 +957,7 @@ function SelectControlsDrawer({
                           if (item.inScope) {
                             return;
                           }
-                          setChosen((current) =>
+                          choose((current) =>
                             clickRow(
                               current,
                               view.shown,

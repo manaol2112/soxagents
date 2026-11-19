@@ -3731,11 +3731,13 @@ def _basis(
     links: _Links,
     engine: int = ENGINE_VERSION,
     context_sha256: str = "",
+    settings: Settings | None = None,
 ) -> _Basis:
     """What a run of the requirement would read now, as `engine` reads it: every file in
     force on it (a file whose reading has not ended is named with nothing read yet), the
     control's facts, the attributes, the links (this requirement's, and which attributes
-    another DESIGN requirement of the control asks for too), the lens, and from engine 2
+    another DESIGN requirement of the control asks for too), the models a run on `settings`
+    uses (the deployment's when None: expected_models), the lens, and from engine 2
     the hash of the control's context."""
     ids = tuple(a[0] for a in attributes)
     linked = links.get(request.requirement_id)
@@ -3773,7 +3775,7 @@ def _basis(
         elsewhere_attribute_ids=tuple(sorted((a for a in ids if a in elsewhere), key=str)),
         lens=lens_for(request.categories, [file.kind for file in included]),
         read_in_part=any(file.truncated for file in included),
-        models=expected_models(control.domain),
+        models=expected_models(control.domain, settings),
         engine=engine,
         context_sha256=context_sha256 if engine >= 2 else "",
     )
@@ -5074,6 +5076,9 @@ def _assess(
             request, control, attributes,
             _linked(connection, control_id),
             context_sha256=context.sha256,
+            # The models are those of the settings the readings run on (AgentCaller below),
+            # never a copy of the process's read at another time (18 November 2026).
+            settings=settings,
         )
     )  # fmt: skip
     texts: dict[UUID, str] = {}

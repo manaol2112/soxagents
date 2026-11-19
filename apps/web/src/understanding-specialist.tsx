@@ -6,15 +6,32 @@ import {
   type Attribute,
   NOT_KNOWN_NOTE_MAX,
   notKnownNoteProblem,
+  PROCEED_REASON_MAX,
+  proceedReasonProblem,
   type QuestionPass,
   type QuestionReview,
   type ReviewNotRun,
+  type ReviewPoint,
+  type ReviewProceeded,
   type ReviewRequest,
 } from "./control-context-model";
 import { UiIcon } from "./ui-icon";
 import { characterCount } from "./understanding-once-model";
 import {
+  CHALLENGE_ACTION,
+  CHALLENGE_NEED_LABEL,
+  CHALLENGE_NOTE_HINT,
+  CHALLENGE_NOTE_LABEL,
+  CHALLENGE_REREAD,
+  CHALLENGE_SEND,
+  CHALLENGE_SENT,
+  type ChallengeIntent,
+  challengeLine,
+  challengeProblem,
   type FollowIntent,
+  factWords,
+  failureDetail,
+  hintParts,
   lastReady,
   markedParts,
   NOT_KNOWN_ACTION,
@@ -25,23 +42,40 @@ import {
   notKnownProblem,
   notKnownWrite,
   notReviewedLine,
+  OPEN_DOCUMENT,
+  OPEN_NARRATIVE,
+  offersChallenge,
   offersReviewAgain,
+  PROCEED_HELD_SENT,
+  PROCEED_REASON_HINT,
+  PROCEED_REASON_HINT_PLAIN,
+  PROCEED_REASON_LABEL,
   PROCEED_SENT,
   PROCEED_WITHOUT,
+  pointName,
+  proceededLine,
   REVIEW_AGAIN_FAILED,
   REVIEW_AGAIN_SENT,
   REVIEW_BY,
   REVIEW_CHECKING,
+  REVIEW_CHOICE_ANCHOR,
   REVIEW_FAILED,
+  REVIEW_HELD,
+  REVIEW_HELD_CHOICE,
+  REVIEW_HELD_NO_RUN,
   REVIEW_NONE,
   REVIEW_NOT_RUN,
   REVIEW_TITLE,
   type ReviewIntent,
   RUN_AGAIN,
+  RUN_AGAIN_SENT,
   reviewAgainWords,
   reviewedLead,
   reviewProblem,
   reviewView,
+  runsAgain,
+  SUPPORT_TITLE,
+  supportLine,
 } from "./understanding-specialist-model";
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
@@ -53,6 +87,7 @@ async function post(
   ids: Ids,
   intent:
     | ReviewIntent
+    | ChallengeIntent
     | FollowIntent
     | "issue-not-known"
     | "walkthrough-not-known"
@@ -104,12 +139,21 @@ export function QuestionReviewSection({
   request = null,
   notRun = null,
   approved = [],
+  documentsHref = null,
+  onProcess = null,
+  proceeded = null,
 }: {
   ids: Ids;
   canAct: boolean;
   pass: QuestionPass | null;
   review: QuestionReview | null | undefined;
   completedAt: string | null;
+  /** Where the documents are opened (D&I Evidence), and the process narrative's step: the
+   * support's sources open there. */
+  documentsHref?: string | null;
+  onProcess?: (() => void) | null;
+  /** After a person proceeded without the review of some units: said here as everywhere. */
+  proceeded?: ReviewProceeded | null;
   /** A read a person asked for after completion, while it runs or once it could not run. */
   request?: ReviewRequest | null;
   notRun?: ReviewNotRun | null;
@@ -186,10 +230,26 @@ export function QuestionReviewSection({
         : null;
   const settled =
     view.state === "ready" ? view.settled : (shown?.openQuestions ?? 1) === 0;
-  const notReviewed =
-    shown !== null
-      ? notReviewedLine(shown.notReviewed, approved, shown.notReviewedItems)
+  // While the pass is HELD the line says only what was not reviewed: the choice at the end
+  // of the course says what happens next (owner decision, 18 November 2026).
+  // After a person proceeded without the review of some, the one sentence that says so
+  // everywhere (with the reason, who and when); while the pass is HELD the line says only what
+  // was not reviewed, as the choice at the end of the course says what happens next.
+  const proceededSaid =
+    completedAt !== null && proceeded !== null
+      ? proceededLine(proceeded, approved, shown?.notReviewedItems ?? [])
       : null;
+  // Once proceeded, the header's lede says it (design review, 19 November 2026: said three
+  // times); the review keeps only Review again.
+  const notReviewed =
+    proceededSaid !== null || shown === null
+      ? null
+      : notReviewedLine(
+          shown.notReviewed,
+          approved,
+          shown.notReviewedItems,
+          pass === "HELD" && completedAt === null,
+        );
   const failedAgain =
     view.state === "ready"
       ? view.againFailed
@@ -249,6 +309,18 @@ export function QuestionReviewSection({
       {notReviewed !== null ? (
         <p className="ur-review-quiet">{notReviewed}</p>
       ) : null}
+      {shown !== null && (shown.points ?? []).length > 0 ? (
+        <ReviewSupport
+          ids={ids}
+          canAct={canAct}
+          reviewId={shown.id}
+          points={shown.points ?? []}
+          approved={approved}
+          completed={completedAt !== null}
+          documentsHref={documentsHref}
+          onProcess={onProcess}
+        />
+      ) : null}
       {failedAgain !== null ? (
         <p className="ur-review-quiet" role="status">
           {REVIEW_AGAIN_FAILED}. {failedAgain}
@@ -283,28 +355,52 @@ export function QuestionReviewSection({
  * choices. Run again asks the specialist once more; Proceed without it completes the
  * understanding by the rules, and the attribute agent's gaps become assumptions. Each shows
  * as done only once the server confirms it; the page then reads again in place.
+ *
+ * `held` (owner decision, 18 November 2026): the review was read but left attributes not
+ * reviewed. The same two choices, said as such: the line names what was not reviewed;
+ * Proceed without it takes a reason (kept in the audit trail with those attributes); Run
+ * again is offered only while the review can still run (its budget of two reads).
  */
 export function ReviewFailed({
   ids,
   canAct,
   failure,
+  held = null,
+  reasonNeeded = false,
 }: {
   ids: Ids;
   canAct: boolean;
   failure: string;
+  held?: { line: string; runAgain: boolean } | null;
+  /** A read before left attributes not reviewed: a proceed takes a reason, also after a
+   * later read could not run (ContextBody.review_reason_needed). */
+  reasonNeeded?: boolean;
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
+  const uid = useId();
   const [sending, setSending] = useState<ReviewIntent | null>(null);
   const [said, setSaid] = useState<{ ok: boolean; text: string } | null>(null);
+  const [reason, setReason] = useState("");
+  const asksReason = held !== null || reasonNeeded;
+  const reasonProblem = asksReason ? proceedReasonProblem(reason) : null;
 
   async function send(intent: ReviewIntent) {
     if (sending !== null) {
       return;
     }
+    if (intent === "review-proceed" && reasonProblem !== null) {
+      return;
+    }
     setSending(intent);
     setSaid(null);
-    const answer = await post(ids, intent);
+    const answer = await post(
+      ids,
+      intent,
+      intent === "review-proceed" && asksReason
+        ? { reason: reason.trim() }
+        : {},
+    );
     setSending(null);
     const problem = reviewProblem(intent, answer.status, answer.detail);
     setSaid(
@@ -314,8 +410,10 @@ export function ReviewFailed({
             ok: true,
             text:
               intent === "review-proceed"
-                ? PROCEED_SENT
-                : "Running the review again…",
+                ? asksReason
+                  ? PROCEED_HELD_SENT
+                  : PROCEED_SENT
+                : RUN_AGAIN_SENT,
           },
     );
     if (problem === null) {
@@ -323,30 +421,61 @@ export function ReviewFailed({
     }
   }
 
+  const done = said?.ok === true;
+  const runAgain = runsAgain(held);
   return (
-    <div className="ur-end ur-review-failed">
-      <h3 className="ur-q">{REVIEW_FAILED}</h3>
+    <div className="ur-end ur-review-failed" id={REVIEW_CHOICE_ANCHOR}>
+      <h3 className="ur-q">{held === null ? REVIEW_FAILED : REVIEW_HELD}</h3>
       <p className="ur-hint" role="status">
-        {failure}
+        {held === null
+          ? failureDetail(failure)
+          : `${held.line} ${runAgain ? REVIEW_HELD_CHOICE : REVIEW_HELD_NO_RUN}`}
       </p>
+      {canAct && asksReason ? (
+        <div className="ur-notknown">
+          <label htmlFor={`${uid}-reason`}>{PROCEED_REASON_LABEL}</label>
+          <textarea
+            id={`${uid}-reason`}
+            rows={2}
+            maxLength={PROCEED_REASON_MAX}
+            value={reason}
+            disabled={sending !== null || done}
+            data-arrive=""
+            aria-describedby={`${uid}-reason-hint`}
+            onChange={(event) => setReason(event.target.value)}
+          />
+          <FieldHint
+            id={`${uid}-reason-hint`}
+            count={characterCount(reason, PROCEED_REASON_MAX)}
+            problem={reason.trim() !== "" ? reasonProblem : null}
+            hint={
+              held !== null ? PROCEED_REASON_HINT : PROCEED_REASON_HINT_PLAIN
+            }
+          />
+        </div>
+      ) : null}
       {canAct ? (
-        <div className="ur-foot-actions">
+        <div className="ur-foot-actions" data-arrive-view="">
           <button
             type="button"
             className="btn btn-secondary"
-            disabled={sending !== null || said?.ok === true}
+            disabled={sending !== null || done || reasonProblem !== null}
+            data-arrive={!asksReason && !runAgain ? "" : undefined}
             onClick={() => void send("review-proceed")}
           >
             {sending === "review-proceed" ? "Proceeding…" : PROCEED_WITHOUT}
           </button>
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={sending !== null || said?.ok === true}
-            onClick={() => void send("review-run")}
-          >
-            {sending === "review-run" ? "Requesting…" : RUN_AGAIN}
-          </button>
+          {runAgain ? (
+            <button
+              type="button"
+              className="btn btn-primary"
+              disabled={sending !== null || done}
+              data-arrive={asksReason ? undefined : ""}
+              onClick={() => void send("review-run")}
+            >
+              {sending === "review-run" ? "Requesting…" : RUN_AGAIN}
+            </button>
+          ) : null}
         </div>
       ) : null}
       {said !== null ? (
@@ -358,6 +487,302 @@ export function ReviewFailed({
         </p>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * What each point the review found established rests on (owner decision, 18 November 2026,
+ * "Show the support"): beside the review, so the person confirming the understanding sees
+ * it. Each item as the read kept it: the walkthrough answer (its question and answer), the
+ * statement's value, the answered question, or the passage quoted with its source and a way
+ * to open it. A person may challenge a point: it is asked again in the questions below, and
+ * shows as open until answered. Nothing shows as done before the server confirms it; focus
+ * goes to the challenge's first field, and back to its button when it closes.
+ */
+export function ReviewSupport({
+  ids,
+  canAct,
+  reviewId,
+  points,
+  approved,
+  completed,
+  documentsHref,
+  onProcess,
+}: {
+  ids: Ids;
+  canAct: boolean;
+  reviewId: string;
+  points: ReviewPoint[];
+  approved: ReadonlyArray<Pick<Attribute, "id" | "code" | "definition">>;
+  completed: boolean;
+  documentsHref: string | null;
+  onProcess: (() => void) | null;
+}) {
+  return (
+    <div className="ur-review-support">
+      <p className="ur-label">{SUPPORT_TITLE}</p>
+      <ul className="ur-support-list">
+        {points.map((point) => (
+          <SupportPoint
+            key={point.key}
+            ids={ids}
+            canAct={canAct}
+            reviewId={reviewId}
+            point={point}
+            name={pointName(point, approved)}
+            completed={completed}
+            documentsHref={documentsHref}
+            onProcess={onProcess}
+          />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function SupportPoint({
+  ids,
+  canAct,
+  reviewId,
+  point,
+  name,
+  completed,
+  documentsHref,
+  onProcess,
+}: {
+  ids: Ids;
+  canAct: boolean;
+  reviewId: string;
+  point: ReviewPoint;
+  name: string;
+  completed: boolean;
+  documentsHref: string | null;
+  onProcess: (() => void) | null;
+}) {
+  const router = useRouter();
+  const [, startTransition] = useTransition();
+  const uid = useId();
+  const opener = useRef<HTMLButtonElement>(null);
+  const first = useRef<HTMLSelectElement & HTMLTextAreaElement>(null);
+  const [open, setOpen] = useState(false);
+  const [need, setNeed] = useState(point.needs[0] ?? "");
+  const [note, setNote] = useState("");
+  const [sending, setSending] = useState(false);
+  const [said, setSaid] = useState<{ ok: boolean; text: string } | null>(null);
+  useEffect(() => {
+    if (open) {
+      first.current?.focus();
+    }
+  }, [open]);
+  const noteProblem = notKnownNoteProblem(note);
+
+  function close() {
+    setOpen(false);
+    window.setTimeout(() => opener.current?.focus(), 0);
+  }
+
+  async function send() {
+    if (sending || noteProblem !== null || need === "") {
+      return;
+    }
+    setSending(true);
+    setSaid(null);
+    const answer = await post(ids, "review-challenge", {
+      review_id: reviewId,
+      unit: point.key,
+      need,
+      note: note.trim(),
+    });
+    setSending(false);
+    const problem = challengeProblem(answer.status, answer.detail);
+    if (answer.status === 409) {
+      // The review changed: it is read again at once, never left to the person to do.
+      setSaid({ ok: false, text: CHALLENGE_REREAD });
+      setOpen(false);
+      startTransition(() => router.refresh());
+      return;
+    }
+    if (problem !== null) {
+      setSaid({ ok: false, text: problem });
+      return;
+    }
+    setSaid({ ok: true, text: CHALLENGE_SENT });
+    setOpen(false);
+    startTransition(() => router.refresh());
+  }
+
+  return (
+    <li className="ur-support-point">
+      <p className="ur-support-name">
+        <strong>{name}</strong>
+        {challengeLine(point.challenge) === null ? null : (
+          <span className="ur-review-quiet">
+            {" "}
+            {challengeLine(point.challenge)}
+          </span>
+        )}
+      </p>
+      {point.challenge === "OPEN" || point.challenge === "PREPARING" ? null : (
+        <ul className="ur-support-items">
+          {point.support.map((item) => {
+            const words = supportLine(item);
+            return (
+              <li
+                key={`${item.kind}-${item.ref}-${item.needs.join("-")}`}
+                className="ur-support-item"
+              >
+                <div className="ur-support-body">
+                  <span className="ur-support-kind">{words.kind}</span>
+                  {words.label !== "" ? (
+                    <span className="ur-support-label">{words.label}</span>
+                  ) : null}
+                  {words.said !== "" ? (
+                    <span className="ur-support-said">{words.said}</span>
+                  ) : null}
+                </div>
+                {item.kind === "DOCUMENT" && documentsHref !== null ? (
+                  <div className="ur-support-open">
+                    <a className="text-link" href={documentsHref}>
+                      {OPEN_DOCUMENT}
+                    </a>
+                  </div>
+                ) : item.kind === "NARRATIVE" && onProcess !== null ? (
+                  <div className="ur-support-open">
+                    <button
+                      type="button"
+                      className="text-link"
+                      onClick={onProcess}
+                    >
+                      {OPEN_NARRATIVE}
+                    </button>
+                  </div>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {offersChallenge(point, canAct, completed) &&
+      !open &&
+      said?.ok !== true ? (
+        <p className="ur-review-quiet ur-support-challenge">
+          <button
+            type="button"
+            className="ur-skip"
+            ref={opener}
+            aria-expanded={false}
+            aria-controls={`${uid}-challenge`}
+            onClick={() => setOpen(true)}
+          >
+            {CHALLENGE_ACTION}
+          </button>
+        </p>
+      ) : null}
+      {open ? (
+        <div className="ur-notknown" id={`${uid}-challenge`}>
+          {point.needs.length > 1 ? (
+            <>
+              <label htmlFor={`${uid}-need`}>{CHALLENGE_NEED_LABEL}</label>
+              <select
+                id={`${uid}-need`}
+                ref={first}
+                value={need}
+                disabled={sending}
+                onChange={(event) => setNeed(event.target.value)}
+              >
+                {point.needs.map((each) => (
+                  <option key={each} value={each}>
+                    {factWords(each)}
+                  </option>
+                ))}
+              </select>
+            </>
+          ) : null}
+          <label htmlFor={`${uid}-note`}>{CHALLENGE_NOTE_LABEL}</label>
+          <textarea
+            id={`${uid}-note`}
+            ref={point.needs.length > 1 ? undefined : first}
+            rows={2}
+            maxLength={NOT_KNOWN_NOTE_MAX}
+            value={note}
+            disabled={sending}
+            aria-describedby={`${uid}-hint`}
+            onChange={(event) => setNote(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                close();
+              }
+            }}
+          />
+          <FieldHint
+            id={`${uid}-hint`}
+            count={characterCount(note, NOT_KNOWN_NOTE_MAX)}
+            problem={noteProblem}
+            hint={CHALLENGE_NOTE_HINT}
+          />
+          <div className="ur-foot-actions">
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={sending}
+              onClick={close}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              disabled={sending || noteProblem !== null}
+              onClick={() => void send()}
+            >
+              {sending ? (
+                <span className="spinner small" aria-hidden="true" />
+              ) : null}
+              {sending ? "Asking…" : CHALLENGE_SEND}
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {said !== null && (!said.ok || point.challenge === "") ? (
+        // Once the server's state reads the point as challenged, its own line says so: the
+        // confirmation is said once.
+        <p
+          className={said.ok ? "ur-review-quiet" : "cc-problem"}
+          role={said.ok ? "status" : "alert"}
+        >
+          {said.text}
+        </p>
+      ) : null}
+    </li>
+  );
+}
+
+/** A field's line under it: the count, the problem (in the danger tone) and the hint, one
+ * full stop between each. */
+function FieldHint({
+  id,
+  count,
+  problem,
+  hint,
+}: {
+  id: string;
+  count: string;
+  problem: string | null;
+  hint: string;
+}) {
+  const parts = hintParts(count, problem, hint);
+  return (
+    <p className="ur-notknown-hint" id={id}>
+      {parts.count}
+      {parts.problem !== null ? (
+        <>
+          {" · "}
+          <span className="ur-hint-problem">{parts.problem}</span>
+        </>
+      ) : null}
+      . {parts.hint}
+    </p>
   );
 }
 
@@ -447,10 +872,12 @@ export function NotKnownPanel({
           }
         }}
       />
-      <p className="ur-notknown-hint" id={`${uid}-hint`}>
-        {characterCount(note, NOT_KNOWN_NOTE_MAX)}
-        {noteProblem !== null ? ` · ${noteProblem}` : ""}. {NOT_KNOWN_HINT}
-      </p>
+      <FieldHint
+        id={`${uid}-hint`}
+        count={characterCount(note, NOT_KNOWN_NOTE_MAX)}
+        problem={noteProblem}
+        hint={NOT_KNOWN_HINT}
+      />
       <div className="ur-foot-actions">
         <button
           type="button"

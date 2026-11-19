@@ -155,14 +155,59 @@ export type Attribute = {
  * in yet (WAITING); the agents are checking what else they need (CHECKING); or the pass
  * ran, or the understanding is complete (DONE). B1k/B1l: the pass is the IT audit
  * specialist's review of the questions asked, and FAILED says its answer could not be used
- * (the page offers Run again and Proceed without it; nothing waits on it). */
-export type QuestionPass = "WAITING" | "CHECKING" | "DONE" | "FAILED";
+ * (the page offers Run again and Proceed without it; nothing waits on it). HELD (owner
+ * decision, 18 November 2026): the review is read but left attributes not reviewed; the
+ * understanding completes only once a person runs it again or proceeds without it, with a
+ * reason. */
+export type QuestionPass = "WAITING" | "CHECKING" | "DONE" | "FAILED" | "HELD";
 export const QUESTION_PASSES: readonly QuestionPass[] = [
   "WAITING",
   "CHECKING",
   "DONE",
   "FAILED",
+  "HELD",
 ];
+
+/** While the pass is HELD (ContextBody.review_held): the units the review did not review,
+ * and whether the review can still be run again (its budget of two reads). */
+export type ReviewHeld = {
+  notReviewed: string[];
+  runAgain: boolean;
+};
+
+/** A person proceeded without (part of) the review, as the server keeps it
+ * (ContextBody.review_proceeded): who, when, the reason recorded, and the units not reviewed
+ * it went past. */
+export type ReviewProceeded = {
+  by: string;
+  at: string;
+  reason: string;
+  notReviewed: string[];
+};
+
+/** ContextBody.review_proceeded, read strictly; null when absent or malformed. */
+export function parseReviewProceeded(value: unknown): ReviewProceeded | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const at = timeOrNull(value.at);
+  if (at === null) {
+    return null;
+  }
+  return {
+    by: plainLine(str(value.by), 120),
+    at,
+    reason: plainLine(str(value.reason), 500),
+    notReviewed: strings(value.not_reviewed)
+      .filter((key) => /^[A-Za-z0-9._-]{1,80}$/.test(key))
+      .slice(0, 24),
+  };
+}
+
+/** The reason a person gives to proceed past attributes the review did not review, as the
+ * API takes it: at least 3 characters, at most 500, plain text. */
+export const PROCEED_REASON_MIN = 3;
+export const PROCEED_REASON_MAX = 500;
 
 /** The IT audit specialist's review of the questions asked (B1k, B1l; understanding_reviews):
  * the latest one of the control. Agent output throughout, shown as the specialist's, never as
@@ -187,6 +232,8 @@ export type QuestionReview = {
   notReviewedItems?: NotReviewedItem[];
   /** Its questions still waiting on a person. */
   openQuestions: number;
+  /** The points it found established, each with what it rests on (empty unless READY). */
+  points?: ReviewPoint[];
   reviewedAt: string | null;
   /** One sentence, "" unless FAILED. */
   failure: string;
@@ -199,6 +246,46 @@ export type ReviewRequest = {
   status: "PENDING" | "FAILED";
   /** One sentence, "" unless FAILED. */
   failure: string;
+};
+
+/** One thing an established point rests on, as the read kept it (ReviewBody.points[].
+ * support; owner decision, 18 November 2026, "Show the support"). */
+export type SupportKind =
+  | "WALKTHROUGH"
+  | "VALUE"
+  | "QUESTION"
+  | "DOCUMENT"
+  | "NARRATIVE";
+export const SUPPORT_KINDS: readonly SupportKind[] = [
+  "WALKTHROUGH",
+  "VALUE",
+  "QUESTION",
+  "DOCUMENT",
+  "NARRATIVE",
+];
+export type SupportItem = {
+  kind: SupportKind;
+  ref: string;
+  needs: AskedFact[];
+  /** The question asked, the value's label, the document's title, or "Process narrative". */
+  label: string;
+  /** The answer given, the value, or the passage quoted. */
+  said: string;
+  documentId: string | null;
+};
+/** A point the review found established, with what it rests on and whether a person
+ * challenged it: OPEN while the question the challenge raised waits, ANSWERED after. */
+export type ReviewPoint = {
+  key: string;
+  kind: "ATTRIBUTE" | "FACT";
+  attributeId: string | null;
+  code: string | null;
+  text: string;
+  needs: AskedFact[];
+  support: SupportItem[];
+  /** PREPARING: its question is still being worded, not shown in the questions yet. */
+  challenge: "" | "PREPARING" | "OPEN" | "ANSWERED";
+  challengeIssueId: string | null;
 };
 
 /** One thing the specialist did not review (ReviewBody.not_reviewed_items). */
@@ -251,13 +338,20 @@ export type IssueAsks = {
 };
 
 /** What an assumption is (B1l): the agent's assumption on a gap, a conflict with a confirmed
- * fact (which holds the attribute's acceptance while open), or a question a person left as
- * not known in Control Understanding. */
-export type AssumptionKind = "ASSUMPTION" | "CONFLICT" | "NOT_KNOWN";
+ * fact (which holds the attribute's acceptance while open), a question a person left as not
+ * known in Control Understanding, or a fact no agent could propose (UNKNOWN: recorded as "...
+ * is not yet known", attribute_assumptions.shown_kind; design review, 19 November 2026),
+ * which asks for the answer and is never offered for a confirmation. */
+export type AssumptionKind =
+  | "ASSUMPTION"
+  | "CONFLICT"
+  | "NOT_KNOWN"
+  | "UNKNOWN";
 export const ASSUMPTION_KINDS: readonly AssumptionKind[] = [
   "ASSUMPTION",
   "CONFLICT",
   "NOT_KNOWN",
+  "UNKNOWN",
 ];
 
 /** An assumption's standing. ACCEPTED_WITH_ATTRIBUTE (the attribute was accepted while it was
@@ -515,6 +609,15 @@ export function criteriaToAccept(context: {
 /** How many approved attributes have no criteria a person owns yet. */
 export function untailored(context: { approved: Attribute[] }): number {
   return context.approved.filter((item) => !item.criteria.owned).length;
+}
+
+/** Of the approved attributes, how many rows read "To accept" (tailored by the agent, for a
+ * person to accept): the node and the next step count them in the rows' own word (design
+ * review, 19 November 2026: "6 need criteria" over six "To accept" rows). */
+export function toAcceptCount(context: { approved: Attribute[] }): number {
+  return context.approved.filter(
+    (item) => attributeRowState(item) === "TO_ACCEPT",
+  ).length;
 }
 
 /** Where a row of the Attributes step stands (product owner, 11 November 2026): an agent
@@ -1886,6 +1989,14 @@ export type ControlContext = {
   /** Where the question pass stands; null where the API does not say (a body from before
    * B1j: the steps then read as they did). */
   questionPass?: QuestionPass | null;
+  /** While the pass is HELD: the units not reviewed and whether a run again is left. */
+  reviewHeld?: ReviewHeld | null;
+  /** Proceed without it takes a reason (ContextBody.review_reason_needed): a read before
+   * completion left attributes not reviewed, held or since failed. */
+  reviewReasonNeeded?: boolean;
+  /** After completion by a person's proceed without the review (ContextBody.
+   * review_proceeded); null otherwise. */
+  reviewProceeded?: ReviewProceeded | null;
   /** The agent's assumptions that name no attribute: shown at the top of the list. */
   setAssumptions?: Assumption[];
   /** The latest IT audit specialist's review of the questions asked (B1k); null when none
@@ -2560,69 +2671,7 @@ export function parseContext(value: unknown): ControlContext | null {
       heldSet,
     ),
     history: records(attributes.history).map(parseAttribute),
-    issues: records(value.issues).map((item) => ({
-      id: str(item.id),
-      origin: oneOf(
-        item.origin,
-        ["ATTRIBUTES", "PROCESS", "SOURCES"] as const,
-        "SOURCES",
-      ),
-      kind: oneOf(
-        item.kind,
-        ["MISSING", "AMBIGUOUS", "CONFLICT"] as const,
-        "AMBIGUOUS",
-      ),
-      topic: str(item.topic),
-      detail: str(item.detail),
-      why: str(item.why),
-      resolve: str(item.resolve),
-      quotes: records(item.quotes).map((quote) => ({
-        source: str(quote.source),
-        title: str(quote.title),
-        quote: str(quote.quote),
-      })),
-      raisedBy: item.raised_by === "AGENT" ? "AGENT" : "RULES",
-      status: oneOf(
-        item.status,
-        ["OPEN", "RESOLVED", "DISMISSED", "NOT_KNOWN"] as const,
-        "OPEN",
-      ),
-      resolutionNote: str(item.resolution_note),
-      version: num(item.version),
-      question: str(item.question),
-      suggestions: (Array.isArray(item.suggestions) ? item.suggestions : [])
-        .filter((answer): answer is string => typeof answer === "string")
-        .slice(0, 4),
-      proposal: str(item.proposal),
-      section: str(item.section),
-      attributes: strings(item.attributes).slice(0, 12),
-      round: num(item.round),
-      pointKind: oneOf(
-        item.point_kind,
-        ["", "MISSING", "CONTRADICTION"] as const,
-        "",
-      ),
-      proposalBasis: oneOf(
-        item.proposal_basis,
-        ["", "SOURCES", "TYPICAL"] as const,
-        "",
-      ),
-      wordingReviewed: item.wording_reviewed === true,
-      wordingPending: item.wording_pending === true,
-      interview: records(item.interview).map((step) => ({
-        key: str(step.key),
-        question: str(step.question),
-        why: str(step.why),
-        usual: str(step.usual),
-        basis: str(step.basis),
-        answers: records(step.answers).map((answer) => ({
-          label: str(answer.label),
-          says: str(answer.says),
-          next: str(answer.next),
-        })),
-      })),
-      ...issueReviewFields(item),
-    })),
+    issues: records(value.issues).map(parseIssue),
     documents: records(value.documents).map((item) => ({
       id: str(item.id),
       kind: oneOf(item.kind, DOCUMENT_KEYS, "OTHER"),
@@ -2712,6 +2761,9 @@ export function parseContext(value: unknown): ControlContext | null {
     understandingCompletedAt: timeOrNull(value.understanding_completed_at),
     questionPass:
       QUESTION_PASSES.find((each) => each === value.question_pass) ?? null,
+    reviewHeld: parseReviewHeld(value.review_held),
+    reviewReasonNeeded: value.review_reason_needed === true,
+    reviewProceeded: parseReviewProceeded(value.review_proceeded),
     setAssumptions,
     questionReview: parseQuestionReview(value.review),
     questionReviewRequest: parseReviewRequest(value.review_request),
@@ -2725,6 +2777,75 @@ export function parseContext(value: unknown): ControlContext | null {
 }
 
 /** A question's B1k/B1l fields, read strictly; absent ones read as a question from before. */
+/** One of the control's issues as the API sends it (control_context.IssueBody): the
+ * context's list, and the question a Control Understanding need carries (18 November
+ * 2026), are read by this one parse. */
+export function parseIssue(item: Raw): ContextIssue {
+  return {
+    id: str(item.id),
+    origin: oneOf(
+      item.origin,
+      ["ATTRIBUTES", "PROCESS", "SOURCES"] as const,
+      "SOURCES",
+    ),
+    kind: oneOf(
+      item.kind,
+      ["MISSING", "AMBIGUOUS", "CONFLICT"] as const,
+      "AMBIGUOUS",
+    ),
+    topic: str(item.topic),
+    detail: str(item.detail),
+    why: str(item.why),
+    resolve: str(item.resolve),
+    quotes: records(item.quotes).map((quote) => ({
+      source: str(quote.source),
+      title: str(quote.title),
+      quote: str(quote.quote),
+    })),
+    raisedBy: item.raised_by === "AGENT" ? "AGENT" : "RULES",
+    status: oneOf(
+      item.status,
+      ["OPEN", "RESOLVED", "DISMISSED", "NOT_KNOWN"] as const,
+      "OPEN",
+    ),
+    resolutionNote: str(item.resolution_note),
+    version: num(item.version),
+    question: str(item.question),
+    suggestions: (Array.isArray(item.suggestions) ? item.suggestions : [])
+      .filter((answer): answer is string => typeof answer === "string")
+      .slice(0, 4),
+    proposal: str(item.proposal),
+    section: str(item.section),
+    attributes: strings(item.attributes).slice(0, 12),
+    round: num(item.round),
+    pointKind: oneOf(
+      item.point_kind,
+      ["", "MISSING", "CONTRADICTION"] as const,
+      "",
+    ),
+    proposalBasis: oneOf(
+      item.proposal_basis,
+      ["", "SOURCES", "TYPICAL"] as const,
+      "",
+    ),
+    wordingReviewed: item.wording_reviewed === true,
+    wordingPending: item.wording_pending === true,
+    interview: records(item.interview).map((step) => ({
+      key: str(step.key),
+      question: str(step.question),
+      why: str(step.why),
+      usual: str(step.usual),
+      basis: str(step.basis),
+      answers: records(step.answers).map((answer) => ({
+        label: str(answer.label),
+        says: str(answer.says),
+        next: str(answer.next),
+      })),
+    })),
+    ...issueReviewFields(item),
+  };
+}
+
 function issueReviewFields(item: Raw): {
   fromReview: boolean;
   reviewRound: 1 | 2 | null;
@@ -2836,10 +2957,101 @@ export function parseQuestionReview(value: unknown): QuestionReview | null {
       .slice(0, 26),
     openQuestions:
       typeof open === "number" && Number.isInteger(open) && open > 0 ? open : 0,
+    points: status === "READY" ? parsePoints(value.points) : [],
     reviewedAt: timeOrNull(value.reviewed_at),
     failure:
       status === "FAILED" ? plainNote(plainLine(str(value.failure), 300)) : "",
   };
+}
+
+const KEY_PATTERN = /^[A-Za-z0-9._-]{1,80}$/;
+
+function facts(value: unknown): AskedFact[] {
+  return strings(value).filter((fact): fact is AskedFact =>
+    (ASKED_FACTS as readonly string[]).includes(fact),
+  );
+}
+
+/** ReviewBody.points, read strictly: a point or an item that is not well formed is left
+ * out, and every word is plain text. */
+export function parsePoints(value: unknown): ReviewPoint[] {
+  return records(value)
+    .flatMap((item): ReviewPoint[] => {
+      const key = str(item.key);
+      if (!KEY_PATTERN.test(key)) {
+        return [];
+      }
+      const id = str(item.attribute_id);
+      const code = str(item.code);
+      const issue = str(item.challenge_issue_id);
+      const challenge =
+        item.challenge === "PREPARING" ||
+        item.challenge === "OPEN" ||
+        item.challenge === "ANSWERED"
+          ? item.challenge
+          : "";
+      return [
+        {
+          key,
+          kind: item.kind === "FACT" ? "FACT" : "ATTRIBUTE",
+          attributeId: UUID.test(id) ? id : null,
+          code: KEY_PATTERN.test(code) ? code : null,
+          text: plainLine(str(item.text), 300),
+          needs: facts(item.needs),
+          support: records(item.support)
+            .flatMap((entry): SupportItem[] => {
+              const kind = SUPPORT_KINDS.find((each) => each === entry.kind);
+              const ref = str(entry.ref);
+              const document = str(entry.document_id);
+              return kind === undefined || !/^[A-Z][0-9]{1,3}$/.test(ref)
+                ? []
+                : [
+                    {
+                      kind,
+                      ref,
+                      needs: facts(entry.needs),
+                      label: plainLine(str(entry.label), 300),
+                      said: plainLine(str(entry.said), 400),
+                      documentId: UUID.test(document) ? document : null,
+                    },
+                  ];
+            })
+            .slice(0, 12),
+          challenge,
+          challengeIssueId: challenge !== "" && UUID.test(issue) ? issue : null,
+        },
+      ];
+    })
+    .filter((point) => point.support.length > 0)
+    .slice(0, 24);
+}
+
+/** ContextBody.review_held, read strictly; null when absent or malformed. */
+export function parseReviewHeld(value: unknown): ReviewHeld | null {
+  if (!isRecord(value) || !Array.isArray(value.not_reviewed)) {
+    return null;
+  }
+  return {
+    notReviewed: value.not_reviewed
+      .filter((key): key is string => typeof key === "string")
+      .slice(0, 24),
+    runAgain: value.run_again === true,
+  };
+}
+
+/** Why a reason to proceed cannot be sent, or null when it can. */
+export function proceedReasonProblem(reason: string): string | null {
+  const said = reason.trim();
+  if (said.length < PROCEED_REASON_MIN) {
+    return `Give a reason of at least ${PROCEED_REASON_MIN} characters.`;
+  }
+  if (said.length > PROCEED_REASON_MAX) {
+    return `Keep the reason to ${PROCEED_REASON_MAX} characters.`;
+  }
+  if (SECRET.test(said)) {
+    return "Keep the reason free of passwords and keys.";
+  }
+  return null;
 }
 
 /** A read a person asked for after completion (ContextBody.review_request), read strictly:
@@ -2890,6 +3102,7 @@ export type ContextIntent =
   | "value-not-known"
   | "review-run"
   | "review-proceed"
+  | "review-challenge"
   | "review-follow";
 
 export type ContextWrite =
@@ -3289,8 +3502,34 @@ export function contextWrite(fields: Fields): ContextWrite {
     // complete, whose findings become assumptions); or proceeds without a failed review.
     case "review-run":
       return ok("POST", `${control}/understanding/review/run`, {});
-    case "review-proceed":
-      return ok("POST", `${control}/understanding/review/proceed`, {});
+    // Past attributes the review did not review, with the person's reason (owner decision,
+    // 18 November 2026); after a failed review the reason may be empty.
+    case "review-proceed": {
+      const reason =
+        typeof fields.reason === "string" ? fields.reason.trim() : "";
+      return reason.length <= PROCEED_REASON_MAX && !SECRET.test(reason)
+        ? ok("POST", `${control}/understanding/review/proceed`, { reason })
+        : { error: "invalid" };
+    }
+    // A person challenges what a point the review found established rests on (owner
+    // decision, 18 November 2026): the read, the point, the need challenged, a short note.
+    case "review-challenge": {
+      const reviewId = text(fields, "review_id");
+      const unit = text(fields, "unit");
+      const need = text(fields, "need");
+      const note = typeof fields.note === "string" ? fields.note.trim() : "";
+      return UUID.test(reviewId) &&
+        KEY_PATTERN.test(unit) &&
+        (ASKED_FACTS as readonly string[]).includes(need) &&
+        notKnownNoteProblem(note) === null
+        ? ok("POST", `${control}/understanding/review/challenge`, {
+            review_id: reviewId,
+            unit,
+            need,
+            note,
+          })
+        : { error: "invalid" };
+    }
     // B1l point 1: a required walkthrough question or a statement value left as not known
     // yet, with an optional note: the person's not-known record, never an answer. One route
     // on the server for both (POST {control}/understanding/not-known with {subject, key,

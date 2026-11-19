@@ -215,8 +215,10 @@ install() {
     apt-get)
       # From the package lists the system already has, when they name packages the mirror
       # still serves (a CI runner's image refreshes its lists every week); `apt-get update`
-      # only when they do not. With the lists refreshed every time, the CI step took from 7
-      # to 172 seconds (19 November 2026). Recommended packages are not needed to read text.
+      # only when they do not, which saves a few seconds. The slow CI runs (up to 172 s with
+      # the lists refreshed, 99 s without; 19 November 2026) are the packages' download from
+      # the mirror, which only a cache of them would remove. Recommended packages are not
+      # needed to read text.
       if ! as_root env DEBIAN_FRONTEND=noninteractive \
         apt-get install -y -qq --no-install-recommends "${list[@]}"; then
         echo "The package lists are missing or out of date: refreshing them (apt-get update)."

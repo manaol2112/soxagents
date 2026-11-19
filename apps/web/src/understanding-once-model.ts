@@ -19,7 +19,9 @@ import type {
   CriteriaVersion,
   QuestionPass,
   QuestionReview,
+  ReviewHeld,
   ReviewNotRun,
+  ReviewProceeded,
   ReviewRequest,
 } from "./control-context-model.ts";
 
@@ -125,6 +127,14 @@ export type Once = {
   /** The server says a read is due and none is queued (ContextBody.review_due): the page
    * follows it up. */
   reviewDue?: boolean;
+  /** While the pass is HELD (ContextBody.review_held): the units the review did not review
+   * and whether it can run again. */
+  held?: ReviewHeld | null;
+  /** Proceed without it takes a reason (ContextBody.review_reason_needed). */
+  reasonNeeded?: boolean;
+  /** After a person proceeded without the review of some units (ContextBody.
+   * review_proceeded). */
+  proceeded?: ReviewProceeded | null;
   /** The approved attributes in the Attributes step's order, so the review names them by
    * letter. */
   approved?: readonly ApprovedRef[];
@@ -141,6 +151,9 @@ export type ApprovedRef = Pick<Attribute, "id" | "code" | "definition">;
  *   recorded, so "Go to the attributes" is never offered before it is.
  * - failed: the specialist's review could not be used (B1l point 7): Run again, or Proceed
  *   without it; nothing waits on it.
+ * - held: the review was read but left attributes not reviewed (owner decision, 18 November
+ *   2026): the understanding completes only after Run again, or Proceed without it with a
+ *   reason.
  * - understood: a body from before B1j says nothing of the pass: as before.
  * - open: points are still open.
  */
@@ -148,6 +161,7 @@ export type EndState =
   | "complete"
   | "checking"
   | "failed"
+  | "held"
   | "understood"
   | "open";
 
@@ -160,6 +174,9 @@ export function understandingEnd(once: Once, understood: boolean): EndState {
   }
   if (once.questionPass === "FAILED") {
     return "failed";
+  }
+  if (once.questionPass === "HELD") {
+    return "held";
   }
   if (!understood) {
     return "open";
@@ -179,9 +196,8 @@ export function readsAgain(once: Once, understood: boolean): boolean {
   return understandingEnd(once, understood) === "checking";
 }
 
-// The assumption on the attribute ("On the attribute").
-
-export const ASSUMED_LEAD = "The agent assumed:";
+// The assumption on the attribute ("On the attribute"); its lead and choices by kind are
+// understanding-specialist-model's assumptionLead, confirmWords and changeWords.
 
 /** The open ones, which wait on a person. */
 export function openAssumptions(
@@ -252,6 +268,10 @@ export function decidedLine(
         // record names only the decision; the product owner, after the review of B1k).
         return `Decided by ${who}${day === "" ? "" : `, ${day}`}: the confirmed understanding stands.`;
       }
+      // A fact not yet known that the person left open: never worded as a confirmation.
+      if (item.kind === "UNKNOWN") {
+        return `Left unanswered by ${who}${day === "" ? "" : `, ${day}`}: ${item.assumed}`;
+      }
       return `Confirmed by ${who}${day === "" ? "" : `, ${day}`}: ${item.assumed}`;
     }
     case "CHANGED":
@@ -318,9 +338,15 @@ export function versionLine(
   return [by, when, cause].filter((part) => part !== "").join(" · ");
 }
 
+/** Said on the attributes line while a question is still being prepared (a challenge's, or
+ * any the agents raised): the attributes wait on it (design review, 19 November 2026: the
+ * line read "Ready" while the challenge's question was being worded). */
+export const WAITING_ON_QUESTION = "Waiting on a question";
+
 /** What the understanding is ready for (B1j): once complete, the attributes are, whatever a
  * question the rules raised since holds for the D&I evidence, which reads the understanding as
- * before; while the agents check what else they need, the attributes are not ready yet. */
+ * before; while the agents check what else they need, or prepare a question (`preparing`),
+ * the attributes are not ready yet. */
 export function readyOnceComplete<
   T extends { key: "attributes" | "evidence"; ready: boolean; note: string },
 >(
@@ -328,6 +354,7 @@ export function readyOnceComplete<
   complete: boolean,
   proposed: number,
   checking = false,
+  preparing = 0,
 ): T[] {
   return lines.map((line) =>
     line.key !== "attributes"
@@ -340,7 +367,9 @@ export function readyOnceComplete<
           }
         : !complete && checking
           ? { ...line, ready: false, note: "Checking" }
-          : line,
+          : !complete && preparing > 0
+            ? { ...line, ready: false, note: WAITING_ON_QUESTION }
+            : line,
   );
 }
 

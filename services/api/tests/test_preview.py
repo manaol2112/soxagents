@@ -66,3 +66,19 @@ def test_preview_opens_a_local_workspace(empty_database: Database) -> None:
     projects = client.get(f"/organizations/{body[0]['id']}/projects")
     assert projects.status_code == 200
     assert projects.json()[0]["slug"] == "sox-2026"
+
+
+def test_preview_returns_to_the_page_asked_for_and_never_off_the_app(
+    empty_database: Database,
+) -> None:
+    """Signing in from a deep link (19 November 2026): the preview lands on that workspace
+    address; an address that could leave the app lands on the workspace home instead."""
+    apply_migrations(empty_database.url, migrations_dir())
+    client = _client(empty_database, preview=True, base_url="http://localhost")
+    deep = "/?organization=0b7f&section=controls"
+    response = client.get("/auth/preview", params={"next": deep}, follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == f"http://localhost:3000{deep}"
+    for unsafe in ("//evil.example/", "https://evil.example/", "/\\evil.example", "/welcome"):
+        refused = client.get("/auth/preview", params={"next": unsafe}, follow_redirects=False)
+        assert refused.headers["location"] == "http://localhost:3000"

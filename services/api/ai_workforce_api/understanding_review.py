@@ -19,7 +19,7 @@ agents need..." meanwhile (question_pass CHECKING). The walkthrough bank's own f
 asked as soon as a confirmed answer opens them, so the review never reads a course with a
 required follow-up still waiting (phase_release.answers_waiting counts them).
 
-Who. A registered agent run: the independent-reviewer agent, prompt understanding-review/3,
+Who. A registered agent run: the independent-reviewer agent, prompt understanding-review/7,
 through the provenance layer (AgentCaller: the agent's budgets, its model call record) inside
 the durable plan-run queue (its lease, attempts and resume), with one row per read in
 understanding_reviews (migration 0173), written once PENDING and ended once READY or FAILED.
@@ -27,11 +27,13 @@ understanding_reviews (migration 0173), written once PENDING and ended once READ
 What it reads, as data (escaped JSON in one block, never a tag of its own): the control (its
 statement, risk, activity, frequency, nature, system); per attribute it is tested on (the
 approved ones, or the library's for a control not tailored yet; for a control with no
-attributes, the kinds of fact over its statement and risk), the walkthrough questions that
-inform it (the bank's Question.informs) with their answers, what its criteria need
-(`needs_of`) and the D&I evidence planned for it; every other question asked with its answer:
-the statement's values, the agents' questions answered, those still waiting, those left as
-not known; and the linked documents' summaries.
+attributes, the kinds of fact over its statement and risk), its criteria (the engagement's
+own where it has them, else the library standard), the walkthrough questions that inform it
+(the bank's Question.informs) with their answers, what its criteria need (`needs_for`) and the
+D&I evidence planned for it; every other question asked with its answer: the statement's
+values, the agents' questions answered, those still waiting, those left as not known; the
+linked documents' summaries, each with a ref (D...); and, once confirmed, the process
+narrative (P1).
 
 What it returns, checked in code (`check`): a narrative of at most 150 words, formal and in
 the third person; the words of it that name what is not yet established (`marked`, exact
@@ -39,9 +41,13 @@ substrings); a verdict for every attribute: ESTABLISHED, naming the answers it r
 NOT_ESTABLISHED with one question (its topic, a plain question, the kind of fact, the
 attribute criterion or evidence request it blocks, a suggested answer and options); and the
 follow-ups the answers open, each naming the answer it follows. An answer that skips an
-attribute, or a NOT_ESTABLISHED with no question, is corrected once (as B1i corrects an
-agent's answer); after that the attribute is marked not reviewed (never an invented
-question), and the attribute agent states its assumptions on it later.
+attribute, an ESTABLISHED that cites nothing given establishing each fact its attribute
+needs (owner-approved F1, 18 November 2026: `unsupported`), or a NOT_ESTABLISHED with no
+question, is corrected once (as B1i corrects an agent's answer); after that the attribute is
+marked not reviewed (never an invented question, never a verdict taken on trust), and the
+attribute agent states its assumptions on it later. Nothing the answer asks disappears
+(owner-approved F2): what cannot be asked is kept as an assumption by its matter, and what a
+walkthrough answer holds is not asked again but becomes an assumption showing that answer.
 
 Asked once, by key (B1l point 4): a question is keyed on its attribute and its kind of fact,
 or, for a follow-up, on the answer that opened it; a second question on a key already asked on
@@ -100,7 +106,10 @@ FACT_ORDER: dict[str, int] = {
 }  # fmt: skip
 ReviewStatus = Literal["PENDING", "READY", "FAILED"]
 Cause = Literal["UNDERSTANDING", "RUN_AGAIN", "REVIEW_AGAIN"]
-QuestionPass = Literal["WAITING", "CHECKING", "DONE", "FAILED"]
+# HELD (owner decision, 18 November 2026, "Completion waits for a person"): the latest read
+# is READY but left attributes not reviewed; the understanding completes only once a person
+# runs the review again or proceeds without it, with a reason.
+QuestionPass = Literal["WAITING", "CHECKING", "DONE", "FAILED", "HELD"]
 
 AGENT = "independent-reviewer"
 # understanding-review/1 (16 November 2026, B1k and B1l): the first version.
@@ -110,7 +119,21 @@ AGENT = "independent-reviewer"
 # correction carries the previous answer as escaped data (agent_answers.correction_prompt).
 # understanding-review/3 (18 November 2026, owner-approved S1): a look-alike bracket the JSON
 # escapes leave is made inert too (prompt_data.neutral); the wording is as /2.
-PROMPT_VERSION = "understanding-review/3"
+# understanding-review/4 (18 November 2026, owner-approved fixes F1 and F3): the inputs give
+# each linked document a ref (D...) and the confirmed process narrative one (P1), and each
+# attribute its engagement criteria where it has them (over the library standard); the prompt
+# says an ESTABLISHED verdict cites, for each of its needs, a ref that establishes it.
+# understanding-review/5 (18 November 2026, owner decision "Tighten citations"): a value
+# counts only for the facts its slot records (statement_values[].establishes), an answered
+# question only for the fact it asked (fact), and a document or the narrative only through
+# cites, each with the need it establishes and a passage quoted from it word for word.
+# understanding-review/6 (19 November 2026, after the screenshot pass of q_ui3): the
+# narrative says only what the answers establish and do not, never the review's own process
+# (refs, a read, a correction, what is asked next or what a person is to do); the page says
+# the state itself.
+# understanding-review/7 (19 November 2026, design review): the narrative names an attribute
+# by what it tests, never by its key or code; the page letters the attributes itself.
+PROMPT_VERSION = "understanding-review/7"
 NARRATIVE_WORDS = 150
 NARRATIVE_LIMIT = 1500
 MAX_ASKED = 7
@@ -120,22 +143,31 @@ MAX_OPTIONS = 5
 READS = 2
 REVIEW_TOKENS, REVIEW_SECONDS = 8000, 180
 SUMMARY_LIMIT = 800
+# A passage quoted from a document or the narrative (AnswerCite.quote).
+QUOTE_LIMIT = 300
 # The one update an answer changed after completion starts, for an answer that informs no
 # attribute (only the population, the sample, the scope, the period or reliance): the planner
 # plans the evidence again and no attribute's criteria may change. Codes start at A1, so no
 # attribute ever has this one (migration 0079).
 NO_ATTRIBUTE = "A0"
 _CODE = re.compile(r"^A[0-9]{1,3}$")
-_REF = re.compile(r"^[WVQRN][0-9]{1,3}$")
+_REF = re.compile(r"^[WVQRNDP][0-9]{1,3}$")
+# The ref the confirmed process narrative has in the inputs (a document a verdict may cite).
+NARRATIVE_REF = "P1"
 
 # What a person reads, each one sentence.
 FAILED_SENTENCE = (
-    "The review could not run: the specialist's answer could not be used after one correction."
+    "The review could not run: the IT audit specialist's review could not be completed."
 )
 STOPPED_SENTENCE = "The review could not run: it stopped before it finished."
 NO_MODEL_SENTENCE = "The review could not run: no model is configured."
 NO_MODEL = "No model is configured, so the review cannot run."
 NOT_FAILED = "The review did not fail, so there is nothing to proceed without."
+# Proceeding past attributes the review did not review takes a reason, kept in the audit
+# trail with the attributes it names (owner decision, 18 November 2026).
+REASON_MIN = 3
+REASON_LIMIT = 500
+REASON_NEEDED = "Give the reason for proceeding without the review of these attributes."
 STILL_ASKED = "Answer the questions in Control Understanding first, or mark them not known yet."
 AT_WORK = "The agents are at work on this control; try again when they finish."
 NOT_DUE = (
@@ -177,6 +209,54 @@ class NotReviewedBody(BaseModel):
     text: str
 
 
+SupportKind = Literal["WALKTHROUGH", "VALUE", "QUESTION", "DOCUMENT", "NARRATIVE"]
+ChallengeState = Literal["", "PREPARING", "OPEN", "ANSWERED"]
+NARRATIVE_LABEL = "Process narrative"
+
+
+class SupportItemBody(BaseModel):
+    """One thing an established point rests on, as the read kept it when it was made (owner
+    decision, 18 November 2026, "Show the support"): a walkthrough answer (its question and
+    answer), a value of the statement (its label and value), an answered question (its
+    question and answer), or a passage quoted from a document (its title) or the confirmed
+    process narrative, with the needs it establishes for the point."""
+
+    kind: SupportKind
+    ref: str
+    needs: list[str]
+    label: str
+    said: str
+    # A document's id, to open it; null for anything else.
+    document_id: UUID | None = None
+
+
+class PointBody(BaseModel):
+    """A unit the read found established, named as the page names it, with what it rests
+    on, and whether a person challenged it (OPEN while the question the challenge raised waits
+    for an answer, ANSWERED once it is answered; "" when not challenged)."""
+
+    key: str
+    kind: Literal["ATTRIBUTE", "FACT"]
+    attribute_id: UUID | None = None
+    code: str | None = None
+    text: str
+    needs: list[str]
+    support: list[SupportItemBody]
+    challenge: ChallengeState = ""
+    challenge_issue_id: UUID | None = None
+
+
+class ChallengeBody(BaseModel):
+    """A person challenges what an established point rests on (POST .../understanding/
+    review/challenge): the read (its id), the point (its unit key), the need challenged (one
+    of the kinds of fact) and an optional note; asked again as a question, once."""
+
+    review_id: UUID
+    unit: str = Field(min_length=1, max_length=80)
+    need: Fact
+    note: str = Field(default="", max_length=500)
+
+
 class ReviewBody(BaseModel):
     """A review of the control's questions (ContextBody.review): before completion the
     latest read; once completed the latest one that was READY (B1k "Completion": the last
@@ -199,6 +279,75 @@ class ReviewBody(BaseModel):
     failure: str
     # The same as not_reviewed, named as the page names them.
     not_reviewed_items: list[NotReviewedBody] = []
+    # The units it found established, each with what it rests on as kept with the read (owner
+    # decision, 18 November 2026, "Show the support"); empty unless READY.
+    points: list[PointBody] = []
+
+
+def reason_needed(state: Standing) -> bool:
+    """Whether Proceed without it takes a reason now (ContextBody.review_reason_needed): a
+    read before completion left attributes not reviewed, and a proceed is open (held, or the
+    latest read failed). Pure."""
+    return (
+        state.left_not_reviewed
+        and not state.completed
+        and (held(state) or state.latest == "FAILED" or state.stale)
+    )
+
+
+class ProceededBody(BaseModel):
+    """A person proceeded without (part of) the review (ContextBody.review_proceeded): who,
+    when, the reason they recorded, and the units not reviewed it went past (empty after a
+    review that could not run with nothing left not reviewed)."""
+
+    by: str
+    at: datetime
+    reason: str
+    not_reviewed: list[str]
+
+
+def proceeded(connection: psycopg.Connection[Any], control_id: UUID) -> ProceededBody | None:
+    """The person's proceed without the review that completed the understanding, from its
+    audit record; None when it was completed otherwise, or not yet."""
+    from ai_workforce_api.understanding_once import completed_at
+
+    if completed_at(connection, control_id) is None:
+        return None
+    row = connection.execute(
+        """
+        SELECT coalesce(u.display_name, ''), e.occurred_at, e.payload
+        FROM audit_events e LEFT JOIN users u ON u.id = e.actor_user_id
+        WHERE e.target_type = 'engagement_control' AND e.target_id = %s
+          AND e.action = 'understanding.review_proceeded'
+        ORDER BY e.occurred_at DESC LIMIT 1
+        """,
+        (control_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    payload = row[2] if isinstance(row[2], dict) else {}
+    return ProceededBody(
+        by=str(row[0]), at=row[1], reason=line(str(payload.get("reason", "")), REASON_LIMIT),
+        not_reviewed=[str(k) for k in payload.get("not_reviewed", []) if isinstance(k, str)],
+    )  # fmt: skip
+
+
+class ReviewHeldBody(BaseModel):
+    """The latest read before completion is READY but left attributes not reviewed
+    (ContextBody.review_held, while question_pass is HELD): the understanding waits for a
+    person to run the review again (`run_again`: a read is left in its budget of two) or to
+    proceed without it, with a reason. `not_reviewed`: the units, as ReviewBody names them."""
+
+    not_reviewed: list[str]
+    run_again: bool
+
+
+class ProceedBody(BaseModel):
+    """Proceed without it (POST .../understanding/review/proceed). The reason is needed only
+    to proceed past attributes the review did not review (at least three characters, plain
+    text); after a read that could not run it is optional."""
+
+    reason: str = Field(default="", max_length=REASON_LIMIT)
 
 
 class ReviewRequestBody(BaseModel):
@@ -283,17 +432,44 @@ class Unit:
     key: str
     code: str | None
     text: str
+    # What its criteria need (needs_for), set by inputs_for for each attribute whose
+    # definition the bank records the needs of (walkthrough_questions.criteria_needs; 18
+    # November 2026; empty when everything is met elsewhere): the bank's record, or, for an
+    # attribute tailored on the engagement (its criteria differ from the library standard),
+    # what its own criteria name (needs_of on its wording, less what is met elsewhere). A
+    # question on a fact outside them is assumed (not_needed), and an ESTABLISHED verdict cites
+    # a ref for each of them (unsupported). None for a custom attribute, one whose definition
+    # the bank records no needs for, and a kind of fact over the statement: its questions are
+    # not held to a needs set.
+    needs: tuple[str, ...] | None = None
+    # What an ESTABLISHED verdict cites for when no needs are recorded (unsupported): what
+    # its own criteria name (needs_of, as the inputs list them), or, for a kind of fact over
+    # the statement, that fact (owner decision, 18 November 2026: a valid citation for each
+    # fact the attribute needs). None: read from its text (needs_of).
+    support: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
 class Parent:
-    """An answer a follow-up may name: a walkthrough answer (W), a value (V), an answered
-    question (Q), or one of the review's own questions of the first read (R)."""
+    """An answer a follow-up may name: a walkthrough answer (W, with the kind of fact its
+    question establishes), a value (V), an answered question (Q), or one of the review's own
+    questions of the first read (R)."""
 
     ref: str
     issue_id: UUID | None = None
     question_key: str = ""
     round_one: bool = False
+    fact: str = ""
+    # What a value or an answered question establishes when an ESTABLISHED verdict cites it
+    # (support_of): the facts a value's slot records (slot_facts), or the kind of fact an
+    # answered question asked; empty for one that names none.
+    covers: tuple[str, ...] = ()
+    # A walkthrough answer to a Yes/No question: it opens no follow-up (owner, 18 November
+    # 2026, "Yes/No always settles"), so one the specialist writes of it is never asked.
+    yes_no: bool = False
+    # A walkthrough answer given as not applicable: a follow-up may name it, but it
+    # establishes no need (owner decision, 18 November 2026).
+    not_applicable: bool = False
 
 
 @dataclass(frozen=True)
@@ -321,6 +497,11 @@ class Asked:
     # Its key was already asked on the control and the read still finds it not established:
     # an assumption although its matter was asked (B1l point 3).
     still_open: bool = False
+    # Assumed by its matter, not by its key (owner-approved F2, 18 November 2026): a second
+    # question on a key this answer already gave, one on a key already assumed, a verdict
+    # given twice, or a follow-up that could not be asked. Kept visible as its own assumption,
+    # so the key-once index never swallows it.
+    by_matter: bool = False
 
     @property
     def key(self) -> tuple[str, str, str]:
@@ -366,20 +547,70 @@ def needs_of(text: str) -> tuple[Fact, ...]:
     return tuple(fact for fact in FACTS if fact in found)
 
 
-def needs_for(definition_key: str, text: str) -> tuple[Fact, ...]:
+def needs_for(definition_key: str, text: str, tailored: bool = False) -> tuple[Fact, ...]:
     """What an attribute's criteria need (B1k "Nothing missed" 2): the bank's own record of
     them where it has one (walkthrough_questions.criteria_needs), leaving out each need it
     records as met elsewhere (met_elsewhere: a value of the statement, or each item's own
     evidence), so the review never asks what a value or the evidence already settles;
-    otherwise read from the wording (`needs_of`). In FACTS order. Pure."""
+    otherwise read from the wording (`needs_of`). An attribute `tailored` on the engagement
+    (its criteria differ from the standard: `tailored_criteria`) is read from its own wording
+    (`text` carries its engagement criteria), less what is met elsewhere (owner-approved F3,
+    18 November 2026: before, it was held to the bank's record of the standard). In FACTS
+    order. Pure."""
     from ai_workforce_api.walkthrough_questions import criteria_needs, met_elsewhere
 
     listed = criteria_needs(definition_key) if definition_key else ()
     if not listed:
         return needs_of(text)
+    if tailored:
+        return tuple(fact for fact in needs_of(text) if not met_elsewhere(definition_key, fact))
     return tuple(
         fact for fact in FACTS if fact in listed and not met_elsewhere(definition_key, fact)
     )
+
+
+def slot_facts(key: str, kind: str, label: str = "") -> tuple[Fact, ...]:
+    """The kinds of fact a value of the statement records, for an ESTABLISHED verdict that
+    cites it (owner decisions, 18 November 2026: a value counts only for the fact its slot
+    records, from an explicit record). A role slot: what the bank's record of role slots says
+    (walkthrough_questions.ROLE_SLOT_FACTS; a control owner records nothing, and a role slot
+    it does not list records nothing). Any other slot: each fact the bank records as met by it
+    (met_by_slot), and by its kind a system (SYSTEM), a number of days or a period (TIMING),
+    a report relied on (POPULATION); an amount, a percentage or a text records none by its
+    kind. Never read from the slot's words (before: a role was PERFORMER unless its words
+    said review, approve or sign). In FACTS order. Pure."""
+    from ai_workforce_api.walkthrough_questions import ROLE_SLOT_FACTS, met_by_slot
+
+    del label
+    if kind == "ROLE":
+        listed: set[str] = set(ROLE_SLOT_FACTS.get(key, ()))
+        return tuple(fact for fact in FACTS if fact in listed)
+    found: set[str] = {fact for _definition, fact in met_by_slot(key)}
+    if kind == "SYSTEM":
+        found.add("SYSTEM")
+    elif kind in ("DAYS", "PERIOD"):
+        found.add("TIMING")
+    elif kind == "REPORT":
+        found.add("POPULATION")
+    return tuple(fact for fact in FACTS if fact in found)
+
+
+def _same(left: str, right: str) -> bool:
+    return " ".join(left.split()).casefold() == " ".join(right.split()).casefold()
+
+
+def tailored_criteria(
+    criteria: tuple[str, str, str], standard: tuple[str, str, str] | None
+) -> bool:
+    """Whether an attribute's engagement criteria (condition, pass, fail) are its own: any of
+    them written, and not the library standard's word for word (spacing and case aside), or
+    written with no standard at all. Decided by the criteria, never by a missing definition
+    key (owner-approved F3, 18 November 2026). Pure."""
+    if not any(part.strip() for part in criteria):
+        return False
+    if standard is None:
+        return True
+    return not all(_same(mine, theirs) for mine, theirs in zip(criteria, standard, strict=True))
 
 
 def met_reasons(definition_key: str) -> list[str]:
@@ -396,7 +627,7 @@ def units_of(attributes: Sequence[tuple[str, str]]) -> list[Unit]:
     """The units the specialist gives a verdict for: each attribute (code or key, text) once,
     in order; with none, the kinds of fact over the control's statement and risk."""
     if not attributes:
-        return [Unit(fact, None, fact) for fact in CONTROL_FACTS]
+        return [Unit(fact, None, fact, support=(fact,)) for fact in CONTROL_FACTS]
     seen: set[str] = set()
     found: list[Unit] = []
     for code, text in attributes:
@@ -412,6 +643,89 @@ def escaped_json(value: Any) -> str:
     answer or a document that says "</review_inputs>" stays data inside a string."""
     text = json.dumps(value, ensure_ascii=False, indent=1, default=str)
     return text.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+
+
+# What only this review's own machinery ever put in a narrative, and so may be left out of
+# what a person reads (screenshot pass of 19 November 2026, narrowed the same day: generic
+# words such as "reference", "proceed" or "correction" are ordinary audit words and stay):
+# REF, one of the inputs' own refs as a cited id (W3, V2, Q1, R1, N1, D1, P1); CLOSING, a
+# sentence the code or the prompt itself used to have the narrative end with.
+_OWN_REF = re.compile(r"\b(?:[WVQRND][0-9]{1,3}|P1)\b")
+OWN_CLOSINGS: tuple[str, ...] = (
+    "No other question is needed before the attributes are drafted.",
+    "No other question is asked before the attributes are drafted; what is not yet "
+    "established is recorded as an assumption on the attributes.",
+    "These are asked now.",
+    "This is asked now.",
+    "These questions are asked now.",
+)
+_CLOSINGS = {" ".join(text.split()).casefold() for text in OWN_CLOSINGS}
+# TERMS: the inputs' and the page's own words, which describe this review and never a control
+# (q_ui4, 19 November 2026: "the read cited an answer reference that is not among the
+# walkthrough answers, the statement values or the questions already answered ... the
+# understanding waits for a person to run the review again or to proceed with a recorded
+# reason"). Whole phrases only, never a word an audit narrative uses of a control.
+_OWN_TERMS = re.compile(
+    r"\bthe inputs\b|\breview_inputs\b|\brests_on\b|\bstatement values\b"
+    r"|\bquestions already answered\b|\banswer references?\b|\bthe read cited\b"
+    r"|\brun the review again\b|\bproceed with a recorded reason\b|\bproceed without it\b"
+    r"|\bthe understanding waits\b",
+    re.IGNORECASE,
+)
+
+
+def narrative_kept(narrative: str) -> tuple[str, tuple[str, ...]]:
+    """The narrative as a person reads it, and the rule each sentence left out matched (REF,
+    CLOSING or TERMS), in order: only what is unambiguously the review's own (a cited ref of
+    its inputs, a closing sentence the code or prompt used to emit, the inputs' or the page's
+    own phrases for this review and its states), never a sentence for its ordinary words. The
+    page says the review's state itself, once, in its own copy. The caller records what was
+    left out. Pure."""
+    kept: list[str] = []
+    dropped: list[str] = []
+    for sentence in re.split(r"(?<=[.!?])\s+", " ".join(narrative.split())):
+        if not sentence:
+            continue
+        if sentence.casefold() in _CLOSINGS:
+            dropped.append("CLOSING")
+        elif _OWN_REF.search(sentence):
+            dropped.append("REF")
+        elif _OWN_TERMS.search(sentence):
+            dropped.append("TERMS")
+        else:
+            kept.append(sentence)
+    return " ".join(kept), tuple(dropped)
+
+
+_ATTRIBUTE_CODE = re.compile(r"(?:\b([Aa]ttributes?) )?\b(A[0-9]{1,3})\b")
+
+
+def letter_of(index: int) -> str:
+    """An attribute's letter by its place, as the page letters it (web attributeLetter): A, B,
+    ... Z, then AA. Pure."""
+    first, at = divmod(index, 26)
+    letter = chr(65 + at)
+    return letter if first == 0 else f"{chr(64 + first)}{letter}"
+
+
+def with_letters(text: str, letters: Mapping[str, str]) -> str:
+    """A narrative as the page shows it: each attribute code (A2) as the letter the page gives
+    that attribute (C), and a code the control no longer has as "an attribute" (design
+    review, 19 November 2026: the paragraph named "attribute A2" beside "Attribute C"). Pure."""
+
+    def shown(found: re.Match[str]) -> str:
+        letter = letters.get(found.group(2))
+        if letter is None:
+            return "an attribute"
+        return f"{found.group(1)} {letter}" if found.group(1) else letter
+
+    return _ATTRIBUTE_CODE.sub(shown, text)
+
+
+def without_process(narrative: str) -> str:
+    """`narrative_kept`'s narrative alone: for a read shown that was kept before the rule (its
+    left-out sentences were recorded, if any, when it was kept). Pure."""
+    return narrative_kept(narrative)[0]
 
 
 def words(text: str) -> int:
@@ -483,6 +797,20 @@ SCHEMA: dict[str, Any] = {
                         "maxItems": 12,
                         "items": {"type": "string", "maxLength": 12},
                     },
+                    "cites": {
+                        "type": "array",
+                        "maxItems": 12,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "ref": {"type": "string", "maxLength": 12},
+                                "need": {"type": "string", "enum": list(FACTS)},
+                                "quote": {"type": "string", "maxLength": QUOTE_LIMIT},
+                            },
+                            "required": ["ref", "need", "quote"],
+                            "additionalProperties": False,
+                        },
+                    },
                     "question": {
                         "type": "object",
                         "properties": _QUESTION_PROPERTIES,
@@ -532,10 +860,20 @@ class AnswerQuestion(BaseModel):
     options: list[str] = Field(default_factory=list, max_length=MAX_OPTIONS + 1)
 
 
+class AnswerCite(BaseModel):
+    """A document (D...) or the confirmed narrative (P1) an ESTABLISHED verdict rests on, for
+    one need, with the passage of it that establishes that need, word for word."""
+
+    ref: str = Field(max_length=12)
+    need: Fact
+    quote: str = Field(max_length=QUOTE_LIMIT)
+
+
 class AnswerVerdict(BaseModel):
     attribute: str = Field(max_length=80)
     verdict: Literal["ESTABLISHED", "NOT_ESTABLISHED"]
     rests_on: list[str] = Field(default_factory=list, max_length=12)
+    cites: list[AnswerCite] = Field(default_factory=list, max_length=12)
     question: AnswerQuestion | None = None
 
 
@@ -561,6 +899,8 @@ class Checked:
     not_reviewed: tuple[str, ...]
     asked: tuple[Asked, ...]
     dropped: tuple[str, ...] = ()
+    # The rule each narrative sentence left out matched (narrative_kept), for the audit.
+    narrative_dropped: tuple[str, ...] = ()
 
 
 def essay(item: AnswerQuestion) -> bool:
@@ -608,53 +948,208 @@ def _question(
     )
 
 
+def not_needed(unit: Unit, fact: str) -> bool:
+    """Whether a question on `fact` asks what the unit's criteria do not need: only for a unit
+    whose needs the bank records (Unit.needs), and never for a fact of no named kind (OTHER),
+    which no needs set names. Pure."""
+    return unit.needs is not None and fact != "OTHER" and fact not in unit.needs
+
+
+def support_of(ref: str, parents: Mapping[str, Parent]) -> tuple[str, ...] | None:
+    """What a ref in an ESTABLISHED verdict's rests_on establishes (owner-approved F1 and the
+    tightening of 18 November 2026): a walkthrough answer that stands, the kind of fact its
+    question establishes; a value of the statement, only the facts its slot records
+    (Parent.covers); an answered question, only its question's kind of fact (none when it was
+    asked of no kind). A ref the inputs do not give as an answer, a value or an answered
+    question, or an answer given as not applicable, None: a document or the narrative is
+    cited with a quoted passage instead (`cite_of`). An empty tuple is a valid citation that
+    establishes no named need. Pure."""
+    parent = parents.get(ref)
+    if parent is None or parent.not_applicable:
+        return None
+    if parent.question_key and parent.issue_id is None:
+        return (parent.fact,) if parent.fact else ()
+    return parent.covers
+
+
+def cite_of(given: AnswerCite, texts: Mapping[str, str]) -> dict[str, str] | None:
+    """A document or the confirmed narrative cited for one need, as kept: only where the
+    quoted passage is found in that text by the strict matcher (console_citations.
+    find_passage: on word boundaries, never where the word before it negates it, at least
+    four words or twenty characters); None otherwise, so a made-up passage, one of another
+    text, or one the text negates establishes nothing. Pure."""
+    from ai_workforce_api.console_citations import find_passage
+
+    ref = given.ref.strip()
+    text = texts.get(ref)
+    quote = line(given.quote, QUOTE_LIMIT)
+    if text is None or not quote or find_passage(text, quote) is None:
+        return None
+    return {"ref": ref, "need": given.need, "quote": quote}
+
+
+def answered_covers(
+    status: str, asks_fact: str | None, by_person: bool, note: str
+) -> tuple[str, ...]:
+    """What an answered question establishes when a verdict cites it (owner decision, 18
+    November 2026): the kind of fact it asked, only where a person answered it (RESOLVED, with
+    who resolved it), never one dismissed as not applicable, closed when the attributes were
+    accepted, or settled by the system itself. Pure."""
+    from ai_workforce_api.control_context import QUESTIONS_CLOSED_NOTE
+
+    if status != "RESOLVED" or not by_person or not asks_fact or note == QUESTIONS_CLOSED_NOTE:
+        return ()
+    return (asks_fact,)
+
+
+def required_needs(unit: Unit) -> tuple[str, ...]:
+    """What an ESTABLISHED verdict on the unit must cite, and so what its support may show:
+    its recorded needs (Unit.needs; what is met elsewhere is not among them), else what its
+    own criteria name (Unit.support), else what its text names (needs_of). Empty when every
+    need is met elsewhere. The one reading `unsupported` and `with_support` share. Pure."""
+    if unit.needs is not None:
+        return unit.needs
+    if unit.support is not None:
+        return unit.support
+    return needs_of(unit.text)
+
+
+def unsupported(
+    unit: Unit,
+    rests_on: Sequence[str],
+    parents: Mapping[str, Parent],
+    cites: Sequence[Mapping[str, str]] = (),
+) -> tuple[str, ...]:
+    """What an ESTABLISHED verdict claims and cites nothing for (owner-approved F1, 18
+    November 2026: a bare assertion never establishes an attribute): each of the unit's needs
+    (Unit.needs; what is met elsewhere is not among them) that no cited answer, value or
+    answered question of that kind of fact, and no passage found in a document or the
+    narrative cited for that need, establishes. A unit whose needs the bank does not record
+    is held the same way to what its own criteria name (Unit.support, needs_of; owner
+    decision, 18 November 2026: before, one valid citation of anything was enough). Empty
+    when the verdict is supported. `cites` are the ones `cite_of` kept. Pure."""
+    found = [kinds for ref in rests_on if (kinds := support_of(ref, parents)) is not None]
+    required = required_needs(unit)
+    covered = {fact for kinds in found for fact in kinds} | {cite["need"] for cite in cites}
+    return tuple(need for need in required if need not in covered)
+
+
+def _assumable(item: AnswerQuestion, code: str | None, position: int) -> Asked | None:
+    """A question that cannot be asked (it names no answer given, no attribute of the
+    control, or nothing it blocks), as an assumption by its matter, so it is never lost
+    (owner-approved F2, 18 November 2026): its topic and its text, plain, with no credential;
+    None when it has neither, or holds a credential, and so holds nothing to record. Pure."""
+    topic = line(item.topic, 120)
+    text = line(item.text, 400)
+    suggested = line(item.suggested, 400)
+    if not topic or not text or not matter_key(topic):
+        return None
+    if contains_secret({"topic": topic, "text": text, "suggested": suggested}):
+        return None
+    return Asked(
+        code=code, fact=item.fact, topic=topic, text=text, blocks=line(item.blocks, 300),
+        suggested=suggested, options=(), position=position, assume_only=True, by_matter=True,
+    )  # fmt: skip
+
+
 def check(
     answer: Answer,
     units: Sequence[Unit],
     parents: Mapping[str, Parent],
     round_: int,
     strict: bool,
+    texts: Mapping[str, str] | None = None,
 ) -> Checked:
     """The code's check of the specialist's answer (B1k "Nothing missed" 5, B1l points 4 and
-    5). With `strict` (the first answer) a skipped attribute, a NOT_ESTABLISHED without a
-    question that names what it blocks, or a narrative over 150 words is refused (ValueError,
-    corrected once); afterwards the attribute is marked not reviewed (no question is
-    invented for it) and the narrative is cut at a sentence. A credential in the narrative is
-    always refused. A follow-up that names no answer given, or an attribute the control does
-    not have, is left out; so is a question with a credential. Which follow-ups the second
-    read may ask (only those of the first read's own questions) is `plan`'s rule; the others
-    become assumptions there."""
-    narrative = " ".join(answer.narrative.split())
+    5). With `strict` (the first answer) a skipped attribute, an ESTABLISHED verdict that cites
+    nothing establishing what its attribute needs (`unsupported`; owner-approved F1, 18
+    November 2026), a NOT_ESTABLISHED without a question that names what it blocks, or a
+    narrative over 150 words is refused (ValueError, corrected once); afterwards the attribute
+    is marked not reviewed (no question is invented for it, no verdict is taken on trust) and
+    the narrative is cut at a sentence. A credential in the narrative is always refused.
+    `texts`: the documents and the confirmed narrative by ref (D..., P1), which a verdict
+    cites with a quoted passage for a need (`cite_of`), and which never name a follow-up's
+    parent.
+
+    Nothing the answer asks disappears (owner-approved F2, 18 November 2026): the question of a
+    verdict given twice, or of one naming no unit, and a follow-up that names no answer given
+    or no attribute of the control, or that cannot be asked as written, is kept as an
+    assumption by its matter (Asked.by_matter); only one holding a credential, or with no
+    topic or text, is left out, with its note. Which follow-ups the second read may ask (only
+    those of the first read's own questions) is `plan`'s rule; the others become assumptions
+    there."""
+    narrative, left_out = narrative_kept(answer.narrative)
     if not narrative:
-        raise ValueError("narrative: the review is empty")
+        raise ValueError(
+            "narrative: describe only how the control runs, what the answers establish and "
+            "what they do not; never refs, these corrections or what is asked next"
+        )
     if contains_secret({"narrative": narrative}):
         raise ValueError("narrative: holds a credential")
     if words(narrative) > NARRATIVE_WORDS:
         if strict:
             raise ValueError(f"narrative: more than {NARRATIVE_WORDS} words")
         narrative = fitted(narrative)
+    codes = {unit.key: unit.code for unit in units}
+    by_unit = {unit.key: unit for unit in units}
     by_key: dict[str, AnswerVerdict] = {}
     dropped: list[str] = []
-    for given in answer.verdicts:
+    asked: list[Asked] = []
+    for at, given in enumerate(answer.verdicts):
         key = given.attribute.strip()
-        if key in by_key:
-            dropped.append(f"verdicts: {key} given twice")
+        if key in by_key or key not in by_unit:
+            said = "given twice" if key in by_key else "names no unit"
+            kept = (
+                None
+                if given.verdict != "NOT_ESTABLISHED" or given.question is None
+                else _assumable(given.question, codes.get(key), len(units) + at)
+            )
+            if kept is not None:
+                asked.append(kept)
+            dropped.append(
+                f"verdicts: {key} {said}"
+                + (", so its question is assumed" if kept is not None else "")
+            )
             continue
         by_key[key] = given
     problems: list[str] = []
     not_reviewed: list[str] = []
     verdicts: list[dict[str, Any]] = []
-    asked: list[Asked] = []
     for position, unit in enumerate(units):
         verdict = by_key.get(unit.key)
         if verdict is None:
             problems.append(f"verdicts: no verdict for {unit.key}")
             not_reviewed.append(unit.key)
             continue
-        rests_on = [ref for ref in dict.fromkeys(verdict.rests_on) if ref in parents]
+        cited = list(dict.fromkeys(ref.strip() for ref in verdict.rests_on))
+        rests_on = [ref for ref in cited if support_of(ref, parents) is not None]
+        invalid = [ref for ref in cited if ref not in rests_on]
+        if invalid:
+            dropped.append(
+                f"verdicts: {unit.key} cites {', '.join(invalid[:6])}, which the inputs do not "
+                "give as an answer, a value or an answered question"
+            )
+        quoted = [found for given in verdict.cites if (found := cite_of(given, texts or {}))]
+        if len(quoted) < len(verdict.cites):
+            dropped.append(
+                f"verdicts: {unit.key} quotes a passage that is not in the document or "
+                "narrative it cites"
+            )
         if verdict.verdict == "ESTABLISHED":
+            missing = unsupported(unit, rests_on, parents, quoted)
+            if missing:
+                problems.append(
+                    f"verdicts: {unit.key} is ESTABLISHED but cites nothing that establishes "
+                    + ", ".join(missing)
+                    + ": a walkthrough answer, a value or an answered question of that kind "
+                    "of fact, or a passage quoted word for word from a document or the "
+                    "narrative"
+                )
+                not_reviewed.append(unit.key)
+                continue
             verdicts.append({"attribute": unit.key, "verdict": "ESTABLISHED",
-                             "rests_on": rests_on})  # fmt: skip
+                             "rests_on": rests_on,
+                             **({"cites": quoted} if quoted else {})})  # fmt: skip
             continue
         question = (
             None
@@ -670,27 +1165,66 @@ def check(
             continue
         verdicts.append({"attribute": unit.key, "verdict": "NOT_ESTABLISHED",
                          "rests_on": rests_on, "fact": question.fact})  # fmt: skip
+        if not_needed(unit, question.fact):
+            # Only what the criteria need is asked (product owner, 18 November 2026, "Record
+            # as assumption"): a question on a fact its criteria do not need is assumed on the
+            # attribute, never asked.
+            dropped.append(
+                f"verdicts: {unit.key} asks {question.fact}, which its criteria do not need, "
+                "so it is assumed"
+            )
+            asked.append(replace(question, assume_only=True))
+            continue
         asked.append(question)
     if problems and strict:
-        raise ValueError("; ".join(problems[:8]))
-    codes = {unit.key: unit.code for unit in units}
+        raise ValueError(
+            "; ".join(problems[:8]) + "; the narrative still describes only how the control "
+            "runs and what the answers establish, never these corrections"
+        )
     # A control with attributes: every follow-up names the one it bears on (B1l point 5).
     attributed = any(unit.code is not None for unit in units)
     follow_problems: list[str] = []
-    for at, follow_up in enumerate(answer.follow_ups, start=len(units)):
-        place = f"follow_ups[{at - len(units)}]"
+    for at, follow_up in enumerate(answer.follow_ups, start=len(units) + len(answer.verdicts)):
+        place = f"follow_ups[{at - len(units) - len(answer.verdicts)}]"
         parent = parents.get(follow_up.parent.strip())
-        if parent is None:
-            dropped.append(f"{place}: names no answer given")
-            continue
         attribute = follow_up.attribute.strip()
+        known = attribute in codes
         code = codes.get(attribute) if attribute else None
-        if attribute and attribute not in codes:
-            dropped.append(f"{place}: names no attribute of the control")
+        if parent is None or (attribute and not known):
+            kept = _assumable(follow_up, code if known else None, at)
+            if kept is not None:
+                asked.append(kept)
+            said = (
+                "names no answer given" if parent is None else "names no attribute of the control"
+            )
+            dropped.append(f"{place}: {said}" + (", so it is assumed" if kept is not None else ""))
+            continue
+        if parent.yes_no:
+            # A Yes or a No settles its question (owner, 18 November 2026): the follow-up is
+            # never asked. Kept as an assumption by its matter, unless the specialist itself
+            # found the attribute established on that very answer.
+            on_it = any(
+                v["attribute"] == attribute and v["verdict"] == "ESTABLISHED"
+                and parent.ref in v["rests_on"]
+                for v in verdicts
+            )  # fmt: skip
+            kept = None if on_it else _assumable(follow_up, code if known else None, at)
+            if kept is not None:
+                asked.append(kept)
+            dropped.append(
+                f"{place}: follows a Yes/No answer, which opens no follow-up"
+                + (", so it is assumed" if kept is not None else ", and the verdict cites it")
+            )
             continue
         made = _question(follow_up, code, at, parent)
         if made is None:
-            dropped.append(f"{place}: not a question to ask")
+            kept = _assumable(follow_up, code, at)
+            if kept is not None:
+                asked.append(kept)
+            dropped.append(
+                f"{place}: not a question to ask"
+                + (", so it is assumed" if kept is not None else "")
+            )
             continue
         if essay(follow_up):
             follow_problems.append(f"{place}: has neither a suggested answer nor two options")
@@ -702,17 +1236,45 @@ def check(
             dropped.append(f"{place}: names no attribute, so it is assumed")
             asked.append(replace(made, assume_only=True))
             continue
+        if attribute and not_needed(by_unit[attribute], made.fact):
+            # Held to its attribute's criteria as a verdict's question is (review finding B2).
+            dropped.append(
+                f"{place}: asks {made.fact} of {attribute}, which its criteria do not need, "
+                "so it is assumed"
+            )
+            asked.append(replace(made, assume_only=True))
+            continue
         asked.append(made)
     if follow_problems and strict:
         raise ValueError("; ".join(follow_problems[:8]))
     return Checked(
         narrative=narrative,
         marked=tuple(marked_in(narrative, answer.marked)),
+        narrative_dropped=left_out,
         verdicts=tuple(verdicts),
         not_reviewed=tuple(not_reviewed),
         asked=tuple(asked),
         dropped=tuple(dropped),
     )
+
+
+@dataclass(frozen=True)
+class Holder:
+    """What holds a key on the control (B1l point 4): a question asked there in any status
+    (ASKED), an assumption already recorded on it (ASSUMED), or a walkthrough question of the
+    bank asked for the control that informs the attribute with that kind of fact (BANK;
+    `answer` is its key when its answer stands, `ref` that answer's ref in the review's
+    inputs, `opens` whether the answer opens a follow-up: opens_follow_up, and `said` each
+    standing answer of the bank that holds the key, as (question, answer): more than one bank
+    question may inform an attribute with the same kind of fact)."""
+
+    by: Literal["ASKED", "ASSUMED", "BANK"]
+    answer: str = ""
+    opens: bool = False
+    ref: str = ""
+    said: tuple[tuple[str, str], ...] = ()
+    # The question keys of every standing answer that holds the key (`said`'s, in order).
+    keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -723,18 +1285,57 @@ class Plan:
     ask: tuple[Asked, ...]
     assume: tuple[Asked, ...]
     repeated: int = 0
+    # Not asked again because a walkthrough answer that stands holds their attribute and kind
+    # of fact and opens no follow-up (18 November 2026). Each with the holder whose answer it
+    # is. Never read as established (owner-approved F2, 18 November 2026): _apply records each
+    # as an assumption showing that answer and what the specialist found it does not
+    # establish, unless the specialist's own verdict is ESTABLISHED and cites that answer.
+    answered: tuple[tuple[Asked, Holder], ...] = ()
 
 
-@dataclass(frozen=True)
-class Holder:
-    """What holds a key on the control (B1l point 4): a question asked there in any status
-    (ASKED), an assumption already recorded on it (ASSUMED), or a walkthrough question of the
-    bank asked for the control that informs the attribute with that kind of fact (BANK;
-    `answer` is its key when its answer stands, so what it still leaves open is a follow-up
-    of that answer)."""
+_VENDOR = re.compile(r"\b(vendor|service provider|service organi[sz]ation)\b", re.IGNORECASE)
 
-    by: Literal["ASKED", "ASSUMED", "BANK"]
-    answer: str = ""
+
+def opens_follow_up(kind: str, value: str) -> bool:
+    """Whether a walkthrough answer that stands opens a follow-up (product owner, 18 November
+    2026: a follow-up is raised only when it is truly needed and not already answered): an
+    answer in the person's own words (an "Other: ..." part, or a free-text answer), or one
+    that names only the vendor. Any other answer settles the fact its question asks: a Yes or
+    a No always does ("Yes/No always settles", product owner, 18 November 2026), and so does
+    any option of the bank chosen as offered, "No one (...)" or "Not handled separately"
+    among them; a gap such an answer shows becomes a design finding or an assumption through
+    their own paths, never a question. Pure."""
+    from ai_workforce_api.walkthrough_questions import is_other
+
+    if kind == "YES_NO":
+        return False
+    if kind == "TEXT":
+        return bool(value.strip())
+    parts = [part.strip() for part in value.split(";") if part.strip()]
+    if not parts:
+        return False
+    if any(is_other(part) for part in parts):
+        return True
+    return all(_VENDOR.search(part) for part in parts)
+
+
+def _settled_by_parent(
+    item: Asked, holders: Mapping[tuple[str, str, str], Holder]
+) -> Holder | None:
+    """The walkthrough answer a follow-up follows, when that answer holds the follow-up's own
+    attribute and kind of fact and opens no follow-up (Holder.opens): what it asks is already
+    said. Any standing answer that holds that key counts, not only the one the holder was
+    chosen by (Holder.keys; 18 November 2026: more than one bank question may hold an
+    attribute's kind of fact). None for any other question, and for a follow-up on another
+    fact (a contradiction, a new name), which stays the specialist's to ask. Pure."""
+    if not item.follow_up or item.parent_issue_id is not None or not item.parent_key:
+        return None
+    holder = holders.get(key_of(item.code, item.fact, None, ""))
+    if holder is None or holder.by != "BANK" or holder.opens:
+        return None
+    if item.parent_key != holder.answer and item.parent_key not in holder.keys:
+        return None
+    return holder
 
 
 def ranked(items: Sequence[Asked]) -> list[Asked]:
@@ -753,12 +1354,19 @@ def plan(
 ) -> Plan:
     """Which questions are asked (B1k "Everything flagged", B1l points 3, 4 and 5):
 
-    - a key asked twice in the answer is asked once; a key already assumed is not assumed
-      again;
+    - a key asked twice in the answer is asked once, and the second question is assumed by
+      its matter (owner-approved F2, 18 November 2026: before, it was dropped); so is one on a
+      key already assumed on the control (before, recorded nowhere);
     - a key already asked on the control, in any status, is never asked again: in the first
       read before completion, one a bank question with a standing answer holds becomes a
-      follow-up of that answer (one per answer), when that is free; otherwise what is still
-      not established on it becomes an assumption (B1l point 3), never a silent drop;
+      follow-up of that answer (one per answer), when that is free and the answer opens one
+      (Holder.opens); otherwise what is still not established on it becomes an assumption
+      (B1l point 3), never a silent drop;
+    - a key a bank question holds with a standing answer that opens no follow-up is not
+      asked again (18 November 2026), counted as repeated and returned in `answered`; so is a
+      follow-up the specialist writes itself of that very answer on the fact it holds (review
+      finding B2), while one on another fact is asked as any follow-up is. It is never read
+      as established: _apply makes it an assumption showing the answer (owner-approved F2);
     - a question that may only be assumed (`assume_only`) is assumed;
     - after completion ("Review again") nothing is asked: every finding is an assumption;
     - in the second read only a follow-up of a question of the first read is asked; what is
@@ -772,22 +1380,37 @@ def plan(
     repeated = 0
     fresh: list[Asked] = []
     assume: list[Asked] = []
+    answered: list[tuple[Asked, Holder]] = []
     for item in asked:
         if item.assume_only:
             assume.append(item)
             continue
+        settled = _settled_by_parent(item, holders)
+        if settled is not None:
+            # A follow-up the specialist wrote itself of a walkthrough answer, on the very fact
+            # that answer holds: keyed on the answer, it would pass the key's own check, so
+            # it is held to the fact's (18 November 2026, review finding B2).
+            repeated += 1
+            answered.append((item, settled))
+            continue
         holder = holders.get(item.key)
         if holder is None:
             if item.key in seen:
-                repeated += 1
+                # The same key twice in this answer: asked once, the second kept visible.
+                assume.append(replace(item, by_matter=True))
                 continue
             seen.add(item.key)
             fresh.append(item)
             continue
-        if holder.by == "ASSUMED":
-            repeated += 1
-            continue
         repeated += 1
+        if holder.by == "ASSUMED":
+            assume.append(replace(item, by_matter=True))
+            continue
+        if holder.by == "BANK" and holder.answer and not holder.opens:
+            # The walkthrough's answer holds it and leaves nothing open: never asked again, in
+            # other words or as a follow-up (seen on ITGC-AC-03, 18 November 2026).
+            answered.append((item, holder))
+            continue
         if (
             holder.by == "BANK"
             and holder.answer
@@ -803,7 +1426,7 @@ def plan(
                 continue
         assume.append(replace(item, still_open=True))
     if after_completion:
-        return Plan((), tuple(assume + fresh), repeated)
+        return Plan((), tuple(assume + fresh), repeated, tuple(answered))
     if round_ >= 2:
         candidates = [item for item in fresh if item.follow_up and item.round_one]
         rest = [item for item in fresh if item not in candidates]
@@ -811,7 +1434,88 @@ def plan(
         candidates, rest = fresh, []
     order = ranked(candidates)
     room = max(0, ceiling)
-    return Plan(tuple(order[:room]), tuple(assume + rest + order[room:]), repeated)
+    return Plan(tuple(order[:room]), tuple(assume + rest + order[room:]), repeated, tuple(answered))
+
+
+def with_support(
+    checked: Checked,
+    parents: Mapping[str, Parent],
+    shown: Mapping[str, tuple[str, str, str, str | None]],
+    units: Sequence[Unit] = (),
+) -> Checked:
+    """The read as it is kept: each ESTABLISHED verdict with `support`, what it rests on as a
+    person reads it, resolved from the inputs the specialist was given (owner decision, 18
+    November 2026, "Show the support"), so the page shows exactly what the stored verdict
+    rests on, whatever the inputs say later. Only what backs a need the unit has
+    (required_needs), each item with the needs it backs: a ref cited beside them, or for a
+    unit whose needs are all met elsewhere, is not shown as support (q_ui4, 19 November
+    2026: such an attribute was listed under "What the review rests on"). Pure."""
+    by_key = {unit.key: unit for unit in units}
+    verdicts: list[dict[str, Any]] = []
+    for verdict in checked.verdicts:
+        if verdict.get("verdict") != "ESTABLISHED":
+            verdicts.append(verdict)
+            continue
+        unit = by_key.get(str(verdict.get("attribute", "")))
+        required = set(required_needs(unit)) if unit is not None else set(FACTS)
+        items: list[dict[str, Any]] = []
+        for ref in verdict.get("rests_on", []):
+            backs = [need for need in support_of(ref, parents) or () if need in required]
+            if not backs:
+                continue
+            kind, label, said, document = shown.get(ref, ("QUESTION", ref, "", None))
+            items.append({"kind": kind, "ref": ref, "needs": backs, "label": label,
+                          "said": said, "document_id": document})  # fmt: skip
+        for cite in verdict.get("cites", []):
+            if cite["need"] not in required:
+                continue
+            kind, label, _said, document = shown.get(
+                cite["ref"], ("DOCUMENT", cite["ref"], "", None)
+            )
+            items.append({"kind": kind, "ref": cite["ref"], "needs": [cite["need"]],
+                          "label": label, "said": cite["quote"],
+                          "document_id": document})  # fmt: skip
+        verdicts.append({**verdict, "support": items[:12]})
+    return replace(checked, verdicts=tuple(verdicts))
+
+
+def walkthrough_gap(item: Asked, holder: Holder, keyed: bool, subject: str = "") -> Any:
+    """A point the specialist finds not established where a walkthrough answer holds its
+    attribute and kind of fact (Plan.answered), as the assumption a person sees and decides
+    (owner-approved F2, 18 November 2026): the answer as given and what the specialist reads
+    it as not establishing. `keyed`: it holds the attribute and kind of fact, so a later read
+    does not assume it again; a second one on that key in the same read is kept by its
+    matter. Pure."""
+    from ai_workforce_api.attribute_assumptions import Refused, drafted_or_refused
+
+    answers = [f'"{line(answer, 120)}" ({line(question, 160)})' for question, answer in holder.said]
+    shown = (
+        answers[0]
+        if len(answers) == 1
+        else ", ".join(answers[:-1]) + f" and {answers[-1]}"
+        if answers
+        else "given"
+    )
+    indicate = "indicate" if len(answers) > 1 else "indicates"
+    basis = f"as the walkthrough answer{'s' if len(answers) > 1 else ''} {shown} {indicate}"
+    # What is assumed, with the answer as its basis, as a plain statement: the specialist's
+    # suggested answer where it answers the matter, else the attribute's own wording (its
+    # subject), never "it" and never "not yet established" (r5, 19 November 2026: "The agent
+    # assumed:" already says it is unconfirmed).
+    assumed = (assumed_answer(item) or line(subject, 300)).rstrip(". ")
+    draft = drafted_or_refused(
+        "MISSING",
+        item.topic,
+        f"{assumed}, {basis}."
+        if assumed
+        else "The walkthrough answer"
+        f"{'s' if len(answers) > 1 else ''} {shown} "
+        f"{'are taken as they stand' if len(answers) > 1 else 'is taken as it stands'}.",
+        [item.code] if item.code is not None and _CODE.match(item.code) else [],
+    )
+    if isinstance(draft, Refused) or not keyed:
+        return draft
+    return replace(draft, asks_code=item.code, asks_fact=item.fact)
 
 
 # --- When the review is due, and when the understanding is complete (pure) --------------
@@ -844,6 +1548,12 @@ class Standing:
     # Any plan run of the control is queued or at work, a plain one included (it makes a
     # read that is due itself: evidence_plans.run_plan).
     plan_live: bool = False
+    # How many units the latest read before completion left not reviewed (owner decision,
+    # 18 November 2026: completion waits for a person while any is).
+    not_reviewed: int = 0
+    # Any READY read before completion left units not reviewed: proceeding without the
+    # review then takes a reason, whatever became of the later reads.
+    left_not_reviewed: bool = False
 
 
 def due_round(state: Standing) -> int | None:
@@ -868,6 +1578,25 @@ def due_round(state: Standing) -> int | None:
     return None
 
 
+def held(state: Standing) -> bool:
+    """Whether the understanding waits on a person because the latest read left attributes
+    not reviewed (owner decision, 18 November 2026): it is READY before completion, nothing
+    in Control Understanding is still to answer (its questions or any other), and no read is
+    due; the page offers Run again (while a read is left in the budget) and Proceed without
+    it, with a reason. While something is still to answer the page shows that instead, and
+    neither choice is offered (they could not succeed). Pure."""
+    return (
+        not state.completed
+        and not state.accepted
+        and state.latest == "READY"
+        and not state.stale
+        and state.not_reviewed > 0
+        and state.latest_open == 0
+        and not state.still_asked
+        and due_round(state) is None
+    )
+
+
 def may_complete(state: Standing, reviewing: bool) -> bool:
     """Whether the understanding is completed now (B1k "Completion", B1l points 2, 3 and 7):
 
@@ -876,7 +1605,9 @@ def may_complete(state: Standing, reviewing: bool) -> bool:
       Understanding is still to answer (a question left as not known is closed);
     - without a model (`reviewing` False) by the rules;
     - with one, once the latest read is READY on its budget: the review asked nothing, or the
-      second read was made (whatever it still finds is an assumption)."""
+      second read was made (whatever it still finds is an assumption); never while that read
+      left an attribute not reviewed (owner decision, 18 November 2026: a person runs the
+      review again or proceeds without it, `held`)."""
     if state.completed:
         return False
     if state.accepted:
@@ -885,7 +1616,7 @@ def may_complete(state: Standing, reviewing: bool) -> bool:
         return False
     if not reviewing:
         return True
-    if state.latest != "READY" or state.stale:
+    if state.latest != "READY" or state.stale or state.not_reviewed > 0:
         return False
     return state.latest_round >= 2 or state.latest_asked == 0 or state.reads >= READS
 
@@ -896,8 +1627,9 @@ def pass_state(state: Standing) -> QuestionPass:
     queued at once, or the page follows it up: review_due); FAILED when the last read could
     not be used or stopped, or was due and nothing could start it (follow_or_fail records it
     so; the page offers Run again and Proceed without it); WAITING while the answers it reads
-    are not in. Before the second fix round of B1k a read due and not queued read WAITING
-    (or DONE after the first read), with nothing to say why."""
+    are not in; HELD when the read left attributes not reviewed and a person is to run it
+    again or proceed without it (`held`). Before the second fix round of B1k a read due and
+    not queued read WAITING (or DONE after the first read), with nothing to say why."""
     if state.completed:
         return "DONE"
     if state.latest == "FAILED" or state.stale:
@@ -908,6 +1640,8 @@ def pass_state(state: Standing) -> QuestionPass:
         return "WAITING"
     if due_round(state) is not None:
         return "CHECKING"
+    if held(state):
+        return "HELD"
     return "DONE" if state.latest == "READY" else "WAITING"
 
 
@@ -926,6 +1660,20 @@ waiting for an answer and those left as not known.
 unit's key: ESTABLISHED when the answers settle what its criteria need (its needs), naming in \
 rests_on the refs of the answers it rests on; or NOT_ESTABLISHED with one question that \
 settles the missing fact. Every unit gets a verdict.
+- An ESTABLISHED verdict cites, for each of its needs, what establishes it. In rests_on: a \
+walkthrough answer whose fact is that need, a statement value (V) whose establishes lists \
+that need, or an answered question (Q or R) whose fact is that need. In cites, for a document \
+(D) or the confirmed process narrative (P1): ref, the need it establishes, and quote, a \
+passage of at least four words copied word for word from that document's summary or that \
+narrative (its sections' text or a step's own description, never the step's number, the \
+bracketed who and where, or "[the control operates here]"). A need met_elsewhere needs \
+nothing cited; a unit that is a kind of fact (is_attribute false) needs that fact. A walkthrough \
+answer of "Not applicable" establishes nothing. Cite only what review_inputs give. Where \
+nothing given establishes a need, the verdict is NOT_ESTABLISHED.
+- Never write a follow-up of a Yes or No walkthrough answer: it settles its question.
+- Each attribute gives its criteria: the engagement's own (from ENGAGEMENT) where it has them, \
+otherwise the library standard (from LIBRARY). Read its needs against those criteria. For a \
+business process control, process_narrative is the confirmed process understanding.
 - A question: topic, the matter in a few words; text, one plain question ending with "?"; \
 fact, the kind of fact it asks (PERFORMER, APPROVER, SYSTEM, RECORD, TIMING, POPULATION, \
 EXCEPTION or OTHER); blocks, one sentence naming the attribute criterion or the D&I evidence \
@@ -947,9 +1695,11 @@ those answers opened, each with parent the ref of that question. Ask nothing els
 only what an attribute or the D&I evidence depends on, and nothing else.
 - narrative: one paragraph of at most 150 words, formal and in the third person, as the \
 design narrative of a workpaper: what the questions answered establish, and, by name, what \
-they do not yet establish and which attributes depend on it. End by saying either that these \
-are asked now, or that no other question is needed before the attributes are drafted. Never \
-write I, we or you.
+they do not yet establish and which attributes depend on it, naming an attribute by what it \
+tests, never by its key or code (A1, A2). Say nothing of this review itself or of what \
+happens next: no refs (W1, V2, D1), no word of a reference, a read, a \
+correction, a question being asked or not, or what a person is to do. Never write I, we or \
+you.
 - marked: the exact words of the narrative that name what is not yet established, each copied \
 word for word.
 - Never invent a name, a system, a document title or a figure: use only what review_inputs \
@@ -972,18 +1722,82 @@ def inputs_of(prompt: str) -> dict[str, Any]:
     return found
 
 
+def _opening(text: str, skip: int = 0) -> str:
+    """The first words of a text (after `skip` of them), as a passage to quote: at least four
+    words, at most ten, or "" when it has fewer."""
+    taken = str(text).split()[skip : skip + 10]
+    return " ".join(taken) if len(taken) >= 4 else ""
+
+
+def verdict_support(given: Mapping[str, Any], unit_key: str) -> dict[str, Any]:
+    """What a scripted specialist cites for a unit it finds established, from `given` (the
+    specialist's inputs), as `check` requires (owner-approved F1 and its tightening, 18
+    November 2026): for each of its needs, a walkthrough answer given of that kind of fact, a
+    value whose slot records it, or an answered question that asked it (rests_on); otherwise
+    the opening words of a document or of the confirmed narrative, quoted for that need
+    (cites). A unit with no needs listed cites one answer given. What nothing in the inputs
+    establishes is left uncited, so the check finds it. Pure."""
+    answered = [
+        entry
+        for entry in [
+            *(q for item in given.get("attributes", []) for q in item.get("questions", [])),
+            *given.get("control_questions", []),
+        ]
+        if entry.get("answer")
+    ]
+    values = list(given.get("statement_values", []))
+    questions = list(given.get("answered_questions", []))
+    quotes: list[tuple[str, str]] = [
+        (str(entry["ref"]), quote)
+        for entry in given.get("documents", [])
+        if entry.get("ref") and (quote := _opening(entry.get("summary", "")))
+    ]
+    process = given.get("process_narrative")
+    if isinstance(process, Mapping):
+        for step in process.get("steps", [])[:1]:
+            if quote := _opening(step, skip=1):
+                quotes.append((str(process["ref"]), quote))
+    found = next(
+        (item for item in given.get("attributes", []) if item.get("unit") == unit_key), None
+    )
+    needs = [str(need) for need in found.get("needs", [])] if found else [unit_key]
+    refs: list[str] = []
+    cites: list[dict[str, str]] = []
+    for need in needs:
+        ref = next(
+            (str(entry["ref"]) for entry in [*answered, *questions] if entry.get("fact") == need),
+            None,
+        ) or next(
+            (str(entry["ref"]) for entry in values if need in entry.get("establishes", [])), None
+        )
+        if ref is not None:
+            if ref not in refs:
+                refs.append(ref)
+        elif quotes:
+            cites.append({"ref": quotes[0][0], "need": need, "quote": quotes[0][1]})
+    if not refs and not cites:
+        refs.extend(str(entry["ref"]) for entry in [*answered, *values][:1])
+    return {"rests_on": refs[:12], "cites": cites[:12]}
+
+
 def established(given: Mapping[str, Any], narrative: str = "") -> dict[str, Any]:
     """An answer that finds every unit established and asks nothing: what a scripted
-    specialist says by default in tests of what follows the review."""
+    specialist says by default in tests of what follows the review. Each verdict cites what
+    establishes its unit's needs (`verdict_support`), as the code requires of an ESTABLISHED
+    verdict (owner-approved F1, 18 November 2026: before, every verdict rested on nothing)."""
     return {
         "narrative": narrative
         or "The questions answered establish how the control operates. No other question is "
         "needed before the attributes are drafted.",
         "marked": [],
         "verdicts": [
-            {"attribute": str(unit["key"]), "verdict": "ESTABLISHED", "rests_on": []}
+            {
+                "attribute": str(unit["key"]),
+                "verdict": "ESTABLISHED",
+                **verdict_support(given, str(unit["key"])),
+            }
             for unit in given.get("units", [])
-        ],
+        ],  # fmt: skip
         "follow_ups": [],
     }
 
@@ -995,11 +1809,11 @@ def latest_row(
     executor: psycopg.Cursor[Any] | psycopg.Connection[Any], control_id: UUID
 ) -> tuple[Any, ...] | None:
     """The control's latest review: id, status, round, narrative, marked, not_reviewed,
-    finished_at, failure, cause, requested_at, asked."""
+    finished_at, failure, cause, requested_at, asked, verdicts."""
     return executor.execute(
         """
         SELECT id, status, round, narrative, marked, not_reviewed, finished_at, failure, cause,
-               requested_at, asked
+               requested_at, asked, verdicts
         FROM understanding_reviews WHERE engagement_control_id = %s
         ORDER BY requested_at DESC, id DESC LIMIT 1
         """,
@@ -1064,15 +1878,20 @@ def standing(
                (SELECT asked FROM last),
                (SELECT count(*) FROM control_context_issues i, last
                 WHERE i.review_id = last.id AND i.status = 'OPEN'),
-               (SELECT count(*) FROM before WHERE status = 'READY')
+               (SELECT count(*) FROM before WHERE status = 'READY'),
+               (SELECT jsonb_array_length(not_reviewed) FROM last),
+               EXISTS (SELECT 1 FROM before WHERE status = 'READY'
+                       AND jsonb_array_length(not_reviewed) > 0)
         """,
         {"c": control_id},
     ).fetchone()
     latest: ReviewStatus | None = None
-    latest_round = asked = still = reads = 0
+    latest_round = asked = still = reads = not_reviewed = 0
+    left_not_reviewed = row is not None and bool(row[6])
     if row is not None and row[0] is not None:
         latest = row[0]
         latest_round, asked, still, reads = int(row[1]), int(row[2]), int(row[3]), int(row[4])
+        not_reviewed = int(row[5] or 0) if latest == "READY" else 0
     waiting = understanding_waiting(connection, project_id, control_id)
     waits = understanding_waits(connection, project_id, control_id)
     return Standing(
@@ -1088,6 +1907,8 @@ def standing(
         reads=reads,
         stale=latest == "PENDING" and not plan_live,
         plan_live=plan_live,
+        not_reviewed=not_reviewed,
+        left_not_reviewed=left_not_reviewed,
     )
 
 
@@ -1096,7 +1917,10 @@ def understanding_waiting(
 ) -> bool:
     """Whether what the review reads is not in yet: a client value of the statement, a
     required walkthrough answer (the bank's required follow-ups included), or, for a business
-    process control, its confirmed process understanding."""
+    process control, its confirmed process understanding. A control the project does not hold
+    (load_context's NotVisible) is read as waiting, never as ready, and logged; any other
+    failure is raised (before, every exception read as waiting, hiding the failure)."""
+    from ai_workforce_api.authorization import NotVisible
     from ai_workforce_api.context_routes import _classes
     from ai_workforce_api.control_context import needs_process_understanding
     from ai_workforce_api.pbc_drafting import load_context
@@ -1106,7 +1930,8 @@ def understanding_waiting(
         return True
     try:
         context = load_context(connection, project_id, control_id)
-    except Exception:
+    except NotVisible:
+        logger.warning("the review waits: control %s is not in project %s", control_id, project_id)
         return True
     if not needs_process_understanding(_classes(connection, control_id, context)):
         return False
@@ -1121,7 +1946,7 @@ def _latest_ready(connection: psycopg.Connection[Any], control_id: UUID) -> tupl
     return connection.execute(
         """
         SELECT id, status, round, narrative, marked, not_reviewed, finished_at, failure, cause,
-               requested_at, asked
+               requested_at, asked, verdicts
         FROM understanding_reviews WHERE engagement_control_id = %s AND status = 'READY'
         ORDER BY requested_at DESC, id DESC LIMIT 1
         """,
@@ -1129,13 +1954,29 @@ def _latest_ready(connection: psycopg.Connection[Any], control_id: UUID) -> tupl
     ).fetchone()
 
 
+def shown_failure(stored: str) -> str:
+    """The sentence a failed read shows, from its kind, never its stored words verbatim (final
+    design review, 19 November 2026, N3: a read ended before the wording changed still said
+    "the specialist's answer could not be used after one correction"). Every failure is one
+    of this module's sentences (end_pending and the read's own end), so the stored text names
+    its kind: stopped, no model, not started, and otherwise the specialist's review that
+    could not be completed (FAILED_SENTENCE, whatever wording it was stored in). The stored
+    text stays as the record of what was said then. Pure."""
+    said = stored.strip()
+    for sentence in (STOPPED_SENTENCE, NO_MODEL_SENTENCE, NOT_STARTED_SENTENCE):
+        if said == sentence:
+            return sentence
+    return FAILED_SENTENCE
+
+
 def _shown_status(
     connection: psycopg.Connection[Any], control_id: UUID, row: tuple[Any, ...]
 ) -> tuple[ReviewStatus, str]:
     """A read's status as the page reads it: one left waiting with no run at work on it reads
-    as FAILED, with the sentence that it stopped."""
+    as FAILED, with the sentence that it stopped; a failed one with its kind's sentence
+    (shown_failure)."""
     status: ReviewStatus = row[1]
-    failure = str(row[7] or "")
+    failure = shown_failure(str(row[7] or "")) if status == "FAILED" else str(row[7] or "")
     if status == "PENDING":
         live = connection.execute(f"SELECT {_PLAN_LIVE_SQL}", {"c": control_id}).fetchone()
         if live is None or not live[0]:
@@ -1190,6 +2031,17 @@ def _approved_attributes(
     ]
 
 
+def letters_of(
+    executor: psycopg.Cursor[Any] | psycopg.Connection[Any], control_id: UUID
+) -> dict[str, str]:
+    """Each approved attribute's code and the letter the page gives it, in the page's order."""
+    return {
+        code: letter_of(index)
+        for index, (_id, code, _text, _key) in enumerate(_approved_attributes(executor, control_id))
+        if code
+    }
+
+
 def _library_attributes(connection: psycopg.Connection[Any], control_id: UUID) -> dict[str, str]:
     from ai_workforce_api.definition_registry import definition_for
 
@@ -1209,12 +2061,17 @@ def _body_of(
         (row[0],),
     ).fetchone()
     keys = [str(item) for item in (row[5] or []) if isinstance(item, str)]
+    letters = letters_of(connection, control_id)
+    # What the paragraph shows: no process narration, and each attribute by the page's letter.
+    shown = with_letters(without_process(str(row[3])), letters)
     return ReviewBody(
         id=row[0],
         status=status,
         round=int(row[2]),
-        narrative=str(row[3]) if status == "READY" else "",
-        marked=[str(item) for item in (row[4] or []) if isinstance(item, str)]
+        narrative=shown if status == "READY" else "",
+        marked=marked_in(
+            shown, [with_letters(str(i), letters) for i in (row[4] or []) if isinstance(i, str)]
+        )
         if status == "READY"
         else [],
         not_reviewed=keys,
@@ -1228,7 +2085,85 @@ def _body_of(
         )
         if keys
         else [],
+        points=points_of(connection, control_id, row) if status == "READY" else [],
     )
+
+
+def points_of(
+    connection: psycopg.Connection[Any], control_id: UUID, row: tuple[Any, ...]
+) -> list[PointBody]:
+    """The read's established points (its stored verdicts, with the support kept with them),
+    named as the page names them, each with the state of a person's challenge of it."""
+    verdicts = [
+        v for v in (row[11] or []) if isinstance(v, dict) and v.get("verdict") == "ESTABLISHED"
+    ]
+    if not verdicts:
+        return []
+    keys = [str(v.get("attribute", "")) for v in verdicts]
+    named = {
+        item.key: item
+        for item in not_reviewed_items(
+            keys, _approved_attributes(connection, control_id),
+            _library_attributes(connection, control_id),
+        )
+    }  # fmt: skip
+    challenges = challenges_of(connection, control_id, UUID(str(row[0])))
+    found: list[PointBody] = []
+    for verdict, key in zip(verdicts, keys, strict=True):
+        name = named[key]
+        support = [
+            SupportItemBody.model_validate(item)
+            for item in verdict.get("support", [])
+            if isinstance(item, dict)
+        ]
+        if not support:
+            # Established on what is met elsewhere alone (no citation needed), or a read kept
+            # before the support was: nothing to show beside it, so it is not listed.
+            continue
+        needs = list(dict.fromkeys(need for item in support for need in item.needs))
+        state, issue = challenges.get(key, ("", None))
+        found.append(
+            PointBody(
+                key=key,
+                kind=name.kind,
+                attribute_id=name.attribute_id,
+                code=name.code,
+                text=name.text,
+                needs=needs,
+                support=support,
+                challenge=state,
+                challenge_issue_id=issue,
+            )  # fmt: skip
+        )
+    return found
+
+
+def challenges_of(
+    executor: psycopg.Cursor[Any] | psycopg.Connection[Any], control_id: UUID, review_id: UUID
+) -> dict[str, tuple[ChallengeState, UUID | None]]:
+    """Each point of a read a person challenged (the audit trail's record of the challenge
+    names the question it raised), with that question's state: PREPARING while its wording is
+    checked (not shown yet), OPEN while it waits in the questions, ANSWERED once settled in
+    any way."""
+    from ai_workforce_api.control_context import WORDING_PENDING_SQL
+
+    found: dict[str, tuple[ChallengeState, UUID | None]] = {}
+    for unit, issue_id, status, pending in executor.execute(
+        f"""
+        SELECT e.payload ->> 'unit', i.id, i.status, {WORDING_PENDING_SQL}
+        FROM audit_events e
+        JOIN control_context_issues i ON i.id = (e.payload ->> 'issue')::uuid
+        WHERE e.target_type = 'engagement_control' AND e.target_id = %s
+          AND e.action = 'understanding.point_challenged' AND e.payload ->> 'review' = %s
+        ORDER BY e.occurred_at
+        """,
+        (control_id, str(review_id)),
+    ).fetchall():
+        state: ChallengeState = (
+            "ANSWERED" if status != "OPEN" else "PREPARING" if pending else "OPEN"
+        )
+        found[str(unit)] = (state, UUID(str(issue_id)))
+    return found
 
 
 def body(connection: psycopg.Connection[Any], control_id: UUID) -> ReviewBody | None:
@@ -1319,11 +2254,26 @@ def review_due(connection: psycopg.Connection[Any], project_id: UUID, control_id
 
 def page_state(
     connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
-) -> tuple[QuestionPass, bool]:
-    """What the context gives of the review in one read of the rules: question_pass and
-    review_due."""
+) -> tuple[QuestionPass, bool, ReviewHeldBody | None, bool]:
+    """What the context gives of the review in one read of the rules: question_pass,
+    review_due, while the read is held review_held, and whether a proceed takes a reason."""
     state = standing(connection, project_id, control_id)
-    return pass_state(state), due_unqueued(state)
+    return (
+        pass_state(state), due_unqueued(state), held_body(connection, control_id, state),
+        reason_needed(state),
+    )  # fmt: skip
+
+
+def held_body(
+    connection: psycopg.Connection[Any], control_id: UUID, state: Standing
+) -> ReviewHeldBody | None:
+    """While the read is held (`held`), the units it did not review and whether a run again
+    is left in the budget; None otherwise."""
+    if not held(state):
+        return None
+    row = latest_row(connection, control_id)
+    keys = [] if row is None else [str(key) for key in (row[5] or []) if isinstance(key, str)]
+    return ReviewHeldBody(not_reviewed=keys, run_again=state.reads < READS)
 
 
 def question_pass(
@@ -1404,7 +2354,8 @@ def request_run(
         if state.reads >= READS:
             raise ContextState(READ_TWICE)
         cause, round_, stage = "RUN_AGAIN", state.reads + 1, "ATTRIBUTES"
-        if state.latest == "READY" and due_round(state) is None:
+        # A held read is run again by a person (owner decision, 18 November 2026).
+        if state.latest == "READY" and due_round(state) is None and not held(state):
             # A read was made and nothing new is due: its questions still wait for answers.
             raise ContextState(STILL_ASKED)
     with transaction(connection) as cursor:
@@ -1444,28 +2395,178 @@ def queue_due(
 
 
 def proceed(
-    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID, person: UUID
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    control_id: UUID,
+    person: UUID,
+    reason: str = "",
 ) -> None:
-    """Proceed without it (POST .../understanding/review/proceed): only after a read that
-    could not be used; the understanding is completed by the rules (nothing in it still to
-    answer, no agent at work), and the attribute agent's gaps become assumptions."""
+    """Proceed without it (POST .../understanding/review/proceed): after a read that could
+    not be used, or one that left attributes not reviewed (`held`; owner decision, 18
+    November 2026), with the person's reason (at least three characters, plain text; else
+    ValueError, 422), kept in the audit trail with the units it proceeds past. The
+    understanding is completed (nothing in it still to answer, no agent at work), and the
+    attribute agent's gaps become assumptions."""
     from ai_workforce_api.db import transaction
     from ai_workforce_api.understanding_once import record_completion
 
     state = standing(connection, project_id, control_id)
     if state.completed or state.accepted:
         raise ContextState(ALREADY_COMPLETE)
-    if not (state.latest == "FAILED" or state.stale):
+    holding = held(state)
+    if not (state.latest == "FAILED" or state.stale or holding):
         raise ContextState(NOT_FAILED)
     if state.live and not state.stale:
         raise ContextState(AT_WORK)
     if state.still_asked or state.waiting:
         raise ContextState(STILL_ASKED)
+    said = line(reason, REASON_LIMIT)
+    if said and contains_secret({"reason": said}):
+        raise ValueError("a reason must be plain text")
+    # Any read before completion that left attributes not reviewed takes a reason, also when
+    # a later read could not run (owner decision, 18 November 2026: held, run again, failed,
+    # proceed still records why, with the attributes the earlier read left).
+    if (holding or state.left_not_reviewed) and len(said) < REASON_MIN:
+        raise ValueError(REASON_NEEDED)
     with transaction(connection) as cursor:
         end_pending(cursor, control_id, STOPPED_SENTENCE)
+        left = left_not_reviewed(cursor, control_id)
     if not record_completion(connection, project_id, control_id, "PROCEEDED_WITHOUT_REVIEW",
                              person, check_live=False):  # fmt: skip
         raise ContextState(ALREADY_COMPLETE)
+    if not left and not said:
+        return
+    # The person's reason, and the attributes it proceeds past, in the audit trail.
+    keys = list(dict.fromkeys(key for _id, _round, units in left for key in units))
+    with transaction(connection) as cursor:
+        _audit(
+            cursor, project_id, control_id, person, None, "understanding.review_proceeded",
+            {"reason": said, "held": holding, "not_reviewed": keys[:24],
+             "not_reviewed_count": len(keys),
+             "reviews": [{"review": str(rid), "round": rnd, "not_reviewed": units}
+                         for rid, rnd, units in left][:4]},
+        )  # fmt: skip
+
+
+def left_not_reviewed(
+    executor: psycopg.Cursor[Any] | psycopg.Connection[Any], control_id: UUID
+) -> list[tuple[UUID, int, list[str]]]:
+    """The READY reads before completion that left attributes not reviewed, oldest first:
+    each read's id, round and unit keys."""
+    return [
+        (UUID(str(row[0])), int(row[1]), [str(k) for k in (row[2] or []) if isinstance(k, str)])
+        for row in executor.execute(
+            """
+            SELECT r.id, r.round, r.not_reviewed FROM understanding_reviews r
+            JOIN engagement_controls c ON c.id = r.engagement_control_id
+            WHERE r.engagement_control_id = %s AND r.status = 'READY'
+              AND r.cause <> 'REVIEW_AGAIN'
+              AND (c.understanding_completed_at IS NULL
+                   OR r.requested_at < c.understanding_completed_at)
+              AND jsonb_array_length(r.not_reviewed) > 0
+            ORDER BY r.requested_at, r.id
+            """,
+            (control_id,),
+        ).fetchall()
+    ]
+
+
+CHALLENGE_DONE = "The understanding is complete; review it again to look at it once more."
+CHALLENGE_STALE = "The review changed; read it again."
+CHALLENGE_NOT_ESTABLISHED = "That point is not one the review found established."
+CHALLENGE_ASKED = "That point was asked already and answered."
+
+
+def challenge(
+    connection: psycopg.Connection[Any],
+    provider: Any,
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    person: UUID,
+    request: ChallengeBody,
+) -> UUID:
+    """A person challenges what an established point rests on (owner decision, 18 November
+    2026): the point is asked again as a question in Control Understanding, keyed on the
+    point and the need challenged so it is asked once (a challenge already open is returned
+    as it is: idempotent), through the review's own way of asking (worded by the question
+    review), with the challenger and the point in the audit trail. Its open question holds
+    completion until it is answered. Before completion only, on the read the page shows; 409
+    otherwise; 422 for a note with a credential. Returns the question's id."""
+    from ai_workforce_api.db import transaction
+
+    note = line(request.note, 500)
+    if note and contains_secret({"note": note}):
+        raise ValueError("a note must be plain text")
+    state = standing(connection, project_id, control_id)
+    if state.completed or state.accepted:
+        raise ContextState(CHALLENGE_DONE)
+    row = latest_row(connection, control_id)
+    if row is None or UUID(str(row[0])) != request.review_id or row[1] != "READY":
+        raise ContextState(CHALLENGE_STALE)
+    unit = request.unit.strip()
+    point = next((p for p in points_of(connection, control_id, row) if p.key == unit), None)
+    if point is None:
+        raise ContextState(CHALLENGE_NOT_ESTABLISHED)
+    code = None if point.kind == "FACT" else unit
+    held_key = key_of(code, request.need, None, "")
+    words = FACT_WORDS.get(request.need, FACT_WORDS["OTHER"])
+    said = next((item for item in point.support if request.need in item.needs), None)
+    suggested = (
+        line(f"{said.label}: {said.said}" if said.said else said.label, 400)
+        if said is not None
+        else ""
+    )
+    letter = letters_of(connection, control_id).get(unit, "") if code else ""
+    held_by = f"attribute {letter}" if letter else "this attribute" if code else "the control"
+    item = Asked(
+        code=code,
+        fact=request.need,
+        topic=line(f"Support for {words[0].lower()}{words[1:]}: {point.text}", 120),
+        text=line(f"What shows {words[0].lower()}{words[1:]}, for {held_by}?", 400),
+        blocks="The attribute's criteria rest on it, and the support the review cited was "
+        "challenged.",
+        suggested=suggested or "The walkthrough answer already given.",
+        options=(),
+    )
+    with transaction(connection) as cursor:
+        organization = _organization(cursor, control_id)
+        assert organization is not None
+        existing = cursor.execute(
+            "SELECT id, status FROM control_context_issues WHERE engagement_control_id = %s "
+            "AND coalesce(asks_code, '') = %s AND asks_fact = %s AND asks_parent_id IS NULL "
+            "AND asks_parent_key = ''",
+            (control_id, code or "", request.need),
+        ).fetchone()
+        if existing is not None:
+            if existing[1] == "OPEN":
+                return UUID(str(existing[0]))
+            raise ContextState(CHALLENGE_ASKED)
+        held = cursor.execute(
+            "SELECT fingerprint, topic FROM control_context_issues "
+            "WHERE engagement_control_id = %s",
+            (control_id,),
+        ).fetchall()
+        marks = {str(r[0]) for r in held}
+        matters = {matter_key(str(r[1])) for r in held}
+        if not _insert_question(cursor, organization, project_id, control_id, request.review_id,
+                                int(row[2]), item, None, marks, matters):  # fmt: skip
+            raise ContextState(CHALLENGE_ASKED)
+        raised = cursor.execute(
+            "SELECT id FROM control_context_issues WHERE engagement_control_id = %s "
+            "AND coalesce(asks_code, '') = %s AND asks_fact = %s AND asks_parent_id IS NULL "
+            "AND asks_parent_key = ''",
+            (control_id, code or "", request.need),
+        ).fetchone()
+        assert raised is not None
+        issue_id = UUID(str(raised[0]))
+        _audit(cursor, project_id, control_id, person, None, "understanding.point_challenged",
+               {"review": str(request.review_id), "unit": unit, "need": request.need,
+                "issue": str(issue_id), "key": list(held_key), "note": note,
+                "support": [s.ref for s in point.support]})  # fmt: skip
+    if provider is not None:
+        _word_questions(connection, provider, organization_id, project_id, control_id, person)
+    return issue_id
 
 
 # --- The read ---------------------------------------------------------------------------
@@ -1489,18 +2590,89 @@ class Inputs:
     approved_codes: set[str]
     # The keys the bank's own questions hold on the control (B1l point 4).
     bank: dict[tuple[str, str, str], Holder] = field(default_factory=dict)
+    # The linked documents (D...) and the confirmed process narrative (P1) by ref, as the
+    # text a verdict's quoted passage must be found in (check, cite_of); a follow-up never
+    # names them as its parent.
+    texts: dict[str, str] = field(default_factory=dict)
+    # What each ref given is, as a person reads it (kind, label, said, document id).
+    shown: dict[str, tuple[str, str, str, str | None]] = field(default_factory=dict)
+
+
+def _neutral_text(text: str, limit: int) -> str:
+    """Untrusted text for the inputs: one line within `limit`, its tags made inert (the whole
+    block is made inert again in prompt_for)."""
+    return neutral(line(text, limit))
+
+
+def narrative_input(found: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """The confirmed process narrative as the specialist reads it (owner-approved F3, 18
+    November 2026; control_context.approved_narrative, as the attribute agent and the planner
+    read it): its sections and its steps, each step one line with who and where and whether
+    the control operates there, under the ref P1 a verdict may cite. None when none is
+    confirmed. Every part is untrusted text, made inert. Pure."""
+    if found is None:
+        return None
+    steps = [_neutral_text(text, 400) for text in _step_lines(found)]
+    return {
+        "ref": NARRATIVE_REF,
+        "sections": [
+            {
+                "heading": _neutral_text(str(item.get("heading", "")), 120),
+                "text": _neutral_text(str(item.get("text", "")), SUMMARY_LIMIT),
+            }
+            for item in found.get("sections", [])[:12]
+        ],  # fmt: skip
+        "steps": steps[:40],
+    }
+
+
+def _step_lines(found: Mapping[str, Any]) -> list[str]:
+    lines: list[str] = []
+    for index, step in enumerate(found.get("steps", []), start=1):
+        where = ", ".join(part for part in (step.get("actor", ""), step.get("system", "")) if part)
+        text = f"{index}. {step.get('description', '')}" + (f" ({where})" if where else "")
+        if step.get("control_point"):
+            text += " [the control operates here]"
+        lines.append(text)
+    return lines
+
+
+def narrative_text(found: Mapping[str, Any] | None) -> str:
+    """The confirmed narrative's own words, one part a line: its sections' text and its
+    steps' descriptions as written, the text a passage quoted from it (P1) must be found in.
+    Never what the code adds when it gives the steps to the specialist (the step's number,
+    who and where in brackets, "[the control operates here]"; independent review, 18 November
+    2026: a quote of that annotation established a need the narrative never states). "" when
+    none is confirmed. Pure."""
+    if found is None:
+        return ""
+    parts = [str(item.get("text", "")) for item in found.get("sections", [])[:12]]
+    steps = [str(step.get("description", "")) for step in found.get("steps", [])[:40]]
+    return "\n".join(part for part in [*parts, *steps] if part.strip())
 
 
 def inputs_for(
     connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID, round_: int
 ) -> Inputs:
-    """What the specialist reads (see the module's docstring), built per attribute."""
-    from ai_workforce_api.control_context import linked_documents, settled_answer
+    """What the specialist reads (see the module's docstring), built per attribute: its
+    criteria as the engagement states them where it does (condition, pass and fail), else the
+    library standard, and what they need; the confirmed process narrative; and each document
+    under a ref a verdict may cite (owner-approved F1 and F3, 18 November 2026)."""
+    from ai_workforce_api.control_context import (
+        approved_narrative,
+        linked_documents,
+        settled_answer,
+    )
     from ai_workforce_api.definition_registry import attribute_for, definition_for
     from ai_workforce_api.pbc_drafting import load_context
     from ai_workforce_api.understanding_authority import facts
     from ai_workforce_api.walkthrough_answers import answers_of, questions_asked, stands
-    from ai_workforce_api.walkthrough_questions import INFORMS, TOPIC_LABELS, fact_of
+    from ai_workforce_api.walkthrough_questions import (
+        INFORMS,
+        TOPIC_LABELS,
+        criteria_needs,
+        fact_of,
+    )
 
     context = load_context(connection, project_id, control_id)
     control = connection.execute(
@@ -1509,23 +2681,30 @@ def inputs_for(
     ).fetchone()
     library_key = "" if control is None else str(control[0])
     approved = [
-        (UUID(str(row[0])), str(row[1] or ""), str(row[2]), str(row[3] or ""))
+        (UUID(str(row[0])), str(row[1] or ""), str(row[2]), str(row[3] or ""),
+         (str(row[4] or ""), str(row[5] or ""), str(row[6] or "")))
         for row in connection.execute(
-            "SELECT id, code, text, definition_key FROM control_attributes "
+            "SELECT id, code, text, definition_key, condition, pass_criteria, fail_criteria "
+            "FROM control_attributes "
             "WHERE engagement_control_id = %s AND status = 'APPROVED' "
             "ORDER BY position, created_at",
             (control_id,),
         ).fetchall()
-    ]
-    listed: list[tuple[str, str, str, UUID | None]] = [
-        (code, text, key, attribute_id) for attribute_id, code, text, key in approved if code
+    ]  # fmt: skip
+    listed: list[tuple[str, str, str, UUID | None, tuple[str, str, str]]] = [
+        (code, text, key, attribute_id, criteria)
+        for attribute_id, code, text, key, criteria in approved
+        if code
     ]
     if not listed:
         definition = definition_for(library_key)
         listed = (
             []
             if definition is None
-            else [(item.key, item.text, item.key, None) for item in definition.attributes]
+            else [
+                (item.key, item.text, item.key, None, ("", "", ""))
+                for item in definition.attributes
+            ]
         )
     evidence: dict[UUID, list[str]] = {}
     for title, attribute_id in connection.execute(
@@ -1542,18 +2721,24 @@ def inputs_for(
     asked_now = questions_asked(connection, control_id, rows)
     left = not_known_keys(connection, control_id)
     parents: dict[str, Parent] = {}
+    shown: dict[str, tuple[str, str, str, str | None]] = {}
     walkthrough: list[dict[str, Any]] = []
     by_key: dict[str, list[str]] = {}
     # The bank's questions that inform each attribute, by definition key, with whether their
-    # answer stands: they hold the attribute's key for that kind of fact (B1l point 4).
-    informing: dict[str, list[tuple[str, str, bool]]] = {}
+    # answer stands, whether it opens a follow-up, its ref and the answer as given: they hold
+    # the attribute's key for that kind of fact (B1l point 4; opens, 18 November 2026).
+    informing: dict[str, list[tuple[str, str, bool, bool, str, tuple[str, str]]]] = {}
     for index, item in enumerate(asked_now, start=1):
         ref = f"W{index}"
         row = rows.get(item.key)
         standing_answer = stands(row, item)
         if standing_answer and row is not None:
             answer = "Not applicable" if row.not_applicable else row.value
-            parents[ref] = Parent(ref, question_key=item.key)
+            shown[ref] = ("WALKTHROUGH", item.text, answer, None)
+            parents[ref] = Parent(
+                ref, question_key=item.key, fact=fact_of(item), yes_no=item.kind == "YES_NO",
+                not_applicable=row.not_applicable,
+            )  # fmt: skip
         else:
             answer = ""
         entry: dict[str, Any] = {
@@ -1565,54 +2750,109 @@ def inputs_for(
         if not standing_answer and ("WALKTHROUGH", item.key) in left:
             entry["not_known"] = True
         walkthrough.append(entry)
+        answered_now = bool(standing_answer and row is not None and not row.not_applicable)
+        opens = answered_now and row is not None and opens_follow_up(item.kind, row.value)
         for need in item.informs:
             by_key.setdefault(need, []).append(ref)
             informing.setdefault(need, []).append(
-                (item.key, fact_of(item), bool(standing_answer and row is not None
-                                               and not row.not_applicable))
-            )  # fmt: skip
-    units_source = [(code, text) for code, text, _key, _id in listed]
+                (item.key, fact_of(item), answered_now, opens, ref, (item.text, answer))
+            )
+    units_source = [(code, text) for code, text, _key, _id, _criteria in listed]
     units = units_of(units_source)
+    # Only where the bank records the criteria's needs (review finding N1): an attribute whose
+    # definition it records none for is not held to the coarse reading of its wording.
+    needs_by_code: dict[str, tuple[str, ...]] = {}
+    support_by_code: dict[str, tuple[str, ...]] = {}
     attributes_data: list[dict[str, Any]] = []
     attributed: set[str] = set()
     bank: dict[tuple[str, str, str], Holder] = {}
-    for code, text, key, attribute_id in listed:
+    for code, text, key, attribute_id, criteria in listed:
         standard = attribute_for(library_key, key, text)
+        library = (
+            None if standard is None else (standard.condition, standard.passes, standard.fails)
+        )
+        # The engagement's criteria are its own where any is written and they are not the
+        # standard's word for word (owner-approved F3): read over the standard, and its needs
+        # come from them.
+        tailored = tailored_criteria(criteria, library)
+        stated = criteria if any(part.strip() for part in criteria) else library
         refs = by_key.get(key, []) if key else []
         attributed.update(refs)
-        need_text = " ".join(
-            [text, *([] if standard is None else [standard.condition, standard.passes])]
-        )
+        need_text = " ".join([text, *([] if stated is None else stated[:2])])
+        needs = needs_for(key, need_text, tailored)
+        if key and criteria_needs(key):
+            needs_by_code.setdefault(code, needs)
+        support_by_code.setdefault(code, needs)
         attributes_data.append(
             {
                 "unit": code,
                 "attribute": text,
-                "standard": None
-                if standard is None
-                else {"condition": standard.condition, "passes": standard.passes,
-                      "fails": standard.fails, "evidence": list(standard.evidence)[:6]},
-                "needs": list(needs_for(key, need_text)),
+                "criteria": None
+                if stated is None
+                else {"condition": _neutral_text(stated[0], 1000),
+                      "passes": _neutral_text(stated[1], 1000),
+                      "fails": _neutral_text(stated[2], 1000),
+                      "from": "ENGAGEMENT" if stated is criteria else "LIBRARY"},
+                "standard_evidence": [] if standard is None else list(standard.evidence)[:6],
+                "needs": list(needs),
                 "met_elsewhere": met_reasons(key),
                 "questions": [entry for entry in walkthrough if entry["ref"] in refs],
                 "d_and_i_evidence": [] if attribute_id is None else evidence.get(attribute_id, []),
             }
         )  # fmt: skip
-        for question_key, informed_fact, answered_now in informing.get(key, []) if key else []:
+        for question_key, informed_fact, answered_now, opens, ref, said in (
+            informing.get(key, []) if key else []
+        ):
             held_key = key_of(code, informed_fact, None, "")
             found_holder = bank.get(held_key)
-            if found_holder is None or (answered_now and not found_holder.answer):
-                bank[held_key] = Holder("BANK", question_key if answered_now else "")
+            # Every standing answer that holds the key is kept with it, so the assumption a
+            # gap becomes shows them all (owner-approved F2, 18 November 2026: before, only
+            # the first answer was known, whatever the others said).
+            heard = (
+                (*(() if found_holder is None else found_holder.said), said)
+                if answered_now
+                else (() if found_holder is None else found_holder.said)
+            )
+            keys = (
+                (*(() if found_holder is None else found_holder.keys), question_key)
+                if answered_now
+                else (() if found_holder is None else found_holder.keys)
+            )
+            # An answer that stands holds the key; of two, one that opens a follow-up.
+            if (
+                found_holder is None
+                or (answered_now and not found_holder.answer)
+                or (opens and not found_holder.opens)
+            ):
+                found_holder = (
+                    Holder("BANK", question_key, opens, ref) if answered_now else Holder("BANK")
+                )
+            bank[held_key] = replace(found_holder, said=heard, keys=keys)
+    units = [
+        replace(unit, needs=needs_by_code.get(unit.key),
+                support=support_by_code.get(unit.key, unit.support))
+        for unit in units
+    ]  # fmt: skip
+    from ai_workforce_api.control_design import design_for
+
     found = facts(connection, control_id)
-    values: list[dict[str, str]] = []
-    answered: list[dict[str, str]] = []
+    design = design_for(connection, control_id)
+    slots = {} if design is None else {slot.key: slot for slot in design.slots}
+    values: list[dict[str, Any]] = []
+    answered: list[dict[str, Any]] = []
     for fact in found:
         if fact.kind == "CONTROL_VALUE":
             ref = f"V{len(values) + 1}"
-            values.append({"ref": ref, "question": fact.question, "answer": fact.answer})
-            parents[ref] = Parent(ref)
+            slot = slots.get(fact.key)
+            covers = () if slot is None else slot_facts(slot.key, slot.kind, slot.label)
+            values.append({"ref": ref, "question": fact.question, "answer": fact.answer,
+                           "establishes": list(covers)})  # fmt: skip
+            parents[ref] = Parent(ref, covers=covers)
+            shown[ref] = ("VALUE", fact.question, fact.answer, None)
     settled_rows = connection.execute(
         """
-        SELECT id, question, topic, status, resolution_note, review_round
+        SELECT id, question, topic, status, resolution_note, review_round, asks_fact,
+               resolved_by IS NOT NULL
         FROM control_context_issues
         WHERE engagement_control_id = %s AND status <> 'SUPERSEDED'
         ORDER BY created_at
@@ -1622,7 +2862,7 @@ def inputs_for(
     waiting: list[dict[str, str]] = []
     not_known: list[dict[str, str]] = []
     round_one: list[dict[str, str]] = []
-    for issue_id, question, topic, status, note, review_round in settled_rows:
+    for issue_id, question, topic, status, note, review_round, asks_fact, by in settled_rows:
         asked_text = str(question) or str(topic)
         if status == "OPEN":
             waiting.append({"question": asked_text})
@@ -1638,14 +2878,21 @@ def inputs_for(
                 )  # fmt: skip
             continue
         answer_text = settled_answer(str(status), str(note))
+        # An answered question establishes the kind of fact it asked, nothing else.
+        asked_of = answered_covers(str(status), asks_fact, bool(by), str(note))
         if review_round == 1:
             ref = f"R{len(round_one) + 1}"
-            round_one.append({"ref": ref, "question": asked_text, "answer": answer_text})
-            parents[ref] = Parent(ref, issue_id=UUID(str(issue_id)), round_one=True)
+            round_one.append({"ref": ref, "question": asked_text, "answer": answer_text,
+                              "fact": asks_fact or ""})  # fmt: skip
+            shown[ref] = ("QUESTION", asked_text, answer_text, None)
+            parents[ref] = Parent(ref, issue_id=UUID(str(issue_id)), round_one=True,
+                                  covers=asked_of)  # fmt: skip
         else:
             ref = f"Q{len(answered) + 1}"
-            answered.append({"ref": ref, "question": asked_text, "answer": answer_text})
-            parents[ref] = Parent(ref, issue_id=UUID(str(issue_id)))
+            answered.append({"ref": ref, "question": asked_text, "answer": answer_text,
+                             "fact": asks_fact or ""})  # fmt: skip
+            shown[ref] = ("QUESTION", asked_text, answer_text, None)
+            parents[ref] = Parent(ref, issue_id=UUID(str(issue_id)), covers=asked_of)
     for entry in walkthrough:
         if entry.get("not_known"):
             not_known.append({"question": str(entry["question"])})
@@ -1662,11 +2909,20 @@ def inputs_for(
             (control_id,),
         ).fetchall()
     ]  # fmt: skip
+    linked = linked_documents(connection, project_id, control_id)[:8]
     documents = [
-        {"title": line(source.title, 200), "kind": source.kind,
-         "summary": line(source.text, SUMMARY_LIMIT)}
-        for source in linked_documents(connection, project_id, control_id)[:8]
+        {"ref": f"D{index}", "title": _neutral_text(source.title, 200),
+         "kind": source.kind, "summary": _neutral_text(source.text, SUMMARY_LIMIT)}
+        for index, source in enumerate(linked, start=1)
     ]  # fmt: skip
+    texts = {f"D{index}": source.text for index, source in enumerate(linked, start=1)}
+    for index, source in enumerate(linked, start=1):
+        shown[f"D{index}"] = ("DOCUMENT", line(source.title, 200), "", source.key)
+    confirmed = approved_narrative(connection, control_id)
+    process = narrative_input(confirmed)
+    if process is not None:
+        texts[NARRATIVE_REF] = narrative_text(confirmed)
+        shown[NARRATIVE_REF] = ("NARRATIVE", NARRATIVE_LABEL, "", None)
     data: dict[str, Any] = {
         "round": round_,
         "control": {
@@ -1690,11 +2946,12 @@ def inputs_for(
         "left_not_known": not_known,
         "agents_assumed": agents_assumed,
         "documents": documents,
+        **({} if process is None else {"process_narrative": process}),
     }
     if round_ == 2:
         data["round_one_questions"] = round_one
-    codes = {code for _id, code, _text, _key in approved if code}
-    return Inputs(data, units, parents, codes, bank)
+    codes = {code for _id, code, _text, _key, _criteria in approved if code}
+    return Inputs(data, units, parents, codes, bank, texts, shown)
 
 
 def _held_keys(
@@ -1790,21 +3047,53 @@ def _insert_question(
     return True
 
 
-def _assumption_of(item: Asked) -> Any:
-    from ai_workforce_api.attribute_assumptions import drafted
+# Words that name a person or a role, for an answer to who performs, approves or does a thing.
+_ROLE = re.compile(
+    r"\b(?:owner|manager|administrator|admin|team|lead|leader|chair|officer|analyst|reviewer|"
+    r"approver|controller|director|head|staff|desk|board|committee|person|someone|engineer|"
+    r"clerk|accountant|supervisor|department|function|group|specialist|auditor|custodian|"
+    r"preparer|operator|security|finance|treasury|payroll|vendor)s?\b",
+    re.IGNORECASE,
+)
+# The same for a role written as its initials, matched as written ("it" is not IT).
+_ROLE_INITIALS = re.compile(r"\b(?:IT|HR|CFO|CIO|CISO|CTO|CAB)\b")
 
-    draft = drafted(
+
+def asks_for_person(item: Asked) -> bool:
+    """Whether the question asks for a person or a role: who performs or approves it, or a
+    question that begins "Who". Pure."""
+    return item.fact in ("PERFORMER", "APPROVER") or item.text.lstrip().lower().startswith("who ")
+
+
+def assumed_answer(item: Asked) -> str:
+    """The answer the attributes are assumed on, or "": the specialist's suggested answer,
+    only where it answers the matter (q_ui4, 19 November 2026: "Investigation owner" was
+    assumed as "A ticket records it.", which names no one): for a question of a person, an
+    answer that names a role. Pure."""
+    suggested = item.suggested.strip()
+    names = _ROLE.search(suggested) or _ROLE_INITIALS.search(suggested)
+    if not suggested or (asks_for_person(item) and not names):
+        return ""
+    return suggested
+
+
+def _assumption_of(item: Asked) -> Any:
+    from ai_workforce_api.attribute_assumptions import Refused, drafted_or_refused
+
+    draft = drafted_or_refused(
         "MISSING",
         item.topic,
-        item.suggested or f"Not established by the questions asked: {item.text}",
+        # Nothing it may be assumed on: the statement that its answer is not yet known
+        # (attribute_assumptions.sentence_of words the question so), never the question.
+        assumed_answer(item) or item.text,
         [item.code] if item.code is not None and _CODE.match(item.code) else [],
     )
-    if draft is None:
+    if isinstance(draft, Refused):
         return draft
     # A matter still not established after it was asked is assumed although it was asked
     # (B1l point 3: whatever is still not established becomes assumptions).
     draft = replace(draft, after_asked=item.still_open)
-    if item.follow_up:
+    if item.follow_up or item.by_matter:
         return draft
     return replace(draft, asks_code=item.code, asks_fact=item.fact)
 
@@ -1876,7 +3165,9 @@ def perform(
     )
 
     def strict(raw: dict[str, Any]) -> Checked:
-        return check(Answer.model_validate(raw), built.units, built.parents, round_, True)
+        return check(
+            Answer.model_validate(raw), built.units, built.parents, round_, True, built.texts
+        )
 
     answered = generate_read(
         connection, caller, request, PROMPT_VERSION,
@@ -1886,16 +3177,19 @@ def perform(
     )  # fmt: skip
     checked = answered.value
     if checked is None and answered.call.readable:
-        # The corrected answer still skipped an attribute or ran over: kept with the
-        # attribute marked not reviewed and the narrative cut at a sentence (B1l point 5).
+        # The corrected answer still skipped an attribute, cited nothing for an ESTABLISHED
+        # one, or ran over: kept with the attribute marked not reviewed and the narrative cut
+        # at a sentence (B1l point 5; owner-approved F1, 18 November 2026).
         try:
             checked = check(
                 Answer.model_validate(answered.call.raw.output), built.units, built.parents,
-                round_, False,
+                round_, False, built.texts,
             )  # fmt: skip
         except ValueError:
             checked = None
     call = answered.call
+    if checked is not None:
+        checked = with_support(checked, built.parents, built.shown, built.units)
     if checked is None:
         note_unusable(
             connection, call, answered.problem,
@@ -1912,11 +3206,16 @@ def perform(
             )
         return Outcome("FAILED", note=FAILED_SENTENCE)
     note_used(
-        connection, call, {"dropped": list(checked.dropped)[:12]} if checked.dropped else None
+        connection,
+        call,
+        {"dropped": list(checked.dropped)[:12], "dropped_count": len(checked.dropped)}
+        if checked.dropped
+        else None,
     )
     outcome = _apply(
         connection, organization_id, project_id, control_id, review_id, round_, cause,
         checked, call.call_id, digest, requester, built.bank,
+        {unit.key: unit.text for unit in built.units},
     )  # fmt: skip
     if outcome.asked:
         _word_questions(connection, provider, organization_id, project_id, control_id, requester)
@@ -1942,9 +3241,11 @@ def _apply(
     digest: str,
     requester: UUID,
     bank: Mapping[tuple[str, str, str], Holder] | None = None,
+    subjects: Mapping[str, str] | None = None,
 ) -> Outcome:
     """Write what a checked read does, in one step: its questions, its assumptions, the read
-    ended READY, and the audit record."""
+    ended READY, and the audit record. `subjects`: each unit's own wording, which an
+    assumption on it states where nothing better is given."""
     from ai_workforce_api import attribute_assumptions
     from ai_workforce_api.control_context import understanding_completed
     from ai_workforce_api.db import transaction
@@ -1992,13 +3293,48 @@ def _apply(
                 # so assumed although asked (B1l point 3), never dropped by record()'s
                 # matter-asked rule.
                 refused.append(replace(item, still_open=True))
+        # What a walkthrough answer holds is not asked again, and never read as established
+        # (owner-approved F2, 18 November 2026): unless the specialist's own verdict is
+        # ESTABLISHED and cites that answer, it is an assumption a person sees, with the
+        # answer and what the specialist reads it as not establishing (walkthrough_gap). The
+        # first on a key holds it; a second in this read is kept by its matter.
+        resting = {
+            str(verdict["attribute"]): set(verdict.get("rests_on", []))
+            for verdict in checked.verdicts
+            if verdict.get("verdict") == "ESTABLISHED"
+        }
+        gaps: list[Any] = []
+        answered: list[dict[str, Any]] = []
+        keyed: set[tuple[str, str, str]] = set()
+        for item, holder in planned.answered:
+            cites = bool(holder.ref) and holder.ref in resting.get(item.code or "", set())
+            answered.append(
+                {"attribute": item.code or item.fact, "fact": item.fact, "answer": holder.answer,
+                 "outcome": "CITED" if cites else "ASSUMED"}
+            )  # fmt: skip
+            if cites:
+                continue
+            fact_key = key_of(item.code, item.fact, None, "")
+            if fact_key in keyed:
+                # The same attribute and kind of fact: one point, said once (screenshot pass,
+                # 19 November 2026: two near-duplicate assumptions on one attribute).
+                answered[-1]["outcome"] = "SAME_POINT"
+                continue
+            gaps.append(
+                walkthrough_gap(item, holder, True, (subjects or {}).get(item.code or "", ""))
+            )
+            keyed.add(fact_key)
         # A question refused at insert (its fingerprint, topic or key was asked before) is
         # assumed with the rest, never dropped (B1l point 3): it is marked still open above,
         # so record()'s matter-asked rule does not skip it; its key keeps it assumed once.
+        # What record() does not record it says in the audit trail, with the record that
+        # already holds it (owner-approved F2).
         assumed = attribute_assumptions.record(
             cursor, organization_id, project_id, control_id,
-            [_assumption_of(item) for item in [*planned.assume, *refused]], AGENT, call_id,
+            [*(_assumption_of(item) for item in [*planned.assume, *refused]), *gaps], AGENT,
+            call_id,
         )  # fmt: skip
+
         cursor.execute(
             """
             UPDATE understanding_reviews
@@ -2020,7 +3356,11 @@ def _apply(
             {"by": AGENT, "prompt_version": PROMPT_VERSION, "round": round_, "cause": cause,
              "model_call": None if call_id is None else str(call_id), "asked": asked,
              "assumed": assumed, "already_asked": planned.repeated + len(refused),
-             "not_reviewed": list(checked.not_reviewed), "dropped": list(checked.dropped)[:12]},
+             "not_reviewed": list(checked.not_reviewed), "dropped": list(checked.dropped)[:12],
+             "dropped_count": len(checked.dropped), "answered_by_walkthrough": answered[:12],
+             "narrative_dropped": {"count": len(checked.narrative_dropped),
+                                   "rules": sorted(set(checked.narrative_dropped))},
+             "answered_by_walkthrough_count": len(answered)},
         )  # fmt: skip
     return Outcome("READY", asked, assumed)
 
@@ -2214,13 +3554,10 @@ def value_informs(library_key: str, slot_key: str) -> tuple[str, ...]:
     """The library attributes a value of the statement settles a need of: those whose need
     the bank records as met by it ("{slot}" in walkthrough_questions.MET_ELSEWHERE), so a
     value left as not known is an assumption on them. Pure."""
-    from ai_workforce_api.walkthrough_questions import MET_ELSEWHERE
+    from ai_workforce_api.walkthrough_questions import met_by_slot
 
     del library_key
-    mark = "{" + slot_key + "}"
-    return tuple(
-        dict.fromkeys(key for (key, _fact), reason in MET_ELSEWHERE.items() if mark in reason)
-    )
+    return tuple(dict.fromkeys(key for key, _fact in met_by_slot(slot_key)))
 
 
 def answer_not_known(

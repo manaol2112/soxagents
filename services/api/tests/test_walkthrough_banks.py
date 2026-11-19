@@ -73,7 +73,13 @@ def _asked(library_key: str) -> list[str]:
 
 
 def _family_keys() -> list[str]:
-    return [key for key in LIBRARY_KEYS if key.startswith(("access-", "change-"))]
+    # Rewritten 18 November 2026 (the operations family's banks). Old: the access and change
+    # families only. New: the operations family too. Justification: walkthrough_questions
+    # now records needs for every operations attribute (FAMILIES names "operations-"), so the
+    # checks that every family attribute's needs are met, that CRITERIA_NEEDS names exactly
+    # the family attributes, and that each reason names only its control's values and
+    # questions apply to it unchanged.
+    return [key for key in LIBRARY_KEYS if key.startswith(("access-", "change-", "operations-"))]
 
 
 # The bank's invariants.
@@ -85,9 +91,22 @@ def test_the_bank_has_no_structural_problems_with_its_facts_and_needs() -> None:
 
 def test_the_questions_added_by_b1k_are_these_and_nothing_was_removed() -> None:
     every = walkthrough_questions._all()
-    later = {item.key: item for item in every if item.since is not None}
+    # Rewritten 18 November 2026 (the operations family's banks). Old: every question with
+    # a `since` was one of B1k's (all dated 16 November). New: the questions dated
+    # 16 November are exactly B1k's, and the only other dated questions are the operations
+    # banks', all dated 18 November (OPERATIONS_ADDED); the 138 undated questions are
+    # unchanged. Justification: a bank added later carries its own date so that finished
+    # controls are not held by it (walkthrough_answers.holds); the B1k set and the count of
+    # the original bank are asserted as exactly as before.
+    later = {item.key: item for item in every if item.since == B1K_ADDED}
     assert set(later) == set(ADDED)
     assert {item.since for item in later.values()} == {B1K_ADDED} == {date(2026, 11, 16)}
+    operations = {key for key, items in CONTROL_QUESTIONS.items() if key.startswith("operations-")}
+    added_later = {item.key for item in every if item.since is not None and item.since != B1K_ADDED}
+    assert added_later == {item.key for key in operations for item in CONTROL_QUESTIONS[key]}
+    assert {item.since for item in every if item.key in added_later} == {
+        walkthrough_questions.OPERATIONS_ADDED
+    }
     assert len([item for item in every if item.since is None]) == BEFORE_B1K
     keys = _keys(list(every))
     assert len(keys) == len(set(keys))

@@ -1793,6 +1793,19 @@ def test_accepting_the_attributes_closes_the_questions_still_open(migrated: Data
         connection.commit()
         assert not control_attributes.attributes_accepted(connection.cursor(), UUID(control))
     _answer_required(migrated, team, control, client)
+    # Re-based 18 November 2026 (product owner, "Yes/No always settles"). Old: the
+    # walkthrough's "No" to wt-ac-change-logging (RECORD on ac01-before) left the grant
+    # record open, so the specialist's RECORD question was asked as its follow-up. New: a
+    # "No" settles it (about 10 of the bank's 47 Yes/No questions have No as the good
+    # answer, and "No opens" asked again what the answer had settled); the record is left
+    # open by the source of dates answered in the person's own words, which still opens
+    # one. What this test is about is unchanged.
+    gap = client.put(
+        f"{_path(team, control)}/walkthrough-answers",
+        json={"answers": {"wt-ac-change-logging-gap": {
+            "value": "Other: the HR system's audit trail", "not_applicable": False}}},
+    )  # fmt: skip
+    assert gap.status_code == 200, gap.text
     plan_id = _plan_run(migrated, control)[0]
     agents = _Agents(migrated, team, control)
     # Rewritten for B1k (16 November 2026: the IT audit specialist's review is the question
@@ -1803,8 +1816,18 @@ def test_accepting_the_attributes_closes_the_questions_still_open(migrated: Data
 
     def asking(given: dict[str, Any]) -> dict[str, Any]:
         answer = understanding_review.established(given)
-        unit = str(given["units"][0]["key"])
-        answer["verdicts"][0] = {
+        # 18 November 2026: on the first attribute whose criteria need a record (old: the
+        # first attribute, whose criteria on ITGC-AC-01 need nothing more, so a question on it
+        # is now an assumption, not a question; product owner, "Record as assumption").
+        units = [str(unit["key"]) for unit in given["units"]]
+        at = next(
+            index
+            for index, unit in enumerate(units)
+            for item in given["attributes"]
+            if item["unit"] == unit and "RECORD" in item["needs"]
+        )
+        unit = units[at]
+        answer["verdicts"][at] = {
             "attribute": unit, "verdict": "NOT_ESTABLISHED", "rests_on": [],
             "question": {"topic": _GRANT_RECORD["topic"], "text": "Which record shows it?",
                          "fact": "RECORD", "blocks": f"The criteria of {unit} need it.",
