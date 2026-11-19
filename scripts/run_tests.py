@@ -651,7 +651,8 @@ def command_durations(args: argparse.Namespace) -> int:
     merged = merged_durations(load_durations(ROOT), lines, ROOT)
     commits = sorted({str(line.get("commit", "")) for line in lines} - {""})
     body = {"source": f"CI parts {', '.join(commits) or 'of an unknown commit'}", "seconds": merged}
-    (ROOT / DURATIONS_FILE).write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
+    text = json.dumps(body, indent=2) + "\n"
+    (ROOT / DURATIONS_FILE).write_text(text, encoding="utf-8", newline="\n")
     measured = sum(len(line["seconds"]) for line in lines)
     print(
         f"{DURATIONS_FILE}: {measured} measured entries from {len(lines)} parts; "

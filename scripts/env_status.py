@@ -162,6 +162,9 @@ def parse_environment_block(block: str) -> dict[str, str]:
 
 
 def _windows_process(pid: int) -> Process:
+    # Also tells mypy, which checks this file on Linux too, that ctypes.WinDLL exists here.
+    if sys.platform != "win32":
+        raise RuntimeError("the process block is read on Windows only")
     import ctypes
     from ctypes import wintypes
 
