@@ -3,10 +3,12 @@ checklist kept apart from the audit team's planning, recipients assigned inline 
 client's email domains, people copied on the email, reference material that stays
 internal unless shared, and the checks run before approval and sending."""
 
-from datetime import UTC, datetime, timedelta
+from dataclasses import replace
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
+import pytest
 from support import Database
 from test_evidence_flow import _drafted, _launch, _project
 from test_evidence_portal import _code, _public, _sent, _verify
@@ -21,7 +23,18 @@ from ai_workforce_api.evidence_planning import (
     suite_wording,
 )
 from ai_workforce_api.evidence_plans import _Line, render
+from ai_workforce_api.models import ModelConfig, ModelRaw, ModelRequest
 from ai_workforce_api.pbc import PbcBody
+from ai_workforce_api.pbc_drafting import (
+    PRIMARY_KIND,
+    DraftContext,
+    PlannedItem,
+    check_draft,
+    load_context,
+    planned_draft,
+    run_draft,
+    with_plan,
+)
 from ai_workforce_api.request_details import (
     _category_type,
     heading_of,
@@ -762,3 +775,684 @@ def test_a_draft_is_reworded_before_anyone_is_assigned(migrated: Database) -> No
     # Leaving draft still needs someone to send it to.
     submitted = team["owner"].post(f"{path}/submit", json={"version": saved.json()["version"]})
     assert submitted.status_code == 409
+
+
+# The request names every planned requirement (FO-28, owner decision 19 November 2026)
+#
+# A phase request's model draft carries one item per REQUESTED requirement, in the plan's
+# order, under the requirement's own title (the portal files an upload by that title,
+# evidence_portal._item_requirement), of a kind the requirement allows, with its period and
+# its system. A draft that drops, merges, adds, reorders or substitutes an item is rejected
+# and the plan's own wording is used (pbc_drafting.check_draft). Before, coverage was
+# checked by kind only: a second ticket could stand in for the access removal record, and
+# one item for two.
+
+_WINDOW = "From 1 January 2027 to 30 September 2027"
+_TICKETS = PlannedItem(
+    "Termination ticket for each selected leaver",
+    "The HR termination ticket for each selected leaver, with the termination date.",
+    ("CONTROL_EXECUTION",),
+    "REQUIRED",
+    _WINDOW,
+)
+_REMOVALS = PlannedItem(
+    "Access removal record for each selected leaver",
+    "The Active Directory change log entry that removed each selected leaver's access.",
+    ("CONTROL_EXECUTION",),
+    "REQUIRED",
+    _WINDOW,
+)
+
+
+def _coverage_context(*planned: PlannedItem, phase: str = "INTERIM") -> DraftContext:
+    return DraftContext(
+        engagement="SOX 2027",
+        period_end=date(2027, 12, 31),
+        control_ref="ITGC-AC-02",
+        title="Leaver access is removed",
+        activity="IT removes a leaver's access when HR records the termination.",
+        risk="A leaver keeps access.",
+        domain="ACCESS",
+        domain_label="",
+        frequency="EVENT_DRIVEN",
+        frequency_label="",
+        nature="MANUAL",
+        nature_label="",
+        key_control=True,
+        owner_name="Dana Ruiz",
+        applications=("Active Directory", "SAP ERP"),
+        test_attributes=(),
+        pbc_items=(),
+        custom_fields=(),
+        phase=phase,
+        planned=planned,
+    )
+
+
+def _asked(planned: PlannedItem, **changes: Any) -> dict[str, Any]:
+    """One draft item that asks for the planned item as planned, with any changes."""
+    item: dict[str, Any] = {
+        "kind": PRIMARY_KIND[planned.categories[0]],
+        "title": planned.title,
+        "detail": f"Please provide this as it was recorded. {planned.description}"[:1500],
+        "period": planned.period_label[:200],
+    }
+    return item | changes
+
+
+def _coverage_draft(*items: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "summary": "For our interim testing of ITGC-AC-02, please provide the items below.",
+        "items": list(items),
+    }
+
+
+def test_a_phase_draft_that_leaves_out_a_planned_item_is_rejected() -> None:
+    context = _coverage_context(_TICKETS, _REMOVALS)
+    with pytest.raises(ValueError, match="^draft has 1 item for 2 planned items$"):
+        check_draft(_coverage_draft(_asked(_TICKETS)), context)
+
+
+def test_a_phase_draft_that_merges_two_planned_items_is_rejected() -> None:
+    context = _coverage_context(_TICKETS, _REMOVALS)
+    merged = _asked(
+        _TICKETS,
+        title="Termination ticket and access removal record for each selected leaver",
+        detail="The HR ticket and the Active Directory change log entry for each leaver.",
+    )
+    with pytest.raises(ValueError, match="^draft has 1 item for 2 planned items$"):
+        check_draft(_coverage_draft(merged), context)
+
+
+def test_a_phase_draft_that_adds_an_item_is_rejected() -> None:
+    context = _coverage_context(_TICKETS, _REMOVALS)
+    added = {
+        "kind": "other",
+        "title": "Screenshots of the HR system's termination screen",
+        "detail": "One screenshot of the termination screen for each selected leaver.",
+    }
+    with pytest.raises(ValueError, match="^draft has 3 items for 2 planned items$"):
+        check_draft(_coverage_draft(_asked(_TICKETS), _asked(_REMOVALS), added), context)
+
+
+def test_a_planned_item_is_not_answered_by_another_artifact() -> None:
+    """The C8 case: both items are control execution evidence, so a second ticket had the
+    kind the access removal record needed and was accepted in its place."""
+    context = _coverage_context(_TICKETS, _REMOVALS)
+    second_ticket = _asked(
+        _TICKETS, detail="A second copy of the HR termination ticket for each selected leaver."
+    )
+    with pytest.raises(ValueError, match="^draft item 2 is not planned item 2$"):
+        check_draft(_coverage_draft(_asked(_TICKETS), second_ticket), context)
+
+
+def test_a_phase_draft_keeps_the_planned_order() -> None:
+    context = _coverage_context(_TICKETS, _REMOVALS)
+    with pytest.raises(ValueError, match="^draft item 1 is not planned item 1$"):
+        check_draft(_coverage_draft(_asked(_REMOVALS), _asked(_TICKETS)), context)
+
+
+def test_a_phase_draft_keeps_the_planned_period() -> None:
+    context = _coverage_context(_TICKETS, _REMOVALS)
+    widened = _asked(_TICKETS, period="From 1 January 2027 to 31 December 2027")
+    with pytest.raises(ValueError, match="^draft item 1 changes the planned period$"):
+        check_draft(_coverage_draft(widened, _asked(_REMOVALS)), context)
+    unstated = _asked(_TICKETS, period="")
+    with pytest.raises(ValueError, match="^draft item 1 changes the planned period$"):
+        check_draft(_coverage_draft(unstated, _asked(_REMOVALS)), context)
+
+
+def test_a_phase_draft_keeps_the_planned_system() -> None:
+    context = _coverage_context(_TICKETS, _REMOVALS)
+    vague = _asked(
+        _REMOVALS, detail="The directory's change log entry that removed each leaver's access."
+    )
+    with pytest.raises(ValueError, match="^draft item 2 leaves out its planned system$"):
+        check_draft(_coverage_draft(_asked(_TICKETS), vague), context)
+
+
+def test_a_phase_draft_keeps_each_planned_items_kind() -> None:
+    context = _coverage_context(_TICKETS, _REMOVALS)
+    configured = _asked(_TICKETS, kind="configuration")
+    with pytest.raises(ValueError, match="^draft item 1 is the wrong kind for planned item 1$"):
+        check_draft(_coverage_draft(configured, _asked(_REMOVALS)), context)
+
+
+def test_items_the_plan_cannot_tell_apart_are_worded_by_the_plan() -> None:
+    """Fail closed: two planned items under one title cannot be paired with a draft's
+    items, so even a draft that repeats them both is rejected."""
+    twin = replace(_REMOVALS, title=_TICKETS.title)
+    context = _coverage_context(_TICKETS, twin)
+    with pytest.raises(ValueError, match="^the plan has two items with the same title$"):
+        check_draft(_coverage_draft(_asked(_TICKETS), _asked(twin)), context)
+
+
+def test_a_plan_larger_than_one_draft_is_refused_by_name() -> None:
+    many = tuple(replace(_TICKETS, title=f"Termination ticket {n}") for n in range(15))
+    with pytest.raises(ValueError, match="^the plan has more items than one draft can hold$"):
+        check_draft(_coverage_draft(_asked(_TICKETS)), _coverage_context(*many))
+
+
+def test_a_paired_phase_draft_is_used_whole() -> None:
+    """Guards against a check stricter than the plan: a model may reword everything but
+    each item's title, keep the title's case and spacing its own, mark an optional item,
+    and say the planned period inside its own sentence."""
+    policy_wording = SuiteWording(
+        period="The version in force during the period, with its effective date",
+        include=("Who may approve which access", "What a request must name"),
+        completeness="",
+        not_sufficient="",
+        alternatives=(),
+        note="",
+    )
+    policy = PlannedItem(
+        "Access management policy",
+        suite_description(policy_wording),
+        ("PROCESS_DOCUMENTATION",),
+        "REQUIRED",
+        policy_wording.period,
+    )
+    walkthrough = PlannedItem(
+        "Walkthrough instance: one access request from request to grant",
+        "One recent grant in the period, with the request, the manager's approval and the "
+        "grant in Active Directory.",
+        ("CONTROL_EXECUTION",),
+        "REQUIRED",
+        "One recent grant in the period",
+    )
+    design = _coverage_context(policy, walkthrough, phase="DESIGN")
+    accepted = check_draft(
+        _coverage_draft(
+            _asked(
+                policy,
+                title="  ACCESS management   policy.",
+                detail="The access policy that says who approves each kind of access.",
+                period="The version in force during the period, with its effective date.",
+            ),
+            _asked(
+                walkthrough,
+                detail="Walk us through one recent grant in Active Directory: the request, "
+                "the manager’s approval, and the grant.",
+                period="Please choose one recent grant in the period.",
+            ),
+        ),
+        design,
+    )
+    assert [item.title for item in accepted.items] == [
+        "  ACCESS management   policy.",
+        walkthrough.title,
+    ]
+    optional = PlannedItem(
+        "HR termination report for the window",
+        "The HR report of terminations in the window, as run.",
+        ("REPORT_RELIABILITY",),
+        "OPTIONAL",
+        _WINDOW,
+    )
+    interim = _coverage_context(_TICKETS, _REMOVALS, optional)
+    paired = check_draft(
+        _coverage_draft(
+            _asked(_TICKETS, detail="Each leaver's HR ticket, showing the termination date."),
+            _asked(
+                _REMOVALS,
+                detail="The Active Directory log entry that removed each leaver's access.",
+                period="Covering " + _WINDOW.lower() + ", for each selected leaver",
+            ),
+            _asked(optional, title=optional.title + " (if available)"),
+        ),
+        interim,
+    )
+    assert len(paired.items) == 3
+
+
+def _library_contexts() -> list[tuple[str, DraftContext]]:
+    """Every phase the planner plans for each version 4 standard and for generic kinds of
+    control, as with_plan reads it back: the items requested with the phase (sample items
+    wait for the sample request), required first."""
+    from ai_workforce_api.controls import BY_KEY
+    from ai_workforce_api.definition_registry import DEFINITIONS
+    from ai_workforce_api.evidence_planning import PlanFacts, check_plan, rules_plan
+
+    common: dict[str, Any] = {
+        "applications": ("SAP ERP",),
+        "period_end": date(2027, 12, 31),
+    }
+    facts: list[PlanFacts] = []
+    for definition in DEFINITIONS:
+        if definition.version < 4:
+            continue
+        control = BY_KEY[definition.library_key]
+        facts.append(
+            PlanFacts(
+                control_ref=control.control_ref,
+                title=control.title,
+                activity=control.activity,
+                risk=control.risk,
+                domain=control.domain,
+                frequency=control.frequency,
+                nature=control.nature,
+                attributes=tuple(item.text for item in definition.approved),
+                classifications=("ITGC",),
+                library_key=definition.library_key,
+                test_basis="STANDARD",
+                basis_decided=True,
+                **common,
+            )
+        )
+    facts.append(
+        PlanFacts(
+            control_ref="ITGC-CM-01",
+            title="Changes are tested and approved",
+            activity="Changes are requested, tested, and approved before production.",
+            risk="An unapproved change reaches production.",
+            domain="CHANGE",
+            frequency="EVENT_DRIVEN",
+            nature="MANUAL",
+            attributes=("The change was approved before deployment", "The change was tested"),
+            classifications=("ITGC",),
+            **common,
+        )
+    )
+    facts.append(
+        PlanFacts(
+            control_ref="ITGC-AC-07",
+            title="MFA is enforced for privileged accounts",
+            activity="The identity provider enforces MFA for every privileged account.",
+            risk="A privileged account is used without a second factor.",
+            domain="ACCESS",
+            frequency="RECURRING",
+            nature="AUTOMATED",
+            attributes=("MFA is required for every privileged account",),
+            classifications=("ITGC",),
+            **common,
+        )
+    )
+    facts.append(
+        PlanFacts(
+            control_ref="RTR-05",
+            title="Unusual journal entries are reviewed",
+            activity="Management reviews a system-generated report of unusual journal "
+            "entries each month and investigates each flagged entry.",
+            risk="An unusual entry goes unreviewed.",
+            domain="RECORD_TO_REPORT",
+            frequency="MONTHLY",
+            nature="IT_DEPENDENT_MANUAL",
+            attributes=("Each flagged entry was investigated",),
+            classifications=("IT_DEPENDENT_MANUAL", "BUSINESS_PROCESS"),
+            process_required=True,
+            process_confirmed=True,
+            **common,
+        )
+    )
+    order = {"REQUIRED": 0, "CONDITIONAL": 1, "OPTIONAL": 2}
+    contexts: list[tuple[str, DraftContext]] = []
+    for item in facts:
+        for phase in check_plan(rules_plan(item), item).phases:
+            planned = tuple(
+                PlannedItem(
+                    r.title,
+                    r.description,
+                    tuple(r.categories),
+                    r.necessity,
+                    wording.period
+                    if (wording := suite_wording(r.description)) is not None
+                    else r.period_label,
+                )
+                for r in sorted(phase.requirements, key=lambda r: order[r.necessity])
+                if r.depends_on is None
+            )
+            if planned:
+                contexts.append(
+                    (
+                        f"{item.control_ref} {phase.phase}",
+                        replace(
+                            _coverage_context(*planned, phase=phase.phase),
+                            control_ref=item.control_ref,
+                            applications=item.applications,
+                        ),
+                    )
+                )
+    return contexts
+
+
+def _as_model_wrote_it(context: DraftContext) -> dict[str, Any]:
+    """The plan's own wording (planned_draft) as a model's answer: each item explains
+    itself, as check_draft asks of a model."""
+    output = planned_draft(context).model_dump()
+    for item in output["items"]:
+        if len(item["detail"].strip()) < 10:
+            item["detail"] = "Please provide this item as described below."
+    return output
+
+
+def test_the_plans_own_wording_passes_and_each_change_to_it_is_rejected() -> None:
+    """The plan's own wording never fails the check (so a model that keeps it is used), and
+    each single change to it is rejected: an item dropped, two neighbours swapped, a
+    sibling's title in an item's place, an item's period changed. Across every version 4
+    standard and generic access, change, automated and report controls."""
+    contexts = _library_contexts()
+    assert len(contexts) > 20
+    for name, context in contexts:
+        whole = _as_model_wrote_it(context)
+        assert len(check_draft(whole, context).items) == len(context.planned), name
+        items = whole["items"]
+        changed: list[tuple[str, list[dict[str, Any]]]] = []
+        if len(items) > 1:
+            changed.append(("dropped", items[:-1]))
+            changed.append(("swapped", [items[1], items[0], *items[2:]]))
+            changed.append(("sibling", [items[0] | {"title": items[1]["title"]}, *items[1:]]))
+        for index, item in enumerate(items):
+            if context.planned[index].period_label.strip():
+                periods = [*items]
+                periods[index] = item | {"period": "As at 1 March 2031"}
+                changed.append(("period", periods))
+                break
+        for change, wrong in changed:
+            with pytest.raises(ValueError):
+                check_draft(whole | {"items": wrong}, context)
+            assert change, name
+
+
+# The same rule through the drafting job, the redraft, and the requests it must not touch.
+
+
+class _ScriptedModel:
+    """A scripted model: the same answer to every call, and anything it should do while it
+    'thinks' (a person or another job changing the request meanwhile)."""
+
+    def __init__(self, output: dict[str, Any], during: Any = None) -> None:
+        self.output = output
+        self.during = during
+        self.requests: list[ModelRequest] = []
+
+    def complete(self, request: ModelRequest, config: ModelConfig) -> ModelRaw:
+        del config
+        self.requests.append(request)
+        if self.during is not None:
+            self.during()
+        return ModelRaw(self.output, (), 1200, 400)
+
+
+def _phase_draft(migrated: Database, team: dict[str, Any], phase: str) -> tuple[UUID, UUID, UUID]:
+    """ITGC-AC-01's draft for one phase, back to pending so the agent drafts it again:
+    (draft, request, control)."""
+    with connect(migrated.url) as connection:
+        row = connection.execute(
+            """
+            SELECT d.id, d.pbc_request_id, d.engagement_control_id FROM pbc_drafts d
+            JOIN engagement_controls c ON c.id = d.engagement_control_id
+            JOIN pbc_requests r ON r.id = d.pbc_request_id
+            WHERE d.project_id = %s AND c.control_ref = 'ITGC-AC-01' AND r.testing_phase = %s
+            """,
+            (team["project"], phase),
+        ).fetchone()
+        assert row is not None
+        connection.execute(
+            "UPDATE pbc_drafts SET status = 'PENDING', source = NULL, content = NULL, "
+            "attempts = 0 WHERE id = %s",
+            (row[0],),
+        )
+        connection.commit()
+    return UUID(str(row[0])), UUID(str(row[1])), UUID(str(row[2]))
+
+
+def _planned_of(
+    migrated: Database, project: UUID, control: UUID, request: UUID
+) -> tuple[PlannedItem, ...]:
+    with connect(migrated.url) as connection:
+        return with_plan(connection, load_context(connection, project, control), request).planned
+
+
+def _wording(migrated: Database, request: UUID) -> str:
+    with connect(migrated.url) as connection:
+        row = connection.execute(
+            "SELECT evidence_description FROM pbc_requests WHERE id = %s", (request,)
+        ).fetchone()
+    assert row is not None
+    return str(row[0])
+
+
+def _draft_record(migrated: Database, draft: UUID) -> tuple[Any, ...]:
+    with connect(migrated.url) as connection:
+        row = connection.execute(
+            "SELECT status, source, note FROM pbc_drafts WHERE id = %s", (draft,)
+        ).fetchone()
+    assert row is not None
+    return tuple(row)
+
+
+def test_a_short_phase_draft_falls_back_to_the_plans_wording_of_every_requirement(
+    migrated: Database,
+) -> None:
+    team = _ready_engagement(migrated, "rd-cover")
+    draft, request, control = _phase_draft(migrated, team, "DESIGN")
+    with connect(migrated.url) as connection:
+        titles = [
+            str(row[0])
+            for row in connection.execute(
+                "SELECT title FROM evidence_requirements "
+                "WHERE pbc_request_id = %s AND status = 'REQUESTED'",
+                (request,),
+            ).fetchall()
+        ]
+    assert len(titles) >= 2
+    planned = _planned_of(migrated, team["project"], control, request)
+    # Item 2 has a kind the second requirement allows, but asks for another artifact.
+    substitute = _asked(
+        planned[1],
+        title="A second copy of the access policy",
+        detail="Another copy of the access policy, as approved.",
+    )
+    output = _coverage_draft(_asked(planned[0]), substitute, *map(_asked, planned[2:]))
+    with connect(migrated.url) as connection:
+        assert run_draft(connection, _ScriptedModel(output), draft) == "DRAFTED"
+    status, source, note = _draft_record(migrated, draft)
+    assert (status, source) == ("DRAFTED", "FALLBACK")
+    assert str(note).startswith("Model draft rejected: draft item 2 is not planned item 2.")
+    wording = " ".join(_wording(migrated, request).split()).lower()
+    for title in titles:
+        assert " ".join(title.split()).rstrip(".").lower() in wording, title
+    assert "a second copy of the access policy" not in wording
+    assert _audit(migrated, team["project"], "pbc.drafted")[-1]["source"] == "FALLBACK"
+
+
+def test_a_redraft_is_held_to_every_planned_item(migrated: Database) -> None:
+    """The Redraft (and the console's redraft_request) reaches the same check: one item of
+    a kind both planned items allow is not both of them."""
+    team = _ready_engagement(migrated, "rd-recover")
+    draft, request, control = _phase_draft(migrated, team, "DESIGN")
+    redraft = team["owner"].post(f"{_project(team)}/pbc-requests/{request}/redraft")
+    assert redraft.status_code == 200, redraft.text
+    planned = _planned_of(migrated, team["project"], control, request)
+    assert len(planned) >= 2
+    merged = _asked(
+        planned[0],
+        kind="design",
+        title="How access is approved, with one example",
+        detail="The access policy and one recent access request from request to grant.",
+    )
+    with connect(migrated.url) as connection:
+        assert run_draft(connection, _ScriptedModel(_coverage_draft(merged)), draft) == "DRAFTED"
+    status, source, note = _draft_record(migrated, draft)
+    assert (status, source) == ("DRAFTED", "FALLBACK")
+    assert str(note).startswith(f"Model draft rejected: draft has 1 item for {len(planned)}")
+    assert "how access is approved, with one example" not in _wording(migrated, request).lower()
+
+
+def test_a_sample_request_is_never_redrafted_into_a_population_request(
+    migrated: Database,
+) -> None:
+    """A sample request (control_tests._draft_sample_request) carries its REQUESTED sample
+    requirements without a testing phase. Before, a Redraft read it as a request from
+    before planning and rewrote it to ask for a population, so the selected samples were
+    no longer asked for."""
+    team = _ready_engagement(migrated, "rd-samples")
+    _draft_id, interim, control = _phase_draft(migrated, team, "INTERIM")
+    asked = "Please provide, for each of the 3 selected items listed below, the approval."
+    with connect(migrated.url) as connection:
+        sample = connection.execute(
+            """
+            INSERT INTO pbc_requests (
+                organization_id, project_id, operation_key, control_ref, owner_user_id,
+                recipient, due_at, evidence_description, follow_up_after_days,
+                max_follow_ups, engagement_control_id, drafted_by
+            )
+            SELECT organization_id, project_id, %s, control_ref, owner_user_id, recipient,
+                   due_at, %s, follow_up_after_days, max_follow_ups, engagement_control_id,
+                   'AGENT'
+            FROM pbc_requests WHERE id = %s
+            RETURNING id
+            """,
+            (f"samples-{uuid4().hex}", asked, interim),
+        ).fetchone()
+        assert sample is not None
+        linked = connection.execute(
+            "UPDATE evidence_requirements SET status = 'REQUESTED', pbc_request_id = %s "
+            "WHERE engagement_control_id = %s AND phase = 'INTERIM' AND depends_on IS NOT NULL "
+            "RETURNING id",
+            (sample[0], control),
+        ).fetchall()
+        assert linked
+        connection.commit()
+    refused = team["owner"].post(f"{_project(team)}/pbc-requests/{sample[0]}/redraft")
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"] == (
+        "request carries planned evidence without a testing phase and cannot be redrafted"
+    )
+    # A draft already queued for it (the worker, a restart) leaves it as it is.
+    with connect(migrated.url) as connection:
+        queued = connection.execute(
+            """
+            INSERT INTO pbc_drafts (
+                organization_id, project_id, pbc_request_id, engagement_control_id,
+                requested_by_user_id
+            )
+            SELECT organization_id, project_id, id, engagement_control_id, %s
+            FROM pbc_requests WHERE id = %s
+            RETURNING id
+            """,
+            (team["owner_id"], sample[0]),
+        ).fetchone()
+        assert queued is not None
+        connection.commit()
+        population = _coverage_draft(
+            {
+                "kind": "population",
+                "title": "Population of new users",
+                "detail": "Every account created in the period, from the system.",
+            }
+        )
+        model = _ScriptedModel(population)
+        assert run_draft(connection, model, queued[0]) == "SKIPPED"
+    assert model.requests == []
+    assert _wording(migrated, sample[0]) == asked
+    assert _draft_record(migrated, queued[0]) == (
+        "SKIPPED",
+        None,
+        "The request carries planned evidence without a testing phase; its wording stays.",
+    )
+
+
+def test_a_plan_change_while_the_request_is_drafted_keeps_the_draft_out(
+    migrated: Database,
+) -> None:
+    """The draft was checked against the requirements as they were when it started. One
+    taken off the request meanwhile, without the request being reworded, made a checked
+    draft name a set the plan no longer holds."""
+    team = _ready_engagement(migrated, "rd-replanned")
+    draft, request, control = _phase_draft(migrated, team, "DESIGN")
+    planned = _planned_of(migrated, team["project"], control, request)
+    assert len(planned) >= 2
+    before = _wording(migrated, request)
+
+    def replanned() -> None:
+        with connect(migrated.url) as other:
+            other.execute(
+                "UPDATE evidence_requirements SET status = 'REMOVED', version = version + 1 "
+                "WHERE pbc_request_id = %s AND status = 'REQUESTED' AND title = %s",
+                (request, planned[-1].title),
+            )
+
+    model = _ScriptedModel(_coverage_draft(*map(_asked, planned)), during=replanned)
+    with connect(migrated.url) as connection:
+        assert run_draft(connection, model, draft) == "SKIPPED"
+    assert len(model.requests) == 1
+    assert _wording(migrated, request) == before
+    assert _draft_record(migrated, draft) == (
+        "SKIPPED",
+        None,
+        "The planned evidence changed while the request was drafted; redraft it.",
+    )
+
+
+def test_a_plan_larger_than_one_draft_keeps_the_requests_wording(
+    migrated: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fifteen REQUESTED requirements (a person may add more than a phase plans). Before,
+    every model draft was rejected and the plan's own draft could not be built either
+    (a draft holds 14 items): the job raised, retried and ended failed."""
+    from ai_workforce_api import pbc_drafting
+
+    team = _ready_engagement(migrated, "rd-fifteen")
+    draft, request, _control = _phase_draft(migrated, team, "DESIGN")
+    before = _wording(migrated, request)
+    real = pbc_drafting.with_plan
+
+    def fifteen(connection: Any, context: DraftContext, request_id: UUID) -> DraftContext:
+        found = real(connection, context, request_id)
+        extra = tuple(
+            replace(found.planned[0], title=f"Signed access approval {n}") for n in range(15)
+        )
+        return replace(found, planned=extra)
+
+    monkeypatch.setattr(pbc_drafting, "with_plan", fifteen)
+    model = _ScriptedModel(_coverage_draft(_asked(_TICKETS)))
+    with connect(migrated.url) as connection:
+        assert run_draft(connection, model, draft) == "SKIPPED"
+    assert model.requests == []
+    assert _wording(migrated, request) == before
+    assert _draft_record(migrated, draft) == (
+        "SKIPPED",
+        None,
+        "The plan has more items than one drafted request can hold; the request keeps its "
+        "current wording.",
+    )
+
+
+def test_a_plan_too_long_for_the_prompt_is_worded_by_the_plan_without_a_model_call(
+    migrated: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The prompt's facts are cut at 12,000 characters, so the last planned items of a long
+    phase never reached the model, and its draft could not name them. Before, the model
+    was called anyway and its draft rejected, the note blaming the model."""
+    from ai_workforce_api import pbc_drafting
+
+    team = _ready_engagement(migrated, "rd-longplan")
+    draft, request, _control = _phase_draft(migrated, team, "DESIGN")
+    real = pbc_drafting.with_plan
+
+    def long(connection: Any, context: DraftContext, request_id: UUID) -> DraftContext:
+        found = real(connection, context, request_id)
+        wordy = tuple(
+            replace(
+                found.planned[0],
+                title=f"Signed access approval for site {n}",
+                description="The signed approval of the access granted at the site. " * 26,
+            )
+            for n in range(9)
+        )
+        return replace(found, planned=wordy)
+
+    monkeypatch.setattr(pbc_drafting, "with_plan", long)
+    model = _ScriptedModel(_coverage_draft(_asked(_TICKETS)))
+    with connect(migrated.url) as connection:
+        assert run_draft(connection, model, draft) == "DRAFTED"
+    assert model.requests == []
+    assert _draft_record(migrated, draft) == (
+        "DRAFTED",
+        "RULES",
+        "The planned items are too long for one model call; the reviewed rules drafted the "
+        "request.",
+    )
+    wording = _wording(migrated, request)
+    assert all(f"Signed access approval for site {n}" in wording for n in range(9))

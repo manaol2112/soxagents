@@ -155,10 +155,13 @@ class DraftItem(BaseModel):
     alternatives: list[str] = Field(default_factory=list, max_length=6)
 
 
+# The most items one draft holds: as many as a phase plans (evidence_planning.PhasePlan).
+MAX_ITEMS = 14
+
+
 class DraftContent(BaseModel):
     summary: str = Field(min_length=10, max_length=500)
-    # As many as a phase plans (evidence_planning.PhasePlan, at most 14).
-    items: list[DraftItem] = Field(min_length=1, max_length=14)
+    items: list[DraftItem] = Field(min_length=1, max_length=MAX_ITEMS)
     questions: list[str] = Field(default_factory=list, max_length=5)
     assumptions: list[str] = Field(default_factory=list, max_length=6)
 
@@ -295,6 +298,28 @@ CATEGORY_KINDS: dict[str, frozenset[str]] = {
     "OTHER": frozenset({"other", "design", "policy"}),
 }
 
+# The order a request's planned items are read in, the same in the prompt, the check, the
+# plan's own wording and the plan's render (evidence_plans.requirement_lines).
+_PLANNED_ORDER = (
+    "CASE necessity WHEN 'REQUIRED' THEN 0 WHEN 'CONDITIONAL' THEN 1 ELSE 2 END, "
+    "created_at, requirement_key"
+)
+# Dashes and curly quotes, compared as plain ones in a period.
+_PLAIN_MARKS = str.maketrans(
+    {
+        "‐": "-",
+        "‑": "-",
+        "‒": "-",
+        "–": "-",
+        "—": "-",
+        "−": "-",
+        "‘": "'",
+        "’": "'",
+        "“": '"',
+        "”": '"',
+    }
+)
+
 
 @dataclass(frozen=True)
 class PlannedItem:
@@ -341,6 +366,9 @@ class DraftContext:
     # what the audit team already knows about how the control operates, so the request
     # never asks the owner for it again (product owner, 12 November 2026).
     understanding: tuple[Fact, ...] = ()
+    # The REQUESTED requirements the draft was checked against, in their order: a draft is
+    # written only while the request still carries exactly these (run_draft).
+    requirement_ids: tuple[UUID, ...] = ()
 
     @property
     def samples(self) -> int:
@@ -602,7 +630,12 @@ def _capitalized(text: str) -> str:
 # Model drafter
 
 
-def prompt_for(context: DraftContext) -> str:
+# The prompt carries at most this many characters of the control's facts.
+PROMPT_FACTS = 12000
+
+
+def _facts_text(context: DraftContext) -> str:
+    """The control's facts as the prompt carries them, before they are cut to size."""
     facts: dict[str, Any] = {
         "engagement": context.engagement,
         "period": context.period,
@@ -645,19 +678,31 @@ def prompt_for(context: DraftContext) -> str:
             }
             for item in context.planned
         ]
-        data = neutral(json.dumps(facts, ensure_ascii=False, indent=1)[:12000])
+    return json.dumps(facts, ensure_ascii=False, indent=1)
+
+
+def prompt_holds_the_plan(context: DraftContext) -> bool:
+    """Whether the prompt carries every planned item whole: the facts are cut to size, and
+    the planned items come last, so a long phase loses its last items first."""
+    return len(_facts_text(context)) <= PROMPT_FACTS
+
+
+def prompt_for(context: DraftContext) -> str:
+    # The control's facts hold the client's RCM words: every tag in them is made inert
+    # (prompt_data; 18 November 2026, owner-approved S1).
+    data = neutral(_facts_text(context)[:PROMPT_FACTS])
+    if context.planned:
         return (
             f"Word the {context.phase.lower()} evidence request for this control, one item "
             f"per planned evidence item.\n\n<control>\n{data}\n</control>"
         )
-    # The control's facts hold the client's RCM words: every tag in them is made inert
-    # (prompt_data; 18 November 2026, owner-approved S1).
-    data = neutral(json.dumps(facts, ensure_ascii=False, indent=1)[:12000])
     return f"Draft the evidence request for this control.\n\n<control>\n{data}\n</control>"
 
 
 def check_draft(output: dict[str, Any], context: DraftContext) -> DraftContent:
     """Model output is untrusted. Anything that breaks a rule is rejected, not repaired."""
+    if len(context.planned) > MAX_ITEMS:
+        raise ValueError(TOO_MANY_ITEMS)
     try:
         content = DraftContent.model_validate(output)
     except ValidationError as error:
@@ -686,11 +731,7 @@ def check_draft(output: dict[str, Any], context: DraftContext) -> DraftContent:
         categories = {category for planned in context.planned for category in planned.categories}
         if "population" in kinds and "POPULATION" not in categories:
             raise ValueError(f"draft asks for a population in a {context.phase.lower()} request")
-        for planned in context.planned:
-            if planned.necessity == "REQUIRED" and not any(
-                CATEGORY_KINDS.get(category, frozenset()) & kinds for category in planned.categories
-            ):
-                raise ValueError(f"draft leaves out a planned item: {planned.title}")
+        _check_paired(content, context)
         return content
     if context.domain == "IPE":
         needed = "report"
@@ -701,6 +742,111 @@ def check_draft(output: dict[str, Any], context: DraftContext) -> DraftContent:
     if needed not in kinds:
         raise ValueError(f"draft has no {needed} item")
     return content
+
+
+# A phase request names every planned requirement (FO-28; owner decision, 19 November
+# 2026). Before, the check compared kinds only: one item could stand for several planned
+# items, another artifact of an allowed kind for a planned one, and an optional item could
+# be left out, so the client was never asked for it.
+TOO_MANY_ITEMS = "the plan has more items than one draft can hold"
+
+
+def _title_key(title: str) -> str:
+    """A title as the request and the portal compare it: case and spacing aside, without a
+    closing full stop or the "(if available)" an optional item carries (planned_draft)."""
+    from ai_workforce_api.request_details import plain_title
+
+    text = plain_title(" ".join(title.split()).rstrip("."))
+    return " ".join(text.lower().split()).rstrip(".")
+
+
+def _period_key(text: str) -> str:
+    return " ".join(text.translate(_PLAIN_MARKS).lower().split()).rstrip(".").rstrip()
+
+
+def _names(system: str, text: str) -> bool:
+    """Whether a text names a system, as whole words in any case: a short name ("AD")
+    never matches inside another word."""
+    words = system.split()
+    if not words:
+        return False
+    pattern = r"(?<!\w)" + r"\s+".join(re.escape(word) for word in words) + r"(?!\w)"
+    return re.search(pattern, text, re.IGNORECASE) is not None
+
+
+def _planned_texts(item: PlannedItem) -> list[str]:
+    """What a planned item asks for: a standard's item by its parts (its labels and what is
+    not sufficient are the audit team's, not part of the ask), any other by its wording."""
+    from ai_workforce_api.evidence_planning import suite_wording
+
+    wording = suite_wording(item.description)
+    if wording is None:
+        return [item.title, item.description]
+    return [
+        item.title,
+        wording.period,
+        *wording.include,
+        wording.completeness,
+        *wording.alternatives,
+        wording.note,
+    ]
+
+
+def _draft_texts(item: DraftItem) -> list[str]:
+    return [
+        item.title,
+        item.detail,
+        item.period,
+        item.format,
+        item.parameters,
+        item.completeness,
+        *item.fields,
+        *item.alternatives,
+    ]
+
+
+def _plural(count: int, word: str) -> str:
+    return f"{count} {word}{'' if count == 1 else 's'}"
+
+
+def _check_paired(content: DraftContent, context: DraftContext) -> None:
+    """Each REQUESTED requirement as its own item, in the plan's order (the order the prompt
+    gives and the email numbers), under its own title (the portal files an upload for an
+    item by that title, evidence_portal._item_requirement), of a kind it allows, with its
+    period and the systems it names. Nothing is matched loosely: a draft that drops,
+    merges, adds, reorders or substitutes an item is rejected, and the plan's own wording
+    is used instead. The messages are short and by number, as the note is cut to 200
+    characters and read by the audit team."""
+    planned = context.planned
+    keys = [_title_key(item.title) for item in planned]
+    if len(set(keys)) < len(keys):
+        # Two items the plan does not tell apart cannot be paired: fail closed.
+        raise ValueError("the plan has two items with the same title")
+    if len(content.items) != len(planned):
+        raise ValueError(
+            f"draft has {_plural(len(content.items), 'item')} for "
+            f"{_plural(len(planned), 'planned item')}"
+        )
+    for number, (item, plan, key) in enumerate(
+        zip(content.items, planned, keys, strict=True), start=1
+    ):
+        if _title_key(item.title) != key:
+            raise ValueError(f"draft item {number} is not planned item {number}")
+        allowed = frozenset().union(
+            *(CATEGORY_KINDS.get(category, frozenset()) for category in plan.categories)
+        )
+        if item.kind not in allowed:
+            raise ValueError(f"draft item {number} is the wrong kind for planned item {number}")
+        # A draft's period holds 200 characters, as the plan's own wording does.
+        period = _period_key(plan.period_label[:200])
+        if period and period not in _period_key(item.period):
+            raise ValueError(f"draft item {number} changes the planned period")
+        asked = _draft_texts(item)
+        for system in context.applications:
+            if any(_names(system, text) for text in _planned_texts(plan)) and not any(
+                _names(system, text) for text in asked
+            ):
+                raise ValueError(f"draft item {number} leaves out its planned system")
 
 
 _DETAIL_ENTRY = re.compile(r"^(?:\d{1,2}[.)]|[-•*])\s+(\S.*)$")
@@ -788,6 +934,52 @@ def draft_runner(settings: Settings, provider: ModelProvider | None = None) -> D
 # made inert (prompt_data.neutral); the wording is as /2.
 PROMPT_VERSION = "evidence-coordinator/3"
 
+# What a draft that was not written says (pbc_drafts.note), and why it was not.
+UNPHASED = "The request carries planned evidence without a testing phase; its wording stays."
+TOO_MANY = (
+    "The plan has more items than one drafted request can hold; the request keeps its "
+    "current wording."
+)
+REPLANNED = "The planned evidence changed while the request was drafted; redraft it."
+PROMPT_TOO_SHORT = (
+    "The planned items are too long for one model call; the reviewed rules drafted the request."
+)
+
+
+def _unphased(connection: psycopg.Connection[Any] | psycopg.Cursor[Any], request_id: UUID) -> bool:
+    """Whether a request carries REQUESTED requirements but no testing phase: a sample
+    request (control_tests._draft_sample_request), whose wording names the selected samples.
+    A draft reads it as a request from before planning and would ask for a population
+    instead, so it is never drafted. A plain read: no lock is taken on the requirements."""
+    row = connection.execute(
+        """
+        SELECT r.testing_phase IS NULL AND EXISTS (
+            SELECT 1 FROM evidence_requirements e
+            WHERE e.pbc_request_id = r.id AND e.status = 'REQUESTED'
+        )
+        FROM pbc_requests r WHERE r.id = %s
+        """,
+        (request_id,),
+    ).fetchone()
+    return row is not None and bool(row[0])
+
+
+def _held(connection: psycopg.Connection[Any], draft_id: UUID, note: str) -> str:
+    """A claimed draft that writes nothing: the request keeps its wording, and the draft
+    says why."""
+    with transaction(connection) as cursor:
+        cursor.execute(
+            """
+            UPDATE pbc_drafts
+            SET status = 'SKIPPED', source = NULL, content = NULL, model_call_id = NULL,
+                note = %s, lease_until = NULL, version = version + 1,
+                updated_at = clock_timestamp()
+            WHERE id = %s
+            """,
+            (note[:200], draft_id),
+        )
+    return "SKIPPED"
+
 
 def run_draft(
     connection: psycopg.Connection[Any],
@@ -826,17 +1018,27 @@ def run_draft(
         return "SKIPPED"
     organization_id, project_id, request_id, control_id, requester = claimed
     started_wording = None if started is None else str(started[0])
+    if _unphased(connection, request_id):
+        # A sample request: its wording names the selected samples, which no draft holds.
+        return _held(connection, draft_id, UNPHASED)
     context = with_understanding(
         connection,
         with_plan(connection, load_context(connection, project_id, control_id), request_id),
         control_id,
     )
+    if len(context.planned) > MAX_ITEMS:
+        # No draft holds every item, the plan's own included: the wording is not replaced
+        # by one that leaves items out.
+        return _held(connection, draft_id, TOO_MANY)
     content: DraftContent | None = None
     source = "RULES"
-    note = "No model is configured." if provider is None else ""
+    # A prompt cut short loses the last planned items, and a draft without them is
+    # rejected: the rules word the request without paying for that call.
+    whole = not context.planned or prompt_holds_the_plan(context)
+    note = "No model is configured." if provider is None else "" if whole else PROMPT_TOO_SHORT
     call_id: UUID | None = None
     agent_instance: UUID | None = None
-    if provider is not None:
+    if provider is not None and whole:
         agent_instance = agent_actor(connection, project_id, "evidence-coordinator")
         caller = AgentCaller(
             connection,
@@ -887,28 +1089,47 @@ def run_draft(
     text = render(content)
     with transaction(connection) as cursor:
         updated = cursor.execute(
-            """
+            f"""
             UPDATE pbc_requests
             SET evidence_description = CASE WHEN %s THEN evidence_description ELSE %s END,
                 version = version + 1, updated_at = clock_timestamp()
             WHERE id = %s AND project_id = %s AND status = 'DRAFT'
               AND evidence_description IS NOT DISTINCT FROM %s
+              AND ARRAY(
+                  SELECT e.id FROM evidence_requirements e
+                  WHERE e.pbc_request_id = pbc_requests.id AND e.status = 'REQUESTED'
+                  ORDER BY {_PLANNED_ORDER}
+              ) = %s::uuid[]
             RETURNING id
             """,
-            # A draft holds every planned item, so the drafted wording always applies.
-            (False, text, request_id, project_id, started_wording),
+            # A draft holds every planned item, so the drafted wording always applies, while
+            # the request carries the requirements it was checked against. Plain reads of
+            # the requirements: no lock is taken on them after the request's row.
+            (
+                False,
+                text,
+                request_id,
+                project_id,
+                started_wording,
+                list(context.requirement_ids),
+            ),
         ).fetchone()
         final = "DRAFTED" if updated is not None else "SKIPPED"
         skipped = "The request is no longer a draft."
         if updated is None:
             changed = cursor.execute(
-                "SELECT 1 FROM pbc_requests WHERE id = %s AND status = 'DRAFT'", (request_id,)
+                "SELECT evidence_description FROM pbc_requests WHERE id = %s AND status = 'DRAFT'",
+                (request_id,),
             ).fetchone()
             if changed is not None:
                 # Still a draft, so it was reworded while the agent drafted: before, the
                 # agent's wording overwrote that wording silently (bug hunt, 9 November
                 # 2026). It stays, and the record says why the draft was not used.
                 skipped = "The request was reworded while it was drafted; that wording stays."
+                if (None if changed[0] is None else str(changed[0])) == started_wording:
+                    # The wording is as it was, so its planned items changed: the draft was
+                    # checked against a set the request no longer carries.
+                    skipped = REPLANNED
                 cursor.execute(
                     """
                     INSERT INTO audit_events (
@@ -1070,15 +1291,16 @@ def with_plan(
         "SELECT testing_phase FROM pbc_requests WHERE id = %s", (request_id,)
     ).fetchone()
     rows = connection.execute(
-        """
-        SELECT title, description, categories, necessity, period_label
+        f"""
+        SELECT title, description, categories, necessity, period_label, id
         FROM evidence_requirements
         WHERE pbc_request_id = %s AND status = 'REQUESTED'
-        ORDER BY CASE necessity WHEN 'REQUIRED' THEN 0 WHEN 'CONDITIONAL' THEN 1 ELSE 2 END,
-                 created_at, requirement_key
+        ORDER BY {_PLANNED_ORDER}
         """,
         (request_id,),
     ).fetchall()
+    # An unplanned context carries no requirement: a draft of it is written only while the
+    # request carries none (run_draft).
     if not rows or phase is None or phase[0] is None:
         return context
     from ai_workforce_api.evidence_planning import suite_wording
@@ -1102,6 +1324,7 @@ def with_plan(
             )
             for r in rows
         ),
+        requirement_ids=tuple(UUID(str(r[5])) for r in rows),
     )
 
 
@@ -2041,6 +2264,12 @@ def _redraft(
             raise DraftState("request is no longer a draft")
         if found[1] is None:
             raise DraftState("request has no control to draft from")
+        if _unphased(cursor, request_id):
+            # A sample request: a redraft would replace its selected samples with a
+            # population (FO-28).
+            raise DraftState(
+                "request carries planned evidence without a testing phase and cannot be redrafted"
+            )
         row = cursor.execute(
             f"""
             INSERT INTO pbc_drafts (
