@@ -987,7 +987,7 @@ def _step(control: ControlRow, phases: Sequence[PhaseJourney]) -> tuple[Step, Ph
     in_hand = round_in_hand(control.not_final)
     if in_hand is not None and not (control.final or not control.not_final):
         return "TEST", in_hand.phase
-    if control.conclusion != "NOT_CONCLUDED":
+    if opinion_reached(control):
         # The opinion is reached: Done when final, else the first thing keeping it open
         # (the register's stage follows the same reason: workspace.progress_of).
         if control.final or not control.not_final:
@@ -1012,6 +1012,19 @@ def _step(control: ControlRow, phases: Sequence[PhaseJourney]) -> tuple[Step, Ph
         return "CONCLUDE", None
     _rank, _tie, step, phase = max(candidates)
     return step, phase
+
+
+def opinion_reached(control: ControlRow) -> bool:
+    """Whether the review is signed and the opinion reached: a verdict shows, or the
+    review is signed with reasons holding the verdict (a D&I sign-off out of date, nothing
+    proposed). Review note R1, 19 November 2026: before, a signed control whose verdict
+    the register holds (ST-2) fell through to the pre-review steps and read "Independent
+    review" for a review already signed. Review note R4, 19 November 2026: the journey's
+    step, the register's step and its stage all ask this one question, so a signed control
+    whose verdict is held no longer reads Conclude in the journey alone."""
+    return control.conclusion != "NOT_CONCLUDED" or (
+        control.review_left == "SIGNED" and bool(control.not_final)
+    )
 
 
 def round_in_hand(reasons: Sequence[NotFinal]) -> NotFinal | None:

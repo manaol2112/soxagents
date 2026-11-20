@@ -468,6 +468,45 @@ def test_the_journey_agrees_with_the_register_wherever_it_does_not_report_a_conf
             ),
             _phases(rollforward="NOT_APPLICABLE", complete=(True, True, False)),
         ),
+        # Review note R4, 19 November 2026: a signed review whose verdict is held by its
+        # reasons. Before, the journey read the verdict alone and put these at Conclude
+        # while the register read them at the reason's step (one screen, one story).
+        (
+            _settled(
+                REVIEWED,
+                sheet_status="SIGNED_OFF",
+                review_status="SIGNED_OFF",
+                review_left="SIGNED",
+                conclusion="NOT_CONCLUDED",
+                not_final=[
+                    NotFinal(
+                        kind="DESIGN",
+                        text="D&I conclusion no longer holds: a design deficiency was logged "
+                        "after the sign-off",
+                        step="REVIEW",
+                        phase="DESIGN",
+                    )
+                ],
+            ),
+            _phases(rollforward="NOT_APPLICABLE", complete=(True, True, False)),
+        ),
+        (
+            _settled(
+                REVIEWED,
+                review_status="SIGNED_OFF",
+                review_left="SIGNED",
+                conclusion="NOT_CONCLUDED",
+                not_final=[
+                    NotFinal(
+                        kind="TESTING",
+                        text="Interim testing outstanding",
+                        step="REQUEST",
+                        phase="INTERIM",
+                    )
+                ],
+            ),
+            _phases(rollforward="NOT_APPLICABLE", complete=(True, False, False)),
+        ),
     ]
     for row, phases in cases:
         journey = journey_of(row, phases)

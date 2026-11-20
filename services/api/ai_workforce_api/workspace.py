@@ -44,6 +44,7 @@ from ai_workforce_api.control_journey import (
     finality_facts,
     journey_of,
     leading_reason,
+    opinion_reached,
     round_in_hand,
 )
 from ai_workforce_api.control_reviews import (
@@ -1749,17 +1750,6 @@ class Step:
     drafted: bool = False
 
 
-def _opinion_reached(control: ControlRow) -> bool:
-    """Whether the review is signed and the opinion reached: a verdict shows, or the
-    review is signed with reasons holding the verdict (a D&I sign-off out of date, nothing
-    proposed). Review note R1, 19 November 2026: before, a signed control whose verdict
-    the register holds (ST-2) fell through to the pre-review steps and read "Independent
-    review" for a review already signed."""
-    return control.conclusion != "NOT_CONCLUDED" or (
-        control.review_left == "SIGNED" and bool(control.not_final)
-    )
-
-
 def step_of(control: ControlRow, stages: StageBody, now: datetime | None = None) -> Step:
     """The control's next step from its records, and whose it is."""
     moment = now or datetime.now(UTC)
@@ -1771,7 +1761,7 @@ def step_of(control: ControlRow, stages: StageBody, now: datetime | None = None)
         # review (docs/workflow-integrity.md §2: interim review is no prerequisite).
         word = "retest" if in_hand.phase == "RETEST" else "roll-forward"
         return Step(f"Finish the {word} testing and sign it off", "PREPARER")
-    if _opinion_reached(control):
+    if opinion_reached(control):
         # The opinion is reached. Concluded only when final; otherwise the first thing
         # keeping it open is the step (docs/workflow-integrity.md §2).
         if control.final or not control.not_final:
@@ -2026,7 +2016,7 @@ def progress_of(control: ControlRow, stages: StageBody, step: Step) -> Progress:
         return "TESTING_REOPENED"
     if round_in_hand(control.not_final) is not None and not control.final:
         return "READY_FOR_TESTING"
-    if _opinion_reached(control):
+    if opinion_reached(control):
         return _PROGRESS_FOR_STEP[leading_reason(control.not_final).step]
     if control.review_left is not None and control.review_left != "SIGNED":
         return (
