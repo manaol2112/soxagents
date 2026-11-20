@@ -885,6 +885,9 @@ export type RcmImport = {
     skippedCount: number;
     warnings: string[];
     problems: string[];
+    /** The problems include rows that must be fixed in the file itself: no mapping
+     * choice settles them. */
+    fixInFile: boolean;
     controls: Array<{
       row: number;
       controlRef: string;
@@ -1471,6 +1474,7 @@ export function parseImport(value: unknown): RcmImport | null {
       skippedCount: Number(preview.skipped_count ?? 0),
       warnings: strings(preview.warnings),
       problems: strings(preview.problems),
+      fixInFile: preview.fix_in_file === true,
       controls: records(preview.controls).map((item) => ({
         row: Number(item.row ?? 0),
         controlRef: str(item.control_ref),
@@ -2367,21 +2371,248 @@ export function initialSelection(
   );
 }
 
-/** The controls a selection leaves out although the agent recommended them: each needs
- * a reason before the selection is saved. */
+/** What decides whether leaving a control out of a system needs a reason. */
+export type ReasonFacts = {
+  hosting: string | null;
+  socExpected: boolean | null;
+  factsConfirmed: boolean;
+  /** SOC reports on file for the system, in any status. */
+  socReports: number;
+  /** The system has had a review (the agent's or the reviewed rules'). */
+  reviewed: boolean;
+};
+
+export function reasonFacts(system: SetupSystem): ReasonFacts {
+  return {
+    hosting: system.hosting,
+    socExpected: system.socExpected,
+    factsConfirmed: system.factsConfirmed,
+    socReports: system.socReports.length,
+    reviewed: (system.assessment?.reviewedAt ?? null) !== null,
+  };
+}
+
+/** No SOC report can be relied on: the team itself confirmed the system runs on premises
+ * with none expected, and none is on file. An agent's assumption never waives a reason
+ * (system_applicability.soc_waived; tests/fixtures/scope-reasons/cases.json). */
+export function socWaived(facts: ReasonFacts): boolean {
+  return (
+    facts.factsConfirmed &&
+    facts.hosting === "ON_PREMISES" &&
+    facts.socExpected === false &&
+    facts.socReports === 0
+  );
+}
+
+/** Whether leaving out a control with this recommendation needs a reason (owner decision,
+ * 19 November 2026; system_applicability.reason_needed). The assessment does not say
+ * whether an exclusion rests on a SOC report, so every assessed control is asked, and
+ * every candidate once the system has a review, unless no SOC report can be relied on. */
+export function reasonNeeded(
+  status: Applicability | null,
+  reviewed: boolean,
+  waived: boolean,
+): boolean {
+  if (status === "RECOMMENDED") {
+    return true;
+  }
+  if (waived) {
+    return false;
+  }
+  return status !== null || reviewed;
+}
+
+/** A reason the API accepts: three characters or more once spacing is collapsed. */
+export function isReason(text: string | undefined): boolean {
+  return (text ?? "").split(/\s+/).join(" ").trim().length >= 3;
+}
+
+/** The controls a selection leaves out that need a reason before it is saved: those the
+ * agent recommended, those the reason rule asks for (reasonNeeded), and in-scope controls
+ * with work on record that it takes out (`onRecord`, from the scope impact). The facts are
+ * required, so no caller can ask less than the API does. */
 export function needsReason(
   candidates: readonly Candidate[],
   selected: Readonly<Record<string, boolean>>,
   notes: Readonly<Record<string, string>>,
+  facts: ReasonFacts,
+  onRecord: ReadonlySet<string> = new Set(),
 ): string[] {
+  const waived = socWaived(facts);
   return candidates
     .filter(
       (item) =>
-        item.status === "RECOMMENDED" &&
         selected[item.controlRef] !== true &&
-        (notes[item.controlRef] ?? "").trim() === "",
+        !isReason(notes[item.controlRef]) &&
+        (reasonNeeded(item.status, facts.reviewed, waived) ||
+          onRecord.has(item.controlRef)),
     )
     .map((item) => item.controlRef);
+}
+
+/** The reasons already on record, for the controls still left out: a save that sends
+ * them again keeps them. A control back in scope since starts with none. */
+export function initialNotes(
+  candidates: readonly Candidate[],
+): Record<string, string> {
+  return Object.fromEntries(
+    candidates
+      .filter(
+        (item) =>
+          item.decision === "NOT_SELECTED" &&
+          !item.inScope &&
+          item.decisionNote.trim() !== "",
+      )
+      .map((item) => [item.controlRef, item.decisionNote]),
+  );
+}
+
+/** Whether a SOC 1 report for the system has been read: one the agent finished reading
+ * that is a SOC 1 report (a SOC 2 report, or one still being read, is not). */
+export function hasReadSoc1(reports: readonly SocReport[]): boolean {
+  return reports.some(
+    (report) => report.status === "READ" && report.reportKind === "SOC1",
+  );
+}
+
+const SOC_AVAILABILITY: Record<SystemAssessment["socAvailability"], string> = {
+  STATED_AVAILABLE: "The vendor states it issues a SOC 1 report.",
+  NOT_FOUND: "No statement that the vendor issues a SOC 1 report was found.",
+  NOT_RESEARCHED:
+    "Whether the vendor issues a SOC 1 report was not researched.",
+};
+
+/** What the assessment says of whether the vendor issues a SOC 1 report; nothing once a
+ * SOC 1 report for the system has been read, which the screen shows instead (one screen,
+ * one story: never "not researched" above the report it read). */
+export function socAvailabilityLine(
+  availability: SystemAssessment["socAvailability"],
+  reports: readonly SocReport[],
+): string | null {
+  return hasReadSoc1(reports) ? null : SOC_AVAILABILITY[availability];
+}
+
+/** Reasons usually given for leaving controls out of a system: one is picked, or the
+ * team's own words are written instead (suggest, don't ask). A suggestion never claims
+ * more than the screen shows: reliance on a SOC 1 report is offered only once a SOC 1
+ * report for the system has been read; until then the reason says the controls are
+ * expected to be covered by one. */
+export function leftOutReasons(reports: readonly SocReport[]): string[] {
+  return [
+    hasReadSoc1(reports)
+      ? "Relied on the service organization's SOC 1 report"
+      : "Expected to be covered by the service organization's SOC 1 report",
+    "Not relevant to financial reporting",
+    "Covered by another control",
+  ];
+}
+
+/** A reason as the API stores it: spacing collapsed. */
+function reasonText(text: string | undefined): string {
+  return (text ?? "").split(/\s+/).join(" ").trim();
+}
+
+/** The reasons a selection still needs, as the Review step asks for them: each control
+ * the agent recommended on its own, every other one by its control area (in `order`, the
+ * Controls step's), one reason for the area. `notes` are the per-control reasons, and
+ * `areaNotes` the reason given for each area. The notes every control is saved with come
+ * back in `filled`; `complete` says whether the selection can be saved. */
+export function reasonPlan(
+  candidates: readonly Candidate[],
+  selected: Readonly<Record<string, boolean>>,
+  notes: Readonly<Record<string, string>>,
+  areaNotes: Readonly<Record<string, string>>,
+  facts: ReasonFacts,
+  onRecord: ReadonlySet<string>,
+  order: readonly string[],
+): {
+  recommended: string[];
+  areas: Array<{ domain: string; refs: string[]; valid: boolean }>;
+  filled: Record<string, string>;
+  complete: boolean;
+} {
+  const first = new Map<string, Candidate>();
+  for (const item of candidates) {
+    if (!first.has(item.controlRef)) {
+      first.set(item.controlRef, item);
+    }
+  }
+  const unexplained = [
+    ...new Set(needsReason(candidates, selected, notes, facts, onRecord)),
+  ];
+  const recommended = unexplained.filter(
+    (ref) => first.get(ref)?.status === "RECOMMENDED",
+  );
+  const byArea = new Map<string, string[]>();
+  for (const ref of unexplained) {
+    const domain = first.get(ref)?.domain ?? "";
+    if (first.get(ref)?.status !== "RECOMMENDED") {
+      byArea.set(domain, [...(byArea.get(domain) ?? []), ref]);
+    }
+  }
+  const known = [
+    ...order,
+    ...[...byArea.keys()].filter((key) => !order.includes(key)),
+  ];
+  const areas = known
+    .filter((domain) => byArea.has(domain))
+    .map((domain) => ({
+      domain,
+      refs: byArea.get(domain) ?? [],
+      valid: isReason(areaNotes[domain]),
+    }));
+  const filled: Record<string, string> = {};
+  for (const [ref, note] of Object.entries(notes)) {
+    filled[ref] = reasonText(note);
+  }
+  for (const area of areas) {
+    if (area.valid) {
+      for (const ref of area.refs) {
+        filled[ref] = reasonText(areaNotes[area.domain]);
+      }
+    }
+  }
+  return {
+    recommended,
+    areas,
+    filled,
+    complete: recommended.length === 0 && areas.every((area) => area.valid),
+  };
+}
+
+/** The reasons on record for the controls left out that are not asked again, one entry
+ * per area and reason, in `order`: what the Review step shows read-only. The agent's
+ * recommended controls are left out: each keeps its own field. */
+export function recordedReasons(
+  candidates: readonly Candidate[],
+  selected: Readonly<Record<string, boolean>>,
+  notes: Readonly<Record<string, string>>,
+  order: readonly string[],
+): Array<{ domain: string; note: string; refs: string[] }> {
+  const groups = new Map<
+    string,
+    { domain: string; note: string; refs: string[] }
+  >();
+  const seen = new Set<string>();
+  for (const item of candidates) {
+    const note = reasonText(notes[item.controlRef]);
+    if (
+      seen.has(item.controlRef) ||
+      selected[item.controlRef] === true ||
+      item.status === "RECOMMENDED" ||
+      !isReason(note)
+    ) {
+      continue;
+    }
+    seen.add(item.controlRef);
+    const key = `${item.domain}\u0000${note}`;
+    const group = groups.get(key) ?? { domain: item.domain, note, refs: [] };
+    group.refs.push(item.controlRef);
+    groups.set(key, group);
+  }
+  const rank = (domain: string) =>
+    order.includes(domain) ? order.indexOf(domain) : order.length;
+  return [...groups.values()].sort((a, b) => rank(a.domain) - rank(b.domain));
 }
 
 export type WizardWrite =
@@ -2879,6 +3110,10 @@ export function wizardProblem(
   const known: Record<string, string> = {
     "say why a recommended control is not selected":
       "Say why each recommended control you leave out is not selected.",
+    "say why a control left out is not selected":
+      "Say why the controls you leave out are not selected.",
+    "say why: this has work on record":
+      "Work is on record for a control this selection takes out of scope. Say why it leaves scope.",
     "unknown control": "A control changed. Refresh and try again.",
     "system changed": "This system changed. Refresh and try again.",
     "a detail cannot hold a credential":
@@ -3893,11 +4128,16 @@ export function setupWrite(
     }
     const ids = [...new Set(multi.recommendation ?? [])];
     const action = fields.action ?? "";
+    // Why the SOC report is relied on instead of testing, or a recommended control is
+    // not added: the person's words, sent only when given (the API asks for them).
+    const reason = (fields.reason ?? "").split(/\s+/).join(" ").trim();
     if (
       ids.length === 0 ||
       ids.length > 60 ||
       !ids.every((id) => UUID.test(id)) ||
-      (action !== "ACCEPT" && action !== "DISMISS" && action !== "KEEP")
+      (action !== "ACCEPT" && action !== "DISMISS" && action !== "KEEP") ||
+      reason.length > 500 ||
+      SECRET.test(reason)
     ) {
       return { error: "invalid" };
     }
@@ -3906,7 +4146,7 @@ export function setupWrite(
       step: "controls",
       method: "POST",
       path: `${path}/recommendations/decide`,
-      body: { ids, action },
+      body: reason === "" ? { ids, action } : { ids, action, reason },
     };
   }
   if (intent === "control-scope") {

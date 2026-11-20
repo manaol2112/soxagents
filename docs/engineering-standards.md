@@ -138,5 +138,37 @@ contractual or regulatory requirement to version every change of input would ove
 | The API paths the web spells out exist in the API | `services/api/tests/test_web_calls_api_routes.py` (paths built elsewhere are counted, not followed) |
 | Both background workers offer the same jobs, and every job looked up by name exists | `services/api/tests/test_scheduler_parity.py` |
 | Every request status change follows the transition table or a named service move | `services/api/tests/test_request_status_moves.py` |
-| No secret in any commit | `.github/workflows/security.yml` (gitleaks over the whole history; checked false positives in `.gitleaksignore`) |
+| No secret in any commit | `.github/workflows/security.yml` (gitleaks: a pull request's own commits on each pull request, every commit of every branch on each push and weekly; checked false positives in `.gitleaksignore`) |
 | No known advisory in a locked dependency | `.github/workflows/security.yml` (`pnpm audit`, `pip-audit`), on lockfile changes and weekly; updates proposed by `.github/dependabot.yml` |
+| Every audit invariant is held by a critical-tier test, and every open part names its increment | `services/api/tests/test_audit_invariants.py` |
+| Every model entry point fails closed against the hostile model | `services/api/tests/test_model_contract.py` |
+
+## 11. Fail closed
+
+Decided by the product owner on 19 November 2026 (the process change: audit rules,
+fail-closed, a hostile test model).
+
+A step that can be incomplete is complete only when it shows it is. When a model call, a
+check, a comparison, a reviewer or a refresh fails, times out, is cut off, is malformed, or
+returns nothing or only part of what it was asked, the result is the open state: UNABLE or
+REVIEW for a test result, CANNOT_TELL or UNSETTLED for a D&I element, NOT_REVIEWED for a
+review, still due for a refresh. The earlier state is kept only while its basis is
+unchanged: when the rerun was triggered by a change to its basis (evidence replaced or
+withdrawn, a placeholder filled, an attribute or criterion reworded), the earlier favourable
+result is open, as stale, until a run on the current basis succeeds. It is never a pass, a
+covered or verified item, a completed review, "nothing to add" or "nothing due".
+
+- Count what came back against what was asked. Every in-scope item has its own verdict, or
+  the whole is not reviewed. An empty list, a missing key or an id that was not asked about
+  is not an answer.
+- A fallback, a default or a rules-only path never reports more than it checked, and never
+  clears a gate that the agent's work would have cleared.
+- Absence is not a finding either way: missing evidence is NOT_DEMONSTRATED or UNABLE,
+  never a pass and never an exception (docs/audit-invariants.md I3).
+- A later run that did less never undoes an earlier finding. A note, a flag or a due state
+  is withdrawn only by a run that covered the same item, or by a person.
+- Every model-facing entry point is shown to fail closed against
+  `services/api/tests/hostile_model.py` (`services/api/tests/test_model_contract.py`). A new
+  entry point joins that registry in the same change.
+- Reviewers ask of each new branch: what does it record when its input is empty, partial or
+  malformed?

@@ -155,13 +155,21 @@ def test_a_client_rcm_is_uploaded_mapped_and_imported_as_the_engagement_rcm(
         for _phase in ("DESIGN", "INTERIM")
     ]
     assert audit is not None
-    # No scan ran, so the systems came from the systems column.
+    # No scan ran, so the systems came from the systems column. Rewritten 19 November 2026
+    # (owner decision, scope integrity part A). Old: the five keys above only. New: the
+    # event also says where each control went (merged rows of one ID, controls spread to
+    # every in-scope system, controls with no system, unmatched systems), all empty for
+    # this RCM. Why: the import must leave the same record the preview showed (AS 1215).
     assert audit[0] == {
         "controls": 4,
         "mode": "REPLACE",
         "skipped_rows": 1,
         "new_applications": 2,
         "systems_source": None,
+        "merged_rows": {},
+        "spread": [],
+        "no_system": [],
+        "uncovered": [],
     }
 
 

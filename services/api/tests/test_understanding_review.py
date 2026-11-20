@@ -28,6 +28,7 @@ from uuid import UUID, uuid4
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
+from hostile_model import no_answer
 from support import Database, run_plan_through
 from test_attributes_follow_understanding import (
     _GRANT_RECORD,
@@ -129,6 +130,7 @@ def test_the_review_asks_before_any_attribute_is_drafted_and_answering_completes
     assert [row[:3] for row in _reviews(migrated, control)] == [(1, "UNDERSTANDING", "PENDING")]
     agents = _Agents(migrated, team, control)
     agents.specialist = lambda given: _asking(given, WHO_APPLIES, "PERFORMER")
+    agents.other = no_answer  # the interview writer's failure path: questions kept
     _run(migrated, control, agents)
     # Read on the questions asked, per attribute, with what each needs.
     [given] = agents.specialist_given
@@ -194,7 +196,12 @@ def test_the_review_asks_before_any_attribute_is_drafted_and_answering_completes
     answered = _answer(client, team, control, question, APPLIED_BY)
     assert answered["understanding_completed_at"] is None
     assert [row[:3] for row in _reviews(migrated, control)][-1] == (2, "UNDERSTANDING", "PENDING")
+    from set_review_answers import every_ok
+
     followed = _Agents(migrated, team, control)
+    # Rewritten 19 November 2026 (SOL defect 4): the set reviewer's answer is stated, a
+    # verdict on each attribute; the default empty one is now corrected and not used.
+    followed.review = every_ok
     _run(migrated, control, followed)
     assert [given["round"] for given in followed.specialist_given] == [2]
     assert _completed_at(migrated, control) is not None
@@ -225,6 +232,7 @@ def test_the_second_read_asks_only_follow_ups_of_its_questions_and_there_is_no_t
     _left_open(team, control, client, "wt-ac01-provisioning", "a contractor provisions it")
     agents = _Agents(migrated, team, control)
     agents.specialist = lambda given: _asking(given, WHO_APPLIES, "PERFORMER")
+    agents.other = no_answer  # the interview writer's failure path: questions kept
     _run(migrated, control, agents)
     [question] = _open_issues(migrated, control)
     _answer(client, team, control, question, "Other: a vendor applies them")
@@ -257,6 +265,7 @@ def test_the_second_read_asks_only_follow_ups_of_its_questions_and_there_is_no_t
 
     reading = _Agents(migrated, team, control)
     reading.specialist = second
+    reading.other = no_answer  # the interview writer's failure path: questions kept
     _run(migrated, control, reading)
     # Only the follow-up of its own question is asked; the rest are assumptions.
     [follow_up] = _open_issues(migrated, control)
@@ -298,6 +307,7 @@ def test_not_known_closes_the_question_never_as_an_answer_and_assumes_on_its_att
     _left_open(team, control, client, "wt-ac01-provisioning", "a contractor provisions it")
     agents = _Agents(migrated, team, control)
     agents.specialist = lambda given: _asking(given, WHO_APPLIES, "PERFORMER")
+    agents.other = no_answer  # the interview writer's failure path: questions kept
     _run(migrated, control, agents)
     [question] = _open_issues(migrated, control)
     path = f"{_path(team, control)}/issues/{question[0]}/not-known"
@@ -742,6 +752,7 @@ def test_the_replay_of_itgc_cm_06_never_reopens_drafts_no_narrative_and_never_wa
     agents = _Agents(migrated, team, control)
     agents.issues = [_GRANT_RECORD]
     agents.specialist = lambda given: _asking(given, WHO_APPLIES, "PERFORMER")
+    agents.other = no_answer  # the interview writer's failure path: questions kept
     _run(migrated, control, agents)
     [question] = _open_issues(migrated, control)
     assert [who for who in agents.calls if who != "other"] == []
@@ -880,6 +891,7 @@ def test_a_read_due_while_the_plain_run_is_queued_is_made_by_that_run(
     assert _reviews(migrated, control) == []
     agents = _Agents(migrated, team, control)
     agents.specialist = lambda given: _asking(given, WHO_APPLIES, "PERFORMER")
+    agents.other = no_answer  # the interview writer's failure path: questions kept
     _run(migrated, control, agents)
     # The plain run made the read that fell due: the question is asked, nothing is left
     # "Checking..." with no read.
@@ -1642,3 +1654,114 @@ def test_follow_never_hands_back_a_run_out_of_attempts_under_an_expired_lease(
     again = client.post(f"{_path(team, control)}/understanding/review/follow")
     assert again.status_code == 200 and len(_reviews(migrated, control)) == 1
     assert len(scheduler.plans) == handed
+
+
+# SOL defect 1 (19 November 2026): a limited update follows what was saved while it was
+# queued or at work (I10)
+
+
+def _limited_update_queued(
+    migrated: Database, slug: str
+) -> tuple[dict[str, Any], str, TestClient, list[str]]:
+    """A completed control with the one limited update an informing answer starts, queued."""
+    team, control, _scheduler, client = _ready(migrated, slug)
+    _answer_required(migrated, team, control, client)
+    _run(migrated, control, _Agents(migrated, team, control))
+    assert _completed_at(migrated, control) is not None
+    definitions = {
+        str(row[0])
+        for row in _rows(
+            migrated,
+            "SELECT definition_key FROM control_attributes WHERE engagement_control_id = %s "
+            "AND status = 'APPROVED' AND definition_key IS NOT NULL AND code IS NOT NULL",
+            UUID(control),
+        )
+    }
+    parents = {item.when[0] for item in walkthrough_questions._all() if item.when is not None}
+    with connect(migrated.url) as connection:
+        rows = answers_of(connection, UUID(control))
+        asked = [item for item in questions_asked(connection, UUID(control), rows)
+                 if item.key in rows and item.when is None and item.key not in parents
+                 and not rows[item.key].not_applicable]  # fmt: skip
+    informing = next(item for item in asked if any(need in definitions for need in item.informs))
+    saved = client.put(
+        f"{_path(team, control)}/walkthrough-answers",
+        json={"answers": {informing.key: {"value": _another(informing, rows[informing.key].value),
+                                          "not_applicable": False}}},
+    )  # fmt: skip
+    assert saved.status_code == 200, saved.text
+    [queued] = _rows(
+        migrated,
+        "SELECT run_status, run_codes FROM evidence_plans WHERE engagement_control_id = %s",
+        UUID(control),
+    )
+    assert queued[0] == "PENDING" and queued[1]
+    return team, control, client, [str(code) for code in queued[1]]
+
+
+def _only_of_each_pass(agents: _Agents) -> list[list[str] | None]:
+    """What each attribute agent's call was told it may change (None: the whole set)."""
+    import json
+
+    found: list[list[str] | None] = []
+    for prompt in agents.prompts:
+        if not prompt.startswith("Propose test attributes for this control."):
+            continue
+        package = json.loads(
+            prompt.split("<control_context>\n", 1)[1].split("\n</control_context>", 1)[0]
+        )
+        found.append(package.get("only_attributes"))
+    return found
+
+
+def _value_saved(migrated: Database, control: str) -> None:
+    """A client value of the control saved now: a change that is not a walkthrough answer,
+    so the whole set follows it."""
+    with connect(migrated.url) as connection:
+        changed = connection.execute(
+            "UPDATE control_parameters SET updated_at = clock_timestamp() "
+            "WHERE engagement_control_id = %s",
+            (UUID(control),),
+        ).rowcount
+        connection.commit()
+    assert changed > 0
+
+
+def test_an_answer_saved_while_the_limited_update_is_queued_is_followed(
+    migrated: Database,
+) -> None:
+    """Old: the update's attributes were fixed when it was queued, so a value saved while it
+    waited was never followed, and its read was recorded as made. New: the update widens to
+    what changed after it was queued, here the whole set; with nothing saved meanwhile it
+    stays as limited as it was queued."""
+    team, control, _client, codes = _limited_update_queued(migrated, "ur-sol1-queued")
+    limited = _Agents(migrated, team, control)
+    _run(migrated, control, limited)
+    assert _only_of_each_pass(limited) == [codes]
+    # Queued again by another informing answer, and a value saved while it waits.
+    team2, control2, _client2, _codes2 = _limited_update_queued(migrated, "ur-sol1-queued-2")
+    _value_saved(migrated, control2)
+    widened = _Agents(migrated, team2, control2)
+    _run(migrated, control2, widened)
+    assert _only_of_each_pass(widened) == [None]
+
+
+def test_an_answer_saved_while_the_limited_update_works_is_followed(migrated: Database) -> None:
+    """Old: the second pass, run because a save landed while the agents worked, kept the
+    codes it was queued with ([['A2'], ['A2']]). New: it widens to what was saved."""
+    team, control, _client, codes = _limited_update_queued(migrated, "ur-sol1-works")
+    agents = _Agents(migrated, team, control)
+    agents.on_plan = lambda: _value_saved(migrated, control)
+    _run(migrated, control, agents)
+    assert _only_of_each_pass(agents) == [codes, None]
+
+
+def test_a_limited_update_is_bounded_by_when_it_was_queued() -> None:
+    """The pure part: what a limited update widens to (evidence_plans.widened)."""
+    from ai_workforce_api.evidence_plans import widened
+
+    assert widened(("A2",), None) == ()
+    assert widened(("A2",), []) == ("A2",)
+    assert widened(("A2",), ["A3", "A2"]) == ("A2", "A3")
+    assert widened((review.NO_ATTRIBUTE,), ["A3"]) == ("A3",)
+    assert widened((review.NO_ATTRIBUTE,), [review.NO_ATTRIBUTE]) == (review.NO_ATTRIBUTE,)

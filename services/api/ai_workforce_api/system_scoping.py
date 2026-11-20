@@ -23,6 +23,7 @@ from psycopg.types.json import Json
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
+from ai_workforce_api.actions import contains_secret
 from ai_workforce_api.adapted_controls import (
     adapted_ref,
     restated,
@@ -57,6 +58,7 @@ from ai_workforce_api.onboarding import (
 )
 from ai_workforce_api.scope_changes import reconcile_scope
 from ai_workforce_api.settings import Settings
+from ai_workforce_api.system_applicability import MIN_REASON
 from ai_workforce_api.system_review_queue import (
     LEASE_MINUTES,
     MAX_ATTEMPTS,
@@ -660,6 +662,10 @@ class Decision(BaseModel):
     ids: list[UUID] = Field(min_length=1, max_length=60)
     # KEEP undoes reliance on the SOC report: the control comes back into scope.
     action: Literal["ACCEPT", "DISMISS", "KEEP"]
+    # A person's reason (owner decision, 19 November 2026): why the SOC report is relied on
+    # instead of testing (ACCEPT on an exclusion), or why a recommended control is not
+    # added (DISMISS on an inclusion). Never taken from the recommendation's rationale.
+    reason: str = Field(default="", max_length=500)
 
 
 def set_facts(
@@ -746,6 +752,28 @@ def decide(
             raise OnboardingState("recommendations changed")
         if body.action == "KEEP" and any(str(row[1]) != "EXCLUDE" for row in rows):
             raise OnboardingState("recommendations changed")
+        # Relying on the SOC report instead of testing takes controls out of scope: a
+        # person says why, before launch or after, and after launch the impact of any work
+        # on record goes in the audit trail with it (the rule of every other route,
+        # onboarding._reason_for). Declining a recommended control needs a reason as the
+        # wizard does. The recommendation's own rationale is never taken as the reason.
+        why = " ".join(body.reason.split())
+        if contains_secret({"reason": why}):
+            raise ValueError("reason holds a secret")
+        recorded: dict[str, Any] = {}
+        if body.action == "ACCEPT" and any(str(row[1]) == "EXCLUDE" for row in rows):
+            if len(why) < MIN_REASON:
+                raise OnboardingState("say why the SOC report is relied on instead of testing")
+            excluding = [
+                UUID(str(row[2])) for row in rows if str(row[1]) == "EXCLUDE" and row[2] is not None
+            ]
+            recorded = _reason_for(connection, project_id, excluding, why)
+        if (
+            body.action == "DISMISS"
+            and any(str(row[1]) == "INCLUDE" for row in rows)
+            and len(why) < MIN_REASON
+        ):
+            raise OnboardingState("say why a recommended control is not selected")
         for rec_id, kind, control_id, library_key in rows:
             if body.action == "KEEP":
                 # Tested after all: the control comes back, and the reliance is set aside
@@ -773,7 +801,8 @@ def decide(
             )
         _audit(
             cursor, organization_id, project_id, principal.id, "onboarding.system_scoping",
-            {"action": body.action, "count": len(rows)},
+            {"action": body.action, "count": len(rows), **({"reason": why} if why else {}),
+             **recorded},
         )  # fmt: skip
     reconcile_scope(connection, organization_id, project_id, principal.id)
     return _snapshot(connection, organization_id, project_id)

@@ -1595,3 +1595,113 @@ def test_the_process_map_agents_assumptions_carry_the_codes_its_findings_name() 
     assert "from_issue(item, codes) for item, codes in coded" in source
     # Old "process-map/3"; new "process-map/4" (18 November 2026, owner-approved S1).
     assert '"process-map/4"' in source
+
+
+# SOL attribute fixes (19 November 2026): the pure rules
+
+
+def test_a_set_review_must_give_a_verdict_on_every_attribute_it_was_given() -> None:
+    """SOL defect 4 (attribute_review.covering): a verdict on each id given, a DUPLICATE
+    counting; the reason names the ids only, never an attribute's words, and reads as a
+    rule, not as a cut-off or a misquote (agent_answers.plain_problem)."""
+    from ai_workforce_api import attribute_review
+    from ai_workforce_api.agent_answers import RULE, plain_problem, problem_of
+
+    rows: dict[str, dict[str, Any]] = {"id-1": {}, "id-2": {}, "id-3": {}}
+    read = attribute_review.covering(rows)
+    answer: dict[str, Any] = {"attributes": [
+        {"id": "id-1", "verdict": "OK", "note": ""},
+        {"id": "id-2", "verdict": "DUPLICATE", "note": "", "duplicate_of": "id-1"},
+        {"id": "id-3", "verdict": "CONCERN", "note": ""},
+    ], "findings": []}  # fmt: skip
+    assert len(read(answer).attributes) == 3
+    given: dict[str, Any]
+    for given in (
+        {"attributes": [], "findings": []},
+        {"attributes": answer["attributes"][:2], "findings": []},
+        {"attributes": [{"id": "elsewhere", "verdict": "OK", "note": ""}], "findings": []},
+    ):
+        with pytest.raises(ValueError) as error:
+            read(given)
+        reason = problem_of(error.value)
+        assert "id-3" in reason and plain_problem(reason) == RULE
+
+
+def test_a_drafts_review_returns_every_draft_or_says_why_one_is_left_out() -> None:
+    """FO-3 (control_attributes.reviewed_drafts): by counts only."""
+    from ai_workforce_api import control_attributes
+
+    draft: dict[str, Any] = {
+        "action": "ADD",
+        "text": "The request is approved",
+        "basis": "INFERRED",
+    }
+    drafted = [control_attributes._Proposal.model_validate(draft)] * 2
+    read = control_attributes.reviewed_drafts(drafted)
+    assert len(read({"attributes": [draft, draft], "fixes": []}).attributes) == 2
+    assert len(read({"attributes": [draft], "fixes": ["One repeats the other."]}).attributes) == 1
+    answer: dict[str, Any]
+    for answer in ({"attributes": [], "fixes": []}, {"attributes": [draft], "fixes": [" "]}):
+        with pytest.raises(ValueError, match="of the 2 drafted attributes"):
+            read(answer)
+
+
+def test_a_figure_in_minutes_needs_a_source_and_vague_timing_words_are_refused() -> None:
+    """FO-7: "739 minutes" is a figure (it reached proposed criteria); promptly,
+    periodically, regularly, routinely, as soon as possible and without undue delay leave a
+    criterion to impression. Months, years, the hyphen form and number words are not yet
+    recognised (they need a whole-figure comparison, residual)."""
+    from ai_workforce_api.attribute_review import refused_criteria
+    from ai_workforce_api.evidence_planning import _VAGUE, _normal
+
+    stated = (
+        "The change ticket in ServiceNow is approved by the change manager.",
+        "The approval is recorded within 739 minutes of the request.",
+        "No approval is recorded within that window, or it is recorded later.",
+    )
+    assert refused_criteria(stated, _normal("the records give nothing of the kind")) is not None
+    assert refused_criteria(stated, _normal("approved within 739 minutes of the request")) is None
+    for word in ("promptly", "periodically", "regularly", "routinely", "as soon as possible",
+                 "without undue delay"):  # fmt: skip
+        assert _VAGUE.search(f"The access is removed {word} after the leave date."), word
+    assert not _VAGUE.search("Reviewed as required.")
+
+
+def test_no_library_criteria_read_as_vague() -> None:
+    """R17: criteria restating a library standard are never refused as vague."""
+    from ai_workforce_api.definition_registry import DEFINITIONS
+    from ai_workforce_api.evidence_planning import _VAGUE
+
+    hits = [
+        (definition.library_key, text)
+        for definition in DEFINITIONS
+        for attribute in definition.attributes
+        for text in (attribute.condition, attribute.passes, attribute.fails)
+        if text and _VAGUE.search(text)
+    ]
+    assert hits == []
+
+
+def test_the_narrative_review_passes_only_on_its_own_full_coverage_and_no_findings() -> None:
+    """FO-25 (process_narrative.review_passed). Old: the reviewer's `passed` alone. New: it
+    passes only when it also marks every attribute covered and lists no finding."""
+    from ai_workforce_api.process_narrative import _Review, review_passed
+
+    def review(
+        passed: bool, coverage: list[dict[str, Any]], findings: tuple[str, ...] = ()
+    ) -> _Review:
+        return _Review.model_validate(
+            {"passed": passed, "coverage": coverage, "findings": list(findings)}
+        )
+
+    covered: list[dict[str, Any]] = [
+        {"code": "A1", "covered": True},
+        {"code": "A2", "covered": True},
+    ]
+    codes = ["A1", "A2"]
+    assert review_passed(review(True, covered), codes)
+    assert not review_passed(review(False, covered), codes)
+    assert not review_passed(review(True, covered[:1]), codes)
+    assert not review_passed(review(True, [covered[0], {"code": "A2", "covered": False}]), codes)
+    assert not review_passed(review(True, covered, ("A2 is not evaluated.",)), codes)
+    assert review_passed(review(True, covered, (" ",)), codes)

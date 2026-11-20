@@ -871,3 +871,70 @@ def test_prior_year_answers_for_many_controls_take_every_plan_in_id_order_first(
         holder.close()
     assert "error" not in outcome, outcome
     assert sorted(outcome["result"], key=str) == sorted([later, control], key=str)
+
+
+def test_the_set_review_takes_the_plan_before_any_attribute(migrated: Database) -> None:
+    """R10 of the SOL attribute fixes (19 November 2026): a person's save of criteria takes
+    the plan and then the attribute (master_plans.set_criteria); the set reviewer's
+    corrections took the attribute and then the plan (attribute_review._kept, then _store),
+    so the two could deadlock. The reviewer now takes the plan first: while a connection
+    holds the plan, the reviewer waits holding no attribute."""
+    from set_review_answers import given_of, with_every_verdict
+    from support import run_plan_through
+    from test_agent_answers import _Script
+    from test_attributes_follow_understanding import _answer_required, _plan_run, _ready
+
+    from ai_workforce_api import attribute_review
+
+    team, control, _scheduler, client = _ready(migrated, "lock-set-review")
+    _answer_required(migrated, team, control, client)
+    plan_id = _plan_run(migrated, control)[0]
+    with connect(migrated.url) as connection:
+        assert run_plan_through(connection, _Script(migrated, team, control), plan_id) == "DONE"
+    revised: list[str] = []
+
+    def review(prompt: str) -> dict[str, Any]:
+        given = given_of(prompt)
+        target = next(item for item in given["attributes"] if "criteria" in item["may_revise"])
+        revised.append(target["id"])
+        return with_every_verdict(
+            {"attributes": [{
+                "id": target["id"], "verdict": "REVISED", "note": "Names the record.",
+                "condition": "The ServiceNow access request names the user and the role.",
+                "pass_criteria": "The manager's approval is recorded on the ServiceNow request.",
+                "fail_criteria": "No approval is recorded on the ServiceNow request.",
+            }], "findings": []},
+            given,
+        )  # fmt: skip
+
+    script = _Script(migrated, team, control)
+    script.answers["set-review"] = [review]
+    holder = psycopg.connect(migrated.url)
+    try:
+        holder.execute(
+            "SELECT id FROM evidence_plans WHERE engagement_control_id = %s FOR UPDATE",
+            (UUID(control),),
+        )
+        holder_pid = holder.info.backend_pid
+
+        def run() -> str:
+            with psycopg.connect(migrated.url, connect_timeout=3) as connection:
+                return attribute_review.review_set(
+                    connection, script, UUID(str(team["org"])), UUID(str(team["project"])),
+                    UUID(control), team["owner_id"],
+                )  # fmt: skip
+
+        thread, outcome = _in_thread(run)
+        _blocked_by(migrated.url, holder_pid)
+        assert revised
+        with psycopg.connect(migrated.url) as third:
+            third.execute(
+                "SELECT 1 FROM control_attributes WHERE id = %s FOR UPDATE NOWAIT",
+                (UUID(revised[0]),),
+            )
+            third.rollback()
+    finally:
+        holder.rollback()
+        holder.close()
+    thread.join(60)
+    assert outcome.get("error") is None and outcome.get("result") == ""

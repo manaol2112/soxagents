@@ -3,16 +3,21 @@ checklist kept apart from the audit team's planning, recipients assigned inline 
 client's email domains, people copied on the email, reference material that stays
 internal unless shared, and the checks run before approval and sending."""
 
-from datetime import UTC, datetime, timedelta
+import re
+from dataclasses import replace
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
+import pytest
 from support import Database
 from test_evidence_flow import _drafted, _launch, _project
 from test_evidence_portal import _code, _public, _sent, _verify
 from test_execution import _add_project_member, _add_user
 from test_onboarding import _base, _complete_setup, _new_engagement
 from test_outbound import _session, migrated
+from test_testing_engine import _approved_samples
+from test_testing_engine import _base as _api_base
 
 from ai_workforce_api.db import connect
 from ai_workforce_api.evidence_planning import (
@@ -21,7 +26,27 @@ from ai_workforce_api.evidence_planning import (
     suite_wording,
 )
 from ai_workforce_api.evidence_plans import _Line, render
+from ai_workforce_api.models import ModelConfig, ModelRaw, ModelRequest
 from ai_workforce_api.pbc import PbcBody
+from ai_workforce_api.pbc_drafting import (
+    MAX_ITEMS,
+    PRIMARY_KIND,
+    REPLANNED,
+    SAMPLE_REDRAFT,
+    TOO_MANY,
+    TOO_MANY_REDRAFT,
+    UNPHASED_REDRAFT,
+    DraftContext,
+    PlannedItem,
+    _planned_title,
+    check_draft,
+    load_context,
+    planned_draft,
+    run_draft,
+    shown_note,
+    with_plan,
+)
+from ai_workforce_api.pbc_drafting import render as render_draft
 from ai_workforce_api.request_details import (
     _category_type,
     heading_of,
@@ -762,3 +787,1170 @@ def test_a_draft_is_reworded_before_anyone_is_assigned(migrated: Database) -> No
     # Leaving draft still needs someone to send it to.
     submitted = team["owner"].post(f"{path}/submit", json={"version": saved.json()["version"]})
     assert submitted.status_code == 409
+
+
+# The request names every planned requirement (FO-28, owner decision 19 November 2026)
+#
+# A phase request's model draft carries one item per REQUESTED requirement, in the plan's
+# order, under the requirement's own title (the portal files an upload by that title,
+# evidence_portal._item_requirement), of a kind the requirement allows, with its period and
+# its system. A draft that drops, merges, adds, reorders or substitutes an item is rejected
+# and the plan's own wording is used (pbc_drafting.check_draft). Before, coverage was
+# checked by kind only: a second ticket could stand in for the access removal record, and
+# one item for two.
+
+_WINDOW = "From 1 January 2027 to 30 September 2027"
+_TICKETS = PlannedItem(
+    "Termination ticket for each selected leaver",
+    "The HR termination ticket for each selected leaver, with the termination date.",
+    ("CONTROL_EXECUTION",),
+    "REQUIRED",
+    _WINDOW,
+)
+_REMOVALS = PlannedItem(
+    "Access removal record for each selected leaver",
+    "The Active Directory change log entry that removed each selected leaver's access.",
+    ("CONTROL_EXECUTION",),
+    "REQUIRED",
+    _WINDOW,
+)
+
+
+def _coverage_context(*planned: PlannedItem, phase: str = "INTERIM") -> DraftContext:
+    return DraftContext(
+        engagement="SOX 2027",
+        period_end=date(2027, 12, 31),
+        control_ref="ITGC-AC-02",
+        title="Leaver access is removed",
+        activity="IT removes a leaver's access when HR records the termination.",
+        risk="A leaver keeps access.",
+        domain="ACCESS",
+        domain_label="",
+        frequency="EVENT_DRIVEN",
+        frequency_label="",
+        nature="MANUAL",
+        nature_label="",
+        key_control=True,
+        owner_name="Dana Ruiz",
+        applications=("Active Directory", "SAP ERP"),
+        test_attributes=(),
+        pbc_items=(),
+        custom_fields=(),
+        phase=phase,
+        planned=planned,
+    )
+
+
+def _asked(planned: PlannedItem, **changes: Any) -> dict[str, Any]:
+    """One draft item that asks for the planned item as planned, with any changes."""
+    item: dict[str, Any] = {
+        "kind": PRIMARY_KIND[planned.categories[0]],
+        # The title as the plan's own wording names it ("(if available)" on an optional
+        # item), which a draft must keep (FO-28 review, 19 November 2026).
+        "title": _planned_title(planned),
+        "detail": f"Please provide this as it was recorded. {planned.description}"[:1500],
+        "period": planned.period_label[:200],
+    }
+    return item | changes
+
+
+def _coverage_draft(*items: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "summary": "For our interim testing of ITGC-AC-02, please provide the items below.",
+        "items": list(items),
+    }
+
+
+def test_a_phase_draft_that_leaves_out_a_planned_item_is_rejected() -> None:
+    context = _coverage_context(_TICKETS, _REMOVALS)
+    with pytest.raises(ValueError, match="^draft has 1 item for 2 planned items$"):
+        check_draft(_coverage_draft(_asked(_TICKETS)), context)
+
+
+def test_a_phase_draft_that_merges_two_planned_items_is_rejected() -> None:
+    context = _coverage_context(_TICKETS, _REMOVALS)
+    merged = _asked(
+        _TICKETS,
+        title="Termination ticket and access removal record for each selected leaver",
+        detail="The HR ticket and the Active Directory change log entry for each leaver.",
+    )
+    with pytest.raises(ValueError, match="^draft has 1 item for 2 planned items$"):
+        check_draft(_coverage_draft(merged), context)
+
+
+def test_a_phase_draft_that_adds_an_item_is_rejected() -> None:
+    context = _coverage_context(_TICKETS, _REMOVALS)
+    added = {
+        "kind": "other",
+        "title": "Screenshots of the HR system's termination screen",
+        "detail": "One screenshot of the termination screen for each selected leaver.",
+    }
+    with pytest.raises(ValueError, match="^draft has 3 items for 2 planned items$"):
+        check_draft(_coverage_draft(_asked(_TICKETS), _asked(_REMOVALS), added), context)
+
+
+def test_a_planned_item_is_not_answered_by_another_artifact() -> None:
+    """The C8 case: both items are control execution evidence, so a second ticket had the
+    kind the access removal record needed and was accepted in its place."""
+    context = _coverage_context(_TICKETS, _REMOVALS)
+    second_ticket = _asked(
+        _TICKETS, detail="A second copy of the HR termination ticket for each selected leaver."
+    )
+    with pytest.raises(ValueError, match="^draft item 2 is not planned item 2$"):
+        check_draft(_coverage_draft(_asked(_TICKETS), second_ticket), context)
+
+
+def test_a_phase_draft_keeps_the_planned_order() -> None:
+    context = _coverage_context(_TICKETS, _REMOVALS)
+    with pytest.raises(ValueError, match="^draft item 1 is not planned item 1$"):
+        check_draft(_coverage_draft(_asked(_REMOVALS), _asked(_TICKETS)), context)
+
+
+def test_a_phase_draft_keeps_the_planned_period() -> None:
+    context = _coverage_context(_TICKETS, _REMOVALS)
+    widened = _asked(_TICKETS, period="From 1 January 2027 to 31 December 2027")
+    with pytest.raises(ValueError, match="^draft item 1 changes the planned period$"):
+        check_draft(_coverage_draft(widened, _asked(_REMOVALS)), context)
+    unstated = _asked(_TICKETS, period="")
+    with pytest.raises(ValueError, match="^draft item 1 changes the planned period$"):
+        check_draft(_coverage_draft(unstated, _asked(_REMOVALS)), context)
+
+
+def test_a_phase_draft_keeps_the_planned_system() -> None:
+    context = _coverage_context(_TICKETS, _REMOVALS)
+    vague = _asked(
+        _REMOVALS, detail="The directory's change log entry that removed each leaver's access."
+    )
+    with pytest.raises(ValueError, match="^draft item 2 leaves out its planned system$"):
+        check_draft(_coverage_draft(_asked(_TICKETS), vague), context)
+
+
+def test_a_phase_draft_keeps_each_planned_items_kind() -> None:
+    context = _coverage_context(_TICKETS, _REMOVALS)
+    configured = _asked(_TICKETS, kind="configuration")
+    with pytest.raises(ValueError, match="^draft item 1 is the wrong kind for planned item 1$"):
+        check_draft(_coverage_draft(configured, _asked(_REMOVALS)), context)
+
+
+def test_items_the_plan_cannot_tell_apart_are_worded_by_the_plan() -> None:
+    """Fail closed: two planned items under one title cannot be paired with a draft's
+    items, so even a draft that repeats them both is rejected."""
+    twin = replace(_REMOVALS, title=_TICKETS.title)
+    context = _coverage_context(_TICKETS, twin)
+    with pytest.raises(ValueError, match="^the plan has two items with the same title$"):
+        check_draft(_coverage_draft(_asked(_TICKETS), _asked(twin)), context)
+
+
+def test_a_plan_larger_than_one_draft_is_refused_by_name() -> None:
+    many = tuple(replace(_TICKETS, title=f"Termination ticket {n}") for n in range(15))
+    with pytest.raises(ValueError, match="^the plan has more items than one draft can hold$"):
+        check_draft(_coverage_draft(_asked(_TICKETS)), _coverage_context(*many))
+
+
+def test_a_paired_phase_draft_is_used_whole() -> None:
+    """Guards against a check stricter than the plan: a model may reword everything but
+    each item's title, keep the title's case and the spacing between its words its own
+    (the portal reads a title with both aside), mark an optional item, and say the planned
+    period inside its own sentence.
+
+    Rewritten after review (19 November 2026). Old: a title with leading spaces and a
+    closing full stop ("  ACCESS management   policy.") was accepted. New: it is another
+    title (test_a_draft_item_keeps_the_title_the_portal_files_by). Why: the portal files an
+    upload by the title on the item's line as written (evidence_portal._item_requirement),
+    so that title linked the upload to no requirement (FO-28 review, B1)."""
+    policy_wording = SuiteWording(
+        period="The version in force during the period, with its effective date",
+        include=("Who may approve which access", "What a request must name"),
+        completeness="",
+        not_sufficient="",
+        alternatives=(),
+        note="",
+    )
+    policy = PlannedItem(
+        "Access management policy",
+        suite_description(policy_wording),
+        ("PROCESS_DOCUMENTATION",),
+        "REQUIRED",
+        policy_wording.period,
+    )
+    walkthrough = PlannedItem(
+        "Walkthrough instance: one access request from request to grant",
+        "One recent grant in the period, with the request, the manager's approval and the "
+        "grant in Active Directory.",
+        ("CONTROL_EXECUTION",),
+        "REQUIRED",
+        "One recent grant in the period",
+    )
+    design = _coverage_context(policy, walkthrough, phase="DESIGN")
+    accepted = check_draft(
+        _coverage_draft(
+            _asked(
+                policy,
+                title="ACCESS management   policy",
+                detail="The access policy that says who approves each kind of access.",
+                period="The version in force during the period, with its effective date.",
+            ),
+            _asked(
+                walkthrough,
+                detail="Walk us through one recent grant in Active Directory: the request, "
+                "the manager’s approval, and the grant.",
+                period="Please choose one recent grant in the period.",
+            ),
+        ),
+        design,
+    )
+    assert [item.title for item in accepted.items] == [
+        "ACCESS management   policy",
+        walkthrough.title,
+    ]
+    optional = PlannedItem(
+        "HR termination report for the window",
+        "The HR report of terminations in the window, as run.",
+        ("REPORT_RELIABILITY",),
+        "OPTIONAL",
+        _WINDOW,
+    )
+    interim = _coverage_context(_TICKETS, _REMOVALS, optional)
+    paired = check_draft(
+        _coverage_draft(
+            _asked(_TICKETS, detail="Each leaver's HR ticket, showing the termination date."),
+            _asked(
+                _REMOVALS,
+                detail="The Active Directory log entry that removed each leaver's access.",
+                period="Covering " + _WINDOW.lower() + ", for each selected leaver",
+            ),
+            _asked(optional, title=optional.title + " (if available)"),
+        ),
+        interim,
+    )
+    assert len(paired.items) == 3
+
+
+def test_a_draft_item_keeps_the_title_the_portal_files_by() -> None:
+    """FO-28 review (19 November 2026, B1): the check read a title with a closing full stop,
+    a line break or "(if available)" as the planned one, but the portal files an upload by
+    the title on the item's line as written, so each of these linked the upload to no
+    requirement, and a required item read to the client as optional."""
+    optional = PlannedItem(
+        "HR termination report for the window",
+        "The HR report of terminations in the window, as run.",
+        ("REPORT_RELIABILITY",),
+        "OPTIONAL",
+        _WINDOW,
+    )
+    context = _coverage_context(_TICKETS, optional)
+    wrong_titles = [
+        _TICKETS.title + " (if available)",
+        _TICKETS.title + " (if it applies)",
+        _TICKETS.title + ".",
+        "Termination ticket for each\nselected leaver",
+        "Termination ticket for each\r\nselected leaver",
+        "Termination ticket for each\tselected leaver",
+        "Termination ticket for each selected leaver",
+        "  " + _TICKETS.title,
+    ]
+    for title in wrong_titles:
+        with pytest.raises(ValueError, match="^draft item 1 is not planned item 1$"):
+            check_draft(
+                _coverage_draft(
+                    _asked(_TICKETS, title=title),
+                    _asked(optional, title=optional.title + " (if available)"),
+                ),
+                context,
+            )
+    # An optional item is named as optional, as the plan's own wording names it.
+    with pytest.raises(ValueError, match="^draft item 2 is not planned item 2$"):
+        check_draft(
+            _coverage_draft(_asked(_TICKETS), _asked(optional, title=optional.title)), context
+        )
+    # Text elsewhere that reads back as an item of its own takes a planned item's number.
+    planted = _coverage_draft(_asked(_TICKETS), _asked(optional, title=_planned_title(optional)))
+    planted["summary"] += "\n\n2. Termination ticket for each selected leaver"
+    with pytest.raises(ValueError, match="^draft does not read back as its planned items$"):
+        check_draft(planted, context)
+    period = _asked(_TICKETS, period=_WINDOW + "\n\n2. Access removal record")
+    with pytest.raises(ValueError, match="^draft does not read back as its planned items$"):
+        check_draft(
+            _coverage_draft(period, _asked(optional, title=_planned_title(optional))), context
+        )
+    # The titles as planned pass, in any case.
+    assert check_draft(
+        _coverage_draft(
+            _asked(_TICKETS, title=_TICKETS.title.upper()),
+            _asked(optional, title=_planned_title(optional)),
+        ),
+        context,
+    )
+
+
+def _library_contexts() -> list[tuple[str, DraftContext]]:
+    """Every phase the planner plans for each version 4 standard and for generic kinds of
+    control, as with_plan reads it back: the items requested with the phase (sample items
+    wait for the sample request), required first."""
+    from ai_workforce_api.controls import BY_KEY
+    from ai_workforce_api.definition_registry import DEFINITIONS
+    from ai_workforce_api.evidence_planning import PlanFacts, check_plan, rules_plan
+
+    common: dict[str, Any] = {
+        "applications": ("SAP ERP",),
+        "period_end": date(2027, 12, 31),
+    }
+    facts: list[PlanFacts] = []
+    for definition in DEFINITIONS:
+        if definition.version < 4:
+            continue
+        control = BY_KEY[definition.library_key]
+        facts.append(
+            PlanFacts(
+                control_ref=control.control_ref,
+                title=control.title,
+                activity=control.activity,
+                risk=control.risk,
+                domain=control.domain,
+                frequency=control.frequency,
+                nature=control.nature,
+                attributes=tuple(item.text for item in definition.approved),
+                classifications=("ITGC",),
+                library_key=definition.library_key,
+                test_basis="STANDARD",
+                basis_decided=True,
+                **common,
+            )
+        )
+    facts.append(
+        PlanFacts(
+            control_ref="ITGC-CM-01",
+            title="Changes are tested and approved",
+            activity="Changes are requested, tested, and approved before production.",
+            risk="An unapproved change reaches production.",
+            domain="CHANGE",
+            frequency="EVENT_DRIVEN",
+            nature="MANUAL",
+            attributes=("The change was approved before deployment", "The change was tested"),
+            classifications=("ITGC",),
+            **common,
+        )
+    )
+    facts.append(
+        PlanFacts(
+            control_ref="ITGC-AC-07",
+            title="MFA is enforced for privileged accounts",
+            activity="The identity provider enforces MFA for every privileged account.",
+            risk="A privileged account is used without a second factor.",
+            domain="ACCESS",
+            frequency="RECURRING",
+            nature="AUTOMATED",
+            attributes=("MFA is required for every privileged account",),
+            classifications=("ITGC",),
+            **common,
+        )
+    )
+    facts.append(
+        PlanFacts(
+            control_ref="RTR-05",
+            title="Unusual journal entries are reviewed",
+            activity="Management reviews a system-generated report of unusual journal "
+            "entries each month and investigates each flagged entry.",
+            risk="An unusual entry goes unreviewed.",
+            domain="RECORD_TO_REPORT",
+            frequency="MONTHLY",
+            nature="IT_DEPENDENT_MANUAL",
+            attributes=("Each flagged entry was investigated",),
+            classifications=("IT_DEPENDENT_MANUAL", "BUSINESS_PROCESS"),
+            process_required=True,
+            process_confirmed=True,
+            **common,
+        )
+    )
+    order = {"REQUIRED": 0, "CONDITIONAL": 1, "OPTIONAL": 2}
+    contexts: list[tuple[str, DraftContext]] = []
+    for item in facts:
+        for phase in check_plan(rules_plan(item), item).phases:
+            planned = tuple(
+                PlannedItem(
+                    r.title,
+                    r.description,
+                    tuple(r.categories),
+                    r.necessity,
+                    wording.period
+                    if (wording := suite_wording(r.description)) is not None
+                    else r.period_label,
+                )
+                for r in sorted(phase.requirements, key=lambda r: order[r.necessity])
+                if r.depends_on is None
+            )
+            if planned:
+                contexts.append(
+                    (
+                        f"{item.control_ref} {phase.phase}",
+                        replace(
+                            _coverage_context(*planned, phase=phase.phase),
+                            control_ref=item.control_ref,
+                            applications=item.applications,
+                        ),
+                    )
+                )
+    return contexts
+
+
+def _as_model_wrote_it(context: DraftContext) -> dict[str, Any]:
+    """The plan's own wording (planned_draft) as a model's answer: each item explains
+    itself, as check_draft asks of a model."""
+    output = planned_draft(context).model_dump()
+    for item in output["items"]:
+        if len(item["detail"].strip()) < 10:
+            item["detail"] = "Please provide this item as described below."
+    return output
+
+
+def test_the_plans_own_wording_passes_and_each_change_to_it_is_rejected() -> None:
+    """The plan's own wording never fails the check (so a model that keeps it is used), and
+    each single change to it is rejected: an item dropped, two neighbours swapped, a
+    sibling's title in an item's place, an item's period changed. Across every version 4
+    standard and generic access, change, automated and report controls."""
+    contexts = _library_contexts()
+    assert len(contexts) > 20
+    for name, context in contexts:
+        whole = _as_model_wrote_it(context)
+        assert len(check_draft(whole, context).items) == len(context.planned), name
+        items = whole["items"]
+        # Each change with the rule that must refuse it, so none passes on another rule.
+        # Review note (19 November 2026): the changes were refused by any rule, and a one-
+        # item phase was changed only in its period; now every phase also gets a title.
+        changed: list[tuple[str, list[dict[str, Any]], str]] = [
+            (
+                "title",
+                [items[0] | {"title": "Screenshots of the settings"}, *items[1:]],
+                "^draft item 1 is not planned item 1$",
+            )
+        ]
+        if len(items) > 1:
+            changed.append(("dropped", items[:-1], "^draft has "))
+            changed.append(
+                (
+                    "swapped",
+                    [items[1], items[0], *items[2:]],
+                    "^draft item 1 is not planned item 1$",
+                )
+            )
+            changed.append(
+                (
+                    "sibling",
+                    [items[0] | {"title": items[1]["title"]}, *items[1:]],
+                    "^draft item 1 is not planned item 1$",
+                )
+            )
+        for index, item in enumerate(items):
+            if context.planned[index].period_label.strip():
+                periods = [*items]
+                periods[index] = item | {"period": "As at 1 March 2031"}
+                changed.append(
+                    ("period", periods, f"^draft item {index + 1} changes the planned period$")
+                )
+                break
+        for change, wrong, rule in changed:
+            try:
+                check_draft(whole | {"items": wrong}, context)
+            except ValueError as error:
+                assert re.match(rule, str(error)), (name, change, str(error))
+            else:
+                pytest.fail(f"{name}: the {change} change was accepted")
+
+
+def test_the_plans_own_wording_reads_back_under_the_planned_titles() -> None:
+    """What the portal reads from the plan's own wording (request_details.parse_wording, by
+    number and title) is each planned item under the title the check holds a model's draft
+    to (_planned_title): the two agree for every library phase."""
+    for name, context in _library_contexts():
+        read = parse_wording(render_draft(planned_draft(context))).items
+        assert [(entry.number, entry.title) for entry in read] == [
+            (number, _planned_title(plan)) for number, plan in enumerate(context.planned, 1)
+        ], name
+
+
+# The same rule through the drafting job, the redraft, and the requests it must not touch.
+
+
+class _ScriptedModel:
+    """A scripted model: the same answer to every call, and anything it should do while it
+    'thinks' (a person or another job changing the request meanwhile)."""
+
+    def __init__(self, output: dict[str, Any], during: Any = None) -> None:
+        self.output = output
+        self.during = during
+        self.requests: list[ModelRequest] = []
+
+    def complete(self, request: ModelRequest, config: ModelConfig) -> ModelRaw:
+        del config
+        self.requests.append(request)
+        if self.during is not None:
+            self.during()
+        return ModelRaw(self.output, (), 1200, 400)
+
+
+def _phase_draft(migrated: Database, team: dict[str, Any], phase: str) -> tuple[UUID, UUID, UUID]:
+    """ITGC-AC-01's draft for one phase, back to pending so the agent drafts it again:
+    (draft, request, control)."""
+    with connect(migrated.url) as connection:
+        row = connection.execute(
+            """
+            SELECT d.id, d.pbc_request_id, d.engagement_control_id FROM pbc_drafts d
+            JOIN engagement_controls c ON c.id = d.engagement_control_id
+            JOIN pbc_requests r ON r.id = d.pbc_request_id
+            WHERE d.project_id = %s AND c.control_ref = 'ITGC-AC-01' AND r.testing_phase = %s
+            """,
+            (team["project"], phase),
+        ).fetchone()
+        assert row is not None
+        connection.execute(
+            "UPDATE pbc_drafts SET status = 'PENDING', source = NULL, content = NULL, "
+            "attempts = 0 WHERE id = %s",
+            (row[0],),
+        )
+        connection.commit()
+    return UUID(str(row[0])), UUID(str(row[1])), UUID(str(row[2]))
+
+
+def _planned_of(
+    migrated: Database, project: UUID, control: UUID, request: UUID
+) -> tuple[PlannedItem, ...]:
+    with connect(migrated.url) as connection:
+        return with_plan(connection, load_context(connection, project, control), request).planned
+
+
+def _wording(migrated: Database, request: UUID) -> str:
+    with connect(migrated.url) as connection:
+        row = connection.execute(
+            "SELECT evidence_description FROM pbc_requests WHERE id = %s", (request,)
+        ).fetchone()
+    assert row is not None
+    return str(row[0])
+
+
+def _draft_record(migrated: Database, draft: UUID) -> tuple[Any, ...]:
+    with connect(migrated.url) as connection:
+        row = connection.execute(
+            "SELECT status, source, note FROM pbc_drafts WHERE id = %s", (draft,)
+        ).fetchone()
+    assert row is not None
+    return tuple(row)
+
+
+def test_a_short_phase_draft_falls_back_to_the_plans_wording_of_every_requirement(
+    migrated: Database,
+) -> None:
+    team = _ready_engagement(migrated, "rd-cover")
+    draft, request, control = _phase_draft(migrated, team, "DESIGN")
+    with connect(migrated.url) as connection:
+        titles = [
+            str(row[0])
+            for row in connection.execute(
+                "SELECT title FROM evidence_requirements "
+                "WHERE pbc_request_id = %s AND status = 'REQUESTED'",
+                (request,),
+            ).fetchall()
+        ]
+    assert len(titles) >= 2
+    planned = _planned_of(migrated, team["project"], control, request)
+    # Item 2 has a kind the second requirement allows, but asks for another artifact.
+    substitute = _asked(
+        planned[1],
+        title="A second copy of the access policy",
+        detail="Another copy of the access policy, as approved.",
+    )
+    output = _coverage_draft(_asked(planned[0]), substitute, *map(_asked, planned[2:]))
+    with connect(migrated.url) as connection:
+        assert run_draft(connection, _ScriptedModel(output), draft) == "DRAFTED"
+    status, source, note = _draft_record(migrated, draft)
+    assert (status, source) == ("DRAFTED", "FALLBACK")
+    assert str(note).startswith("Model draft rejected: draft item 2 is not planned item 2.")
+    wording = " ".join(_wording(migrated, request).split()).lower()
+    for title in titles:
+        assert " ".join(title.split()).rstrip(".").lower() in wording, title
+    assert "a second copy of the access policy" not in wording
+    assert _audit(migrated, team["project"], "pbc.drafted")[-1]["source"] == "FALLBACK"
+
+
+def test_a_redraft_is_held_to_every_planned_item(migrated: Database) -> None:
+    """The Redraft (and the console's redraft_request) reaches the same check: one item of
+    a kind both planned items allow is not both of them."""
+    team = _ready_engagement(migrated, "rd-recover")
+    draft, request, control = _phase_draft(migrated, team, "DESIGN")
+    # Offered, so the panel shows the Redraft (design review, 19 November 2026).
+    assert _details(team, str(request))["redraft_refusal"] is None
+    redraft = team["owner"].post(f"{_project(team)}/pbc-requests/{request}/redraft")
+    assert redraft.status_code == 200, redraft.text
+    planned = _planned_of(migrated, team["project"], control, request)
+    assert len(planned) >= 2
+    merged = _asked(
+        planned[0],
+        kind="design",
+        title="How access is approved, with one example",
+        detail="The access policy and one recent access request from request to grant.",
+    )
+    with connect(migrated.url) as connection:
+        assert run_draft(connection, _ScriptedModel(_coverage_draft(merged)), draft) == "DRAFTED"
+    status, source, note = _draft_record(migrated, draft)
+    assert (status, source) == ("DRAFTED", "FALLBACK")
+    assert str(note).startswith(f"Model draft rejected: draft has 1 item for {len(planned)}")
+    assert "how access is approved, with one example" not in _wording(migrated, request).lower()
+
+
+def _queued(migrated: Database, team: dict[str, Any], control: UUID, request: UUID) -> UUID:
+    """A draft queued for the request as reconcile queues one (evidence_plans.queue_drafts):
+    the worker's path, apart from the Redraft."""
+    from ai_workforce_api.evidence_plans import queue_drafts
+
+    with connect(migrated.url) as connection:
+        with connection.cursor() as cursor:
+            [queued] = queue_drafts(
+                cursor, team["org"], team["project"], team["owner_id"], control, [request]
+            )
+        connection.commit()
+    return queued
+
+
+def test_a_sample_request_keeps_its_list_of_selected_samples(migrated: Database) -> None:
+    """FO-28 review (19 November 2026, B2), through the real route: approving the samples
+    drafts the sample request, gives it its phase and links the sample evidence to it as
+    requested, in one transaction (evidence_plans.on_samples_approved). The guard read a
+    sample request by a missing phase, which a real one never has, so a Redraft was
+    accepted and the plan's items replaced the list of selected samples the client is asked
+    for. A sample request is now known by its own link, and its wording stays."""
+    team, client, _scheduler, plan = _approved_samples(migrated, "rd-samples")
+    approved = client.post(
+        f"{_api_base(team)}/control-tests/{plan['id']}/approve", json={"version": plan["version"]}
+    )
+    assert approved.status_code == 200, approved.text
+    sample = UUID(approved.json()["sample_request_id"])
+    control = UUID(plan["engagement_control_id"])
+    with connect(migrated.url) as connection:
+        state = connection.execute(
+            """
+            SELECT r.status, r.testing_phase, (
+                SELECT count(*) FROM evidence_requirements e
+                WHERE e.pbc_request_id = r.id AND e.status = 'REQUESTED'
+            )
+            FROM pbc_requests r WHERE r.id = %s
+            """,
+            (sample,),
+        ).fetchone()
+    assert state is not None
+    assert (state[0], state[1]) == ("DRAFT", "INTERIM") and state[2] > 0
+    asked = _wording(migrated, sample)
+    assert "We selected " in asked
+    # The panel shows why in place of a Redraft that cannot succeed (design review, 19
+    # November 2026: it was offered, and answered with an error).
+    read = client.get(f"{_api_base(team)}/pbc-requests/{sample}/details")
+    assert read.status_code == 200, read.text
+    assert read.json()["redraft_refusal"] == SAMPLE_REDRAFT
+    refused = client.post(f"{_api_base(team)}/pbc-requests/{sample}/redraft")
+    assert refused.status_code == 409, refused.text
+    assert (
+        refused.json()["detail"]
+        == SAMPLE_REDRAFT
+        == (
+            "A sample request lists the selected samples, so it is not redrafted. Edit its "
+            "wording instead."
+        )
+    )
+    # The console's redraft_request relays the same sentence, as the person reads it.
+    from ai_workforce_api.authorization import Principal, PrincipalKind
+    from ai_workforce_api.console_tools import ToolContext, ToolFailed, execute, parse
+    from ai_workforce_api.settings import Settings
+
+    with connect(migrated.url) as connection:
+        tool, parsed = parse("redraft_request", {"request_id": str(sample)})
+        context = ToolContext(
+            connection=connection,
+            settings=Settings(database_url=migrated.url),
+            principal=Principal(kind=PrincipalKind.USER, id=team["owner_id"]),
+            organization_id=team["org"],
+            project_id=team["project"],
+        )
+        with pytest.raises(ToolFailed) as relayed:
+            execute(tool, parsed, context)
+    assert str(relayed.value) == SAMPLE_REDRAFT
+    # A draft queued for it (reconcile, the worker, a restart) leaves it as it is, even one
+    # a model wrote that names every planned item and passes the check.
+    planned = _planned_of(migrated, team["project"], control, sample)
+    assert planned
+    paired = _coverage_draft(*(_asked(item, title=_planned_title(item)) for item in planned))
+    queued = _queued(migrated, team, control, sample)
+    model = _ScriptedModel(paired)
+    with connect(migrated.url) as connection:
+        assert run_draft(connection, model, queued) == "SKIPPED"
+    assert model.requests == []
+    assert _wording(migrated, sample) == asked
+    # Old (to 20 November 2026): the note stored the sentence. New (G2 review, B1): it
+    # stores the reason's token, and the sentence is what the draft shows for it.
+    assert _draft_record(migrated, queued) == ("SKIPPED", None, "SAMPLE")
+    assert shown_note("SKIPPED", "SAMPLE") == (
+        "A sample request lists the selected samples; its wording stays."
+    )
+
+
+def test_a_request_with_planned_evidence_but_no_phase_keeps_its_wording(
+    migrated: Database,
+) -> None:
+    """Fail closed: a request carrying requested requirements without a testing phase (a
+    kickoff draft kept from before planning) is read by a draft as unplanned, which would
+    ask for a population in place of its planned items, so it is not drafted."""
+    team = _ready_engagement(migrated, "rd-unphased")
+    _draft_id, request, control = _phase_draft(migrated, team, "INTERIM")
+    with connect(migrated.url) as connection:
+        connection.execute("UPDATE pbc_requests SET testing_phase = NULL WHERE id = %s", (request,))
+        held = connection.execute(
+            "SELECT count(*) FROM evidence_requirements "
+            "WHERE pbc_request_id = %s AND status = 'REQUESTED'",
+            (request,),
+        ).fetchone()
+        connection.commit()
+    assert held is not None and held[0] > 0
+    before = _wording(migrated, request)
+    # Old (to 19 November 2026): "request carries planned evidence without a testing phase
+    # and cannot be redrafted", which is not a sentence, so the panel showed a generic
+    # line (design review). New: why, and what to do; shown in place of the Redraft.
+    assert _details(team, str(request))["redraft_refusal"] == UNPHASED_REDRAFT
+    refused = team["owner"].post(f"{_project(team)}/pbc-requests/{request}/redraft")
+    assert refused.status_code == 409, refused.text
+    assert (
+        refused.json()["detail"]
+        == UNPHASED_REDRAFT
+        == (
+            "This request has planned evidence but no testing phase, so it is not redrafted. "
+            "Edit its wording instead."
+        )
+    )
+    queued = _queued(migrated, team, control, request)
+    population = _coverage_draft(
+        {
+            "kind": "population",
+            "title": "Population of new users",
+            "detail": "Every account created in the period, from the system.",
+        }
+    )
+    model = _ScriptedModel(population)
+    with connect(migrated.url) as connection:
+        assert run_draft(connection, model, queued) == "SKIPPED"
+    assert model.requests == []
+    assert _wording(migrated, request) == before
+    # Old (to 20 November 2026): the note stored the sentence. New (G2 review, B1): it
+    # stores the reason's token, and the sentence is what the draft shows for it.
+    assert _draft_record(migrated, queued) == ("SKIPPED", None, "UNPHASED")
+    assert shown_note("SKIPPED", "UNPHASED") == (
+        "The request carries planned evidence without a testing phase; its wording stays."
+    )
+
+
+def test_a_plan_change_while_the_request_is_drafted_keeps_the_draft_out(
+    migrated: Database,
+) -> None:
+    """The draft was checked against the requirements as they were when it started. One
+    taken off the request meanwhile, without the request being reworded, made a checked
+    draft name a set the plan no longer holds."""
+    team = _ready_engagement(migrated, "rd-replanned")
+    draft, request, control = _phase_draft(migrated, team, "DESIGN")
+    planned = _planned_of(migrated, team["project"], control, request)
+    assert len(planned) >= 2
+    before = _wording(migrated, request)
+
+    def replanned() -> None:
+        with connect(migrated.url) as other:
+            other.execute(
+                "UPDATE evidence_requirements SET status = 'REMOVED', version = version + 1 "
+                "WHERE pbc_request_id = %s AND status = 'REQUESTED' AND title = %s",
+                (request, planned[-1].title),
+            )
+
+    model = _ScriptedModel(_coverage_draft(*map(_asked, planned)), during=replanned)
+    with connect(migrated.url) as connection:
+        assert run_draft(connection, model, draft) == "SKIPPED"
+    assert len(model.requests) == 1
+    assert _wording(migrated, request) == before
+    # Old (to 19 November 2026): "...changed while the request was drafted; redraft it.",
+    # stored and shown nowhere (design review). New: what to do, on the panel and the row.
+    # Old (to 20 November 2026): the note stored that sentence. New (G2 review, B1): it
+    # stores the reason's token, and the panel shows the sentence for it.
+    assert _draft_record(migrated, draft) == ("SKIPPED", None, "REPLANNED")
+    shown = _details(team, str(request))
+    assert shown["planning"]["not_drafted"] == REPLANNED
+    assert REPLANNED == (
+        "The planned evidence changed during drafting. Redraft the request to match the plan."
+    )
+    # A Redraft drafts it to the plan as it now is, so it is offered.
+    assert shown["redraft_refusal"] is None
+    # Rewritten 20 November 2026 (design review: "Not drafted" sat beside "Ready for review"
+    # on a written request). Old: "Not drafted". New: "Needs redraft", the state it is in.
+    assert _row_agent(team, request) == ("NOT_DRAFTED", "Needs redraft")
+
+
+def test_a_plan_larger_than_one_draft_keeps_the_requests_wording(
+    migrated: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fifteen REQUESTED requirements (a person may add more than a phase plans). Before,
+    every model draft was rejected and the plan's own draft could not be built either
+    (a draft holds 14 items): the job raised, retried and ended failed."""
+    from ai_workforce_api import pbc_drafting
+
+    team = _ready_engagement(migrated, "rd-fifteen")
+    draft, request, _control = _phase_draft(migrated, team, "DESIGN")
+    before = _wording(migrated, request)
+    real = pbc_drafting.with_plan
+
+    def fifteen(connection: Any, context: DraftContext, request_id: UUID) -> DraftContext:
+        found = real(connection, context, request_id)
+        extra = tuple(
+            replace(found.planned[0], title=f"Signed access approval {n}") for n in range(15)
+        )
+        return replace(found, planned=extra)
+
+    monkeypatch.setattr(pbc_drafting, "with_plan", fifteen)
+    model = _ScriptedModel(_coverage_draft(_asked(_TICKETS)))
+    with connect(migrated.url) as connection:
+        assert run_draft(connection, model, draft) == "SKIPPED"
+    assert model.requests == []
+    assert _wording(migrated, request) == before
+    # Old (to 19 November 2026): "The plan has more items than one drafted request can
+    # hold; the request keeps its current wording."; new: which wording it keeps (the test
+    # plan's, of every item: evidence_plans.render_into), so nothing is asked of the person.
+    # Rewritten 20 November 2026 (design review: "more items than one drafted request can
+    # hold" sat beside a 15-item request holding all 15). Old: "The test plan has more items
+    # than one drafted request can hold; the request keeps the test plan's wording of every
+    # item."; new: which wording the request uses, and why it is not redrafted.
+    # Old (to 20 November 2026): the note stored the sentence. New (G2 review, B1): it
+    # stores the reason's token, and the sentence is what the draft shows for it.
+    assert _draft_record(migrated, draft) == ("SKIPPED", None, "TOO_MANY")
+    assert shown_note("SKIPPED", "TOO_MANY") == (
+        "The request uses the test plan's wording for each of its planned items, as there are "
+        "too many for a redraft."
+    )
+
+
+def test_a_stored_skip_reason_shows_and_routes_by_its_token(migrated: Database) -> None:
+    """G2 review, 20 November 2026 (B1), end to end: the panel's banner, the Evidence
+    list's "Needs redraft" and the draft's shown note read the stored token. A row with the
+    old sentence still needs a redraft; one with an unknown note is not read as current;
+    one whose reason needs nothing done shows nothing."""
+    from ai_workforce_api import pbc_drafting
+
+    team = _ready_engagement(migrated, "rd-token")
+    draft, request, _control = _phase_draft(migrated, team, "DESIGN")
+
+    def stored(note: str) -> dict[str, Any]:
+        with connect(migrated.url) as connection:
+            connection.execute(
+                "UPDATE pbc_drafts SET status = 'SKIPPED', source = NULL, content = NULL, "
+                "note = %s, version = version + 1 WHERE id = %s",
+                (note, draft),
+            )
+            connection.commit()
+        planning: dict[str, Any] = _details(team, str(request))["planning"]
+        return planning
+
+    assert stored("REPLANNED")["not_drafted"] == REPLANNED
+    assert _row_agent(team, request) == ("NOT_DRAFTED", "Needs redraft")
+    listed = team["owner"].get(f"{_project(team)}/pbc-drafts")
+    assert listed.status_code == 200, listed.text
+    assert [d["note"] for d in listed.json() if d["id"] == str(draft)] == [REPLANNED]
+    old = "The planned evidence changed while the request was drafted; redraft it."
+    assert stored(old)["not_drafted"] == REPLANNED
+    assert _row_agent(team, request) == ("NOT_DRAFTED", "Needs redraft")
+    unknown = stored("A reason no table holds.")["not_drafted"]
+    assert unknown != "" and unknown == pbc_drafting.shown_note("SKIPPED", "")
+    assert _row_agent(team, request) == ("NOT_DRAFTED", "Needs redraft")
+    assert stored("REWORDED")["not_drafted"] == ""
+    assert _row_agent(team, request)[0] != "NOT_DRAFTED"
+
+
+def _row_agent(team: dict[str, Any], request: UUID) -> tuple[str, str]:
+    """The request's agent column in the Evidence list."""
+    read = team["owner"].get(f"{_project(team)}/evidence-requests", params={"size": 100})
+    assert read.status_code == 200, read.text
+    [row] = [row for row in read.json()["rows"] if row["id"] == str(request)]
+    return str(row["agent"]), str(row["agent_label"])
+
+
+def test_more_planned_items_than_a_draft_holds_are_not_offered_a_redraft(
+    migrated: Database,
+) -> None:
+    """Design review, 19 November 2026: a request whose plan carries more planned items
+    than one draft holds was offered a Redraft that is always skipped. The panel shows why
+    in its place, and a Redraft is refused with that sentence. A queued draft keeps the
+    wording, which asks nothing of the person (the test plan words every item), so neither
+    the panel nor the Evidence list says it was not drafted. Once the request is no longer
+    a draft, no refusal is shown either."""
+    team = _ready_engagement(migrated, "rd-overfull")
+    _draft_id, request, control = _phase_draft(migrated, team, "DESIGN")
+    with connect(migrated.url) as connection:
+        carried = connection.execute(
+            "SELECT count(*) FROM evidence_requirements "
+            "WHERE pbc_request_id = %s AND status = 'REQUESTED'",
+            (request,),
+        ).fetchone()
+        assert carried is not None
+        # Copies of a planned requirement, as more than a phase plans (a person may add
+        # them), carried by the request until it holds one more than a draft can.
+        for n in range(MAX_ITEMS + 1 - int(carried[0])):
+            connection.execute(
+                """
+                INSERT INTO evidence_requirements (
+                    organization_id, project_id, plan_id, engagement_control_id, phase,
+                    requirement_key, title, description, categories, objective, rationale,
+                    necessity, period_start, period_end, status, origin, pbc_request_id
+                )
+                SELECT organization_id, project_id, plan_id, engagement_control_id, phase,
+                       %s, %s, description, categories, objective, rationale, necessity,
+                       period_start, period_end, status, 'PERSON', pbc_request_id
+                FROM evidence_requirements
+                WHERE pbc_request_id = %s AND status = 'REQUESTED'
+                ORDER BY created_at, id LIMIT 1
+                """,
+                (f"person-extra-{n}", f"Signed access approval {n}", request),
+            )
+        connection.commit()
+    before = _wording(migrated, request)
+    assert _details(team, str(request))["redraft_refusal"] == TOO_MANY_REDRAFT
+    refused = team["owner"].post(f"{_project(team)}/pbc-requests/{request}/redraft")
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"] == TOO_MANY_REDRAFT
+    queued = _queued(migrated, team, control, request)
+    model = _ScriptedModel(_coverage_draft(_asked(_TICKETS)))
+    with connect(migrated.url) as connection:
+        assert run_draft(connection, model, queued) == "SKIPPED"
+    assert model.requests == []
+    assert _wording(migrated, request) == before
+    # Old (to 20 November 2026): the note stored TOO_MANY's sentence. New (G2 review,
+    # B1): its token; the sentence is what the draft shows for it.
+    assert _draft_record(migrated, queued) == ("SKIPPED", None, "TOO_MANY")
+    listed = team["owner"].get(f"{_project(team)}/pbc-drafts")
+    assert listed.status_code == 200, listed.text
+    assert [d["note"] for d in listed.json() if d["id"] == str(queued)] == [TOO_MANY]
+    assert _details(team, str(request))["planning"]["not_drafted"] == ""
+    assert _row_agent(team, request)[0] != "NOT_DRAFTED"
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE pbc_requests SET status = 'CANCELLED', "
+            "cancellation_reason = 'Replaced by another request.' WHERE id = %s",
+            (request,),
+        )
+        connection.commit()
+    gone = _details(team, str(request))
+    assert gone["planning"]["not_drafted"] == "" and gone["redraft_refusal"] is None
+    assert _row_agent(team, request)[0] != "NOT_DRAFTED"
+
+
+def test_a_skipped_draft_that_needs_nothing_done_says_nothing() -> None:
+    """Only a draft whose wording was written for other planned items asks the person to
+    act: a sample, no-phase or over-full request, or one sent or reworded meanwhile, needs
+    nothing done. Every
+    sentence the panel or the console shows is one written for people (reviewProblem shows
+    a 409 as it is only when it reads as one)."""
+    from ai_workforce_api.pbc_drafting import (
+        SAMPLE_REQUEST,
+        UNPHASED,
+        not_drafted_note,
+    )
+
+    # A row written before the tokens (to 20 November 2026) holds the sentence: it reads
+    # as its token, so each is checked both ways.
+    assert not_drafted_note("SKIPPED", REPLANNED) == REPLANNED
+    assert not_drafted_note("SKIPPED", "REPLANNED") == REPLANNED
+    for note in (
+        TOO_MANY,
+        SAMPLE_REQUEST,
+        UNPHASED,
+        "The request is no longer a draft.",
+        "The request was reworded while it was drafted; that wording stays.",
+        "Evidence for its items was in hand; the rest are asked for on their own.",
+        "Items joined it after it was drafted; the plan's wording stands.",
+        "Prepared with the demo; drafted in a later step",
+        "TOO_MANY",
+        "SAMPLE",
+        "UNPHASED",
+        "NOT_DRAFT",
+        "REWORDED",
+        "IN_HAND",
+        "JOINED",
+        "DEMO",
+    ):
+        assert not_drafted_note("SKIPPED", note) == "", note
+    assert not_drafted_note("DRAFTED", REPLANNED) == ""
+    assert not_drafted_note("DRAFTED", "REPLANNED") == ""
+    for sentence in (SAMPLE_REDRAFT, UNPHASED_REDRAFT, TOO_MANY_REDRAFT, TOO_MANY, REPLANNED):
+        assert re.fullmatch(r"[A-Z][^\n]{2,300}\.", sentence), sentence
+    from ai_workforce_api.pbc_drafting import SKIP_REASONS
+
+    for token, reason in SKIP_REASONS.items():
+        assert re.fullmatch(r"[A-Z][^\n]{2,199}\.", reason.shown), token
+
+
+def test_the_replanned_token_needs_a_redraft_whatever_its_sentence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """G2 review, 20 November 2026 (B1): "Plan changed" was decided by matching the stored
+    note with REPLANNED's sentence, so a copy edit would have left every stored row without
+    its banner. The note stores the token, and the row routes on it whatever is shown."""
+    from ai_workforce_api import pbc_drafting
+
+    assert pbc_drafting.not_drafted_note("SKIPPED", "REPLANNED") == REPLANNED
+    edited = replace(pbc_drafting.SKIP_REASONS["REPLANNED"], shown="Edited copy of the reason.")
+    monkeypatch.setitem(pbc_drafting.SKIP_REASONS, "REPLANNED", edited)
+    assert pbc_drafting.not_drafted_note("SKIPPED", "REPLANNED") == "Edited copy of the reason."
+    assert pbc_drafting.shown_note("SKIPPED", "REPLANNED") == "Edited copy of the reason."
+
+
+def test_a_replanned_row_written_with_the_old_sentence_still_needs_a_redraft() -> None:
+    """G2 review, 20 November 2026 (B1): a row written before 19 November 2026 holds the
+    old sentence, which matched nothing, so it showed no banner and no "Needs redraft"
+    (fail-open). It reads as its token, and shows the current sentence."""
+    from ai_workforce_api import pbc_drafting
+
+    old = "The planned evidence changed while the request was drafted; redraft it."
+    assert pbc_drafting.not_drafted_note("SKIPPED", old) == REPLANNED
+
+
+def test_an_unknown_skipped_note_does_not_read_as_current() -> None:
+    """G2 review, 20 November 2026 (B1): a SKIPPED note that is neither a token nor a
+    known sentence fails closed: the wording is not read as current, so the person is asked
+    to redraft rather than told nothing."""
+    from ai_workforce_api import pbc_drafting
+
+    for note in ("A reason no table holds.", "", "replanned"):
+        shown = pbc_drafting.not_drafted_note("SKIPPED", note)
+        assert shown != "", note
+        assert shown == pbc_drafting.shown_note("SKIPPED", note), note
+    assert pbc_drafting.not_drafted_note("DRAFTED", "A reason no table holds.") == ""
+
+
+def test_no_code_routes_on_a_skip_reasons_sentence() -> None:
+    """G2 review, 20 November 2026 (B1), the class: no module compares a note with a skip
+    reason's sentence, or writes one into a note; the sentences live in pbc_drafting's
+    table alone, and every route reads the token (pbc_drafting.skip_reason)."""
+    import ast
+    from pathlib import Path
+
+    from ai_workforce_api import pbc_drafting
+
+    root = Path(pbc_drafting.__file__).resolve().parents[3]
+    sentences = {
+        sentence[:200]
+        for reason in pbc_drafting.SKIP_REASONS.values()
+        for sentence in (reason.shown, *reason.earlier)
+    }
+    names = {
+        name
+        for name, value in vars(pbc_drafting).items()
+        if isinstance(value, str) and value[:200] in sentences
+    } | {"NEEDS_ACTION"}
+    assert {"REPLANNED", "TOO_MANY", "SAMPLE_REQUEST", "UNPHASED"} <= names
+
+    def sentence_like(node: ast.expr) -> bool:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value[:200] in sentences
+        if isinstance(node, ast.Name):
+            return node.id in names
+        if isinstance(node, ast.Attribute):
+            return node.attr in names
+        return False
+
+    offenders: list[str] = []
+    sources = [
+        *(root / "services" / "api" / "ai_workforce_api").rglob("*.py"),
+        *(root / "scripts").rglob("*.py"),
+    ]
+    assert len(sources) > 50
+    for path in sources:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        here = path.resolve() == Path(pbc_drafting.__file__).resolve()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Compare) and any(
+                sentence_like(side) for side in (node.left, *node.comparators)
+            ):
+                offenders.append(f"{path.name}:{node.lineno} compares with a sentence")
+            if (
+                not here
+                and isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and any(s in node.value.replace("''", "'") for s in sentences)
+            ):
+                offenders.append(f"{path.name}:{node.lineno} holds a sentence")
+    web = root / "apps" / "web" / "src"
+    for path in [*web.rglob("*.ts"), *web.rglob("*.tsx")]:
+        text = path.read_text(encoding="utf-8")
+        # A whole string literal: other copy may open with the same words (a 409's answer).
+        offenders += [
+            f"{path.name} holds a sentence"
+            for s in sentences
+            for quote in ('"', "'", "`")
+            if f"{quote}{s}{quote}" in text
+        ]
+    assert offenders == []
+
+
+def test_a_plan_too_long_for_the_prompt_is_worded_by_the_plan_without_a_model_call(
+    migrated: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The prompt's facts are cut at 12,000 characters, so the last planned items of a long
+    phase never reached the model, and its draft could not name them. Before, the model
+    was called anyway and its draft rejected, the note blaming the model."""
+    from ai_workforce_api import pbc_drafting
+
+    team = _ready_engagement(migrated, "rd-longplan")
+    draft, request, _control = _phase_draft(migrated, team, "DESIGN")
+    real = pbc_drafting.with_plan
+
+    def long(connection: Any, context: DraftContext, request_id: UUID) -> DraftContext:
+        found = real(connection, context, request_id)
+        wordy = tuple(
+            replace(
+                found.planned[0],
+                title=f"Signed access approval for site {n}",
+                description="The signed approval of the access granted at the site. " * 26,
+            )
+            for n in range(9)
+        )
+        return replace(found, planned=wordy)
+
+    monkeypatch.setattr(pbc_drafting, "with_plan", long)
+    model = _ScriptedModel(_coverage_draft(_asked(_TICKETS)))
+    with connect(migrated.url) as connection:
+        assert run_draft(connection, model, draft) == "DRAFTED"
+    assert model.requests == []
+    assert _draft_record(migrated, draft) == (
+        "DRAFTED",
+        "RULES",
+        "The planned items are too long for one model call; the reviewed rules drafted the "
+        "request.",
+    )
+    wording = _wording(migrated, request)
+    assert all(f"Signed access approval for site {n}" in wording for n in range(9))
+
+
+def test_the_mapping_check_says_only_what_it_checks() -> None:
+    """The approval panel's "Mapped to the test plan" check reads the request's
+    requirements, not its wording, so it never says the wording is traced (one screen, one
+    story). Old (to 19 November 2026): "2 planned items, each traced to the test plan.";
+    new: what is checked, by phase; why: owner decision 19 November 2026 (FO-28), a model
+    draft or a person's edit could leave a planned item out of the wording."""
+    from ai_workforce_api.request_quality import quality_from
+
+    rows = [
+        (uuid4(), "E1", "Signed approval", ["CONTROL_EXECUTION"], None, None, False, True),
+        (uuid4(), "E2", "Access policy", ["PROCESS_DOCUMENTATION"], None, None, False, False),
+    ]
+
+    def mapping(phase: str) -> str:
+        checks = quality_from(
+            uuid4(), uuid4(), phase, "Please send the approval.", "DRAFT", rows, None, False
+        )
+        return next(check.detail for check in checks if check.key == "mapping")
+
+    # Design review, 19 November 2026: the label names the test plan, so the detail says
+    # it once. Old: "2 planned items from the test plan. Each item that evidences an
+    # attribute is linked to an approved attribute."; new below.
+    assert mapping("INTERIM") == (
+        "2 planned items. Attribute evidence is linked to approved attributes."
+    )
+    assert mapping("DESIGN") == "2 planned items."
+    assert "traced" not in mapping("INTERIM") + mapping("DESIGN")

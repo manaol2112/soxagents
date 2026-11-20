@@ -38,6 +38,7 @@ from ai_workforce_api.control_context import (
     line,
     raise_issues,
     record_not_asked,
+    records_basis,
     settled_answer,
     source_blocks,
     understanding_completed,
@@ -756,7 +757,7 @@ def run_narrative(
             fixes = [*fixes, *(line(item, 300) for item in answer.fixes if line(item, 300))]
             if answer.revised and revised_sections:
                 sections, steps = revised_sections, revised_steps or steps
-            passed = answer.passed
+            passed = review_passed(answer, codes)
             if passed or not answer.revised:
                 break
     _stage(connection, control_id, "CHECKING", rounds)
@@ -1181,6 +1182,16 @@ def _merge(held: list[_Question], more: list[_Question]) -> list[_Question]:
     return merged[:MAX_QUESTIONS]
 
 
+def review_passed(answer: _Review, codes: list[str]) -> bool:
+    """Whether the narrative reviewer's answer passes the narrative by its own account: it
+    says passed, its coverage marks every attribute covered, and it lists no finding (I10;
+    FO-25, 19 November 2026: before, its `passed` alone counted, so an answer that said
+    passed with an attribute it marked not covered, or with findings, read Reviewed). Pure."""
+    covered = {item.code.strip() for item in answer.coverage if item.covered}
+    findings = [text for text in (line(item, 300) for item in answer.findings) if text]
+    return answer.passed and all(code in covered for code in codes) and not findings
+
+
 def rules_findings(sections: list[Section], steps: list[Step], codes: list[str]) -> list[str]:
     """What the reviewed rules find wrong with a narrative: a section missing, an attribute
     not explained or not evaluated, the first person, commentary about what is missing, no
@@ -1508,8 +1519,8 @@ def raise_late_points(
                           AND status = 'OPEN' AND topic = %s
                         ORDER BY created_at DESC LIMIT 1)
             """,
-            (question, proposal, basis if basis in ("SOURCES", "TYPICAL") else "TYPICAL",
-             joined, control_id, topic),
+            (question, proposal, records_basis(basis, stated=True, cited=False), joined,
+             control_id, topic),
         )  # fmt: skip
         asked.add(_topic(topic))
         raised += 1
@@ -1517,11 +1528,13 @@ def raise_late_points(
 
 
 def _statement(item: _Question) -> tuple[str, str]:
-    """A point's statement to confirm and where it comes from; none when it holds a secret."""
+    """A point's statement to confirm and where it comes from; none when it holds a secret.
+    The drafter's points carry no citation, so none is "From the records" (owner decision, 19
+    November 2026: records_basis); its question review keeps that."""
     proposal = line(item.proposal, 400)
     if not proposal or contains_secret({"proposal": proposal}):
         return "", ""
-    return proposal, item.proposal_basis or "TYPICAL"
+    return proposal, records_basis(item.proposal_basis, stated=True, cited=False)
 
 
 def _suggestions(item: _Question) -> list[str]:

@@ -23,10 +23,10 @@ defect. Targeted tests, the fail-without-fix proof and independent review found 
 |---|---|---|---|
 | G0 | Every change, every step | ruff, mypy, tsc and biome on the changed files; the tests selected for them | `make check-changed` |
 | G1 | A change is ready for review | G0; the safeguard tests of the touched area; for each **new** safeguard test only, proof that it fails without its fix; `test_migrations` and `test_schema` when a migration changed | `make test-files`, `make prove` |
-| G2 | High-risk changes only | One independent code review, given the diff and the G1 summary | An agent or a person |
+| G2 | High-risk changes only | One independent code review, given the diff and the G1 summary; and, before any code, the design note's answers to the "what happens later" challenge | An agent or a person |
 | G3 | A change to what a person sees | The committed browser checks; snapshots of the changed states; one design review of the changed states | Browser checks and the `ui-reviewer` agent, once |
 | G4 | Every push and pull request | Lint, types, the critical tier in four parallel parts, the fast tier's files not in it, every Node test, the web build, the secret scan and the dependency audit | GitHub Actions; required checks `baseline`, `secrets`, `dependencies` |
-| G5 | A milestone | G4 and `make test-full` on CI; coverage of the audit-critical modules and mutation testing are planned, not yet approved | CI, on demand |
+| G5 | A milestone | G4 and `make test-full` on CI; coverage of the audit-critical modules and mutation testing are planned, not yet approved; and one independent adversarial audit of the milestone against `docs/audit-invariants.md`, by an agent or person that built none of it | CI, on demand |
 | G6 | A release | G5, a Windows CI job (planned), a migration rehearsal on a copy of the schema, a security review | CI, one review, the owner's approval |
 
 A gate's commands run through `scripts/run_tests.py`, so no agent supervises a test run: one
@@ -90,6 +90,13 @@ tools, outbound email (and the rest of AGENTS.md's High class). One code reviewe
 diff and the G1 summary; it is never asked to rerun what G1 recorded. These reviews found a
 blocking defect every time in November 2026 and are not reduced.
 
+Before a High-risk change is coded, someone other than its author challenges the design
+note with "what happens later": what if a basis it relies on changes after sign-off, while
+a run is in progress, or when a file is withdrawn, replaced or read again, an attribute or
+criterion is reworded, the plan is revised, or a phase is decided later? Each answer names
+the invariant in `docs/audit-invariants.md` and the test that holds it, or the increment
+that will (owner, 19 November 2026).
+
 ### G3: a visible change
 
 The committed browser checks run on the seeded synthetic states (being added: testing
@@ -114,13 +121,41 @@ refreshes the times from a run's logs); the fast tier's files that are not
 critical (`make test-fast-only`, `FAST_PY` minus `CRITICAL_PY`, which no CI run reached
 before; every file of either list runs in exactly one part); every Node test, which includes
 `CRITICAL_NODE`; and the web app's production build (`make web-build`). `security.yml` runs
-the secret scan and the dependency audit. Branch protection requires `baseline`, which
+the secret scan (a pull request's own commits; every branch's whole history on a push and
+weekly) and the dependency audit. Branch protection requires `baseline`, which
 always runs and fails unless every part succeeded, `secrets` and `dependencies`. Each job has
 a time limit, and a test part stops itself at 25 minutes, under its job's 30, so its
 summary is written. A CI result is reported only once the run on GitHub shows it; a
 closeout before the push says that the critical tier has not yet run on CI. JUnit XML is
 not uploaded as an artifact: that needs a new action, a supply-chain dependency for the
 owner to decide.
+
+### The risk-class check (report only)
+
+Decided by the product owner on 19 November 2026. `.github/workflows/risk.yml` runs
+`scripts/risk_class.py` (standard library, about a second; no agent, no test suite) on every
+pull request, and again when its body is edited. The mapping is `.github/risk-paths.toml`:
+each path's minimum class (engineering standards §2) is the highest rule that matches it,
+and an unmatched path is High. The check takes the higher of the base and head mappings, so
+a pull request cannot lower its own minimum, and it runs the base commit's copy of the
+script. It fails when the template's declaration is missing, malformed or below the
+minimum; there is no per-PR exception (a wrong minimum is fixed in the mapping, itself a
+High change). Dependabot needs no declaration only when it changes dependency files or
+workflow `uses:` pins. For High it checks that the evidence exists and is current: a design
+note (a committed docs/ file, or inline; a sensitive note stays private, with its summary
+in the body, since the repository is public), the audit invariants touched, and a review
+record whose reviewed commit is in the pull request, with no High path of it changed since.
+
+It proves presence and currency only. It cannot prove that a review happened, who did it,
+that it was independent, or its quality: every agent acts with the owner's credentials. It
+is not the independent-review gate, and under `pull_request` it guards against omission
+and mistakes, not a hostile change. It reports only for now (`--report-only`, and not a
+required check). It becomes a required check after a report-only week with at least five
+pull requests: `--report-only` is dropped and the owner adds `risk-class` to branch
+protection. `services/api/tests/test_risk_class.py` (critical tier) checks the
+rules and keeps the mapping honest: every tracked file matches a rule, every API module
+whose own test is in `CRITICAL_PY` maps to High, and an excepted module writes no SQL,
+registers no route, holds no prompt and calls no model.
 
 ### G5: a milestone
 
@@ -453,8 +488,9 @@ Every milestone report states:
 
 1. The tests executed, with the commands actually run and their results.
 2. The tests intentionally not executed, and why.
-3. The risk-based justification for the selected coverage: what changed, which invariants
-   it could affect, and which tests cover them.
+3. The risk-based justification for the selected coverage: what changed, which audit
+   invariants (`docs/audit-invariants.md`, by id) it could affect, and which tests cover
+   them.
 4. Any outstanding failures or regression risks.
 5. The date and commit of the most recent successful full-suite execution, and whether it
    still applies to the code being closed.
@@ -478,6 +514,11 @@ Closure checklist (a milestone: the gates of §1 its changes passed, and G5):
       covers them or why G5 ran.
 - [ ] Every rewritten expectation recorded with the old one, the new one and the
       justification (§3); any test missed by the routine sets added to them (§6).
+- [ ] The "what happens later" challenge answered in the design note of every High-risk
+      change, each answer naming an invariant and its test.
+- [ ] G5: the milestone's independent adversarial audit run against
+      `docs/audit-invariants.md`; each finding that survives verification fixed, or added to
+      that file's open table with an increment.
 - [ ] The diff reviewed for unrelated changes, secrets, unsafe defaults and data exposure.
 - [ ] The report's five items above.
 

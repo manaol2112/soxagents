@@ -529,6 +529,28 @@ class ParsedControl:
     test_attributes: list[str]
     pbc_items: list[str]
     custom_fields: list[tuple[str, str]]
+    # Every row of the control: an RCM kept one row per system repeats the control ID with
+    # the same content, and those rows are one control (owner decision, 19 November 2026).
+    # Each row with the systems it names, so an instance points at the row of its system.
+    rows: list[int] = field(default_factory=list)
+    row_systems: list[tuple[int, list[str]]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not self.rows:
+            self.rows = [self.row]
+        if not self.row_systems:
+            self.row_systems = [(self.row, list(self.applications))]
+
+
+@dataclass
+class _Repeat:
+    """A control ID on more than one row, and what keeps its rows from being one control."""
+
+    ref: str
+    rows: list[int]
+    differs: list[str] = field(default_factory=list)
+    unnamed: list[int] = field(default_factory=list)
+    twice: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -550,6 +572,8 @@ class BuildResult:
     skipped: list[Skipped] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
+    # Some problems are rows to fix in the file itself, which no mapping choice settles.
+    fix_in_file: bool = False
 
 
 # Reading files
@@ -1012,6 +1036,8 @@ def build(
     value_maps: dict[str, dict[str, str]],
 ) -> BuildResult:
     """Turn mapped rows into controls. Rows that cannot be used are listed, not guessed."""
+    from ai_workforce_api.rcm_systems import names_a_system
+
     names = headers(rows, header_row)
     result = BuildResult()
     result.problems.extend(check_fields(column_fields, len(names)))
@@ -1028,7 +1054,13 @@ def build(
     if result.problems:
         return result
     column = {choice: index for index, choice in enumerate(column_fields) if choice in FIELD_KEYS}
+    # A control ID seen before: the index of its control, and the content its rows share.
     seen: dict[str, int] = {}
+    contents: dict[str, dict[str, str]] = {}
+    repeats: dict[str, _Repeat] = {}
+    # Rows skipped unread (no description, or a secret), by control ID: if another row of
+    # the ID is kept, the skipped row's system would be lost, so the import is held.
+    unread: dict[str, list[tuple[int, str]]] = {}
     bad_emails = 0
     for number, row in data_rows(rows, header_row):
 
@@ -1045,24 +1077,15 @@ def build(
         if len(ref) > 60:
             result.skipped.append(Skipped(number, "Control ID is longer than 60 characters."))
             continue
-        if ref.lower() in seen:
-            result.skipped.append(Skipped(number, f"Control ID repeats row {seen[ref.lower()]}."))
-            continue
-        if activity == "":
-            activity = title
-        if activity == "":
-            result.skipped.append(Skipped(number, "No control description."))
-            continue
+        # A row that looks like it holds a secret is not read further: never merged into
+        # another row's control, and none of its cells becomes a system.
         if any(_CREDENTIAL.search(value) for value in row):
             result.skipped.append(Skipped(number, "The row looks like it holds a secret."))
+            unread.setdefault(ref.lower(), []).append((number, "it looks like it holds a secret"))
             continue
-        if len(result.controls) >= MAX_CONTROLS:
-            result.skipped.append(Skipped(number, f"Only {MAX_CONTROLS} controls are imported."))
-            continue
-        seen[ref.lower()] = number
         email = cell("owner_email").strip().lower()
-        if email != "" and _EMAIL.fullmatch(email) is None:
-            bad_emails += 1
+        valid_email = email == "" or _EMAIL.fullmatch(email) is not None
+        if not valid_email:
             email = ""
         owner = " ".join(cell("owner_name").split())[:200]
         if email == "" and _EMAIL.fullmatch(owner.lower()):
@@ -1072,6 +1095,50 @@ def build(
             label = field_value(row, column_fields, key)[:120]
             mapped[key] = (value_maps[key][value_key(label)], label)
         key_text = normalize(cell("key_control"))
+        applications = _split(cell("applications"), r"[,;\n|]", 20, 120)
+        content = _content(row, cell, column, column_fields, mapped, email, key_text)
+        seen_at = seen.get(ref.lower())
+        if seen_at is not None:
+            # The same control ID again (owner decision, 19 November 2026): the same
+            # content on a row naming its own system is the control on that system too;
+            # anything else holds the import until the file is reconciled. Never "first
+            # row wins".
+            kept = result.controls[seen_at]
+            group = repeats.setdefault(ref.lower(), _Repeat(kept.control_ref, [kept.row]))
+            group.rows.append(number)
+            for key, value in contents[ref.lower()].items():
+                label = _field_label(key, labels, names)
+                if content.get(key, "") != value and label not in group.differs:
+                    group.differs.append(label)
+            if not names_a_system(kept.applications) and kept.row not in group.unnamed:
+                group.unnamed.insert(0, kept.row)
+            if not names_a_system(applications):
+                group.unnamed.append(number)
+            if not group.differs and not group.unnamed:
+                named = {name.lower(): name for name in kept.applications}
+                for name in applications:
+                    if name.lower() in named:
+                        if named[name.lower()] not in group.twice:
+                            group.twice.append(named[name.lower()])
+                        continue
+                    named[name.lower()] = name
+                    kept.applications.append(name)
+                kept.rows.append(number)
+                kept.row_systems.append((number, applications))
+            continue
+        if activity == "":
+            activity = title
+        if activity == "":
+            result.skipped.append(Skipped(number, "No control description."))
+            unread.setdefault(ref.lower(), []).append((number, "no control description"))
+            continue
+        if len(result.controls) >= MAX_CONTROLS:
+            result.skipped.append(Skipped(number, f"Only {MAX_CONTROLS} controls are imported."))
+            continue
+        if not valid_email:
+            bad_emails += 1
+        seen[ref.lower()] = len(result.controls)
+        contents[ref.lower()] = content
         result.controls.append(
             ParsedControl(
                 row=number,
@@ -1088,7 +1155,7 @@ def build(
                 key_control=True if "key_control" not in column else key_text in _YES,
                 owner_name=owner,
                 owner_email=email[:200],
-                applications=_split(cell("applications"), r"[,;\n|]", 20, 120),
+                applications=applications,
                 test_attributes=_split(cell("test_attributes"), r"\n|;", 20, 500)
                 or [DEFAULT_ATTRIBUTE],
                 pbc_items=_split(cell("pbc_items"), r"\n|;", 20, 500) or [DEFAULT_EVIDENCE],
@@ -1099,6 +1166,8 @@ def build(
                 ],
             )
         )
+    _report_repeats(result, repeats, seen)
+    _report_unread(result, unread, seen)
     if bad_emails:
         result.warnings.append(
             f"{bad_emails} owner email{'s are' if bad_emails > 1 else ' is'} not valid and "
@@ -1107,6 +1176,136 @@ def build(
     if not result.controls:
         result.problems.append("No row has a control ID and a description.")
     return result
+
+
+# How many repeated control IDs are listed one by one; the rest are counted.
+REPEATS_LISTED = 5
+
+
+def _content(
+    row: list[str],
+    cell: Callable[[str], str],
+    column: dict[str, int],
+    column_fields: list[str],
+    mapped: dict[str, tuple[str, str]],
+    email: str,
+    key_text: str,
+) -> dict[str, str]:
+    """What two rows of one control ID must share: every mapped field and kept client
+    column but the systems cell, as read (spacing collapsed, terms as their standard
+    value, the owner email once checked). An ignored column is not compared."""
+    content: dict[str, str] = {}
+    for key in FIELD_KEYS:
+        if key in ("control_ref", "applications"):
+            continue
+        if key in VALUE_FIELDS:
+            content[key] = mapped[key][0]
+        elif key not in column:
+            continue
+        elif key == "owner_email":
+            content[key] = email
+        elif key == "key_control":
+            content[key] = str(key_text in _YES)
+        else:
+            content[key] = " ".join(cell(key).split())
+    for index, choice in enumerate(column_fields):
+        if choice == CUSTOM:
+            content[f"{CUSTOM}:{index}"] = " ".join(
+                (row[index] if index < len(row) else "").split()
+            )
+    return content
+
+
+def _field_label(key: str, labels: dict[str, str], names: list[str]) -> str:
+    if key.startswith(f"{CUSTOM}:"):
+        index = int(key.split(":", 1)[1])
+        return f'"{names[index]}"' if index < len(names) else "a client column"
+    return labels[key].lower()
+
+
+def listed(items: list[str], limit: int = 6) -> str:
+    """Items as a sentence: "A", "A and B", "A, B and C", "A, B and 4 more"."""
+    if len(items) > limit:
+        return f"{', '.join(items[:limit])} and {len(items) - limit} more"
+    if len(items) <= 1:
+        return "".join(items)
+    return f"{', '.join(items[:-1])} and {items[-1]}"
+
+
+def _report_repeats(result: BuildResult, repeats: dict[str, _Repeat], seen: dict[str, int]) -> None:
+    """A repeated control ID in the preview: merged rows as a warning, rows that cannot be
+    one control as a problem that holds the import."""
+    held = [group for group in repeats.values() if group.differs or group.unnamed]
+    if held:
+        result.fix_in_file = True
+    for group in held[:REPEATS_LISTED]:
+        rows = listed([str(row) for row in group.rows], 20)
+        unnamed = (
+            f"{'row' if len(group.unnamed) == 1 else 'rows'} "
+            f"{listed([str(row) for row in group.unnamed], 20)} "
+            f"name{'s' if len(group.unnamed) == 1 else ''} no system"
+        )
+        if group.differs and group.unnamed:
+            why = f"differ in {listed(group.differs, 20)}, and {unnamed}"
+            fix = "make the rows the same and name the system on each, or give each its own ID"
+        elif group.differs:
+            why = f"differ in {listed(group.differs, 20)}"
+            fix = "make the rows the same or give each its own ID"
+        else:
+            why = unnamed
+            fix = "name the system on each row or give each its own ID"
+        result.problems.append(f"Rows {rows} share control ID {group.ref} but {why}: {fix}.")
+    if len(held) > REPEATS_LISTED:
+        result.problems.append(
+            f"And {len(held) - REPEATS_LISTED} more control IDs are on more than one row that "
+            "differ: make the rows the same or give each its own ID."
+        )
+    merged = [group for group in repeats.values() if not group.differs and not group.unnamed]
+    for group in merged[:REPEATS_LISTED]:
+        control = result.controls[seen[group.ref.lower()]]
+        line = (
+            f"{group.ref} is on rows {listed([str(row) for row in group.rows], 20)} with the "
+            f"same content: one control for {listed(control.applications)}."
+        )
+        if group.twice:
+            line += (
+                f" {listed(group.twice)} {'is' if len(group.twice) == 1 else 'are'} named "
+                "more than once and imported once."
+            )
+        result.warnings.append(line)
+    if len(merged) > REPEATS_LISTED:
+        result.warnings.append(
+            f"And {len(merged) - REPEATS_LISTED} more control IDs are on more than one row "
+            "with the same content: one control for each system they name."
+        )
+
+
+def _report_unread(
+    result: BuildResult, unread: dict[str, list[tuple[int, str]]], seen: dict[str, int]
+) -> None:
+    """A row skipped unread whose control ID another row imports holds the import (owner
+    decision, 19 November 2026; fail closed): the skipped row may name a system the control
+    would otherwise never be created for. Named by row number and the kept row's control ID
+    only, never by the skipped row's cells."""
+    held = [
+        (row, why, result.controls[seen[ref]].control_ref)
+        for ref, rows in unread.items()
+        if ref in seen
+        for row, why in rows
+    ]
+    held.sort()
+    if held:
+        result.fix_in_file = True
+    for row, why, ref in held[:REPEATS_LISTED]:
+        result.problems.append(
+            f"Row {row} repeats control ID {ref} but cannot be read ({why}): fix the row in "
+            "the file or give it its own ID."
+        )
+    if len(held) > REPEATS_LISTED:
+        result.problems.append(
+            f"And {len(held) - REPEATS_LISTED} more rows repeat a control ID but cannot be "
+            "read: fix the rows in the file or give each its own ID."
+        )
 
 
 def _split(text: str, pattern: str, limit: int, width: int) -> list[str]:

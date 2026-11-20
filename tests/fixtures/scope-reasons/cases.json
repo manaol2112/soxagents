@@ -1,0 +1,16 @@
+{
+ "_": "When leaving a control out in the system wizard needs a reason (docs/onboarding.md, system wizard; owner decision 19 November 2026: leaving out a control because of a SOC report needs a reason). The stored assessment does not say whether an exclusion rests on a SOC report, so a reason is asked for every control the agent assessed and every candidate once the system has a review, unless the team itself confirmed the system is on premises, expects no SOC report, and none is on file. A Recommended control always needs one. Read by the web's tests (onboarding-model: reasonNeeded) and the server's (system_applicability.reason_needed). Synthetic facts only.",
+ "cases": [
+  {"name": "recommended, even on a confirmed on-premises system", "status": "RECOMMENDED", "reviewed": true, "hosting": "ON_PREMISES", "socExpected": false, "confirmed": true, "reports": 0, "needs": true},
+  {"name": "not recommended on a SaaS system", "status": "NOT_RECOMMENDED", "reviewed": true, "hosting": "SAAS", "socExpected": true, "confirmed": true, "reports": 0, "needs": true},
+  {"name": "potentially applicable", "status": "POTENTIAL", "reviewed": true, "hosting": "SAAS", "socExpected": true, "confirmed": false, "reports": 0, "needs": true},
+  {"name": "needs judgment, as a malformed or partial answer is filled in", "status": "JUDGMENT", "reviewed": true, "hosting": null, "socExpected": null, "confirmed": false, "reports": 0, "needs": true},
+  {"name": "not assessed although the system has a review", "status": null, "reviewed": true, "hosting": "SAAS", "socExpected": true, "confirmed": false, "reports": 0, "needs": true},
+  {"name": "not assessed and no review yet", "status": null, "reviewed": false, "hosting": null, "socExpected": null, "confirmed": false, "reports": 0, "needs": false},
+  {"name": "team-confirmed on premises, no SOC report expected or on file", "status": "NOT_RECOMMENDED", "reviewed": true, "hosting": "ON_PREMISES", "socExpected": false, "confirmed": true, "reports": 0, "needs": false},
+  {"name": "on premises only as the agent assumed it", "status": "NOT_RECOMMENDED", "reviewed": true, "hosting": "ON_PREMISES", "socExpected": false, "confirmed": false, "reports": 0, "needs": true},
+  {"name": "confirmed on premises with a SOC report on file", "status": "POTENTIAL", "reviewed": true, "hosting": "ON_PREMISES", "socExpected": false, "confirmed": true, "reports": 1, "needs": true},
+  {"name": "confirmed on premises, whether a SOC report is expected not known", "status": "JUDGMENT", "reviewed": true, "hosting": "ON_PREMISES", "socExpected": null, "confirmed": true, "reports": 0, "needs": true},
+  {"name": "confirmed vendor hosted with no SOC report expected", "status": "NOT_RECOMMENDED", "reviewed": true, "hosting": "VENDOR_HOSTED", "socExpected": false, "confirmed": true, "reports": 0, "needs": true}
+ ]
+}

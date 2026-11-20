@@ -102,7 +102,20 @@ def test_the_questions_added_by_b1k_are_these_and_nothing_was_removed() -> None:
     assert set(later) == set(ADDED)
     assert {item.since for item in later.values()} == {B1K_ADDED} == {date(2026, 11, 16)}
     operations = {key for key, items in CONTROL_QUESTIONS.items() if key.startswith("operations-")}
-    added_later = {item.key for item in every if item.since is not None and item.since != B1K_ADDED}
+    # Rewritten 19 November 2026 (owner decision, question integrity part A). Old: the only
+    # dated questions besides B1k's were the operations banks'. New: those, and the one
+    # universal question on evidence without a SOC 1 report, dated 19 November
+    # (SOC1_NO_REPORT_ADDED), named exactly. Why: it was added to the bank in use, so it
+    # carries its own date and finished controls are not held by it; the B1k set and the
+    # count of the original bank are asserted exactly as before.
+    no_report = {"wt-service-org-no-report"}
+    assert {item.key for item in every if item.since == date(2026, 11, 19)} == no_report
+    assert walkthrough_questions.SOC1_NO_REPORT_ADDED == date(2026, 11, 19)
+    added_later = {
+        item.key
+        for item in every
+        if item.since is not None and item.since != B1K_ADDED and item.key not in no_report
+    }
     assert added_later == {item.key for key in operations for item in CONTROL_QUESTIONS[key]}
     assert {item.since for item in every if item.key in added_later} == {
         walkthrough_questions.OPERATIONS_ADDED

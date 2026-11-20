@@ -1124,11 +1124,25 @@ class AnswerIssue(BaseModel):
         return list(dict.fromkeys(found))[:12]
 
 
+def records_basis(basis: str, *, stated: bool, cited: bool) -> str:
+    """Where a statement to confirm comes from, as a person is shown it (owner decision, 19
+    November 2026, SOL's report defect 4): "From the records" (SOURCES) only when the writer
+    says so and a record backs it (`cited`: a quote found in its source, or a person's answer
+    it follows); otherwise the usual practice for a control of its kind (TYPICAL), an empty
+    basis included; and none when there is no statement (`stated` False). The one rule of
+    every writer of a question's basis: checked_issues, question_review and the narrative's
+    points. Pure."""
+    if not stated:
+        return ""
+    return "SOURCES" if basis == "SOURCES" and cited else "TYPICAL"
+
+
 def checked_issues(
     raw: list[AnswerIssue], sources: list[Source], origin: IssueOrigin
 ) -> list[Issue]:
     """The agent's issues, with only the quotes that are found in their sources. A
-    conflict nobody can point to in the sources is ambiguity, not a conflict."""
+    conflict nobody can point to in the sources is ambiguity, not a conflict, and a statement
+    nobody can point to in them is the usual practice, not the records' (records_basis)."""
     found: list[Issue] = []
     for item in raw[:5]:
         quotes = tuple(
@@ -1162,7 +1176,9 @@ def checked_issues(
                 quotes=quotes,
                 question=line(item.question, 400) if asks else "",
                 proposal=proposal,
-                proposal_basis=(item.proposal_basis or "TYPICAL") if proposal else "",
+                proposal_basis=records_basis(
+                    item.proposal_basis, stated=bool(proposal), cited=bool(quotes)
+                ),
                 suggestions=tuple(
                     text for text in (line(value, 200) for value in item.suggestions[:3]) if text
                 )

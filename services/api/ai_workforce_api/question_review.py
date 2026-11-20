@@ -10,10 +10,12 @@ Every path that raises an agent's question ends here, so none reaches a person a
   "Monthly" and never reads a paragraph;
 - an independent agent then reads each interview as the auditor would and corrects it: whether
   each answer answers its question, whether the usual answer makes sense, how each path reads;
-- deterministic checks hold both answers: the shape of the interview (interview_problems), and
-  no figure or mid-sentence name the records do not hold (invented). What fails is sent back
-  once; a question that still fails, or that the reviewer did not finish, keeps its draft wording
-  and stays unreviewed, and the screen says so. A model failure is never passed off as a review.
+- deterministic checks hold both answers: the shape of the interview (interview_problems), no
+  figure or mid-sentence name the records do not hold (invented), and no step, answer sentence
+  or detail about another matter than the item asks (_strays; 19 November 2026). What fails
+  is sent back once; a question that still fails, or that the reviewer did not finish, keeps
+  its draft wording and stays unreviewed, and the screen says so. A model failure is never
+  passed off as a review.
 
 The checks do not judge grammar or sense, which are the reviewer's work, and a new name that opens
 a sentence looks like any capitalized first word, so only the agents' instructions hold it.
@@ -21,6 +23,11 @@ a sentence looks like any capitalized first word, so only the agents' instructio
 The topic that identifies a question stays, and one a person answered in the meantime is left
 alone. The question and the statement to confirm are read from the interview (its first question,
 and the sentences along its usual answers), so every screen and agent reads the same words.
+
+Where the statement comes from is never the model's word alone (owner decision, 19 November
+2026): "From the records" (SOURCES) only for an item raised so with a quote its source still
+holds, or for a follow-up of an answer a person confirmed; anything else is the usual practice
+(TYPICAL; control_context.records_basis).
 """
 
 import json
@@ -36,7 +43,13 @@ from pydantic import BaseModel, Field, ValidationError
 
 from ai_workforce_api.actions import contains_secret
 from ai_workforce_api.agent_answers import SHAPE, note_unusable, problem_of
-from ai_workforce_api.control_context import Source, line, source_blocks
+from ai_workforce_api.control_context import (
+    Source,
+    check_quote,
+    line,
+    records_basis,
+    source_blocks,
+)
 from ai_workforce_api.db import transaction
 from ai_workforce_api.models import ModelProvider, ModelRequest
 from ai_workforce_api.prompt_data import neutral
@@ -49,8 +62,11 @@ logger = logging.getLogger(__name__)
 # /3 and /5 (18 November 2026, owner-approved, seen on ITGC-AC-03): both agents are given the
 # walkthrough's confirmed answers and, for a follow-up, the answer it follows, and are told
 # never to ask either again; a step that does is sent back (_repeats_answered).
-WRITER_LABEL = "question-interview/3"
-REVIEWER_LABEL = "question-review/5"
+# /4 and /6 (19 November 2026, owner-approved, SOL's report defect 3): the reviewer is shown
+# what the item asks as raised (asks: its question and detail), and both prompts gain one rule
+# line: every step serves what the item asks. Shipped with the deterministic check (_strays).
+WRITER_LABEL = "question-interview/4"
+REVIEWER_LABEL = "question-review/6"
 # The first pass, then one more for what the checks sent back.
 ROUNDS = 2
 MAX_ITEMS = 12
@@ -116,6 +132,7 @@ return no steps, and correct the grammar of its detail and why. For any other it
 as given with its grammar and spelling corrected.
 
 Facts:
+- Every step serves what the item asks; never ask about another matter.
 - Never add a person's name, a system, a figure, a threshold or a document title that is not in \
 the item, the control context or the sources. Name people by role.
 - Do not ask again what the control context, the client's answers or the walkthrough answers \
@@ -141,6 +158,8 @@ clicks an answer, and the next question depends on the answer. Read each intervi
 auditor, along every answer path, and correct it before the auditor sees it.
 
 Correct whatever falls short of these:
+- Every step serves what the item asks (asks: its question and detail as raised); a step about \
+another matter is rewritten to ask it, or removed.
 - Every answer actually answers its question. A question and its answers that do not fit are \
 rewritten or the step is removed. "Who" is answered by a role, "how often" by a frequency.
 - A follow-up makes sense after the answer that leads to it, and asks something that answer has \
@@ -265,6 +284,13 @@ class _Held:
     drafted: dict[str, Any] | None = None
     # A follow-up: the question and answer it follows (18 November 2026); None otherwise.
     follows: dict[str, str] | None = None
+    # Whether a quote stored on the item is still found in the control's sources (check_quote
+    # at the review, so a document unlinked, replaced or withdrawn since no longer counts).
+    cited: bool = False
+    # Whether the answer it follows is one a person gave: a walkthrough answer that stands, or
+    # a question a person resolved. A dismissal, a supersession or a system's resolution is
+    # not (19 November 2026).
+    confirmed_parent: bool = False
 
 
 def _why_problems(why: str) -> list[str]:
@@ -313,23 +339,34 @@ _PLAIN = frozenset(
 )  # fmt: skip
 
 
-def _stems(text: str) -> set[str]:
+def stems(text: str) -> set[str]:
     """The matter words of a sentence, each cut to a rough stem ("reviewer's", "reviewed" and
-    "reviews" read as one), the plain words left out."""
+    "reviews" read as one), the plain words left out. Pure; the one implementation, read by
+    the asked-again check (_repeats_answered) and the matter check (_strays).
+
+    19 November 2026 (SOL's report, defect 2): a word that loses no ending loses a final "e"
+    when four letters remain, so "approve", "approves" and "approved" read as one ("approv"),
+    while "employee" and "employees" stay one ("employe"). A plain word is left out before it
+    is cut as well as after, so "where" or "these" never read as a matter word."""
     found: set[str] = set()
-    for word in re.findall(r"[a-z0-9']+", text.lower()):
-        word = word.removesuffix("'s").strip("'")
+    for raw in re.findall(r"[a-z0-9']+", text.lower()):
+        word = raw.removesuffix("'s").strip("'")
+        if raw in _PLAIN or word in _PLAIN:
+            continue
         for suffix in ("ing", "ed", "er", "es", "s"):
             if word.endswith(suffix) and len(word) - len(suffix) >= 4:
                 word = word[: -len(suffix)]
                 break
+        else:
+            if word.endswith("e") and len(word) - 1 >= 4:
+                word = word[:-1]
         if len(word) > 3 and word not in _PLAIN:
             found.add(word)
     return found
 
 
 def _overlaps(first: str, second: str) -> bool:
-    one, two = _stems(first), _stems(second)
+    one, two = stems(first), stems(second)
     if len(one) < 3 or len(two) < 3:
         return False
     return len(one & two) / min(len(one), len(two)) > REPEAT_SHARE
@@ -359,6 +396,97 @@ def _repeats_answered(steps: list[dict[str, Any]], answered: list[dict[str, str]
                 )
                 break
     return found
+
+
+# Words that frame a question without naming its matter ("How often?", "Does someone do it?").
+_FRAME = frozenset(
+    stems("often usual usually always ever never someone somebody person people role done happen")
+)
+_STEP_KEY = re.compile(r"[A-Za-z0-9_-]{1,12}")
+
+
+def _said(value: Any) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _matter(text: Any) -> set[str]:
+    return stems(_said(text)) - _FRAME
+
+
+def _purpose(held: _Held) -> set[str]:
+    """What the item asks, as raised: never changed between the writer's and the reviewer's
+    pass (_pass changes only its problems and the drafted interview)."""
+    return stems(
+        " ".join([held.topic, held.question, held.proposal, *held.suggestions, held.detail])
+    )
+
+
+def _strays(steps: list[Any], held: _Held) -> list[str]:
+    """Each step, answer sentence and branch about another matter than the item asks (SOL's
+    report, defect 3, 19 November 2026: the wording review replaced "Which contractors are in
+    scope, and where are they tracked?" with a question on the office visitor register, saved
+    as reviewed). The first step's question shares a matter word with what the item asks (its
+    topic, question, statement, suggestions and detail); a later step's question, where it has
+    matter words ("How often?" has none), shares one with that or with the step and answer
+    that lead to it; and every answer's sentence, which is what a person confirms, shares one
+    with its step's question or what leads to it. A first step naming no matter, or no
+    readable step, is held (fail closed). Only forward links are followed, so a duplicate or
+    empty key, a link to an unknown or an earlier step, or a cycle never raises: what the
+    shape checks report is theirs (interview_problems). The problem names the step by its key
+    and quotes only the question as raised, never the model's words (they go to the audit
+    trail). Pure."""
+    asked = held.question or held.topic
+    readable = [step for step in steps if isinstance(step, dict)]
+    if not readable:
+        return [f'The interview asks nothing of what the item asks ("{asked}"): ask it.']
+    purpose = _purpose(held)
+    leads: dict[int, set[str]] = {0: set(purpose)}
+    found: list[str] = []
+    for at, step in enumerate(readable):
+        key = _said(step.get("key"))
+        name = key if _STEP_KEY.fullmatch(key) else str(at + 1)
+        context = leads.get(at, set(purpose))
+        question = _matter(step.get("question"))
+        if (at == 0 or question) and not question & context:
+            found.append(
+                f'Step {name} asks about another matter than the question it settles ("{asked}"):'
+                " ask what the item asks."
+            )
+        own = context | question
+        answers = step.get("answers")
+        for answer in answers if isinstance(answers, list) else []:
+            if not isinstance(answer, dict):
+                continue
+            says = _matter(answer.get("says"))
+            if not says & own:
+                found.append(
+                    f"Step {name}: an answer's sentence is about another matter than the "
+                    f'question it settles ("{asked}"): say what the answer means for it.'
+                )
+            target = _said(answer.get("next"))
+            later = next(
+                (
+                    index
+                    for index in range(at + 1, len(readable))
+                    if target and _said(readable[index].get("key")) == target
+                ),
+                None,
+            )
+            if later is not None:
+                leads[later] = leads.get(later, set()) | own | _matter(answer.get("label")) | says
+    return list(dict.fromkeys(found))
+
+
+def _detail_strays(detail: str, held: _Held) -> list[str]:
+    """A detail rewritten about another matter than the item asks, a conflict's included
+    (19 November 2026): a conflict's detail and why are the only words its review rewrites.
+    An unchanged detail is the item's own. Pure."""
+    if detail == held.detail or _matter(detail) & _purpose(held):
+        return []
+    return [
+        "The detail is about another matter than the question it settles "
+        f'("{held.question or held.topic}"): keep to what the item asks.'
+    ]
 
 
 def _step_problems(step: dict[str, Any], at: int, keys: list[str]) -> list[str]:
@@ -505,65 +633,95 @@ def _follows(
     parent_key: str,
     parent_id: Any,
     answered: list[dict[str, str]],
-) -> dict[str, str] | None:
+) -> tuple[dict[str, str] | None, bool]:
     """The question and answer a follow-up follows: a walkthrough answer (by its key) or a
-    settled question (by its id); None when it follows none, or one not settled."""
+    settled question (by its id); None when it follows none, or one not settled. With it,
+    whether that answer is a person's (19 November 2026, the "confirmed answer" of
+    records_basis): a walkthrough answer that stands (answered_walkthrough, not applicable
+    left out), or a question a person resolved (RESOLVED with resolved_by, the rule of
+    understanding_chat). A dismissal ("Not applicable"), a supersession and a system's
+    resolution are settled but not answered by anyone."""
     from ai_workforce_api.control_context import SETTLED_QUESTION_SQL, settled_answer
 
     if parent_key:
         found = next((item for item in answered if item["key"] == parent_key), None)
         if found is None:
-            return None
-        return {"question": found["question"], "answer": found["answer"]}
+            return None, False
+        return {"question": found["question"], "answer": found["answer"]}, True
     if parent_id is None:
-        return None
+        return None, False
     row = connection.execute(
-        "SELECT i.question, i.topic, i.status, i.resolution_note FROM control_context_issues i "
+        "SELECT i.question, i.topic, i.status, i.resolution_note, "
+        "i.status = 'RESOLVED' AND i.resolved_by IS NOT NULL FROM control_context_issues i "
         f"WHERE i.id = %s AND {SETTLED_QUESTION_SQL}",
         (parent_id,),
     ).fetchone()
     if row is None:
-        return None
+        return None, False
     return {
         "question": line(str(row[0]) or str(row[1]), 400),
         "answer": line(settled_answer(str(row[2]), str(row[3])), 400),
-    }
+    }, bool(row[4])
+
+
+def _cited(quotes: Any, sources: list[Source]) -> bool:
+    """Whether any quote stored on an item ({source, title, quote}) is still found in the
+    sources as they stand (check_quote, the one implementation). Anything else reads as
+    uncited (fail closed). Pure."""
+    if not isinstance(quotes, list):
+        return False
+    return any(
+        isinstance(item, dict)
+        and isinstance(item.get("source"), str)
+        and isinstance(item.get("quote"), str)
+        and check_quote(sources, item["source"], item["quote"]) is not None
+        for item in quotes
+    )
 
 
 def _open(
     connection: psycopg.Connection[Any],
     control_id: UUID,
     answered: list[dict[str, str]] | None = None,
+    sources: list[Source] | None = None,
 ) -> list[_Held]:
-    return [
-        _Held(
-            id=UUID(str(row[0])),
-            version=int(row[1]),
-            kind=str(row[2]),
-            topic=str(row[3]),
-            question=str(row[4]),
-            proposal=str(row[5]),
-            proposal_basis=str(row[6]),
-            suggestions=[str(item) for item in row[7] if isinstance(item, str)]
-            if isinstance(row[7], list)
-            else [],
-            why=str(row[8]),
-            detail=str(row[9]),
-            problems=[],
-            follows=_follows(connection, str(row[10] or ""), row[11], answered or []),
+    """The open agent questions not yet reviewed, as raised: each with the answer it follows,
+    whether that is a person's, and whether a quote on it is still found in `sources` (none
+    given: uncited)."""
+    held: list[_Held] = []
+    for row in connection.execute(
+        """
+        SELECT id, version, kind, topic, question, proposal, proposal_basis, suggestions,
+               why, detail, asks_parent_key, asks_parent_id, quotes
+        FROM control_context_issues
+        WHERE engagement_control_id = %s AND status = 'OPEN' AND raised_by = 'AGENT'
+          AND NOT wording_reviewed
+        ORDER BY created_at LIMIT %s
+        """,
+        (control_id, MAX_ITEMS),
+    ).fetchall():
+        follows, confirmed = _follows(connection, str(row[10] or ""), row[11], answered or [])
+        held.append(
+            _Held(
+                id=UUID(str(row[0])),
+                version=int(row[1]),
+                kind=str(row[2]),
+                topic=str(row[3]),
+                question=str(row[4]),
+                proposal=str(row[5]),
+                proposal_basis=str(row[6]),
+                suggestions=[str(item) for item in row[7] if isinstance(item, str)]
+                if isinstance(row[7], list)
+                else [],
+                why=str(row[8]),
+                detail=str(row[9]),
+                problems=[],
+                follows=follows,
+                cited=_cited(row[12], sources or []),
+                confirmed_parent=confirmed,
+            )
         )
-        for row in connection.execute(
-            """
-            SELECT id, version, kind, topic, question, proposal, proposal_basis, suggestions,
-                   why, detail, asks_parent_key, asks_parent_id
-            FROM control_context_issues
-            WHERE engagement_control_id = %s AND status = 'OPEN' AND raised_by = 'AGENT'
-              AND NOT wording_reviewed
-            ORDER BY created_at LIMIT %s
-            """,
-            (control_id, MAX_ITEMS),
-        ).fetchall()
-    ]
+    return held
 
 
 def _cleaned(item: _Item, held: _Held) -> dict[str, Any]:
@@ -596,6 +754,14 @@ def _cleaned(item: _Item, held: _Held) -> dict[str, Any]:
     question = str(first["question"]) if first is not None else ""
     usual = str(first["usual"]) if first is not None else ""
     proposal, basis = statement_along_usual(steps)
+    # The model's own "SOURCES" is not a record (owner decision, 19 November 2026): kept only
+    # for an item raised so with a quote its source still holds (a review never raises a usual
+    # answer to the records), or for a follow-up of a person's answer; else the usual practice.
+    basis = records_basis(
+        basis,
+        stated=bool(proposal),
+        cited=(held.cited and held.proposal_basis == "SOURCES") or held.confirmed_parent,
+    )
     return {
         "interview": steps,
         "question": question,
@@ -623,13 +789,19 @@ def _judge(
 ) -> list[str]:
     """What holds the agent's interview back. The item's own words count as known. A step
     that asks again what the walkthrough's answers (`answered`) or the answer the item follows
-    already say is sent back (18 November 2026)."""
+    already say is sent back (18 November 2026), and so is a step, an answer's sentence or a
+    detail about another matter than the item asks (_strays, _detail_strays; 19 November
+    2026)."""
     steps = fields["interview"]
     problems = interview_problems(held.kind, steps, fields["why"])
     already = [*(answered or [])]
     if held.follows is not None:
         already.append({**held.follows, "reads": held.follows["answer"]})
     problems.extend(_repeats_answered(steps, already))
+    # The wording may change how it reads, never what it asks (19 November 2026).
+    if held.kind != "CONFLICT":
+        problems.extend(_strays(steps, held))
+    problems.extend(_detail_strays(fields["detail"], held))
     pieces = [
         fields["why"],
         fields["detail"],
@@ -694,6 +866,9 @@ def _ask_agent(
                     "steps": item.drafted["interview"],
                     "detail": item.drafted["detail"],
                     "why": item.drafted["why"],
+                    # What the item asks as raised, which the interview must settle (19
+                    # November 2026): the reviewer reads the writer's steps against it.
+                    "asks": {"question": item.question or item.topic, "detail": item.detail},
                 }
                 if item.drafted is not None
                 else {
@@ -856,7 +1031,7 @@ def review_open_questions(
     follow-up's item the answer it follows (18 November 2026); the shared context_package is
     left as it is for the other agents."""
     answered = answered_walkthrough(connection, control_id)
-    pending = _open(connection, control_id, answered)
+    pending = _open(connection, control_id, answered, sources)
     if provider is None or not pending:
         return 0
     package = {

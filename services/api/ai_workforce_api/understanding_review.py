@@ -3744,7 +3744,7 @@ def fail_if_unqueued(
 
 
 def informed_update(
-    connection: psycopg.Connection[Any], control_id: UUID
+    connection: psycopg.Connection[Any], control_id: UUID, since: datetime | None = None
 ) -> tuple[list[str], str] | None:
     """The one update an answer changed after completion starts (B1l "Also agreed": "An
     answer changed after completion re-tailors only the attributes its question informs (the
@@ -3762,7 +3762,15 @@ def informed_update(
     ACCEPTED, agent_answers.note_used; an answer rejected or not used never counts, so the
     whole set followed the understanding once); and every change since that call is a
     walkthrough answer (a value, an answer to a question or a changed assumption makes the
-    whole set follow)."""
+    whole set follow).
+
+    With `since` (SOL defect 1, 19 November 2026), for an update already limited when it was
+    queued: the changes are those made after `since` (the attribute agent's last answer is
+    not required, as the queue already decided the update is limited), what the update must
+    widen to (evidence_plans.run_plan, with its `widened`). Nothing changed since then is
+    ([], "") then, never None: the update stays as limited as it was. Before, a limited
+    update's codes were fixed when it was queued, so an answer saved meanwhile was never
+    followed and its read recorded as made."""
     from ai_workforce_api import control_attributes
     from ai_workforce_api.criteria_history import cause_of
     from ai_workforce_api.walkthrough_questions import question
@@ -3782,23 +3790,31 @@ def informed_update(
         )
         SELECT f.completed, f.at,
                EXISTS (SELECT 1 FROM control_parameters v
-                       WHERE v.engagement_control_id = f.id AND v.updated_at > f.at)
+                       WHERE v.engagement_control_id = f.id AND v.updated_at > f.bound)
                OR EXISTS (SELECT 1 FROM control_context_issues i
                           WHERE i.engagement_control_id = f.id
                             AND i.status IN ('RESOLVED', 'DISMISSED')
-                            AND i.resolved_by IS NOT NULL AND i.resolved_at > f.at)
+                            AND i.resolved_by IS NOT NULL AND i.resolved_at > f.bound)
                OR EXISTS (SELECT 1 FROM attribute_assumptions s
                           WHERE s.engagement_control_id = f.id AND s.status = 'CHANGED'
-                            AND s.decided_at > f.at),
+                            AND s.decided_at > f.bound),
                ARRAY(SELECT w.question_key FROM control_walkthrough_answers w
                      WHERE w.engagement_control_id = f.id AND w.status = 'CONFIRMED'
-                       AND w.updated_at > f.at
+                       AND w.updated_at > f.bound
                      ORDER BY w.updated_at)
-        FROM followed f
+        FROM (SELECT *, coalesce(%(since)s::timestamptz, at) AS bound FROM followed) f
         """,
-        {"c": control_id, "agent": control_attributes.PROMPT_VERSION.split("/", 1)[0]},
-    ).fetchone()
-    if not limited(row):
+        {"c": control_id, "agent": control_attributes.PROMPT_VERSION.split("/", 1)[0],
+         "since": since},
+    ).fetchone()  # fmt: skip
+    if since is not None:
+        # The update is already limited (by the queue that bounded it): only what changed
+        # since `since` counts. Anything but a walkthrough answer widens it to the set.
+        if row is None or row[0] is None or row[2]:
+            return None
+        if not row[3]:
+            return [], ""
+    elif not limited(row):
         return None
     assert row is not None
     keys = [str(key) for key in row[3]]

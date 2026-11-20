@@ -16,6 +16,7 @@ from dataclasses import replace
 from typing import Any
 from uuid import UUID
 
+from hostile_model import no_answer
 from support import Database
 from test_attributes_follow_understanding import _Agents, _answer_required, _path, _ready
 from test_outbound import migrated
@@ -233,6 +234,7 @@ def test_every_question_the_specialist_returns_is_asked_or_a_visible_assumption(
 
     agents = _Agents(migrated, team, control)
     agents.specialist = specialist
+    agents.other = no_answer  # the interview writer's failure path: questions kept
     _run(migrated, control, agents)
     topics, assumed = _visible(migrated, control)
     matters = [str(row[0]) for row in assumed]

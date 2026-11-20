@@ -1,0 +1,178 @@
+# Minimum risk class by path (docs/engineering-standards.md §2). Read by
+# scripts/risk_class.py, run by .github/workflows/risk.yml on every pull request.
+#
+# A path's class is the HIGHEST of every rule that matches it ("when unsure, take the
+# higher class"). A path that no rule matches is `default`. Rules never lower one another:
+# the only way down is `except`, which removes a path from ONE rule, and every excepted path
+# is checked by services/api/tests/test_risk_class.py (no SQL write, route, prompt or model
+# call, and its own test not in the critical tier). Globs are PurePosixPath.full_match
+# patterns: `*` stays within one segment, `**` spans segments.
+#
+# A wrong minimum is fixed here, never by a per-PR exception (owner decision M2, 19 November
+# 2026). A change to this file is High, and the check takes the higher of the base and head
+# mappings for every path, so a pull request cannot lower its own minimum.
+#
+# `dependabot` marks the paths a Dependabot pull request may change without a declaration
+# (owner decision M3): "any" for a dependency file, "pins" for a workflow whose diff changes
+# only `uses:` lines.
+version = 1
+default = "High"
+
+# --- High -------------------------------------------------------------------------------
+
+[[rule]]
+class = "High"
+why = "§2 High: a migration or stored data"
+paths = ["migrations/**"]
+
+[[rule]]
+class = "High"
+why = "§2 High: API modules write stored data, serve route bodies, hold gates and approvals, or call a model"
+paths = ["services/api/ai_workforce_api/**"]
+except = [
+    "services/api/ai_workforce_api/definitions_*.py",
+    "services/api/ai_workforce_api/statements_*.py",
+    "services/api/ai_workforce_api/statement_registry.py",
+    "services/api/ai_workforce_api/definition_registry.py",
+    "services/api/ai_workforce_api/testing_definitions.py",
+    "services/api/ai_workforce_api/slot_options.py",
+    "services/api/ai_workforce_api/slot_questions.py",
+    "services/api/ai_workforce_api/walkthrough_questions.py",
+    "services/api/ai_workforce_api/scenario.py",
+    "services/api/ai_workforce_api/entitlement_errors.py",
+]
+
+[[rule]]
+class = "High"
+why = "§2 High: the gate itself (required checks, permissions, what runs)"
+paths = [".github/workflows/**"]
+dependabot = "pins"
+
+[[rule]]
+class = "High"
+why = "§2 High: the risk classifier and its mapping"
+paths = [".github/risk-paths.toml", "scripts/risk_class.py"]
+
+[[rule]]
+class = "High"
+why = "§2 High: suppresses findings of a required security check"
+paths = [".gitleaksignore"]
+
+[[rule]]
+class = "High"
+why = "§2 High: the critical-tier lists G4 runs and make reset, a destructive command (owner decision M1)"
+paths = ["Makefile"]
+
+[[rule]]
+class = "High"
+why = "§2 High: a destructive command or stored data"
+paths = ["scripts/reset.sh", "scripts/backup.sh"]
+
+[[rule]]
+class = "High"
+why = "§2 High: the guard that keeps the owner's databases out of scratch stacks"
+paths = ["scripts/review_guard.py", "scripts/scratch_stack.py"]
+
+[[rule]]
+class = "High"
+why = "§2 High: sessions, the origin check, response headers, the client portal's calls"
+paths = [
+    "apps/web/proxy.ts",
+    "apps/web/src/origin-guard.ts",
+    "apps/web/next.config.ts",
+    "apps/web/src/portal-api.ts",
+]
+
+[[rule]]
+class = "High"
+why = "§2 High: the secrets template, live email off by default, the only volume delete"
+paths = [".env.example", "docker-compose.yml"]
+
+[[rule]]
+class = "High"
+why = "§2 High: agent permissions and instructions"
+paths = ["AGENTS.md", ".claude/agents/**"]
+
+# --- Medium -----------------------------------------------------------------------------
+
+[[rule]]
+class = "Medium"
+why = "§2 Medium: library content and fixed lists the API reads (they change what controls are tested against)"
+paths = ["services/api/ai_workforce_api/**"]
+
+[[rule]]
+class = "Medium"
+why = "§2 Medium: route handlers, pages, models and helpers several screens share"
+paths = ["apps/web/app/**/*.ts", "apps/web/app/**/*.tsx", "apps/web/src/*.ts"]
+
+[[rule]]
+class = "Medium"
+why = "§2 Medium: dependencies (the set security.yml audits); adding one needs approval (§8)"
+paths = [
+    "package.json",
+    "pnpm-lock.yaml",
+    "uv.lock",
+    "pyproject.toml",
+    "services/api/pyproject.toml",
+    "apps/web/package.json",
+]
+dependabot = "any"
+
+[[rule]]
+class = "Medium"
+why = "§2 Medium: shared test and delivery infrastructure"
+paths = ["scripts/**"]
+
+[[rule]]
+class = "Medium"
+why = "§2 Medium: shared process (the PR template, Dependabot)"
+paths = [".github/**"]
+
+[[rule]]
+class = "Medium"
+why = "§2 Medium: the rules and the known-failures list (an edit to the baseline can hide a failure)"
+paths = [
+    "docs/engineering-standards.md",
+    "docs/test-strategy.md",
+    "docs/audit-invariants.md",
+    "docs/test-baseline.md",
+]
+
+[[rule]]
+class = "Medium"
+why = "§2 Medium: tool configuration and model evaluation cases"
+paths = [
+    "biome.json",
+    "tsconfig.json",
+    "apps/web/tsconfig.json",
+    "pnpm-workspace.yaml",
+    ".gitattributes",
+    ".gitignore",
+    ".npmrc",
+    ".node-version",
+    ".python-version",
+    "services/api/evals/**",
+]
+
+# --- Low --------------------------------------------------------------------------------
+
+[[rule]]
+class = "Low"
+why = "§2 Low: local presentation (G3 still applies)"
+paths = [
+    "apps/web/src/**/*.tsx",
+    "apps/web/app/**/*.css",
+    "apps/web/app/**/*.svg",
+    "apps/web/public/**",
+    "apps/web/next-env.d.ts",
+]
+
+[[rule]]
+class = "Low"
+why = "§2 Low: tests (a deleted test file is at least Medium)"
+paths = ["services/api/tests/**", "tests/**"]
+
+[[rule]]
+class = "Low"
+why = "§2 Low: documentation"
+paths = ["docs/**", "README.md", "apps/web/AGENTS.md"]
