@@ -2467,17 +2467,39 @@ export function initialNotes(
   );
 }
 
+/** Whether a SOC 1 report for the system has been read: one the agent finished reading
+ * that is a SOC 1 report (a SOC 2 report, or one still being read, is not). */
+export function hasReadSoc1(reports: readonly SocReport[]): boolean {
+  return reports.some(
+    (report) => report.status === "READ" && report.reportKind === "SOC1",
+  );
+}
+
+const SOC_AVAILABILITY: Record<SystemAssessment["socAvailability"], string> = {
+  STATED_AVAILABLE: "The vendor states it issues a SOC 1 report.",
+  NOT_FOUND: "No statement that the vendor issues a SOC 1 report was found.",
+  NOT_RESEARCHED:
+    "Whether the vendor issues a SOC 1 report was not researched.",
+};
+
+/** What the assessment says of whether the vendor issues a SOC 1 report; nothing once a
+ * SOC 1 report for the system has been read, which the screen shows instead (one screen,
+ * one story: never "not researched" above the report it read). */
+export function socAvailabilityLine(
+  availability: SystemAssessment["socAvailability"],
+  reports: readonly SocReport[],
+): string | null {
+  return hasReadSoc1(reports) ? null : SOC_AVAILABILITY[availability];
+}
+
 /** Reasons usually given for leaving controls out of a system: one is picked, or the
  * team's own words are written instead (suggest, don't ask). A suggestion never claims
  * more than the screen shows: reliance on a SOC 1 report is offered only once a SOC 1
  * report for the system has been read; until then the reason says the controls are
  * expected to be covered by one. */
 export function leftOutReasons(reports: readonly SocReport[]): string[] {
-  const onFile = reports.some(
-    (report) => report.status === "READ" && report.reportKind === "SOC1",
-  );
   return [
-    onFile
+    hasReadSoc1(reports)
       ? "Relied on the service organization's SOC 1 report"
       : "Expected to be covered by the service organization's SOC 1 report",
     "Not relevant to financial reporting",

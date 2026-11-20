@@ -655,8 +655,9 @@ def check_report(output: dict[str, Any], text: str, candidates: list[Any]) -> Re
                      "SOC 1 report: it is not a substitute for one in testing controls over "
                      "financial reporting.")  # fmt: skip
     if dropped:
-        notes.append(f"{dropped} CUEC{'s' if dropped != 1 else ''} the agent listed could not "
-                     "be found in the report's text and were left out.")  # fmt: skip
+        one = dropped == 1
+        notes.append(f"{dropped} CUEC{'' if one else 's'} the agent listed could not be found "
+                     f"in the report's text and {'was' if one else 'were'} left out.")  # fmt: skip
     return ReportRead(
         kind=answer.report_kind,
         service_organization=clean_line(answer.service_organization, 200),

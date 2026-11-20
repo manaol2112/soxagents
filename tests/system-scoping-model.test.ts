@@ -13,6 +13,7 @@ import {
   chooseAll,
   cuecRows,
   filterOffers,
+  hasReadSoc1,
   initialNotes,
   initialSelection,
   leftOutReasons,
@@ -34,6 +35,7 @@ import {
   setupNoticeFor,
   setupProblem,
   setupWrite,
+  socAvailabilityLine,
   socOverview,
   socWaived,
   suggestedCode,
@@ -840,6 +842,43 @@ describe("the reasons suggested for leaving controls out", () => {
       const options = leftOutReasons(reports);
       assert.equal(options[0], expected);
       assert.equal(options.includes(relied), false);
+    }
+  });
+
+  it("says nothing of the vendor's statement once a SOC 1 report is read", () => {
+    // Old: "Whether the vendor issues a SOC 1 report was not researched." sat above
+    // the read SOC 1 report's card and the reason "Relied on ... SOC 1 report".
+    const read = [report("READ", "SOC1")];
+    assert.equal(hasReadSoc1(read), true);
+    for (const availability of [
+      "NOT_RESEARCHED",
+      "NOT_FOUND",
+      "STATED_AVAILABLE",
+    ] as const) {
+      assert.equal(socAvailabilityLine(availability, read), null);
+      assert.equal(
+        socAvailabilityLine(availability, [report("READ", "SOC2"), ...read]),
+        null,
+      );
+    }
+  });
+
+  it("keeps the vendor's statement while no SOC 1 report is read", () => {
+    for (const reports of [
+      [],
+      [report("READING", "SOC1")],
+      [report("FAILED", "SOC1")],
+      [report("READ", "SOC2")],
+    ]) {
+      assert.equal(hasReadSoc1(reports), false);
+      assert.equal(
+        socAvailabilityLine("NOT_RESEARCHED", reports),
+        "Whether the vendor issues a SOC 1 report was not researched.",
+      );
+      assert.equal(
+        socAvailabilityLine("NOT_FOUND", reports),
+        "No statement that the vendor issues a SOC 1 report was found.",
+      );
     }
   });
 });
