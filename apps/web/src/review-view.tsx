@@ -12,7 +12,7 @@ import {
   type ReviewNote,
   type ReviewNotice,
   reperformedWords,
-  runFailureLine as reperformFailureLine,
+  reviewBanner,
   reviewDifferences,
   reviewPill,
   SEVERITY_LABEL,
@@ -96,6 +96,7 @@ export function ReviewTab({
     );
   }
   const waiting = openNotes(review);
+  const banner = reviewBanner(review);
   const pill = reviewPill(review, {
     waiting: waiting.length,
     outstanding,
@@ -175,12 +176,10 @@ export function ReviewTab({
           {REVIEW_NOTICES[notice]}
         </Banner>
       ) : null}
-      {reperformFailureLine(review) !== null ? (
-        // The re-performance ended without a usable answer: said as a warning, with
-        // "Re-perform" below, never as information.
-        <Banner tone="warning">{reperformFailureLine(review)}</Banner>
-      ) : review.reperformNote !== "" ? (
-        <Banner tone="info">{review.reperformNote}</Banner>
+      {banner !== null ? (
+        // Decided once in the model (reviewBanner): a failure as a warning, with
+        // "Re-perform" below, never as information, and none over a signed review.
+        <Banner tone={banner.tone}>{banner.text}</Banner>
       ) : null}
       <div className="card-body review-body">
         <dl className="review-facts">

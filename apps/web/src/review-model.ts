@@ -51,6 +51,38 @@ export function runFailureLine(
   );
 }
 
+/** The one banner the review card shows about the agent's re-performance, or null: the
+ * failure line as a warning while there is a failure to act on (runFailureLine), else the
+ * run's own note as information, never a note from a run that gave up. A failed run's note
+ * ("Re-perform to try again") is a failure, not information, so it is not shown over a
+ * signed review or while the agent re-performs again. Decided here from the typed status
+ * and record for every reader (code review, 20 November 2026; before, the view showed the
+ * raw note on its own condition, so a signed review over a failed run said "Re-perform to
+ * try again" as information beside "Reviewed"). */
+export type ReviewBanner = { tone: "warning" | "info"; text: string };
+
+export function reviewBanner(
+  review: Pick<
+    ControlReview,
+    | "status"
+    | "reperforming"
+    | "reperformState"
+    | "reperformNote"
+    | "failureNote"
+    | "reperformance"
+  >,
+): ReviewBanner | null {
+  const failure = runFailureLine(review);
+  if (failure !== null) {
+    return { tone: "warning", text: failure };
+  }
+  if (review.reperformance?.failed === true) {
+    return null;
+  }
+  const note = plainNote(review.reperformNote);
+  return note === "" ? null : { tone: "info", text: note };
+}
+
 export type NoteSeverity = "MUST_FIX" | "SHOULD_FIX" | "OBSERVATION";
 export type NoteStatus =
   | "PROPOSED"

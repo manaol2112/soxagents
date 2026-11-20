@@ -8,6 +8,7 @@ import {
   parseReviews,
   reperformedWords,
   reperformHold,
+  reviewBanner,
   reviewFor,
   reviewNoticeFor,
   reviewPill,
@@ -517,5 +518,71 @@ describe("a signed review over a re-performance that gave up (code review, 20 No
       ),
       { words: "Reviewed", tone: "tone-success" },
     );
+  });
+});
+
+describe("the review card's one re-performance banner (code review, 20 November 2026)", () => {
+  const failed = {
+    known: true,
+    source: "MODEL",
+    due: 3,
+    done: 3,
+    capped: false,
+    dropped: 0,
+    failed: true,
+  };
+  const open = {
+    status: "OPEN" as const,
+    reperforming: false,
+    reperformState: "IDLE" as const,
+    reperformNote:
+      "The re-performance did not finish. Re-perform to try again.",
+    failureNote: "",
+    reperformance: failed,
+  };
+
+  it("shows no banner over a signed review whose last re-performance gave up", () => {
+    // Before: the view fell through to the raw note as an info banner, so a signed
+    // review said "Re-perform to try again" beside "Reviewed".
+    const signed = { ...open, status: "SIGNED_OFF" as const };
+    assert.equal(reviewBanner(signed), null);
+    assert.equal(
+      reviewBanner({ ...signed, failureNote: "The model did not answer." }),
+      null,
+    );
+  });
+
+  it("never shows a failed run's note as information while it re-performs again", () => {
+    for (const review of [
+      { ...open, reperforming: true },
+      { ...open, reperformState: "RUNNING" as const },
+    ]) {
+      const banner = reviewBanner(review);
+      assert.doesNotMatch(banner?.text ?? "", /Re-perform/);
+    }
+  });
+
+  it("says an open review's failure as a warning, and a finished run's note as information", () => {
+    assert.deepEqual(reviewBanner(open), {
+      tone: "warning",
+      text: "The re-performance did not finish. Re-perform to try again.",
+    });
+    const finished = {
+      ...open,
+      reperformance: { ...failed, done: 0, failed: false },
+      reperformNote: "The reviewer agent did not re-perform the items.",
+    };
+    assert.deepEqual(reviewBanner(finished), {
+      tone: "info",
+      text: "The reviewer agent did not re-perform the items.",
+    });
+    assert.deepEqual(
+      reviewBanner({ ...finished, status: "SIGNED_OFF" as const }),
+      {
+        tone: "info",
+        text: "The reviewer agent did not re-perform the items.",
+      },
+    );
+    assert.equal(reviewBanner({ ...finished, reperformNote: "" }), null);
   });
 });
