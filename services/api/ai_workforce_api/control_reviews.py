@@ -2264,6 +2264,9 @@ def _sign_off(
         coverage = {
             # The conclusion as proposed, and each deficiency's severity as rated (B3).
             "conclusion": concluded.proposed,
+            # Marks a verdict recorded as signed, none included (ST-2): reviews signed
+            # before recorded none for every round (control_conclusions.signed_verdict).
+            "verdict_recorded": True,
             "deficiencies": []
             if current.test_round_id is not None
             else [

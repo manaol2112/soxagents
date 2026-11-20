@@ -13,7 +13,7 @@ Nothing here concludes on its own: the proposal is read, never stored, so it alw
 records.
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
@@ -400,8 +400,9 @@ NOTHING_PROPOSED = "No conclusion is proposed from the records yet"
 class Concluded:
     """Where a control's conclusion stands: NOT_READY, PROPOSED or FINAL; the final
     verdict (FINAL only); the verdict the register shows once a review is signed (the
-    final one, else the one the latest signed review recorded, else the proposal); why it
-    is not final; and whether it is final as the register counts it."""
+    final one, else shown_verdict: never effective unless the records and the verdict the
+    review signed both are); why it is not final; and whether it is final as the register
+    counts it."""
 
     status: Status
     final: Verdict | None
@@ -413,7 +414,11 @@ class Concluded:
 def signed_verdict(facts: FinalityFacts | None) -> tuple[bool, Verdict | None]:
     """Whether the most recently signed review (the control's own or a round's) recorded
     the verdict it signed (control_reviews.coverage "conclusion"), and that verdict. A
-    review signed before reviews recorded one recorded none."""
+    review signed before reviews recorded one recorded none: no "conclusion", or a
+    "conclusion" of null without the "verdict_recorded" marker every review now records
+    (round reviews recorded null for every round). Before (19 November 2026), that null
+    read as a recorded verdict of none, so every control whose latest signed review was a
+    round's left FINAL once anything was proposed."""
     if facts is None:
         return False, None
     signed: list[tuple[datetime, Mapping[str, Any] | None]] = []
@@ -432,6 +437,8 @@ def signed_verdict(facts: FinalityFacts | None) -> tuple[bool, Verdict | None]:
     if "conclusion" not in coverage:
         return False, None
     value = coverage["conclusion"]
+    if value is None and coverage.get("verdict_recorded") is not True:
+        return False, None
     return True, (value if value in ("EFFECTIVE", "NOT_EFFECTIVE") else None)
 
 
@@ -476,13 +483,33 @@ def concluded(
     return Concluded(
         "PROPOSED" if proposed is not None else "NOT_READY",
         None,
-        # The opinion the review reached: the verdict it signed, else the proposal, else
-        # the interim's own (a roll-forward still owed holds the proposal, not the
-        # opinion on the period tested so far).
-        verdict if recorded and verdict is not None else proposed or interim,
+        shown_verdict(proposed, verdict if recorded else None, interim, reasons),
         tuple(reasons),
         False,
     )
+
+
+def shown_verdict(
+    proposed: Verdict | None,
+    signed: Verdict | None,
+    interim: Verdict | None,
+    reasons: Sequence[NotFinal],
+) -> Verdict | None:
+    """The verdict the register shows for a signed control that is not final (ST-2, one
+    screen one story, 19 November 2026). The opinion is the proposal, else, while a
+    roll-forward is still owed, the opinion on the period tested so far (interim). Not
+    effective when the opinion or the verdict the review signed says so; none while the
+    D&I conclusion no longer holds (no D&I verdict stands); else the opinion, else none.
+    Never effective unless the records and the verdict signed (where one was recorded)
+    both are. Before, the verdict the review signed stood over the records, so a control
+    with a deficiency logged after its sign-off read Effective in the register and the
+    export."""
+    opinion = proposed if proposed is not None else interim
+    if "NOT_EFFECTIVE" in (opinion, signed):
+        return "NOT_EFFECTIVE"
+    if any(item.kind == "DESIGN" for item in reasons):
+        return None
+    return opinion
 
 
 def engagement_conclusions(

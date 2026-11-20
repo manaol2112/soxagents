@@ -476,14 +476,28 @@ def test_a_signed_review_is_final_only_with_finality_and_the_verdict_it_signed()
     found = _signed_conclusion(lapsed, "EFFECTIVE")
     assert found.status == "PROPOSED" and found.final is None
     assert [r.kind for r in found.reasons] == ["DESIGN"]
+    # No D&I verdict holds: the register shows no verdict, not the one the review signed.
+    assert found.verdict is None
+    found = _signed_conclusion(lapsed, None)
+    assert found.status == "NOT_READY" and found.verdict is None
     # The records now propose another verdict than the review signed: the review is owed.
     found = _signed_conclusion(_final_facts(), "NOT_EFFECTIVE")
     assert found.status == "PROPOSED" and found.final is None
     assert [(r.kind, r.text) for r in found.reasons] == [
         ("REVIEW", "Conclusion changed since the review signed it: review outstanding")
     ]
-    # The register still shows the verdict the review signed until the review is done again.
-    assert found.verdict == "EFFECTIVE"
+    # The register shows not effective: the records propose it (an OE deficiency logged
+    # after the sign-off). Rewritten 19 November 2026 (ST-2, one screen one story, product
+    # owner decision 19 Nov 2026): the old expectation was EFFECTIVE (the verdict the
+    # review signed stood over the records until the review was done again), which let the
+    # register and the export read Effective while the panel proposed Not effective. New:
+    # NOT_EFFECTIVE, never effective unless the records and the signed verdict both are.
+    assert found.verdict == "NOT_EFFECTIVE"
+    # The same where the review signed not effective and the records now propose effective.
+    signed_failed = _final_facts(
+        review_coverage={"sheet_version": 3, "workpapers": [], "conclusion": "NOT_EFFECTIVE"}
+    )
+    assert _signed_conclusion(signed_failed, "EFFECTIVE").verdict == "NOT_EFFECTIVE"
     # Said once: a change the review's coverage already names is not said a second time.
     moved = _final_facts(sheet_version=4)
     found = _signed_conclusion(moved, "NOT_EFFECTIVE")
@@ -528,6 +542,30 @@ def test_a_signed_review_is_final_only_with_finality_and_the_verdict_it_signed()
     assert _signed_conclusion(reviewed, "EFFECTIVE").status == "FINAL"
 
 
+def test_a_review_signed_before_verdicts_were_marked_rests_on_finality() -> None:
+    """ST-2 review note N2 (19 November 2026). Round reviews signed before this change
+    recorded a null verdict for every round. Before, that read as a recorded verdict of
+    none, so every control whose latest signed review was a round's left FINAL with
+    "Conclusion changed since the review signed it". Now a null verdict without the
+    "verdict_recorded" marker is a legacy review, resting on finality alone; with the
+    marker, nothing was proposed as it signed, and a verdict proposed since asks for the
+    review again."""
+    legacy_round = _final_facts(
+        review_coverage={"sheet_version": 3, "workpapers": [], "conclusion": None}
+    )
+    assert _signed_conclusion(legacy_round, "EFFECTIVE").status == "FINAL"
+    marked_none = _final_facts(
+        review_coverage={
+            "sheet_version": 3, "workpapers": [], "conclusion": None, "verdict_recorded": True
+        }
+    )  # fmt: skip
+    found = _signed_conclusion(marked_none, "EFFECTIVE")
+    assert found.status == "PROPOSED"
+    assert [r.text for r in found.reasons] == [
+        "Conclusion changed since the review signed it: review outstanding"
+    ]
+
+
 def test_a_d_and_i_sign_off_that_lapses_after_a_full_sign_off_takes_the_conclusion_off_final(
     migrated: Database,
 ) -> None:
@@ -565,3 +603,21 @@ def test_a_d_and_i_sign_off_that_lapses_after_a_full_sign_off_takes_the_conclusi
     assert design["text"] == (
         "D&I conclusion no longer holds: a design deficiency was logged after the sign-off"
     )
+    # The register and the export do not read Effective once the records stop supporting
+    # it: no D&I verdict holds (one screen one story, ST-2).
+    assert row["conclusion"] == "NOT_CONCLUDED"
+    from ai_workforce_api.authorization import Principal, PrincipalKind
+    from ai_workforce_api.engagement_data import ControlFilters
+    from ai_workforce_api.engagement_data import controls as exported
+
+    ref = row["label"] or row["control_ref"]
+    with connect(migrated.url) as connection:
+        found = exported(
+            connection,
+            Principal(kind=PrincipalKind.USER, id=team["owner_id"]),
+            team["org"],
+            team["project"],
+            ControlFilters(control_ref=ref),
+        )
+    [listed] = [r for r in found["controls"] if r["control_ref"] == ref]
+    assert listed["conclusion"] == "NOT_CONCLUDED"
