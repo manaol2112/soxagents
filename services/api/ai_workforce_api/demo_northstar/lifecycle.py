@@ -780,6 +780,7 @@ def _results_for_files(
     """The results of one sheet from the given files (keyed as the evaluators know them:
     a round's later population stands in for the interim's under the same key)."""
     from ai_workforce_api.test_citations import CitedFile, check_citations
+    from ai_workforce_api.testing_engine import now_text
 
     cited = tuple(
         CitedFile(
@@ -822,10 +823,14 @@ def _results_for_files(
                 )
         raw = _evaluate(ctx, control, str(label))
         results = []
+        overrides = []
         for n, outcome in enumerate(raw):
+            # An exception's citations keep the file's own negated words; a pass's never
+            # do (check_citations, read as testing_engine reads the tester's).
             citations = check_citations(
                 [{"file": index_of[k], "quote": q} for k, q in outcome.quotes if k in index_of],
                 cited,
+                supports=outcome.result != "EXCEPTION",
             )
             if outcome.result == "PASS" and not any(c.get("found") for c in citations):
                 outcome.result, outcome.note = "UNABLE", "No cited evidence supports the attribute."
@@ -841,17 +846,31 @@ def _results_for_files(
                     "checks": [],
                 }
             )
+            if outcome.result == "NOT_APPLICABLE":
+                # The tester agent's not applicable is a proposal a person confirms with a
+                # reason (D1, audit invariant I7; testing_engine.final_results): the demo's
+                # tester confirms each one the sheet relies on, as override_work records it.
+                overrides.append(
+                    {
+                        "index": n,
+                        "result": "NOT_APPLICABLE",
+                        "reason": confirmed_not_applicable(outcome.note),
+                        "by": str(ctx.team["morgan"]),
+                        "at": now_text(),
+                    }
+                )
         if any(r["result"] == "EXCEPTION" for r in results):
             exceptions += 1
         ctx.cursor.execute(
             """
             UPDATE test_items
-            SET results = %s, source = %s, tested_at = clock_timestamp(), note = %s,
-                needs_test = false, version = version + 1
+            SET results = %s, overrides = %s, source = %s, tested_at = clock_timestamp(),
+                note = %s, needs_test = false, version = version + 1
             WHERE id = %s AND version = %s
             """,
             (
                 Json(results),
+                Json(overrides),
                 SEEDED,
                 "Prepared with the demo (simulated): results read from the evidence files as of 30 September 2027.",
                 item_id,
@@ -859,6 +878,14 @@ def _results_for_files(
             ),
         )
     return exceptions
+
+
+def confirmed_not_applicable(note: str) -> str:
+    """The demo tester's reason for confirming the agent's not applicable: the agent's own
+    why, at least MIN_NOT_APPLICABLE_REASON characters as a person's override must give
+    (test_sheets.OverrideBody), and within the override's limit."""
+    why = note.strip() or "the attribute does not apply to this item."
+    return f"Confirmed by the tester: {why}"[:500]
 
 
 @dataclass

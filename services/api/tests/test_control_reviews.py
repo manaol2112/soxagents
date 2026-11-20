@@ -343,14 +343,28 @@ def test_the_reviewer_decides_notes_a_must_fix_reopens_the_work_and_signs_off(
         connection.commit()
     review = client.get(f"{base}/reviews").json()[0]
     assert review["blocking"] == []
-    assert _row(client, team, sheet["control_id"])["review_left"] == "SIGN"
+    # Rewritten 20 November 2026 (S5). Old: with every note cleared the register's step was
+    # SIGN and the inbox said "Sign off the review of ITGC-AC-01 · SAP ERP". New: the run
+    # was the rules' alone (0 of 3 items re-performed by the agent), so the review signs
+    # only over a second run or the reviewer's record of re-performing by hand (FO-1): the
+    # step is REPERFORM and the inbox says to re-perform, naming the record. Reason: no
+    # screen offers a sign-off the sign-off then refuses (one screen, one story).
+    assert review["attestation_needed"] is True
+    assert _row(client, team, sheet["control_id"])["review_left"] == "REPERFORM"
     # The dashboard and the inbox say where the review stands (9.2).
     dashboard = client.get(f"{base}/workspace/dashboard").json()["review"]
     assert (dashboard["in_scope"], dashboard["to_sign"], dashboard["signed_off"]) == (31, 1, 0)
     assert dashboard["not_started"] == 30 and dashboard["complete"] is False
     inbox = client.get(f"{base}/console/inbox").json()["waiting"]
     waiting = next(item for item in inbox if item["kind"] == "control_review")
-    assert waiting["title"] == "Sign off the review of ITGC-AC-01 · SAP ERP"
+    assert waiting["title"] == "Re-perform the testing for the review of ITGC-AC-01 · SAP ERP"
+    reviewer_queue = reviewer.get(f"{base}/queue").json()["items"]
+    [queued] = [i for i in reviewer_queue if i["id"] == f"review:{review['id']}"]
+    assert queued["reason"] == (
+        "The reviewer agent re-performed 0 of 3 items; re-perform again, or sign off with a "
+        "record of re-performing them by hand."
+    )
+    assert not any(i["title"].startswith("Sign off the review") for i in reviewer_queue)
     assert waiting["link"] == "controls"
     # Only this control is in scope now, so its review completes the engagement's.
     with connect(migrated.url) as connection:

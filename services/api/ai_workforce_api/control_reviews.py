@@ -24,7 +24,7 @@ contradicts itself), so a tester's pass it cannot endorse becomes a proposed not
 
 import copy
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal, Protocol
@@ -342,12 +342,66 @@ def needs_attestation(tested_branch: bool, record: ReperformanceBody) -> bool:
 def reperformance_of(connection: psycopg.Connection[Any], review_id: UUID) -> ReperformanceBody:
     """The review's last re-performance as its run recorded it (_finish), and whether a
     later attempt gave up (fail_reperformance) without recording one."""
-    rows = connection.execute(
-        "SELECT action, payload FROM audit_events WHERE target_type = 'control_review' "
-        "AND target_id = %s AND action IN ('review.reperformed', 'review.reperform_failed') "
-        "ORDER BY created_at DESC, id DESC LIMIT 2",
-        (review_id,),
-    ).fetchall()
+    return reperformances_of(connection, [review_id]).get(review_id, ReperformanceBody())
+
+
+def reperformances_of(
+    connection: psycopg.Connection[Any], review_ids: Sequence[UUID]
+) -> dict[UUID, ReperformanceBody]:
+    """reperformance_of for several reviews in one query: what the queue and the register
+    route on (S5, 20 November 2026), never the note's wording (REPERFORM_FAILED)."""
+    if not review_ids:
+        return {}
+    events: dict[UUID, list[tuple[Any, Any]]] = {}
+    for target_id, action, payload in connection.execute(
+        """
+        SELECT target_id, action, payload FROM (
+            SELECT target_id, action, payload,
+                   row_number() OVER (PARTITION BY target_id
+                                      ORDER BY created_at DESC, id DESC) AS n
+            FROM audit_events
+            WHERE target_type = 'control_review' AND target_id = ANY(%s)
+              AND action IN ('review.reperformed', 'review.reperform_failed')
+        ) latest
+        WHERE n <= 2 ORDER BY target_id, n
+        """,
+        (list(review_ids),),
+    ).fetchall():
+        events.setdefault(UUID(str(target_id)), []).append((action, payload))
+    return {review_id: _record_of(events.get(review_id, [])) for review_id in review_ids}
+
+
+def run_lets_sign(record: ReperformanceBody, tested_branch: bool) -> bool:
+    """Whether the reviewer agent's last run leaves the review to sign as it is: it did not
+    give up (fail_reperformance), and the review needs no record of a re-performance by
+    hand (needs_attestation). The queue and the register say "Sign off the review" only
+    then (S5, 20 November 2026); before, they said it after any run with a date."""
+    return not record.failed and not needs_attestation(tested_branch, record)
+
+
+def signs_after_run(
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    control_id: Any,
+    round_review: bool,
+    record: ReperformanceBody | None,
+) -> bool:
+    """run_lets_sign for one review, reading its branch only where it decides (a full run
+    signs on either): a round's review is on the tested branch; a control's own review is
+    not when its design is signed off as not effective, where nothing was tested (as
+    _review reads it). No record read (the review is not resting) decides nothing here."""
+    if record is None or run_lets_sign(record, True):
+        return True
+    if record.failed or round_review:
+        return False
+    from ai_workforce_api.design_conclusions import design_verdict
+
+    design = design_verdict(connection, project_id, UUID(str(control_id)))
+    return run_lets_sign(record, design != "NOT_EFFECTIVE")
+
+
+def _record_of(rows: Sequence[tuple[Any, Any]]) -> ReperformanceBody:
+    """The record from a review's last two re-performance events, newest first."""
     failed = bool(rows) and rows[0][0] == "review.reperform_failed"
     recorded = next(
         (dict(row[1]) for row in rows if row[0] == "review.reperformed" and row[1]), None
@@ -1714,6 +1768,30 @@ def _review_states(
     states: dict[UUID, tuple[ReviewStatus, ReviewLeft]] = {}
     key = "r.test_round_id" if by_round else "r.engagement_control_id"
     scope = "r.test_round_id IS NOT NULL" if by_round else "r.test_round_id IS NULL"
+    rows = connection.execute(
+        f"""
+            SELECT {key}, r.status, r.reperform_status, r.reperformed_at,
+                   count(*) FILTER (WHERE n.status = 'PROPOSED'),
+                   count(*) FILTER (WHERE n.status = 'OPEN'),
+                   count(*) FILTER (WHERE n.status = 'RESPONDED'),
+                   r.id, r.engagement_control_id
+            FROM control_reviews r
+            LEFT JOIN review_notes n ON n.control_review_id = r.id
+            WHERE r.project_id = %s AND {scope}
+            GROUP BY r.id
+            """,
+        (project_id,),
+    ).fetchall()
+    # Only an open review that would otherwise sign needs its run's record.
+    records = reperformances_of(
+        connection,
+        [
+            UUID(str(row[7]))
+            for row in rows
+            if row[1] != "SIGNED_OFF" and row[2] == "IDLE" and not any(row[4:7])
+            and row[3] is not None
+        ],
+    )  # fmt: skip
     for (
         control_id,
         status,
@@ -1722,19 +1800,12 @@ def _review_states(
         proposed,
         open_,
         responded,
-    ) in connection.execute(
-        f"""
-            SELECT {key}, r.status, r.reperform_status, r.reperformed_at,
-                   count(*) FILTER (WHERE n.status = 'PROPOSED'),
-                   count(*) FILTER (WHERE n.status = 'OPEN'),
-                   count(*) FILTER (WHERE n.status = 'RESPONDED')
-            FROM control_reviews r
-            LEFT JOIN review_notes n ON n.control_review_id = r.id
-            WHERE r.project_id = %s AND {scope}
-            GROUP BY r.id
-            """,
-        (project_id,),
-    ).fetchall():
+        review_id,
+        review_control,
+    ) in rows:
+        signable = signs_after_run(
+            connection, project_id, review_control, by_round, records.get(UUID(str(review_id)))
+        )
         left: ReviewLeft = (
             "SIGNED"
             if status == "SIGNED_OFF"
@@ -1747,7 +1818,7 @@ def _review_states(
             else "CLEAR"
             if responded
             else "SIGN"
-            if reperformed_at is not None
+            if reperformed_at is not None and signable
             else "REPERFORM"
         )
         states[UUID(str(control_id))] = (
