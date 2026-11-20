@@ -14,6 +14,9 @@ owner signs in with the token in the state's facts):
                        scope, then launched (the wizard is on Systems & Processes, which
                        opens at launch): leaving out a control the checks assessed asks one
                        reason for all of them
+- scope-wizard-reason-soc  the same, with a SOC 1 report for Workday read: the suggested
+                       reasons offer reliance on it (with no report on file, they say the
+                       controls are expected to be covered by one)
 - scope-wizard-record  a launched engagement (SAP ERP) with a test sheet on ITGC-AC-02, the
                        system reviewed by the standard checks: taking controls out in the
                        wizard shows the work on record and asks why
@@ -29,12 +32,13 @@ from uuid import UUID
 from test_engagement_integrity import _launched, _ready_without_controls, _test_sheet
 from test_onboarding import _base, _choose_methodology, _new_engagement, _pbc
 from test_rcm_uploads import _upload
+from test_system_applicability import REPORT, _answer, _read, _Scripted, _wand
 from test_system_applicability import _setup as _wizard_setup
-from test_system_applicability import _wand
 
 from ai_workforce_api.auth import token_hash
 from ai_workforce_api.db import connect
 from ai_workforce_api.rcm_systems import run_scan
+from ai_workforce_api.system_scoping import run_review
 
 HEAD = "Ctrl #,Control Activity,How Often,Manual / Automated,Process,Control Owner,Systems\n"
 # Rows 2 and 3 share AC 1.01 but differ in description and owner; row 4 has no
@@ -167,6 +171,42 @@ def reviewed_then_launched(
     return statuses
 
 
+def with_soc_report(
+    url: str, owner: Any, base: str, system_id: str, statuses: dict[str, str]
+) -> dict[str, str]:
+    """A synthetic SOC 1 report for the system uploaded and read by a scripted model (as
+    test_an_uploaded_report_gives_the_cuecs_and_their_mapping reads it), the assessment
+    keeping the statuses the standard checks gave. The report as the API lists it."""
+    uploaded = owner.post(
+        f"{base}/systems/{system_id}/soc-reports/upload",
+        params={"file_name": "Workday SOC 1 2027.txt"},
+        content=REPORT.encode(),
+        headers={"content-type": "text/plain"},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    refs = sorted(statuses)
+    answer = _answer(
+        refs,
+        controls=[
+            {
+                "control_ref": ref,
+                "status": statuses[ref],
+                "rationale": "Usual for application systems.",
+                "support": "System details",
+                "missing": "",
+                "confidence": "LOW",
+            }
+            for ref in refs
+        ],
+    )
+    with connect(url) as connection:
+        assert run_review(connection, _Scripted([_read(refs), answer]), UUID(system_id)) == "DONE"
+    system = next(a for a in owner.get(base).json()["applications"] if a["id"] == system_id)
+    (report,) = system["soc_reports"]
+    assert (report["status"], report["report_kind"]) == ("READ", "SOC1"), report
+    return {"status": report["status"], "report_kind": report["report_kind"]}
+
+
 def build(seed: Any) -> None:
     _held(seed, "scope-rcm-held", HELD_RCM)
     _held(seed, "scope-rcm-held-many", HELD_MANY_RCM)
@@ -190,6 +230,18 @@ def build(seed: Any) -> None:
         token=_sign_in(seed.database.url, team["owner_id"]),
         system_id=system_id,
         statuses=statuses,
+    )
+
+    owner, base, system_id, team = _wizard_setup(seed.database)
+    statuses = reviewed_then_launched(seed.database.url, owner, team, system_id)
+    report = with_soc_report(seed.database.url, owner, base, system_id, statuses)
+    _name(seed.database.url, team, "Example Audit Firm")
+    seed.add(
+        "scope-wizard-reason-soc",
+        seed.href(team, section="controls", system=system_id),
+        token=_sign_in(seed.database.url, team["owner_id"]),
+        system_id=system_id,
+        report=report,
     )
 
     team, owner, base = _launched(seed.database, "wizard-record")
