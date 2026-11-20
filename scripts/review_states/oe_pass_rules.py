@@ -18,6 +18,12 @@ of this database only).
                       re-performing by hand
 - oe-review-failed    the same after a later re-performance gave up: the review, the next
                       step and the queue say to re-perform, never to sign off
+- oe-review-none      the Review step after a re-performance whose every model answer was
+                      rejected (FALLBACK, 0 of 3 re-performed)
+- oe-review-differs   the Review step after a full re-performance that found a difference
+                      from the preparer's result (its note left proposed)
+- oe-review-signed    the partial review signed off over the reviewer's record of
+                      re-performing the rest by hand
 """
 
 from typing import Any
@@ -160,27 +166,55 @@ def _dismiss_proposed(seed: Any, team: dict[str, Any], client: Any, review_id: s
             review = decided.json()
 
 
-def _reviewed(seed: Any, slug: str) -> tuple[dict[str, Any], Any, str, dict[str, Any]]:
+REJECTED = {"results": [{"index": 99, "result": "PASS", "note": "x"}]}
+
+
+def _reviewed(
+    seed: Any, slug: str, answers: str = "partial", dismiss: bool = True
+) -> tuple[dict[str, Any], Any, str, dict[str, Any]]:
     team, client, sheet, _file = _prepared_control(seed.database, slug, "DISMISS")
     control = sheet["control_id"]
     _rollforward_decided(seed.database, team, client, control)
     review = client.get(f"{seed.base(team)}/reviews").json()[0]
     attributes = len(sheet["attributes"])
     passing = _all_pass(attributes)
-    rejected = {"results": [{"index": 99, "result": "PASS", "note": "x"}]}
+    differs = {
+        "results": [
+            {"index": 0, "result": "EXCEPTION", "note": "The approval is dated after access."}
+        ]
+        + passing["results"][1:]
+    }
+    scripted = {
+        "partial": [passing, REJECTED, REJECTED],
+        "none": [REJECTED, REJECTED, REJECTED],
+        "differs": [differs, passing, passing],
+    }[answers]
     with connect(seed.url) as connection:
-        assert (
-            run_reperformance(
-                connection, _Provider([passing, rejected, rejected]), UUID(review["id"])
-            )
-            == "DONE"
-        )
-    _dismiss_proposed(seed, team, client, review["id"])
+        assert run_reperformance(connection, _Provider(scripted), UUID(review["id"])) == "DONE"
+    if dismiss:
+        _dismiss_proposed(seed, team, client, review["id"])
     review = client.get(f"{seed.base(team)}/reviews").json()[0]
     record = review["reperformance"]
-    assert (record["source"], record["due"], record["done"]) == ("MODEL", 3, 1), record
-    assert review["attestation_needed"] is True
+    expected = {
+        "partial": ("MODEL", 3, 1),
+        "none": ("FALLBACK", 3, 0),
+        "differs": ("MODEL", 3, 3),
+    }[answers]
+    assert (record["source"], record["due"], record["done"]) == expected, record
+    assert review["attestation_needed"] is (answers != "differs"), review
     return team, client, control, review
+
+
+def _add_review(seed: Any, name: str, team: dict[str, Any], control: str, review: Any) -> None:
+    seed.add(
+        name,
+        seed.href(team, section="controls", control=control, step="review"),
+        tokens=_people(seed, team),
+        viewer="reviewer",
+        overview=seed.href(team, section="overview", filter="all"),
+        flow=seed.href(team, section="controls", control=control),
+        blocking=review["blocking"],
+    )
 
 
 def _review_states(seed: Any) -> None:
@@ -216,6 +250,30 @@ def _review_states(seed: Any) -> None:
     )
 
 
+def _more_review_states(seed: Any) -> None:
+    team, _client, control, review = _reviewed(seed, "oe-none", "none")
+    _add_review(seed, "oe-review-none", team, control, review)
+
+    team, _client, control, review = _reviewed(seed, "oe-differs", "differs", dismiss=False)
+    assert any(n["target"].get("reviewer_result") for n in review["notes"]), review["notes"]
+    _add_review(seed, "oe-review-differs", team, control, review)
+
+    team, client, control, review = _reviewed(seed, "oe-signed")
+    signed = _reviewer(seed, team).post(
+        f"{seed.base(team)}/reviews/{review['id']}/sign-off",
+        json={
+            "version": review["version"],
+            "note": "Re-performed u0002 and u0003 by hand against the access tickets.",
+            "reperformed_by_hand": True,
+        },
+    )
+    assert signed.status_code == 200, signed.text
+    review = client.get(f"{seed.base(team)}/reviews").json()[0]
+    assert review["status"] == "SIGNED_OFF", review["status"]
+    _add_review(seed, "oe-review-signed", team, control, review)
+
+
 def build(seed: Any) -> None:
     _sheet_states(seed)
     _review_states(seed)
+    _more_review_states(seed)
