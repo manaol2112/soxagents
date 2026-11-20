@@ -13,6 +13,7 @@ from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
+from hostile_model import Repeat, Replay
 from support import Database
 from test_models import _add_project_member, _add_user, _client, _seed_org, _seed_project
 from test_outbound import migrated
@@ -30,7 +31,6 @@ from ai_workforce_api.models import (
     ModelConfig,
     ModelProviderError,
     ModelRateLimit,
-    ModelRaw,
     ModelRequest,
     ModelTimeout,
     cost_micros,
@@ -58,20 +58,17 @@ KEY = base64.b64encode(hashlib.sha256(b"test provenance key").digest()).decode()
 SONNET = ModelConfig("balanced", "anthropic", "claude-sonnet-5-5", 2_000, 10_000)
 
 
-class _Scripted:
-    """Answers, or raises, in the order given; records every request."""
+class _Scripted(Replay):
+    """Answers, or raises, in the order given; records every request. The shared replay fake
+    (hostile_model.Replay); its script keeps this file's name, `steps`. It answers its last
+    step again after the script ends, as this file's copy did: stated here (then=Repeat())."""
 
     def __init__(self, steps: list[Any]) -> None:
-        self.steps = steps
-        self.requests: list[ModelRequest] = []
+        super().__init__(steps, then=Repeat(), raises=True)
 
-    def complete(self, request: ModelRequest, config: ModelConfig) -> ModelRaw:
-        del config
-        self.requests.append(request)
-        step = self.steps[min(len(self.requests), len(self.steps)) - 1]
-        if isinstance(step, Exception):
-            raise step
-        return ModelRaw(step, (), 800, 200)
+    @property
+    def steps(self) -> list[Any]:
+        return self.outputs
 
 
 def _request(prompt: str = "Say ok.", system: str = "Be brief.") -> ModelRequest:

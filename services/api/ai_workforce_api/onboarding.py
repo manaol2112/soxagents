@@ -1051,9 +1051,16 @@ def _snapshot(
         if not from_upload and not runs_on_a_system(c.domain) and c.key not in loaded_keys
     ]
     period = period_state(connection, project_id)
-    readiness = _readiness(str(project[2]), settings, applications, team, controls, agents, period)
-    ready = all(item.complete for item in readiness)
     source, file_name, open_import = _rcm_state(connection, project_id, controls)
+    # What holds the open upload's import, read from the preview the page shows, so the
+    # setup agent never calls the step ready while Import is held.
+    from ai_workforce_api.rcm_uploads import upload_hold
+
+    held = None if open_import is None else upload_hold(connection, project_id, open_import)
+    readiness = _readiness(
+        str(project[2]), settings, applications, team, controls, agents, period, held
+    )
+    ready = all(item.complete for item in readiness)
     templates = summaries(firm_templates(connection, project_id))
     body = OnboardingBody(
         project_id=project_id,
@@ -1689,6 +1696,7 @@ def _readiness(
     controls: list[ControlBody],
     agents: list[StaffedAgent],
     period: PeriodState | None = None,
+    upload_held: Literal["ROWS", "OTHER"] | None = None,
 ) -> list[ReadinessItem]:
     included = [control for control in controls if control.included]
     scope_issues: list[str] = []
@@ -1733,6 +1741,12 @@ def _readiness(
             else "No controls yet. After launch, set up the systems and controls in "
             "Controls: load the standard library or upload the organization's RCM."
         )
+    # An upload still being mapped whose import is held: worth checking, not a launch
+    # blocker (an engagement may launch without it).
+    if upload_held == "ROWS":
+        rcm_advisories.append("The uploaded RCM has rows to fix before it can be imported.")
+    elif upload_held == "OTHER":
+        rcm_advisories.append("The uploaded RCM has items to resolve before it can be imported.")
     # Systems come from the RCM: identified on upload, or added here for the library.
     on_systems = [c for c in included if runs_on_a_system(c.domain)]
     if on_systems and not applications:

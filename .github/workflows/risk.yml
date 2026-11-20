@@ -1,0 +1,58 @@
+name: Risk class
+
+# Every pull request declares a risk class at or above its paths' minimum, with the High
+# evidence present (scripts/risk_class.py, mapping in .github/risk-paths.toml,
+# docs/test-strategy.md "The risk-class check"). A separate workflow from ci.yml, so that
+# fixing a declaration in the body reruns this job in seconds, not the gate.
+#
+# REPORT ONLY (owner decision M4, 19 November 2026): the verdict is printed and summarised
+# but the job never fails, and it is not a required check. It becomes required after a
+# report-only week with at least five pull requests: --report-only is dropped and the owner
+# adds `risk-class` to branch protection.
+#
+# It runs the BASE commit's copy of the script, so a pull request cannot weaken the check
+# that judges it by editing the script. Under `pull_request` the workflow file itself comes
+# from the pull request, so this guards against omission and mistakes, not a hostile change.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: risk-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  risk-class:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Checkout, with the history the merge base needs
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.0"
+          python-version: "3.14.8"
+
+      # The body and the login arrive as environment variables and are read as data; they
+      # are never interpolated into this script.
+      - name: Classify
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          script="$RUNNER_TEMP/risk_class.py"
+          if ! git show "$BASE_SHA:scripts/risk_class.py" > "$script" 2>/dev/null; then
+            # Only the pull request that adds the script has none at its base.
+            cp scripts/risk_class.py "$script"
+          fi
+          uv run --no-project python -I "$script" --base "$BASE_SHA" --head "$HEAD_SHA" --report-only

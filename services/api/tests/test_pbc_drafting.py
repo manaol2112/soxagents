@@ -357,7 +357,11 @@ def test_the_design_request_asks_for_design_evidence_and_no_population(
 def test_a_model_draft_is_used_when_it_passes_the_checks(migrated: Database) -> None:
     team, _owner, _base_path = _started(migrated, "model", RecordingScheduler())
     draft_id, request_id = _first_draft(migrated, team["project"])
-    provider = FakeProvider(_valid_output())
+    # Old (to 19 November 2026): the generic three-item _valid_output() passed against the
+    # interim plan. New: the draft is paired with the plan, one item per requirement. Why:
+    # owner decision 19 November 2026 (FO-28), the request names every planned requirement,
+    # so a draft that is not paired falls back to the plan's wording. Every assertion stays.
+    provider = FakeProvider(_paired_output(migrated, team["project"], request_id))
     with connect(migrated.url) as connection:
         assert run_draft(connection, provider, draft_id) == "DRAFTED"
         row = connection.execute(
@@ -535,6 +539,38 @@ def _first_draft(database: Database, project: UUID, phase: str = "INTERIM") -> t
 
 def _project(team: dict[str, Any]) -> str:
     return f"/organizations/{team['org']}/projects/{team['project']}"
+
+
+def _paired_output(database: Database, project: UUID, request_id: UUID) -> dict[str, Any]:
+    """A model draft of a planned request that check_draft accepts (FO-28): one item per
+    REQUESTED requirement, in the plan's order, under its title, of its kind and with its
+    period; the population item names the SAP export."""
+    from ai_workforce_api.pbc_drafting import PRIMARY_KIND, load_context, with_plan
+
+    with connect(database.url) as connection:
+        control = connection.execute(
+            "SELECT engagement_control_id FROM pbc_requests WHERE id = %s", (request_id,)
+        ).fetchone()
+        assert control is not None
+        planned = with_plan(connection, load_context(connection, project, control[0]), request_id)
+    items: list[dict[str, Any]] = []
+    for item in planned.planned:
+        kind = PRIMARY_KIND[item.categories[0]]
+        lead = (
+            "Export of SAP table USR02 with users created in FY2027. "
+            if kind == "population"
+            else ""
+        )
+        items.append(
+            {
+                "kind": kind,
+                "title": item.title,
+                "detail": f"{lead}Please provide this as recorded. {item.description}"[:1500],
+                "period": item.period_label[:200],
+            }
+        )
+    assert any(item["kind"] == "population" for item in items)
+    return {**_valid_output(), "items": items}
 
 
 # The Claude provider, against a stand-in for the SDK client. No network is used.
@@ -783,10 +819,13 @@ def test_a_person_who_rewords_a_request_while_it_is_drafted_keeps_their_wording(
             (request_id,),
         ).fetchone()
     assert wording == (mine,)
-    assert draft == (
-        "SKIPPED",
-        "The request was reworded while it was drafted; that wording stays.",
-        None,
+    # Old (to 20 November 2026): the note stored the sentence. New (G2 review, B1): it
+    # stores the reason's token, and the sentence is what the draft shows for it.
+    assert draft == ("SKIPPED", "REWORDED", None)
+    from ai_workforce_api.pbc_drafting import shown_note
+
+    assert shown_note("SKIPPED", "REWORDED") == (
+        "The request was reworded while it was drafted; that wording stays."
     )
     assert audit == (1,)
 
@@ -807,8 +846,12 @@ def test_a_draft_still_applies_when_only_other_fields_changed_meanwhile(
                 )
             return super().complete(request, config)
 
+    # Old (to 19 November 2026): the generic _valid_output(); new: paired with the plan; why:
+    # owner decision 19 November 2026 (FO-28), as in
+    # test_a_model_draft_is_used_when_it_passes_the_checks.
+    paired = _paired_output(migrated, team["project"], request_id)
     with connect(migrated.url) as connection:
-        assert run_draft(connection, Redating(_valid_output()), draft_id) == "DRAFTED"
+        assert run_draft(connection, Redating(paired), draft_id) == "DRAFTED"
         wording = connection.execute(
             "SELECT evidence_description FROM pbc_requests WHERE id = %s", (request_id,)
         ).fetchone()

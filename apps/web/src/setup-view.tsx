@@ -675,7 +675,10 @@ function StepIssues({
   return (
     <>
       {issues.length > 0 ? (
-        <ul className="setup-issues" aria-label="Needed before launch">
+        <ul
+          className="setup-issues setup-readiness"
+          aria-label="Needed before launch"
+        >
           {issues.map((issue) => (
             <li key={issue}>
               <UiIcon name="info" size={14} />
@@ -686,7 +689,7 @@ function StepIssues({
       ) : null}
       {advisories.length > 0 ? (
         <ul
-          className="setup-issues setup-advisories"
+          className="setup-issues setup-advisories setup-readiness"
           aria-label="Worth knowing"
         >
           {advisories.map((note) => (

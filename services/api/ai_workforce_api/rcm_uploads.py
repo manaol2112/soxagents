@@ -10,6 +10,7 @@ import hashlib
 import logging
 import re
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
@@ -31,6 +32,7 @@ from ai_workforce_api.controls import DOMAIN_AGENTS, runs_on_a_system
 from ai_workforce_api.db import transaction
 from ai_workforce_api.model_providers import live_model
 from ai_workforce_api.onboarding import (
+    ApplicationBody,
     OnboardingBody,
     OnboardingState,
     _applications,
@@ -48,6 +50,7 @@ from ai_workforce_api.rcm_import import (
     REQUIRED,
     VALUE_FIELDS,
     BuildResult,
+    ParsedControl,
     RcmFileError,
     Sheet,
     best_sheet,
@@ -58,6 +61,7 @@ from ai_workforce_api.rcm_import import (
     data_rows,
     detect_header,
     headers,
+    listed,
     normalize,
     parse_file,
     suggest_fields,
@@ -69,9 +73,10 @@ from ai_workforce_api.rcm_systems import (
     SystemScanScheduler,
     assigned_systems,
     basis,
+    names_a_system,
 )
 from ai_workforce_api.rcm_terms import reset_terms
-from ai_workforce_api.scope_changes import reconcile_scope
+from ai_workforce_api.scope_changes import reconcile_scope, started
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.system_review_queue import (
     schedule_system_reviews,
@@ -163,6 +168,9 @@ class ImportPreview(BaseModel):
     skipped_count: int
     warnings: list[str]
     problems: list[str]
+    # The problems include rows to fix in the file itself: the next step is a corrected
+    # upload, not a mapping change.
+    fix_in_file: bool = False
     controls: list[ControlPreview]
     new_applications: list[str]
 
@@ -592,6 +600,18 @@ def _read(
     return _body(connection, project_id, _load(connection, project_id, import_id))
 
 
+def upload_hold(
+    connection: psycopg.Connection[Any], project_id: UUID, import_id: UUID
+) -> Literal["ROWS", "OTHER"] | None:
+    """What holds the import of an upload still being mapped, from the same preview the
+    page shows (the caller has authorized the read): rows to fix in the file, anything
+    else, or nothing."""
+    preview = _body(connection, project_id, _load(connection, project_id, import_id))
+    if preview.ready:
+        return None
+    return "ROWS" if preview.preview.fix_in_file else "OTHER"
+
+
 def _layout(
     connection: psycopg.Connection[Any],
     principal: Principal,
@@ -670,14 +690,18 @@ def _import(
     """Import the mapped rows, all at once or not at all: replacing the engagement's
     controls, or adding to the ones an earlier sheet imported."""
     authorize_controls_setup(connection, principal, organization_id, project_id)
-    existing = {app.name.lower(): app.id for app in _applications(connection, project_id)}
+    applications = _applications(connection, project_id)
+    existing = {app.name.lower(): app.id for app in applications}
+    launched = started(connection, project_id)
     with transaction(connection) as cursor:
         stored = _open(cursor, project_id, import_id, body.version)
         result = build(stored.rows, stored.header_row, stored.column_fields, stored.value_maps)
-        if result.problems or not result.controls:
+        if result.problems or not result.controls or _stale(stored):
             raise OnboardingState("mapping is incomplete")
         confirmed = _confirmed(stored)
         new_names = _new_names(result, existing, confirmed)
+        # Which systems each control is imported for: the same placement the preview shows.
+        placement = _place(result, stored, applications, new_names)
         if len(new_names) > MAX_NEW_APPLICATIONS:
             raise OnboardingState("too many applications")
         layers = {system.name.lower(): system.layer for system in confirmed or []}
@@ -701,11 +725,20 @@ def _import(
             ).fetchone()
             if created is not None:
                 existing[name.lower()] = created[0]
-        every_app = list(dict.fromkeys(existing.values()))
+        replaced: list[str] = []
         # A control replaced here takes the matches to the standards proposed for it.
         if body.mode == "ADD":
-            # Library controls still give way to the upload; same control IDs are replaced.
+            # Library controls still give way to the upload; same control IDs are replaced,
+            # on every system they cover (the preview names them).
             replaced_refs = [control.control_ref.upper() for control in result.controls]
+            replaced = [
+                str(row[0])
+                for row in cursor.execute(
+                    "SELECT DISTINCT control_ref FROM engagement_controls WHERE project_id = %s "
+                    "AND source = 'UPLOAD' AND upper(control_ref) = ANY(%s) ORDER BY 1",
+                    (project_id, replaced_refs),
+                ).fetchall()
+            ]
             cursor.execute(
                 """
                 DELETE FROM library_match_runs WHERE project_id = %s AND engagement_control_id IN (
@@ -724,21 +757,23 @@ def _import(
         else:
             cursor.execute("DELETE FROM library_match_runs WHERE project_id = %s", (project_id,))
             cursor.execute("DELETE FROM engagement_controls WHERE project_id = %s", (project_id,))
+        no_system = set(placement.no_system)
         for control in result.controls:
-            apps = [
-                existing[name.lower()]
-                for name in _control_systems(control.control_ref, control.applications, confirmed)
-                if name.lower() in existing
-            ]
-            # One instance per system the control relies on (Milestone 8.5); a control
-            # that names none covers every in-scope system. A business process control
-            # belongs to its process: one row, no system.
-            targets: list[UUID | None] = (
-                list(dict.fromkeys(apps)) or list(every_app) or [None]
-                if runs_on_a_system(control.domain)
-                else [None]
-            )
-            for app in targets:
+            # One instance per system the control relies on (Milestone 8.5), each pointing
+            # at the row that named its system; a control that names no system covers every
+            # in-scope system. One whose systems were all left out, or not identified, gets
+            # no system and is never spread: before launch, launch waits until a person
+            # chooses its systems; after launch it comes in out of scope, so no work starts
+            # on no system. A business process control belongs to its process: one row.
+            targets: dict[UUID | None, int] = {}
+            for name in placement.targets[control.row]:
+                app_id = existing.get(name.lower())
+                if app_id is not None and app_id not in targets:
+                    targets[app_id] = _source_row(control, name, confirmed)
+            if not targets:
+                targets[None] = control.row
+            included = not (launched and control.control_ref in no_system)
+            for app, source_row in targets.items():
                 cursor.execute(
                     """
                     INSERT INTO engagement_controls (
@@ -747,11 +782,11 @@ def _import(
                         key_control, owner_name, owner_email, application_ids,
                         test_attributes, pbc_items, template_key, agent_key, source,
                         rcm_import_id, source_row, domain_label, frequency_label,
-                        nature_label, custom_fields, engagement_application_id
+                        nature_label, custom_fields, engagement_application_id, included
                     )
                     VALUES (
                         %s, %s, %s, 0, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s, 'UPLOAD', %s, %s, %s, %s, %s, %s, %s
+                        %s, 'UPLOAD', %s, %s, %s, %s, %s, %s, %s, %s
                     )
                     """,
                     (
@@ -774,7 +809,7 @@ def _import(
                         default_template(control.domain),
                         DOMAIN_AGENTS[control.domain],
                         import_id,
-                        control.row,
+                        source_row,
                         control.domain_label,
                         control.frequency_label,
                         control.nature_label,
@@ -785,6 +820,7 @@ def _import(
                             ]
                         ),
                         app,
+                        included,
                     ),
                 )
         cursor.execute(
@@ -811,6 +847,18 @@ def _import(
                 "skipped_rows": len(result.skipped),
                 "new_applications": len(new_names),
                 "systems_source": stored.systems_source if confirmed is not None else None,
+                # Where each control went (the preview's own placement): rows of one
+                # control ID merged, controls spread to every in-scope system, controls
+                # with no system, and named systems no identified system matches.
+                "merged_rows": {
+                    control.control_ref: control.rows
+                    for control in result.controls
+                    if len(control.rows) > 1
+                },
+                "spread": placement.spread,
+                "no_system": placement.no_system,
+                "uncovered": [ref for ref, _values in placement.uncovered],
+                **({"replaced": replaced} if body.mode == "ADD" else {}),
             },
         )
     # The imported controls are matched to the firm's standards at once, for a person to
@@ -951,7 +999,9 @@ def _rescan(
         stored = _load(cursor, project_id, import_id, lock=True)
         if stored.status != "MAPPING":
             raise OnboardingState("upload is closed")
-        _reset_systems(cursor, import_id, stored.systems_basis)
+        _reset_systems(
+            cursor, import_id, basis(stored.sheet_index, stored.header_row, stored.column_fields)
+        )
     return _body(connection, project_id, _load(connection, project_id, import_id))
 
 
@@ -1048,6 +1098,170 @@ def _new_names(
     return [name for key, name in used.items() if key not in existing]
 
 
+@dataclass
+class _Placement:
+    """Which systems each control is imported for. The preview and the import both use it,
+    so what the preview says is what the import does (invariant I16)."""
+
+    # By the control's row: the names of the systems it is imported for.
+    targets: dict[int, list[str]] = field(default_factory=dict)
+    # Every in-scope system a control naming none covers.
+    spread_to: list[str] = field(default_factory=list)
+    spread: list[str] = field(default_factory=list)
+    no_system: list[str] = field(default_factory=list)
+    # The systems the no-system controls name, which were left out or not identified.
+    left_out: list[str] = field(default_factory=list)
+    # Controls naming systems no identified system matches, with those names.
+    uncovered: list[tuple[str, list[str]]] = field(default_factory=list)
+
+
+def _variants(proposal: SystemProposal) -> set[str]:
+    return {proposal.name.lower(), *(alias.lower() for alias in proposal.aliases)}
+
+
+def _lists(proposal: SystemProposal, control: ParsedControl) -> bool:
+    """The identified system names the control: by its ID, or by its systems cell."""
+    return control.control_ref in proposal.control_refs or bool(
+        _variants(proposal) & {name.lower() for name in control.applications}
+    )
+
+
+def _place(
+    result: BuildResult,
+    stored: _Stored,
+    applications: list[ApplicationBody],
+    new_names: list[str],
+) -> _Placement:
+    """Each control's systems: those it is confirmed to rely on; for a control naming no
+    system, every in-scope system (Milestone 8.5); for one whose named systems were all
+    left out or not identified, none (owner decision, 19 November 2026: never spread)."""
+    scan = stored.systems if stored.systems_status == "READY" else None
+    confirmed = None if scan is None else [system for system in scan if system.included]
+    # The engagement's systems not taken out of scope, then the ones this import adds.
+    placement = _Placement(
+        spread_to=[app.name for app in applications if app.out_of_scope_at is None] + new_names
+    )
+    for control in result.controls:
+        if not runs_on_a_system(control.domain):
+            placement.targets[control.row] = []
+            continue
+        if scan is not None:
+            unmatched = [
+                name
+                for name in control.applications
+                if names_a_system([name])
+                and not any(name.lower() in _variants(system) for system in scan)
+            ]
+            if unmatched:
+                placement.uncovered.append((control.control_ref, unmatched))
+        named = _control_systems(control.control_ref, control.applications, confirmed)
+        if named:
+            placement.targets[control.row] = list({n.lower(): n for n in named}.values())
+        elif not names_a_system(control.applications) and not any(
+            _lists(system, control) for system in scan or []
+        ):
+            placement.targets[control.row] = placement.spread_to
+            if placement.spread_to:
+                placement.spread.append(control.control_ref)
+        else:
+            placement.targets[control.row] = []
+            placement.no_system.append(control.control_ref)
+            for name in [n for n in control.applications if names_a_system([n])] + [
+                system.name
+                for system in scan or []
+                if not system.included and _lists(system, control)
+            ]:
+                if name.lower() not in {left.lower() for left in placement.left_out}:
+                    placement.left_out.append(name)
+    return placement
+
+
+def _source_row(control: ParsedControl, name: str, confirmed: list[SystemProposal] | None) -> int:
+    """The row that named the system, or the control's first row."""
+    variants = {name.lower()}
+    for system in confirmed or []:
+        if system.name.lower() == name.lower():
+            variants |= _variants(system)
+    return next(
+        (row for row, values in control.row_systems if {v.lower() for v in values} & variants),
+        control.row,
+    )
+
+
+def _placement_lines(placement: _Placement, launched: bool) -> list[str]:
+    """The preview's lines for where controls go that the controls list does not show."""
+    lines: list[str] = []
+    if placement.spread:
+        count = len(placement.spread)
+        lines.append(
+            f"{count} control{'s name' if count > 1 else ' names'} no system and "
+            f"{'are' if count > 1 else 'is'} imported for every in-scope system "
+            f"({listed(placement.spread_to)}): {listed(placement.spread, 10)}."
+        )
+    if placement.no_system:
+        many = len(placement.no_system) > 1
+        named = f" ({listed(placement.left_out)})" if placement.left_out else ""
+        then = (
+            f"{'they are' if many else 'it is'} imported out of scope with no system. Choose "
+            f"{'their' if many else 'its'} systems in Controls to bring "
+            f"{'them' if many else 'it'} into scope."
+            if launched
+            else f"{'they are' if many else 'it is'} imported with no system, and launch "
+            f"waits until {'their' if many else 'its'} systems are chosen."
+        )
+        lines.append(
+            f"{listed(placement.no_system, 10)} name{'' if many else 's'} only systems that "
+            f"are left out or not identified{named}: {then}"
+        )
+    if placement.uncovered:
+        many = len(placement.uncovered) > 1
+        shown = listed([f"{ref} ({listed(names)})" for ref, names in placement.uncovered], 10)
+        lines.append(
+            f"{shown} name{'' if many else 's'} systems that no identified system matches, "
+            f"and {'they are' if many else 'it is'} not imported for them: rescan the "
+            "systems, or choose them on the control after import."
+        )
+    return lines
+
+
+def _replacing(connection: psycopg.Connection[Any], project_id: UUID, result: BuildResult) -> str:
+    """Added to the controls already imported, this sheet replaces each control of the
+    same ID on every system it covers: said before the person chooses Add."""
+    refs = [control.control_ref.upper() for control in result.controls]
+    found: dict[str, list[str]] = {}
+    for ref, name in connection.execute(
+        """
+        SELECT c.control_ref, coalesce(a.name, '') FROM engagement_controls c
+        LEFT JOIN engagement_applications a ON a.id = c.engagement_application_id
+        WHERE c.project_id = %s AND c.source = 'UPLOAD' AND upper(c.control_ref) = ANY(%s)
+        ORDER BY c.control_ref, a.name
+        """,
+        (project_id, refs),
+    ).fetchall():
+        found.setdefault(str(ref), []).append(str(name) or "no system")
+    if not found:
+        return ""
+    shown = listed([f"{ref} ({listed(names)})" for ref, names in found.items()], 10)
+    return (
+        "If added to the controls already imported, this sheet replaces the controls with "
+        f"the same ID on every system they cover: {shown}."
+    )
+
+
+def _stale(stored: _Stored) -> bool:
+    """The systems were identified under an earlier reading of the rows (rcm_systems
+    SCAN_ROWS_VERSION), so they may miss systems that reading did not see."""
+    return stored.systems_status == "READY" and stored.systems_basis != basis(
+        stored.sheet_index, stored.header_row, stored.column_fields
+    )
+
+
+STALE_SCAN = (
+    "The systems were identified from an earlier reading of the rows. Rescan to identify "
+    "them again before importing."
+)
+
+
 # Helpers
 
 
@@ -1107,7 +1321,20 @@ def _body(connection: psycopg.Connection[Any], project_id: UUID, stored: _Stored
         ]
         for key, items in choices.items()
     }
-    existing = {app.name.lower(): app.id for app in _applications(connection, project_id)}
+    applications = _applications(connection, project_id)
+    existing = {app.name.lower(): app.id for app in applications}
+    new_names = _new_names(result, existing, _confirmed(stored))
+    warnings = list(result.warnings)
+    problems = list(result.problems)
+    if result.controls and not result.problems:
+        warnings += _placement_lines(
+            _place(result, stored, applications, new_names), started(connection, project_id)
+        )
+        replacing = _replacing(connection, project_id, result)
+        if replacing:
+            warnings.append(replacing)
+    if _stale(stored):
+        problems.append(STALE_SCAN)
     count = connection.execute(
         "SELECT count(*) FROM engagement_controls WHERE project_id = %s", (project_id,)
     ).fetchone()
@@ -1136,8 +1363,9 @@ def _body(connection: psycopg.Connection[Any], project_id: UUID, stored: _Stored
             importable=len(result.controls),
             skipped=[SkippedRow(row=item.row, reason=item.reason) for item in result.skipped[:100]],
             skipped_count=len(result.skipped),
-            warnings=result.warnings,
-            problems=result.problems,
+            warnings=warnings,
+            problems=problems,
+            fix_in_file=result.fix_in_file,
             controls=[
                 ControlPreview(
                     row=control.row,
@@ -1158,7 +1386,7 @@ def _body(connection: psycopg.Connection[Any], project_id: UUID, stored: _Stored
                 )
                 for control in result.controls[:12]
             ],
-            new_applications=_new_names(result, existing, _confirmed(stored))[:60],
+            new_applications=new_names[:60],
         ),
         terms=TermsBody(
             status=stored.terms_status,
@@ -1183,7 +1411,7 @@ def _body(connection: psycopg.Connection[Any], project_id: UUID, stored: _Stored
                 for system in stored.systems
             ],
         ),
-        ready=not result.problems and bool(result.controls),
+        ready=not problems and bool(result.controls),
         replaces=int(count[0]) if count is not None else 0,
     )
 

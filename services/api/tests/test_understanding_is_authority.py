@@ -24,6 +24,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
+from hostile_model import no_answer
 from support import Database, run_plan_through
 from test_attributes_follow_understanding import (
     _Agents,
@@ -1346,6 +1347,7 @@ def test_an_open_conflict_from_before_is_closed_only_for_a_reason_that_is_true_o
     # Until the next run, the conflict is still a question in Control Understanding.
     assert str(stale) in [need["key"] for need in _needs(team, control)]
     agents = _Understood(migrated, team, control)
+    agents.other = no_answer  # the interview writer's failure path: questions kept
     agents.answer = lambda facts: {
         "attributes": [],
         "issues": [

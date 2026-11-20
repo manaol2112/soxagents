@@ -583,8 +583,13 @@ def test_every_point_arrives_with_a_statement_and_says_where_it_comes_from(
     assert set(points) == {"Evidence of the check", "Retention of the listing"}
     kept = points["Retention of the listing"]
     assert kept["id"] == asked_open["id"] and kept["version"] == asked_open["version"] + 1
+    # Rewritten 19 November 2026 (owner decision, question integrity part A). Old: the
+    # restated point kept the drafter's basis, "SOURCES". New: "TYPICAL". Why: "From the
+    # records" is shown only with a checked quote or a confirmed answer behind it, and the
+    # drafter's points carry no citation (control_context.records_basis); the statement and
+    # the suggestions are kept as before.
     assert (kept["proposal"], kept["proposal_basis"], kept["suggestions"]) == (
-        "The listing is kept with the review ticket in ServiceNow.", "SOURCES",
+        "The listing is kept with the review ticket in ServiceNow.", "TYPICAL",
         ["Kept in SharePoint"],
     )  # fmt: skip
     # A point that already has a statement is never rewritten by a later run.

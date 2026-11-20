@@ -10,7 +10,6 @@ reviewer catching planted false passes. The live model is judged in test_live_gr
 """
 
 import json
-import re
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -20,6 +19,7 @@ import pytest
 from corpus_m3c import AC, INJECTIONS, Cell, ControlSet, Manifest, Sample, build
 from corpus_m3c_supplement import build as build_supplement
 from fastapi.testclient import TestClient
+from hostile_model import first_line, item_label, quote_in
 from support import Database
 from test_evidence_analysis import _Provider
 from test_evidence_corpus import _control, _upload
@@ -53,7 +53,8 @@ from ai_workforce_api.workpaper_fill import Content, Section, Tab
 from ai_workforce_api.workpaper_service import PrepareBody, run_draft
 from ai_workforce_api.workpaper_service import _prepare as prepare_workpaper
 
-__all__ = ["migrated"]
+# The prompt parsers are re-exported from hostile_model for the files that import them here.
+__all__ = ["first_line", "item_label", "migrated", "quote_in"]
 
 
 @pytest.fixture(scope="module")
@@ -153,30 +154,12 @@ def sample_of(control: ControlSet, label: str) -> Sample:
 
 # --- The scripted tester ---------------------------------------------------------------
 
-_ITEM = re.compile(r'"sample": "([^"]+)"')
-_FILE = re.compile(r"<file index=(\d+) [^>]*>\n(.*?)\n</file>", re.S)
-
-
-def item_label(prompt: str, labels: list[str]) -> str:
-    """The sample a tester prompt is about, by its key in the item block."""
-    block = _ITEM.search(prompt)
-    assert block is not None and block.group(1) in labels, prompt[:300]
-    return block.group(1)
-
-
-def quote_in(prompt: str, wanted: str) -> tuple[int, str] | None:
-    """The file (by index) of the prompt holding `wanted`, as the tester would cite it."""
-    for index, body in _FILE.findall(prompt):
-        if wanted and wanted in body:
-            return int(index), wanted
-    return None
-
-
-def first_line(prompt: str) -> tuple[int, str]:
-    found = _FILE.search(prompt)
-    assert found is not None
-    line = next(part.strip() for part in found.group(2).splitlines() if len(part.strip()) >= 6)
-    return int(found.group(1)), line[:150]
+# The prompt parsers item_label, quote_in and first_line live in hostile_model.py, one copy
+# for the scripted testers and the hostile model (audit-invariants increment, 19 November
+# 2026). They are imported above under the same names, so `from test_grounded_testing import
+# first_line` still works. A prompt they cannot read is recorded as unscripted and fails the
+# test; before, their assert was raised inside complete(), where the model layer turned it
+# into a failed model call that a test could pass on.
 
 
 class Scripted(_Provider):

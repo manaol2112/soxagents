@@ -283,15 +283,19 @@ def test_an_agents_question_becomes_an_interview_before_a_person_sees_it(
             # owner-approved S1: the data's tags are made inert, nothing else changed); now /3
             # and /5 (18 November 2026, owner-approved: both agents read the walkthrough's
             # answers and a follow-up's answer, and never ask either again).
-            "AND prompt_version IN ('question-interview/3', 'question-review/5') "
+            # Rewritten 19 November 2026 (owner decision, question integrity part A). Old: /3
+            # and /5. New: /4 and /6. Why: the reviewer is now shown what the item asks as
+            # raised, and both prompts gain one rule line (every step serves what the item
+            # asks); a prompt change is recorded under a new label. Nothing else changed.
+            "AND prompt_version IN ('question-interview/4', 'question-review/6') "
             "ORDER BY created_at",
             (cid,),
         ).fetchall()
     assert audit is not None and audit[0]["reviewed"] == 1 and audit[0]["unreviewed"] == 0
     assert audit[0]["fixes"] == ["Split the question into two steps."]
     assert calls == [
-        ("engagement-planner", "question-interview/3"),
-        ("independent-reviewer", "question-review/5"),
+        ("engagement-planner", "question-interview/4"),
+        ("independent-reviewer", "question-review/6"),
     ]
     # Written once: another review of the control does not pay to write it again.
     again = _Provider([{"attributes": [], "issues": []}])

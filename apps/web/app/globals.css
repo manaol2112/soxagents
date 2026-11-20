@@ -13417,6 +13417,129 @@ button.sys-more-clear:hover {
   font-size: var(--fs-base);
 }
 
+/* A reason is a sentence: the field grows with it, so it is read whole. */
+.sw-reason textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 2.6rem;
+  font: inherit;
+  font-size: var(--fs-base);
+  resize: vertical;
+  field-sizing: content;
+}
+
+.answer :is(input, textarea)[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+.answer-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--fs-sm);
+}
+
+/* The controls left out: outlined, so they never read as the selected ones. */
+.sw-chosen.is-out .sw-chip {
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px dashed var(--border-strong);
+}
+
+button.sw-chip-more,
+.sw-chosen.is-out button.sw-chip-more {
+  height: auto;
+  color: var(--accent-strong);
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  line-height: inherit;
+  background: transparent;
+  border: 1px solid var(--border);
+  box-shadow: none;
+  transition: background 120ms ease;
+}
+
+button.sw-chip-more:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+}
+
+/* One reason for the controls of an area left out, or the reason on record for them. */
+.sw-why {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+/* Floated, the legend sits inside the box as its first row, not on its border. */
+.sw-why > legend {
+  float: left;
+  width: 100%;
+  padding: 0;
+}
+
+.sw-why-head {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--fs-base);
+  font-weight: 600;
+}
+
+.sw-why-note {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.sw-why-note b {
+  margin-right: 0.3rem;
+  color: var(--text-tertiary);
+  font-size: var(--fs-2xs);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.sw-why-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.sw-impact {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+}
+
+.sw-checking {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+  margin: 0;
+}
+
+/* A decision's reason on the control's row: two lines until the row is opened. */
+.sw-row-decision {
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  overflow-wrap: anywhere;
+}
+
+.sw-row-decision.is-clamped {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
 /* A system SOC 1 standing, its reports, and their CUECs. */
 .soc-assess {
   display: grid;
@@ -16378,8 +16501,9 @@ button.answer-done:hover {
   top: 4.5rem;
 }
 
-/* The agent lists what each step still needs; the step's own list would repeat it. */
-.setup-page.is-guided .setup-issues {
+/* The agent lists what each step still needs (its readiness); the step's own copy of that
+   list would repeat it. Every other list of problems, such as an upload's, stays. */
+.setup-page.is-guided .setup-readiness {
   display: none;
 }
 

@@ -219,6 +219,26 @@ export function reviewWrite(fields: Fields): ReviewWrite {
   }
 }
 
+/** What the request panel offers for a Redraft (design review, 19 November 2026: one
+ * that is always refused was offered, and answered with an error): the button while one
+ * may be asked for; otherwise the server's reason in its place, as a rule, unless the
+ * plan-changed banner already says what to do. While the banner shows, its Redraft sits
+ * in the banner, next to its reason, and the status card offers none (design review,
+ * 20 November 2026: at 390 the warning came after Approve and send, and the Redraft was
+ * offered twice). `button` is the status card's, `banner` the banner's. */
+export function redraftOffer(
+  refusal: string | null,
+  notDrafted: string,
+): { button: boolean; note: string; banner: boolean } {
+  if (notDrafted !== "") {
+    return { button: false, note: "", banner: refusal === null };
+  }
+  if (refusal === null) {
+    return { button: true, note: "", banner: false };
+  }
+  return { button: false, note: refusal, banner: false };
+}
+
 /** What to tell the person when a call did not go through, or null when it did. */
 export function reviewProblem(status: number, detail: string): string | null {
   if (status === 200) {
