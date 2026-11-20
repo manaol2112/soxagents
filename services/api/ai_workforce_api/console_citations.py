@@ -190,6 +190,16 @@ def _negated(text: str, start: int) -> bool:
     return False
 
 
+def negated_span(text: str, start: int, end: int) -> bool:
+    """Whether a located span of the text is negated: the words just before it negate it,
+    or a word inside it is negated in its own clause (the guard find_passage applies, used
+    by a rule check's quoted side and a test citation; review B3, 20 November 2026).
+    "approved by Elena Rossi" and "not approved by Elena Rossi" of "Change 42 was not
+    approved by Elena Rossi" are both negated."""
+    starts = [start, *(word.start() for word in _WORD.finditer(text, start, end)), end]
+    return any(_negated(text, at) for at in starts)
+
+
 def find_passage(text: str, quote: str, context: str = "") -> PassageMatch | None:
     """Where a quoted passage is in the text, matched strictly: folded as find_quote
     folds (spacing, case, quote marks, dashes), but only on word boundaries at both ends,

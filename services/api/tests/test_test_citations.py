@@ -145,3 +145,20 @@ def _upload_bytes(
     assert added.status_code == 200, added.text
     file_id: str = added.json()["file_id"]
     return file_id
+
+
+def test_a_citation_the_file_negates_is_not_found() -> None:
+    """Review B3 (audit invariants I6, I10; 20 November 2026). Before, "approved by the
+    line manager" of "Access was not approved by the line manager" was kept as a found
+    citation and could support a pass. Now a passage the words just before it negate is
+    not found; the file's own negated words, quoted whole, are kept."""
+    cited = (CitedFile(uuid4(), "ticket.txt", "Access was not approved by the line manager.\n"
+                       "Change 43 approved by the line manager.", False),)  # fmt: skip
+    assert check_citations([{"file": 0, "quote": "was not approved by the line manager"}],
+                           cited)[0]["found"] is True  # fmt: skip
+    kept = check_citations([{"file": 0, "quote": "approved by the line manager"}], cited)
+    # find_quote locates the first occurrence, the negated one: it is not kept.
+    assert kept == []
+    later = check_citations([{"file": 0, "quote": "Change 43 approved by the line manager"}],
+                            cited)  # fmt: skip
+    assert later[0]["found"] is True

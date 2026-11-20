@@ -1909,3 +1909,80 @@ def test_required_evidence_follows_the_attribute_through_a_rewording(
         connection.commit()
         removed = plan_evidence(connection, UUID(sheet["id"]), control, renamed)
     assert before[index][0]["evidence"] not in [entry["evidence"] for entry in removed[index]]
+
+
+def _population_check(kind: str, left: str, right: str) -> Any:
+    """One rule check of two population-row values, evaluated."""
+    from ai_workforce_api.testing_checks import evaluate as evaluate_checks
+
+    detail = (("Left", left), ("Right", right))
+    [found] = evaluate_checks(
+        [{"kind": kind, "left": {"label": "Left", "value": left, "file": -1},
+          "right": {"label": "Right", "value": right, "file": -1}}],
+        [], detail,
+    )  # fmt: skip
+    return found
+
+
+def test_equal_and_different_leave_mixed_dates_and_units_open() -> None:
+    """Review B1 (audit invariants I6, I10; 20 November 2026). Before, equal and different
+    read a date alone against a time on the same day, an aware time against a naive one,
+    and "100%" against "100" as not the same, so a different check held and supported a
+    pass and an equal check failed and turned a pass into an exception. Now each is open,
+    as on or before already was; a date alone against a date alone still compares."""
+    for left, right in (
+        ("2027-03-15", "2027-03-15T10:00"),
+        ("2027-03-15T10:00Z", "2027-03-15T10:00"),
+        ("2027-03-15T10:00+01:00", "2027-03-15T10:00Z"),
+        ("100%", "100"),
+    ):
+        for kind in ("equal", "different"):
+            found = _population_check(kind, left, right)
+            assert found.left.verified and found.right.verified
+            assert found.holds is None, (kind, left, right)
+    assert _population_check("equal", "2027-03-15", "2027-03-15").holds is True
+    assert _population_check("different", "2027-03-14", "2027-03-15T10:00").holds is True
+    assert _population_check("equal", "100%", "100%").holds is True
+
+
+def test_a_single_token_against_a_display_name_is_left_open() -> None:
+    """Review B2 (audit invariants I6, I10; 20 November 2026). Before, an account with no
+    digit, dot or underscore ("jsmith") read as different from a display name ("John
+    Smith"), so a segregation-of-duties different check held and a pass stood. Now an
+    account against a name is open, and a pass on it goes to a person."""
+    from ai_workforce_api.testing_checks import apply as apply_checks
+
+    for kind in ("equal", "different"):
+        assert _population_check(kind, "jsmith", "John Smith").holds is None
+        assert _population_check(kind, "John Smith", "jsmith").holds is None
+    # Two accounts, or two names, are still told apart.
+    assert _population_check("different", "jsmith", "mjones").holds is True
+    assert _population_check("different", "John Smith", "Mary Jones").holds is True
+    kept = apply_checks(
+        {"index": 0, "result": "PASS", "note": "The approver is not the requester."},
+        [_population_check("different", "jsmith", "John Smith")],
+    )
+    assert kept["result"] != "PASS"
+
+
+def test_a_negated_passage_verifies_no_side() -> None:
+    """Review B3 (audit invariants I6, I10; 20 November 2026). Before, a side quoting
+    "approved by Elena Rossi", or "not approved by Elena Rossi", of "Change 42 was not
+    approved by Elena Rossi" was verified, and its comparison could support a pass. Now a
+    negated passage verifies nothing; one that is not negated still does."""
+    from ai_workforce_api.testing_checks import evaluate as evaluate_checks
+
+    texts = [("ticket.txt", "Change 42 was not approved by Elena Rossi.\n"
+                            "Change 43 approved by Mark Lee.\nRequested by jdoe.")]  # fmt: skip
+    requester = {"label": "Requester", "value": "jdoe", "file": 0, "quote": "Requested by jdoe"}
+    for quote, value in (("approved by Elena Rossi", "Elena Rossi"),
+                         ("not approved by Elena Rossi", "Elena Rossi"),
+                         ("Elena Rossi", "Elena Rossi"),
+                         ("approved by Mark Lee", "Mark Lee")):  # fmt: skip
+        [found] = evaluate_checks(
+            [{"kind": "different", "left": {"label": "Approver", "value": value, "file": 0,
+                                            "quote": quote}, "right": requester}],
+            texts, (),
+        )  # fmt: skip
+        assert found.left.verified is (value == "Mark Lee"), quote
+        assert found.right.verified

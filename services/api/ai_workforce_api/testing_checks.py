@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
 
-from ai_workforce_api.console_citations import find_quote
+from ai_workforce_api.console_citations import find_quote, negated_span
 from ai_workforce_api.inbound import clean_line
 from ai_workforce_api.sampling import (
     SlashOrder,
@@ -372,8 +372,14 @@ def _side(
         return None
     name, text = texts[index]
     span = find_quote(text, quote) if quote.strip() else None
-    # Every value of the side is in the quoted passage, each on its own.
-    verified = span is not None and all(_contains(text[span[0] : span[1]], atom) for atom in values)
+    # Every value of the side is in the quoted passage, each on its own, and the passage
+    # is not negated: "not approved by Elena Rossi" names no approver (review B3, 20
+    # November 2026; before, a negated passage verified the side).
+    verified = (
+        span is not None
+        and all(_contains(text[span[0] : span[1]], atom) for atom in values)
+        and not negated_span(text, span[0], span[1])
+    )
     return Side(label, value, index, quote, verified, name, values)
 
 
@@ -455,10 +461,9 @@ def _compare(
         )
         if a is None or b is None:
             return None, "A value is not a date, or its day and month order is unknown."
-        if (a.at.tzinfo is None) != (b.at.tzinfo is None) or (
-            a.at.tzinfo is not None and a.at.utcoffset() != b.at.utcoffset()
-        ):
-            return None, "The two times are in different or unstated time zones."
+        gap = _unresolved(a, b)
+        if gap is not None:
+            return None, gap
         if a.at.date() == b.at.date() and not (a.timed and b.timed):
             return None, "Both values are on the same day and a time is not given for both."
         holds = a.at <= b.at
@@ -498,6 +503,22 @@ class _Moment:
     at: datetime
     # Whether the value states a time; a date alone is the whole day.
     timed: bool
+
+
+def _unresolved(a: _Moment, b: _Moment) -> str | None:
+    """Why two moments cannot be told the same or apart, or None when they can (item 5
+    with FO-18, 19 November 2026): one with a time zone and one without, or two different
+    offsets; or the same day where only one states a time (a date alone is the whole
+    day). Every comparison of two dates goes through here (review B1, 20 November 2026:
+    before, only on or before did, so equal and different read "2027-03-15" against
+    "2027-03-15T10:00", and an aware time against a naive one, as not the same)."""
+    if (a.at.tzinfo is None) != (b.at.tzinfo is None) or (
+        a.at.tzinfo is not None and a.at.utcoffset() != b.at.utcoffset()
+    ):
+        return "The two times are in different or unstated time zones."
+    if a.at.date() == b.at.date() and a.timed != b.timed:
+        return "Both values are on the same day and a time is not given for both."
+    return None
 
 
 def _order(side: Side, orders: dict[str, SlashOrder] | None) -> SlashOrder | None:
@@ -557,10 +578,13 @@ def _identifier(value: str) -> str:
     return "".join(ch for ch in _strict(value) if ch.isalnum())
 
 
-def _account_shaped(value: str) -> bool:
-    """One token with a digit, a dot or an underscore in it: an account or an ID."""
+def _one_token(value: str) -> bool:
+    """One token with no space in it: it may be an account or an ID, so it is never told
+    apart from a display name (review B2, 20 November 2026: before, only a token with a
+    digit, a dot or an underscore was, so "jsmith" read as different from "John Smith"
+    and a segregation-of-duties check passed)."""
     text = _strict(value)
-    return " " not in text and bool(re.search(r"[\d._]", text))
+    return bool(text) and " " not in text
 
 
 def _name_shaped(value: str) -> bool:
@@ -587,13 +611,19 @@ def _same(
     if _DATE_SHAPED.search(a) or _DATE_SHAPED.search(b):
         if moments[0] is None or moments[1] is None:
             return None
+        if _unresolved(moments[0], moments[1]) is not None:
+            return None
         return moments[0].at == moments[1].at
     numbers = _number(a), _number(b)
     if numbers[0] is not None and numbers[1] is not None:
-        return numbers[0] == numbers[1]
+        # Numbers in different units are not told apart (review B1, 20 November 2026:
+        # before, "100%" and "100" read as different).
+        if numbers[0][1] != numbers[1][1]:
+            return None
+        return numbers[0][0] == numbers[1][0]
     if normal_value(a) and normal_value(a) == normal_value(b):
         return True
-    if (_account_shaped(a) and _name_shaped(b)) or (_name_shaped(a) and _account_shaped(b)):
+    if (_one_token(a) and _name_shaped(b)) or (_name_shaped(a) and _one_token(b)):
         return None
     padded = re.compile(r"(?<=[^\W\d_])0+(?=\d)")
     if padded.sub("", _identifier(a)) == padded.sub("", _identifier(b)):
