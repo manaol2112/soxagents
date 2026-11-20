@@ -988,14 +988,16 @@ UNPHASED_REDRAFT = (
 # An over-full request keeps the wording the test plan wrote for it: every change to a draft
 # request's planned items rewrites it from all of them (evidence_plans.render_into), so it
 # names every planned item and nothing is asked of the person but the rule (design review,
-# 19 November 2026: a seeded 15-item request listed all 15).
+# 19 November 2026: a seeded 15-item request listed all 15). Rewritten 20 November 2026:
+# "more items than one drafted request can hold" sat beside a 15-item request that holds
+# all 15, so the sentences say which wording it uses and why it is not redrafted.
 TOO_MANY = (
-    "The test plan has more items than one drafted request can hold; the request keeps the "
-    "test plan's wording of every item."
+    "The request uses the test plan's wording for each of its planned items, as there are "
+    "too many for a redraft."
 )
 TOO_MANY_REDRAFT = (
-    "The test plan has more items than one drafted request can hold, so it is not redrafted. "
-    "Edit its wording instead."
+    "This request uses the test plan's wording for each of its planned items, as there are "
+    "too many for a redraft. Edit its wording to change it."
 )
 REPLANNED = "The planned evidence changed during drafting. Redraft the request to match the plan."
 # The notes of a draft that was not written which ask the person to act: the request's

@@ -461,10 +461,12 @@ describe("the test plan attributes a request supports", () => {
     const row = (api.rows as Array<Record<string, unknown>>)[0] ?? {};
     const list = parseCenterList({
       ...api,
-      rows: [{ ...row, agent: "NOT_DRAFTED", agent_label: "Not drafted" }],
+      // Rewritten 20 November 2026: the server's label "Not drafted" became "Needs redraft"
+      // (the request has wording, written for other planned items).
+      rows: [{ ...row, agent: "NOT_DRAFTED", agent_label: "Needs redraft" }],
     });
     assert.equal(list?.rows[0]?.agent, "NOT_DRAFTED");
-    assert.equal(list?.rows[0]?.agentLabel, "Not drafted");
+    assert.equal(list?.rows[0]?.agentLabel, "Needs redraft");
   });
 });
 

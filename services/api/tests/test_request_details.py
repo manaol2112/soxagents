@@ -1576,7 +1576,9 @@ def test_a_plan_change_while_the_request_is_drafted_keeps_the_draft_out(
     assert shown["planning"]["not_drafted"] == REPLANNED
     # A Redraft drafts it to the plan as it now is, so it is offered.
     assert shown["redraft_refusal"] is None
-    assert _row_agent(team, request) == ("NOT_DRAFTED", "Not drafted")
+    # Rewritten 20 November 2026 (design review: "Not drafted" sat beside "Ready for review"
+    # on a written request). Old: "Not drafted". New: "Needs redraft", the state it is in.
+    assert _row_agent(team, request) == ("NOT_DRAFTED", "Needs redraft")
 
 
 def test_a_plan_larger_than_one_draft_keeps_the_requests_wording(
@@ -1608,11 +1610,15 @@ def test_a_plan_larger_than_one_draft_keeps_the_requests_wording(
     # Old (to 19 November 2026): "The plan has more items than one drafted request can
     # hold; the request keeps its current wording."; new: which wording it keeps (the test
     # plan's, of every item: evidence_plans.render_into), so nothing is asked of the person.
+    # Rewritten 20 November 2026 (design review: "more items than one drafted request can
+    # hold" sat beside a 15-item request holding all 15). Old: "The test plan has more items
+    # than one drafted request can hold; the request keeps the test plan's wording of every
+    # item."; new: which wording the request uses, and why it is not redrafted.
     assert _draft_record(migrated, draft) == (
         "SKIPPED",
         None,
-        "The test plan has more items than one drafted request can hold; the request keeps "
-        "the test plan's wording of every item.",
+        "The request uses the test plan's wording for each of its planned items, as there are "
+        "too many for a redraft.",
     )
 
 

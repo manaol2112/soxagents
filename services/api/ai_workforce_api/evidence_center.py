@@ -118,8 +118,10 @@ Agent = Literal["DRAFTING", "NOT_DRAFTED", "TYPE_TO_CONFIRM", "READY_FOR_REVIEW"
 AGENT_LABELS: dict[str, str] = {
     "DRAFTING": "Drafting",
     # The last draft was not written and the wording was written for other planned items
-    # (pbc_drafting.not_drafted_note): the request panel says what to do.
-    "NOT_DRAFTED": "Not drafted",
+    # (pbc_drafting.not_drafted_note): the request panel says what to do. "Needs redraft",
+    # not "Not drafted": the request has wording, written for other planned items (design
+    # review, 20 November 2026: "Not drafted" sat beside "Ready for review").
+    "NOT_DRAFTED": "Needs redraft",
     "TYPE_TO_CONFIRM": "Type to confirm",
     "READY_FOR_REVIEW": "Drafted",
     "READING": "Reading files",

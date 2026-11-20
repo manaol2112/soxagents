@@ -640,14 +640,29 @@ describe("a Redraft that cannot succeed", () => {
   });
 
   it("offers the Redraft only where it can succeed, and says why in its place", () => {
-    assert.deepEqual(redraftOffer(null, ""), { button: true, note: "" });
-    // The plan changed: the banner says to redraft, and the Redraft is there.
-    assert.deepEqual(redraftOffer(null, REPLANNED), { button: true, note: "" });
-    assert.deepEqual(redraftOffer(SAMPLE, ""), { button: false, note: SAMPLE });
+    assert.deepEqual(redraftOffer(null, ""), {
+      button: true,
+      note: "",
+      banner: false,
+    });
+    // Rewritten 20 November 2026 (design review: at 390 the warning came after Approve and
+    // send, and the Redraft showed in the status card). Old: { button: true, note: "" }.
+    // New: the Redraft sits in the plan-changed banner, next to its reason, and only there.
+    assert.deepEqual(redraftOffer(null, REPLANNED), {
+      button: false,
+      note: "",
+      banner: true,
+    });
+    assert.deepEqual(redraftOffer(SAMPLE, ""), {
+      button: false,
+      note: SAMPLE,
+      banner: false,
+    });
     // A banner that already says what to do is not repeated by the rule.
     assert.deepEqual(redraftOffer("Refused.", "Edit it."), {
       button: false,
       note: "",
+      banner: false,
     });
   });
 

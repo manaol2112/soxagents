@@ -358,17 +358,32 @@ export function RequestReview({
       {lean ? null : <LifecycleTrack stage={life} />}
     </>
   );
+  // The plan changed after the wording was written: said once, full width, above both
+  // columns, so a narrow screen shows it before the approval actions, with its Redraft
+  // beside it (design review, 20 November 2026: "Not drafted." sat on a written request,
+  // and at 390 it came after Approve and send). The Redraft shows where the status card
+  // would have offered one: a draft its viewer may edit or approve, not one a person wrote.
+  const planChangedPart =
+    notDrafted !== "" ? (
+      <div className="rr-callout is-warn rr-replanned" role="status">
+        <UiIcon name="risk" size={14} />
+        <span>
+          <strong>Plan changed.</strong> {notDrafted}
+        </span>
+        {redraft.banner && editable && (approver || !written) && !editing ? (
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={busy}
+            onClick={() => review.run("redraft", { intent: "redraft" })}
+          >
+            {review.busy === "redraft" ? "Requesting…" : "Redraft"}
+          </button>
+        ) : null}
+      </div>
+    ) : null;
   const calloutPart = (
     <>
-      {notDrafted !== "" ? (
-        <p className="rr-callout is-warn">
-          <UiIcon name="risk" size={14} />
-          <span>
-            <strong>Not drafted.</strong> {notDrafted}
-          </span>
-        </p>
-      ) : null}
-
       {stage === "RETURNED" && request.approvalReason ? (
         <p className="rr-callout is-warn">
           <UiIcon name="risk" size={14} />
@@ -989,6 +1004,7 @@ export function RequestReview({
         id={`request-${request.id}`}
       >
         <div className="rr-top">{headPart}</div>
+        {planChangedPart}
         <div className="rr-layout">
           <div className="rr-main">
             {calloutPart}
@@ -1006,6 +1022,7 @@ export function RequestReview({
       id={`request-${request.id}`}
     >
       {headPart}
+      {planChangedPart}
       <div className="rr-layout">
         <div className="rr-main">
           {calloutPart}
