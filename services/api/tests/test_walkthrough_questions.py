@@ -219,7 +219,25 @@ def test_questions_are_in_topic_order_and_in_each_topics_explicit_order() -> Non
         assert questions_for(key) == asked
 
 
+def _ancestors(item: Question) -> list[str]:
+    """The keys a follow-up is asked under: its parent, its parent's parent, and so on."""
+    found: list[str] = []
+    while item.when is not None and item.when[0] not in found:
+        found.append(item.when[0])
+        parent = question(item.when[0])
+        if parent is None:
+            break
+        item = parent
+    return found
+
+
 def test_each_follow_up_comes_directly_after_its_parent() -> None:
+    # Rewritten 19 November 2026 (owner decision, question integrity part A: the bank's first
+    # follow-up of a follow-up, wt-service-org-no-report). Old: the question directly before a
+    # follow-up was its parent or a follow-up of the same parent. New: its parent or any
+    # question asked under its parent (the rule of the order check in problems()). Why: a
+    # follow-up of an earlier sibling now sits between siblings; anything not under the
+    # parent still fails.
     for key in IN_SCOPE:
         asked = questions_for(key)
         for index, item in enumerate(asked):
@@ -227,9 +245,10 @@ def test_each_follow_up_comes_directly_after_its_parent() -> None:
                 continue
             assert item.order == 0 and index > 0, item.key
             before = asked[index - 1]
-            assert before.key == item.when[0] or (
-                before.when is not None and before.when[0] == item.when[0]
-            ), (key, item.key)
+            assert before.key == item.when[0] or item.when[0] in _ancestors(before), (
+                key,
+                item.key,
+            )
             parent = question(item.when[0])
             assert parent is not None and parent.topic == item.topic, item.key
 
@@ -248,11 +267,16 @@ def test_universal_family_and_specific_questions_interleave_in_walkthrough_order
     assert ac03.index("wt-ac-population-source") < ac03.index("wt-ac03-listing-check")
     # A family follow-up of a universal question: vendor changes after the service
     # organization's details.
+    # Rewritten 19 November 2026 (owner decision, question integrity part A). Old: the four
+    # service organization questions in a row. New: the evidence approach without a SOC 1
+    # report (wt-service-org-no-report) comes directly after the report question that opens
+    # it. Why: it is that answer's follow-up; the order of the others is unchanged.
     cm01 = _keys(questions_for("change-approval"))
     service = cm01.index("wt-service-org")
-    assert cm01[service : service + 4] == [
+    assert cm01[service : service + 5] == [
         "wt-service-org",
         "wt-service-org-report",
+        "wt-service-org-no-report",
         "wt-service-org-detail",
         "wt-cm-vendor-changes",
     ]
@@ -609,8 +633,17 @@ def test_every_rendered_sentence_reads_as_a_sentence_without_placeholders() -> N
                 values.append(other if item.kind == "CHOICE" else _sample(item) + JOIN + other)
             for value in values:
                 answers = {item.key: value}
-                if item.when is not None:
-                    answers[item.when[0]] = item.when[1]
+                # Rewritten 19 November 2026 (owner decision, question integrity part A).
+                # Old: only the direct parent was answered. New: every question it is asked
+                # under is answered to open it. Why: the bank's first follow-up of a
+                # follow-up (wt-service-org-no-report) is asked only when its parent is, so
+                # opening the parent alone narrated nothing; every sentence is still checked.
+                opening: Question = item
+                while opening.when is not None:
+                    answers.setdefault(opening.when[0], opening.when[1])
+                    parent = question(opening.when[0])
+                    assert parent is not None, opening.key
+                    opening = parent
                 told = dict(narrate(asked, answers))
                 assert item.topic in told, (key, item.key)
                 own = [text for text, owner in told[item.topic] if owner == item.key]
@@ -699,6 +732,11 @@ SINGLE = (
     "wt-op06-run-log",
     "wt-op08-severity",
     "wt-op08-first-seen",
+    # Added 19 November 2026 (owner decision, question integrity part A). Old: SINGLE ended
+    # with the operations questions. New: it also lists the evidence approach without a SOC 1
+    # report, a CHOICE as the owner approved it (one approach is the team's decision). The
+    # assertion still compares the bank's CHOICE questions with this list exactly.
+    "wt-service-org-no-report",
 )
 
 
@@ -1016,12 +1054,25 @@ def test_the_product_owners_example_and_the_universal_follow_ups_offer_their_opt
 
 
 def test_each_free_text_question_comes_after_a_structured_one_on_the_same_follow_up() -> None:
+    # Rewritten 19 November 2026 (owner decision, question integrity part A). Old: the
+    # question directly before a free-text one. New: the nearest one before it that is not
+    # asked under an earlier sibling of it. Why: the bank's first follow-up of a follow-up
+    # (wt-service-org-no-report) sits between the report question and the details; the
+    # assertion on that nearest one is as before.
     for key in ("", *IN_SCOPE):
         asked = questions_for(key)
         for index, item in enumerate(asked):
             if item.kind != "TEXT":
                 continue
-            before = asked[index - 1]
+            at = index - 1
+            while (
+                item.when is not None
+                and asked[at].when is not None
+                and asked[at].when != item.when
+                and item.when[0] in _ancestors(asked[at])
+            ):
+                at -= 1
+            before = asked[at]
             assert before.when == item.when and before.kind in ("CHOICE", "MULTI"), (key, item.key)
             assert item.required == before.required, item.key
 
