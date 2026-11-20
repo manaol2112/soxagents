@@ -66,7 +66,10 @@ def test_a_short_or_duplicated_population_is_flagged() -> None:
     assert "1 repeated and 1 blank" in by_check["key"].detail
     no_dates = build_frame(_table([["a"], ["b"]], ("Name",)), date(2027, 12, 31), "EVENT_DRIVEN")
     assert len(no_dates.rows) == 2
-    assert next(c for c in no_dates.checks if c.check == "period").result == "INFO"
+    # Rewritten 19 November 2026 (FO-19): old INFO, new ISSUE. Reason: a period that could
+    # not be checked is for a person to confirm; as information, readiness read it as the
+    # population's checks passed (audit invariant I12). Every row stays in the frame.
+    assert next(c for c in no_dates.checks if c.check == "period").result == "ISSUE"
 
 
 def test_dates_and_periods_are_read_as_written() -> None:
@@ -381,13 +384,16 @@ def test_a_day_first_column_is_read_day_first_throughout() -> None:
     check = next(check for check in unread.checks if check.check == "period")
     assert check.result == "ISSUE"
     assert "'Date granted' looks like a date column" in check.detail
-    # A column merely named like a date, holding no dates, stays information.
+    # A column merely named like a date, holding no dates, is no date column. Rewritten
+    # 19 November 2026 (FO-19): old INFO, new ISSUE, as for any population whose period
+    # could not be checked; it is still not read as an unreadable date column.
     names = build_frame(
         _table([["REQ-1", "Clerk"], ["REQ-2", "Manager"]], ("Ticket", "Role granted")),
         date(2027, 12, 31),
         "EVENT_DRIVEN",
     )
-    assert next(c for c in names.checks if c.check == "period").result == "INFO"
+    period_check = next(c for c in names.checks if c.check == "period")
+    assert period_check.result == "ISSUE" and "No date column was found" in period_check.detail
 
 
 # Helpers

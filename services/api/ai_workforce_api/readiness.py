@@ -63,6 +63,8 @@ BLOCKING: frozenset[str] = frozenset(
         "CONFLICT_REQUIRES_REVIEW",
     }
 )
+# The checks that hold testing in every state, a signed-off interim included (FO-10).
+HOLDING_CHECKS: frozenset[str] = frozenset({"plan", "criteria", "process", "conflicts"})
 CheckStatus = Literal["OK", "BLOCKED", "WARN", "PENDING", "NOT_APPLICABLE"]
 CheckKey = Literal["criteria", "process", "evidence", "scope", "conflicts", "plan"]
 
@@ -105,13 +107,35 @@ class ReadinessBody(BaseModel):
 
     @property
     def blocking(self) -> bool:
-        return self.state in BLOCKING
+        """Whether testing waits: a blocking state, or a blocked plan, criteria, process or
+        conflicts check whatever the state (FO-10, 19 November 2026). Before, once the
+        interim testing was signed off (READY_FOR_REVIEW, CONCLUDED) these no longer held a
+        round's testing, so a roll-forward was tested on unsettled criteria or a plan not
+        approved again."""
+        return self.state in BLOCKING or self._held() is not None
+
+    def _held(self) -> CheckBody | None:
+        return next(
+            (c for c in self.checks if c.key in HOLDING_CHECKS and c.status == "BLOCKED"), None
+        )
 
     def first_blocker(self) -> str:
+        held = self._held()
+        if held is not None and held.blockers:
+            return held.blockers[0].detail
         for check in self.checks:
             if check.status == "BLOCKED" and check.blockers:
                 return check.blockers[0].detail
         return ""
+
+    def waits_for(self) -> str:
+        """What testing waits for, in a person's words: the state's label for a blocking
+        state, else the blocked check's title, never "ready for review" or "concluded"
+        beside a blocker (critic 20)."""
+        if self.state in BLOCKING:
+            return self.label.lower()
+        held = self._held()
+        return self.label.lower() if held is None else held.title.lower()
 
 
 @dataclass
@@ -568,7 +592,13 @@ def evaluate(facts: Facts) -> ReadinessBody:
         # An empty or unreadable population blocks: there is nothing to sample. A count
         # that looks short for the frequency, duplicate keys, or rows outside the period
         # are for a person to look at, not reasons to stop: a control can start mid-year.
-        empty = name == "read" or "no data rows" in str(check.get("detail", ""))
+        # Read from typed fields, never the detail's wording (19 November 2026): the
+        # check's own `blocks`, or (a check stored before it) no row in the frame.
+        empty = (
+            name == "read"
+            or check.get("blocks") is True
+            or (name == "rows" and facts.frame_rows == 0)
+        )
         (scope_blockers if empty else warnings).append(item)
     scope_check = CheckBody(
         key="scope",
@@ -735,7 +765,7 @@ def waiting_reason(connection: psycopg.Connection[Any], project_id: UUID, contro
     found = assess(connection, project_id, control_id)
     if found is not None and found.blocking:
         first = found.first_blocker()
-        return f"Testing waits: {found.label.lower()}." + (f" {first}" if first else "")
+        return f"Testing waits: {found.waits_for()}." + (f" {first}" if first else "")
     # Then the OE gate (B0): the earlier blocker is named first, as the workflow runs.
     from ai_workforce_api.design_conclusions import oe_gate_reason
 

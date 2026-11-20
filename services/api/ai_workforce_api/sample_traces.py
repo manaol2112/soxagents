@@ -50,7 +50,15 @@ from ai_workforce_api.evidence_findings import (
 )
 from ai_workforce_api.evidence_withdrawn import in_force
 from ai_workforce_api.inbound import clean_line
-from ai_workforce_api.sampling import key_column, parse_date
+from ai_workforce_api.sampling import (
+    VALUE_TOKEN,
+    SlashOrder,
+    ambiguous_slashed,
+    key_column,
+    normal_value,
+    parse_date,
+    slash_order,
+)
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.storage import ObjectStore, StoreError, digest_of, open_store
 from ai_workforce_api.walkthrough_instances import (
@@ -88,8 +96,10 @@ _NOT_ID_HEADER = re.compile(
     r"group|role|roles|responsibility|responsibilities|ou|location|company|division|cost|"
     r"approver|assigned|by|date|time|when|day|enabled)\b"
 )
-_ID_VALUE = re.compile(r"^[a-z0-9._@\\-]{4,}$")
-_TOKEN = re.compile(r"[a-z0-9][a-z0-9._@\\-]*")
+# In any script (FO-17 class, 19 November 2026): before, ASCII only, so a non-Latin
+# identifier was never one and a non-Latin name had no tokens to find.
+_ID_VALUE = re.compile(r"^[\w.@\\-]{4,}$")
+_TOKEN = VALUE_TOKEN
 _NOT_VALUES = frozenset({"true", "false", "yes", "no", "n/a", "none", "null", "active"})
 
 
@@ -100,14 +110,8 @@ def header_words(header: str) -> str:
 
 
 def normal(value: str) -> str:
-    """A value as it is compared: folded, its words joined by one space, a "Last, First"
-    name turned round, and stray punctuation at the ends dropped."""
-    text = unicodedata.normalize("NFKC", value).casefold().strip()
-    parts = [part.strip() for part in text.split(",")]
-    if len(parts) == 2 and all(re.fullmatch(r"[^\W\d_]+(?: [^\W\d_]+)*", p) for p in parts):
-        text = f"{parts[1]} {parts[0]}"
-    tokens = [token.strip("._-@\\") for token in _TOKEN.findall(text)]
-    return " ".join(token for token in tokens if token)
+    """A value as it is compared (sampling.normal_value, shared with the testing checks)."""
+    return normal_value(value)
 
 
 def _usable(value: str) -> bool:
@@ -212,11 +216,16 @@ def _date_of(value: str) -> date | None:
     return None
 
 
+# FO-16 (19 November 2026): "Term Date", "Leaver" and "End date of employment" name the
+# event, and an expiry the removal; before, such a column had no role, so the trace said
+# nothing of it.
 _EVENT_HEADER = re.compile(
-    r"terminat|separat|last (working )?day|leav(e|ing) date|exit date|end of employment"
+    r"terminat|separat|last (working )?day|leav(e|ing) date|exit date|end of employment|"
+    r"\bterm date\b|\bleaver\b|end date of employment"
 )
 _REMOVAL_HEADER = re.compile(
-    r"disabl|deactivat|\bend ?dat|revok|remov|delet|deprovision|\block(ed)?\b|\bwhen changed\b"
+    r"disabl|deactivat|\bend ?dat|revok|remov|delet|deprovision|\block(ed)?\b|\bwhen changed\b|"
+    r"expir"
 )
 _ACTIVITY_HEADER = re.compile(r"logon|login|sign ?in|last (activity|access|used|use)")
 _OFF = re.compile(r"(?i)^(false|disabled|inactive|no|n|0|end[- ]?dated|terminated)$")
@@ -228,9 +237,54 @@ def _spoken(header: str) -> str:
     return words[:1].upper() + words[1:] if words else header
 
 
-def row_dates(columns: list[str], values: list[str]) -> list[tuple[str, date, Role]]:
+def listing_orders(
+    columns: tuple[str, ...] | list[str], rows: Iterable[Iterable[str]]
+) -> dict[int, SlashOrder]:
+    """Each listing column's day and month order where its own values show it (FO-17,
+    19 November 2026: slash_order, strict); a column that cannot tell has none."""
+    values: dict[int, list[str]] = {}
+    for row in rows:
+        for index, value in enumerate(row):
+            values.setdefault(index, []).append(value)
+    found: dict[int, SlashOrder] = {}
+    for index in range(len(columns)):
+        order = slash_order(values.get(index, []), strict=True)
+        if order is not None:
+            found[index] = order
+    return found
+
+
+def _placed(value: str, order: SlashOrder | None) -> date | None:
+    """A trace's date, read in its column's own order; a slashed date whose day and month
+    could be either way, with no order to tell, is not read (FO-17). Before, it was read
+    month first, so 03/04/2027 in a day-first listing timed a removal a month off."""
+    head = value.strip().split(" ")[0]
+    if ambiguous_slashed(head) and order is None:
+        return None
+    if order is not None and ambiguous_slashed(head):
+        return parse_date(head, order)
+    return _date_of(value)
+
+
+def unplaced_dates(
+    columns: list[str], values: list[str], orders: dict[int, SlashOrder] | None = None
+) -> list[tuple[str, str]]:
+    """A listing row's dates the trace cannot read for want of their order: each column's
+    name and the value as written, for a person to confirm."""
+    found: list[tuple[str, str]] = []
+    for index, value in enumerate(values[: len(columns)]):
+        head = value.strip().split(" ")[0]
+        if ambiguous_slashed(head) and (orders or {}).get(index) is None:
+            found.append((_spoken(columns[index]), value.strip()))
+    return found
+
+
+def row_dates(
+    columns: list[str], values: list[str], orders: dict[int, SlashOrder] | None = None
+) -> list[tuple[str, date, Role]]:
     """A listing row's dates that the trace reads: the event, removals, activity. A
-    "when changed" date is a removal only where the row says the account is off."""
+    "when changed" date is a removal only where the row says the account is off. Each is
+    read in its column's own order (`orders`, listing_orders)."""
     words = [header_words(header) for header in columns]
     off = any(
         re.search(r"\b(enabled|status|state)\b", header) and _OFF.match(values[i].strip())
@@ -241,7 +295,7 @@ def row_dates(columns: list[str], values: list[str]) -> list[tuple[str, date, Ro
     for index, header in enumerate(words):
         if index >= len(values):
             continue
-        when = _date_of(values[index])
+        when = _placed(values[index], (orders or {}).get(index))
         if when is None:
             continue
         role: Role | None = None
@@ -286,7 +340,8 @@ def text_dates(text: str) -> list[tuple[str, date, Role]]:
                 gap = re.match(r"^[\s:·|-]*(?:[A-Za-z]+\s+){0,2}", rest)
                 after = rest[gap.end() if gap else 0 :]
                 token = _DATE_TOKEN.match(after)
-                when = None if token is None else _date_of(token.group(1))
+                # A prose date has no column to tell its order (FO-17).
+                when = None if token is None else _placed(token.group(1), None)
                 if when is not None:
                     found.append((label.group(1)[:1].upper() + label.group(1)[1:], when, role))
                     break
@@ -509,8 +564,9 @@ def anchor_of(subject: Subject, listings: list[Listing]) -> tuple[str, int] | No
         if listing.table is None or len(found) != 1:
             continue
         row = list(listing.table.rows[found[0]])
+        orders = listing_orders(listing.table.columns, listing.table.rows)
         has_event = any(
-            role == "EVENT" for _l, _d, role in row_dates(list(listing.table.columns), row)
+            role == "EVENT" for _l, _d, role in row_dates(list(listing.table.columns), row, orders)
         )
         score = (1 if has_event else 0, len(listing.table.rows))
         if best is None or score > best[0]:
@@ -751,6 +807,8 @@ def _trace(
         )
     event: tuple[str, date, str] | None = None
     files: list[TraceFileBody] = []
+    # Dates a listing holds but the trace cannot read for want of their order (FO-17).
+    unplaced: list[ObservationBody] = []
     for listing in listings:
         if listing.table is None:
             files.append(
@@ -765,7 +823,23 @@ def _trace(
         if len(found) == 1:
             row = list(listing.table.rows[found[0]])
             columns = list(listing.table.columns)
-            dates = row_dates(columns, row)
+            orders = listing_orders(listing.table.columns, listing.table.rows)
+            dates = row_dates(columns, row, orders)
+            for header, value in unplaced_dates(columns, row, orders):
+                unplaced.append(
+                    ObservationBody(
+                        kind="NOT_TRACED", file_id=UUID(listing.file_id),
+                        title=clean_line(f"Date order unknown in {listing.file_name}", 200),
+                        observation=clean_line(
+                            f"'{header}' holds {value} for {label} in {listing.file_name}, "
+                            "and the listing does not show whether its dates are written day "
+                            "or month first.", 600),
+                        question=clean_line(
+                            f"Please confirm whether the dates in {listing.file_name} are "
+                            "written day first or month first.", 600),
+                        expected="The date format of the listing",
+                    )
+                )  # fmt: skip
             key = key_column(listing.table)
             keyed = f"{columns[key]} {row[key]}" if key is not None else ""
             files.append(
@@ -861,7 +935,7 @@ def _trace(
                 )
     body.files = files
     body.reasons = [clean_line(reason, 240) for reason in reasons[:8]]
-    body.observations = _observations(body, label)
+    body.observations = _observations(body, label) + unplaced
     body.ready = (
         body.status == "CONFIRMED"
         and not body.observations
@@ -879,7 +953,7 @@ def _timing(body: TraceBody, label: str) -> list[ObservationBody]:
         None,
     )
     if removed is None:
-        return []
+        return _untimed(body, label)
     entry, when = removed
     event = body.event
     if event is None:
@@ -917,6 +991,47 @@ def _timing(body: TraceBody, label: str) -> list[ObservationBody]:
             )
         ]  # fmt: skip
     return []
+
+
+def _untimed(body: TraceBody, label: str) -> list[ObservationBody]:
+    """A trace with a time limit stated and no removal date to time against it (FO-16,
+    19 November 2026): never "traced within the limit" with nothing compared. Before, no
+    removal date meant no point at all, so a combined listing whose termination row had no
+    disable date, or a trace with neither date, could be ready. A listing row that already
+    says no removal is recorded (_observations) is not said twice."""
+    if body.limit_days is None:
+        return []
+    event = body.event
+    said = event is not None and any(
+        entry.listing
+        and entry.state == "FOUND"
+        and not any(when.role in ("REMOVAL", "EVENT") for when in entry.dates)
+        for entry in body.files
+    )
+    if said:
+        return []
+    first = next(
+        (entry for entry in body.files if entry.state == "FOUND"),
+        body.files[0] if body.files else None,
+    )
+    if first is None:
+        return []
+    return [
+        ObservationBody(
+            kind="NOT_TRACED", file_id=first.file_id,
+            title=clean_line(f"No removal date for {label}", 200),
+            observation=clean_line(
+                (f"{event.label} {event.date:%d %b %Y}; no file" if event is not None
+                 else "No file gives the date of the event for " + label + ", and no file")
+                + f" gives the date {label}'s access was removed, so the removal cannot be "
+                f"timed against the limit of {body.limit_days} business days.", 600),
+            question=clean_line(
+                f"Please provide the record of the removal of {label}'s access with its date"
+                + ("." if event is not None
+                   else ", and the date of the event that required it."), 600),
+            expected="The removal record with its date",
+        )
+    ]  # fmt: skip
 
 
 def _observations(body: TraceBody, label: str) -> list[ObservationBody]:
