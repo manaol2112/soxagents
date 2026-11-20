@@ -276,8 +276,8 @@ export type Completion = {
   completedBy: string;
   reopenings: Reopening[];
   deletable: boolean;
-  /** No control is in scope (C3): nothing was tested, so the engagement is archived,
-   * never completed, and the card says only that (`completionLead`). */
+  /** No control is in scope (C3), read by the server from the controls: the engagement
+   * is archived, never completed (`completionLead`, `completionShown`). */
   nothingInScope: boolean;
 };
 
@@ -380,20 +380,30 @@ export function statusOrder(status: string): number {
 }
 
 /** What the completion card leads with while the engagement cannot be completed: with
- * nothing in scope, one line that says to archive it and no count or list (design
- * review, 20 November 2026: before, "2 items are still open. The engagement can be
- * completed once they are done." stood above "Archive the engagement instead of
- * completing it."); otherwise how many items are open, in agreement with the count. */
+ * nothing in scope, one line that says to archive it and no count (design review, 20
+ * November 2026: before, "2 items are still open. The engagement can be completed once
+ * they are done." stood above "Archive the engagement instead of completing it."), and
+ * that the items listed below are still open where any is; otherwise how many items are
+ * open, in agreement with the count. It never says no control was tested: every control
+ * may be taken out of scope after some were (code review, 20 November 2026). */
 export function completionLead(
   completion: Pick<Completion, "nothingInScope" | "openCount">,
 ):
   | { kind: "NOTHING_IN_SCOPE"; strong: string; rest: string }
   | { kind: "OPEN"; strong: string; rest: string } {
   if (completion.nothingInScope) {
+    // The one SCOPE item this lead replaces; the others stay listed.
+    const others = completion.openCount - 1;
+    const still =
+      others <= 0
+        ? ""
+        : others === 1
+          ? " This item is still open:"
+          : " These items are still open:";
     return {
       kind: "NOTHING_IN_SCOPE",
       strong: "Nothing is in scope.",
-      rest: "No control has been tested, so the engagement cannot be completed. Archive it instead.",
+      rest: `No control is in scope, so the engagement cannot be completed. Archive it instead.${still}`,
     };
   }
   const one = completion.openCount === 1;
@@ -401,5 +411,21 @@ export function completionLead(
     kind: "OPEN",
     strong: `${completion.openCount} ${one ? "item is" : "items are"} still open.`,
     rest: `The engagement can be completed once ${one ? "it is" : "they are"} done.`,
+  };
+}
+
+/** The open items the completion card lists, and how many more there are. With nothing
+ * in scope, only the SCOPE item is left out, as the lead says it; every deficiency,
+ * request and running task stays listed, since each is still open when the engagement is
+ * archived (code review, 20 November 2026: before, the whole list was hidden). */
+export function completionShown(
+  completion: Pick<Completion, "nothingInScope" | "openCount" | "openItems">,
+): { items: OpenItem[]; more: number } {
+  const items = completion.nothingInScope
+    ? completion.openItems.filter((item) => item.kind !== "SCOPE")
+    : completion.openItems;
+  return {
+    items,
+    more: Math.max(0, completion.openCount - completion.openItems.length),
   };
 }

@@ -52,6 +52,7 @@ import {
   canCloseOut,
   closedNotice,
   completionLead,
+  completionShown,
   deleteConsequence,
   detailsEditable,
   homeListsWork,
@@ -3542,30 +3543,27 @@ function EngagementCloseOut({
               <strong>{completionLead(completion).strong}</strong>{" "}
               {completionLead(completion).rest}
             </p>
-            {completion.nothingInScope ? null : (
-              <>
-                <ul className="closeout-list">
-                  {uniqueKeys(
-                    completion.openItems,
-                    (item) => `${item.kind}-${item.label}`,
-                  ).map(([key, item]) => (
-                    <li key={key}>
-                      {item.controlId !== null ? (
-                        <a href={controlHref(item.controlId)}>{item.label}</a>
-                      ) : (
-                        <span>{item.label}</span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-                {completion.openCount > completion.openItems.length ? (
-                  <p className="form-hint">
-                    And {completion.openCount - completion.openItems.length}{" "}
-                    more.
-                  </p>
-                ) : null}
-              </>
-            )}
+            {completionShown(completion).items.length > 0 ? (
+              <ul className="closeout-list">
+                {uniqueKeys(
+                  completionShown(completion).items,
+                  (item) => `${item.kind}-${item.label}`,
+                ).map(([key, item]) => (
+                  <li key={key}>
+                    {item.controlId !== null ? (
+                      <a href={controlHref(item.controlId)}>{item.label}</a>
+                    ) : (
+                      <span>{item.label}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {completionShown(completion).more > 0 ? (
+              <p className="form-hint">
+                And {completionShown(completion).more} more.
+              </p>
+            ) : null}
           </div>
         ) : null}
         {detail.status === "COMPLETED" ? (

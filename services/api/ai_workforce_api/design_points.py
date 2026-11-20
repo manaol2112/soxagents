@@ -347,7 +347,8 @@ def points_of(
                 )
             )
     # The attributes resting on files not relied on, grouped by the files they rest on:
-    # one decision about one file is one point, under the last attribute it names (design
+    # one decision about one file is one point, under the last attribute it names, never
+    # one the sentence leaves to "and 2 more" (design
     # review, 20 November 2026: before, one point per attribute repeated the same decision
     # on the same file once per attribute).
     excluded = {(d.requirement_id, d.file_id) for d in decisions if d.kind == "NOT_RELIED_ON"}
@@ -388,7 +389,10 @@ def points_of(
                     f"{view._listed_names([names.get(f, 'a file') for f in files])}."
                 ),
                 refs=_refs(list(files), evidence),
-                place=PlaceBody(at="ATTRIBUTE", attribute_id=grouped[-1].id),
+                place=PlaceBody(
+                    at="ATTRIBUTE",
+                    attribute_id=grouped[min(len(grouped), conclusions.NAMED_MOST) - 1].id,
+                ),
                 settle=_settle("RELIABILITY"),
             )
         )

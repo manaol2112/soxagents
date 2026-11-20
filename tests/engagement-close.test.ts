@@ -5,6 +5,7 @@ import {
   canCloseOut,
   closedNotice,
   completionLead,
+  completionShown,
   detailsEditable,
   ENGAGEMENT_STATUSES,
   engagementPhase,
@@ -254,16 +255,77 @@ describe("scope items on completion (C3, 19 November 2026)", () => {
 });
 
 describe("the completion card's lead (design review, 20 November 2026)", () => {
-  it("with nothing in scope, says only to archive: no count and no list", () => {
+  it("with nothing in scope, says to archive, with no count", () => {
     // Before: "2 items are still open. The engagement can be completed once they are
     // done." above "Archive the engagement instead of completing it."
-    const lead = completionLead({ nothingInScope: true, openCount: 2 });
+    // Rewritten (code review, 20 November 2026). Old: "No control has been tested, so
+    // the engagement cannot be completed." New: "No control is in scope, so ...". Why:
+    // every control may be taken out of scope after some were tested, so the old words
+    // stated a fact the server never established.
+    const lead = completionLead({ nothingInScope: true, openCount: 1 });
     assert.equal(lead.kind, "NOTHING_IN_SCOPE");
     assert.equal(
       `${lead.strong} ${lead.rest}`,
-      "Nothing is in scope. No control has been tested, so the engagement cannot be completed. Archive it instead.",
+      "Nothing is in scope. No control is in scope, so the engagement cannot be completed. Archive it instead.",
     );
-    assert.ok(!/\d/.test(`${lead.strong} ${lead.rest}`));
+    assert.ok(!/tested/.test(`${lead.strong} ${lead.rest}`));
+    // Other items still open are announced, never counted in the lead.
+    const two = completionLead({ nothingInScope: true, openCount: 2 });
+    assert.ok(two.rest.endsWith(" This item is still open:"));
+    const three = completionLead({ nothingInScope: true, openCount: 3 });
+    assert.ok(three.rest.endsWith(" These items are still open:"));
+    assert.ok(!/\d/.test(`${three.strong} ${three.rest}`));
+  });
+
+  it("with nothing in scope, hides only the scope item, never other open work", () => {
+    // Code review, 20 November 2026: before, the whole list was hidden, so a deficiency,
+    // a request with the client or a running task stood open with none of them shown.
+    const scope = {
+      kind: "SCOPE" as const,
+      label: "No control is in scope.",
+      controlId: null,
+    };
+    const request = {
+      kind: "REQUEST" as const,
+      label: "AC-01: evidence request sent",
+      controlId: "c1",
+    };
+    const deficiency = {
+      kind: "DEFICIENCY" as const,
+      label: "D-1 Access not removed: not closed",
+      controlId: null,
+    };
+    const running = {
+      kind: "RUNNING" as const,
+      label: "Agent still working: Draft memo",
+      controlId: null,
+    };
+    const shown = completionShown({
+      nothingInScope: true,
+      openCount: 9,
+      openItems: [scope, deficiency, request, running],
+    });
+    assert.deepEqual(shown.items, [deficiency, request, running]);
+    assert.equal(shown.more, 5);
+    // Only the scope item alone: nothing is listed.
+    assert.deepEqual(
+      completionShown({
+        nothingInScope: true,
+        openCount: 1,
+        openItems: [scope],
+      }),
+      { items: [], more: 0 },
+    );
+    // Something in scope: a system's SCOPE item is listed like any other.
+    const system = { ...scope, label: "Workday: no control in scope" };
+    assert.deepEqual(
+      completionShown({
+        nothingInScope: false,
+        openCount: 2,
+        openItems: [system, request],
+      }).items,
+      [system, request],
+    );
   });
 
   it("otherwise counts the open items, singular and plural agreeing", () => {

@@ -417,10 +417,10 @@ def test_a_launched_engagement_is_not_deleted_and_an_archived_draft_is(
 # is not completed. Audit invariants I1 (nothing is final, and nothing completes, unless
 # its whole basis is current) and I16 (completion agrees with the register).
 
-NOTHING_SCOPED = (
-    "No control is in scope, so nothing has been tested. Archive the engagement instead of "
-    "completing it."
-)
+# Rewritten (code review, 20 November 2026). Old: "No control is in scope, so nothing has
+# been tested. ..." New: the words below. Why: every control may be taken out of scope
+# after some were tested, so "nothing has been tested" was never established.
+NOTHING_SCOPED = "No control is in scope. Archive the engagement instead of completing it."
 
 
 def _register_row(team: dict[str, Any], control_id: UUID) -> dict[str, Any]:
@@ -527,6 +527,65 @@ def test_taking_every_control_out_holds_completion(migrated: Database) -> None:
     assert state["nothing_in_scope"] is True
     refused = owner.post(f"{project}/complete", json={"version": state["version"]})
     assert refused.status_code == 409
+
+
+def test_nothing_in_scope_is_read_from_the_controls_and_keeps_other_open_work(
+    migrated: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Code review, 20 November 2026. Before, nothing_in_scope was decided by comparing the
+    first item's label with a fixed sentence, so rewording it turned the flag off. Now it is
+    read from the controls in scope. With nothing in scope, a deficiency still open stays an
+    open item beside the scope item, and still holds completion (taking the controls out
+    of scope cancels their requests, so none is left)."""
+    from ai_workforce_api import engagement_close
+
+    monkeypatch.setattr(engagement_close, "NOTHING_IN_SCOPE", "Reworded for this test.")
+    team = _launched(migrated, "all-out-open")
+    owner, project = team["owner"], _project(team)
+    base = _base(team["org"], team["project"])
+    with connect(migrated.url) as connection:
+        controls = [
+            row[0]
+            for row in connection.execute(
+                "SELECT id FROM engagement_controls WHERE project_id = %s AND included",
+                (team["project"],),
+            ).fetchall()
+        ]
+        connection.execute(
+            """
+            INSERT INTO deficiencies (
+                organization_id, project_id, reference, engagement_control_id, title,
+                deficiency_type, identified_by
+            )
+            VALUES (%s, %s, 'D-001', %s, 'Late review', 'OPERATING', %s)
+            """,
+            (team["org"], team["project"], controls[0], team["owner_id"]),
+        )
+    before = owner.get(f"{project}/completion").json()
+    # Something is in scope, whatever the words: not "nothing in scope".
+    assert before["nothing_in_scope"] is False
+    for control in controls:
+        out = owner.post(
+            f"{base}/controls/{control}/scope",
+            json={"included": False, "reason": "Covered by the vendor's SOC 1 report."},
+        )
+        assert out.status_code == 200, out.text
+    state = owner.get(f"{project}/completion").json()
+    assert state["nothing_in_scope"] is True
+    items = state["open_items"]
+    assert [(item["kind"], item["label"]) for item in items] == [
+        ("SCOPE", "Reworded for this test."),
+        ("DEFICIENCY", "D-001 Late review: not closed"),
+    ]
+    assert state["open_count"] == 2
+    assert state["can_complete"] is False
+    refused = owner.post(f"{project}/complete", json={"version": state["version"]})
+    assert refused.status_code == 409
+    # The flag never reads the items: with none of them shown, it still holds.
+    monkeypatch.setattr(engagement_close, "_OPEN_ITEMS_SHOWN", 0)
+    unlisted = owner.get(f"{project}/completion").json()
+    assert (unlisted["open_items"], unlisted["open_count"]) == ([], 2)
+    assert unlisted["nothing_in_scope"] is True
 
 
 def test_a_system_with_no_control_in_scope_holds_completion_until_it_is_marked_out(
