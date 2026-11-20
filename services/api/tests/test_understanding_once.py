@@ -722,6 +722,7 @@ def test_a_matter_is_asked_once_superseded_closed_by_acceptance_or_reworded(
     [kept] = [row for row in _open_issues(migrated, control) if row[1] == _GRANT_RECORD["topic"]]
     assert _GRANT_RECORD["topic"] not in {row[0] for row in _assumptions(migrated, control)}
     silent = _Agents(migrated, team, control)
+    silent.other = no_answer  # the interview writer's failure path: questions kept
     with connect(migrated.url) as connection:
         generate_reviewed(connection, silent, org, project, UUID(control), team["owner_id"])
         connection.commit()
