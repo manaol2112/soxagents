@@ -7,6 +7,8 @@ import {
   type NoteSeverity,
   openNotes,
   REVIEW_NOTICES,
+  REVIEW_OUTSTANDING,
+  REVIEW_REOPEN_ANCHOR,
   type ReviewNote,
   type ReviewNotice,
   runFailureLine as reperformFailureLine,
@@ -60,6 +62,7 @@ export function ReviewTab({
   ids,
   canAct,
   automation = null,
+  outstanding = false,
 }: {
   review: ControlReview | null;
   sheet: TestSheet | null;
@@ -68,6 +71,9 @@ export function ReviewTab({
   canAct: boolean;
   /** Whether an agent worker will pick up a queued re-performance (M1d). */
   automation?: Automation | null;
+  /** A typed reason holds the signed review (review-model.reviewHoldOf): it reads as
+   * outstanding, never as reviewed (design review, 19 November 2026). */
+  outstanding?: boolean;
 }) {
   if (review === null) {
     return (
@@ -137,7 +143,9 @@ export function ReviewTab({
         <span
           className={`pill pill-dot ${
             review.status === "SIGNED_OFF"
-              ? "tone-success"
+              ? outstanding
+                ? "tone-warning"
+                : "tone-success"
               : waiting.length > 0
                 ? "tone-warning"
                 : ""
@@ -147,7 +155,9 @@ export function ReviewTab({
             <span className="spinner small" aria-hidden="true" />
           ) : null}
           {review.status === "SIGNED_OFF"
-            ? "Reviewed"
+            ? outstanding
+              ? REVIEW_OUTSTANDING
+              : "Reviewed"
             : review.reperforming
               ? executionOf({
                   agent: "reviewer",
@@ -546,6 +556,7 @@ export function ReviewTab({
             ) : null}
             {decides === false && canAct && review.viewerIsReviewer ? (
               <form
+                id={REVIEW_REOPEN_ANCHOR}
                 autoComplete="off"
                 method="post"
                 action="/workspace/reviews"
@@ -554,6 +565,7 @@ export function ReviewTab({
                 <Hidden ids={ids} review={review} intent="reopen" />
                 <input
                   name="reason"
+                  data-arrive
                   required
                   minLength={3}
                   maxLength={500}

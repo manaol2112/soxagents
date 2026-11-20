@@ -1,4 +1,8 @@
-import type { ControlReview } from "./review-model";
+import {
+  type ControlReview,
+  mayAssessCoverage,
+  REVIEW_COVERAGE_ANCHOR,
+} from "./review-model";
 import { UiIcon } from "./ui-icon";
 
 type Ids = { organizationId: string; projectId: string; controlId: string };
@@ -29,10 +33,12 @@ export function CoverageForm({
     return null;
   }
   const covered = review.coverage?.sheet_version;
-  const may =
-    canAct &&
-    review.viewerIsReviewer &&
-    (!review.viewerPrepared || !review.independenceRequired);
+  const may = mayAssessCoverage(review, canAct);
+  // A reason a coverage assessment does not clear comes first (review-model.reviewHoldOf):
+  // reopening clears a gap with it, so the form is offered only where it clears what holds
+  // the review (design review, 19 November 2026).
+  const offered = gap !== "" && held === "";
+  const reason = held !== "" ? held : gap;
   return (
     <section
       className="cw-coverage"
@@ -43,21 +49,18 @@ export function CoverageForm({
         {typeof covered === "number"
           ? `Signed off against testing version ${covered}.`
           : "The version this review covered was not recorded."}
-        {gap !== ""
-          ? ` ${gap}.`
-          : held !== ""
-            ? ""
-            : " Nothing has changed since."}
+        {reason !== "" ? ` ${reason}.` : " Nothing has changed since."}
       </p>
-      {gap === "" && held !== "" ? (
+      {held !== "" ? (
         <p className="cw-coverage-waits">
-          {held}. A coverage assessment does not clear this: the reviewer
-          reopens the review and signs it again on the current records.
+          The reviewer reopens the review and signs it again on the current
+          records.
         </p>
       ) : null}
-      {gap !== "" ? (
+      {offered ? (
         may ? (
           <form
+            id={REVIEW_COVERAGE_ANCHOR}
             method="post"
             action="/workspace/reviews"
             autoComplete="off"
@@ -78,7 +81,13 @@ export function CoverageForm({
                 Does the signed review cover the current versions?
               </legend>
               <label>
-                <input type="radio" name="decision" value="COVERS" required />
+                <input
+                  type="radio"
+                  name="decision"
+                  value="COVERS"
+                  required
+                  data-arrive
+                />
                 It covers them (COVERS): record why, without re-performing
               </label>
               <label>

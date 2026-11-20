@@ -2,14 +2,17 @@
 
 Each on an engagement of its own, built with the test suite's helpers through the API as
 the team would (a person's decisions over the API; the reviewer agent's re-performance by
-the rules, no model). Two records are written directly, as the suite's own tests write
+the rules, no model). Three records are written directly, as the suite's own tests write
 them: a deficiency logged after the review signed (the records then propose another
-verdict than the review signed), and a phase set PENDING, as the planner's rules leave
-one. Each state carries the session tokens of the people who view it (8 hours; synthetic
-users of this database only).
+verdict than the review signed), a phase set PENDING, as the planner's rules leave one,
+and a signed test sheet's version raised after its review signed. Each state carries the
+session tokens of the people who view it (8 hours; synthetic users of this database only).
 
 - e3a-conclusion-changed  the control's Review step: a signed review whose conclusion moved
                           since it signed (the Review coverage form offers no COVERS)
+- e3a-coverage-gap        the control's Review step: a signed review whose testing moved on
+                          a version since it signed (a coverage gap; COVERS offered), its
+                          sheet version raised as signing a reopened sheet again raises it
 - e3a-review-footer       the control's Review step with an open review held by both new
                           sign-off reasons (an undecided proposed deficiency; a signed-off
                           result awaiting a reviewer's impact decision)
@@ -100,6 +103,31 @@ def _conclusion_changed(seed: Any) -> None:
     )
 
 
+def _coverage_gap(seed: Any) -> None:
+    team, client, sheet, _file = _prepared_control(seed.database, "e3a-gap", "DISMISS")
+    control = sheet["control_id"]
+    _rollforward_decided(seed.database, team, client, control)
+    review = client.get(f"{seed.base(team)}/reviews").json()[0]
+    _sign_review(seed.database, client, team, review["id"])
+    with connect(seed.url) as connection:
+        # The interim sheet moves on a version after the review signed, as reopening and
+        # signing it again does: the signed review's coverage is in question.
+        connection.execute(
+            "UPDATE test_sheets SET version = version + 1 WHERE id = %s", (sheet["id"],)
+        )
+        connection.commit()
+    rows = {row["id"]: row for row in client.get(f"{seed.base(team)}/workspace/controls").json()}
+    reasons = rows[control]["not_final"]
+    assert [(r["kind"], r["coverage"]) for r in reasons] == [("REVIEW", True)], reasons
+    seed.add(
+        "e3a-coverage-gap",
+        _href(seed, team, section="controls", control=control, step="review"),
+        tokens=_people(seed, team),
+        viewer="reviewer",
+        reason=reasons[0]["text"],
+    )
+
+
 def _review_footer(seed: Any) -> None:
     team, client, sheet, _file = _tested_control(seed.database, "e3a-footer")
     base = seed.base(team)
@@ -187,5 +215,6 @@ def _history_resynced(seed: Any) -> None:
 
 def build(seed: Any) -> None:
     _conclusion_changed(seed)
+    _coverage_gap(seed)
     _review_footer(seed)
     _history_resynced(seed)

@@ -197,6 +197,7 @@ import { RequestReview } from "./request-review";
 import {
   reviewFor as controlReviewFor,
   openNotes,
+  reviewHoldOf,
   roundReviewsFor,
 } from "./review-model";
 import { ReviewTab } from "./review-view";
@@ -1197,6 +1198,16 @@ function ControlRecord({
   const canAct =
     canRequestEvidence(model.organization.role) &&
     model.selectedProject?.status === "ACTIVE";
+  // What holds the control's own signed review, from the typed reasons: the Review step,
+  // its node and its row read as outstanding while it stands, never as done (design
+  // review, 19 November 2026).
+  const reviewHold = reviewHoldOf({
+    signed: control.reviewStatus === "SIGNED_OFF",
+    held: control.reviewHeldBy ?? "",
+    gap: coverageGaps.control,
+    review,
+    canAct,
+  });
   const hasInput = hasDraftInput(control, engagement.files);
   const context =
     engagement.context !== null && engagement.context.controlId === control.id
@@ -1689,9 +1700,13 @@ function ControlRecord({
   };
   const lifeState = (key: string): PhaseState => {
     if (key === "review") {
-      // The control's own review or any round's: open is in progress, all signed is done.
+      // The control's own review or any round's: open is in progress, all signed is done;
+      // a signed one a typed reason holds needs attention, and does not fold away.
       if (controlReviews.some((item) => item.status === "OPEN")) {
         return "active";
+      }
+      if (reviewHold !== null) {
+        return "issue";
       }
       return controlReviews.length > 0 ? "done" : "todo";
     }
@@ -2164,6 +2179,7 @@ function ControlRecord({
       type: item.type,
     })),
     reviewStatus: control.reviewStatus ?? "",
+    reviewHold,
     conclusion: control.conclusion,
     proposedConclusion:
       engagement.controlConclusion?.controlId === control.id
@@ -3466,6 +3482,7 @@ function ControlRecord({
                             ids={ids}
                             canAct={canAct}
                             automation={engagement.automation ?? null}
+                            outstanding={reviewHold !== null}
                           />
                         )}
                       </PhaseStep>
