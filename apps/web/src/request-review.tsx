@@ -60,6 +60,7 @@ import {
 import {
   MAX_DESCRIPTION,
   type RequestDetail,
+  redraftOffer,
   reviewProblem,
 } from "./request-review-model";
 import { UiIcon } from "./ui-icon";
@@ -258,6 +259,9 @@ export function RequestReview({
   const unsent =
     (status === "DRAFT" || status === "APPROVAL_PENDING") && delivery == null;
   const failing = details?.checks.filter((check) => !check.ok) ?? [];
+  // The agent's last draft was not written: the wording was written for other planned items.
+  const notDrafted = draft ? (details?.planning.notDrafted ?? "") : "";
+  const redraft = redraftOffer(details?.redraftRefusal ?? null, notDrafted);
   const submitBlocked = failing.some((check) => check.key !== "type");
   const typeLabels = Object.fromEntries(
     (details?.types ?? []).map((item) => [item.key, item.label]),
@@ -356,6 +360,15 @@ export function RequestReview({
   );
   const calloutPart = (
     <>
+      {notDrafted !== "" ? (
+        <p className="rr-callout is-warn">
+          <UiIcon name="risk" size={14} />
+          <span>
+            <strong>Not drafted.</strong> {notDrafted}
+          </span>
+        </p>
+      ) : null}
+
       {stage === "RETURNED" && request.approvalReason ? (
         <p className="rr-callout is-warn">
           <UiIcon name="risk" size={14} />
@@ -645,17 +658,21 @@ export function RequestReview({
                     Add approval note
                   </button>
                 ) : null}
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  disabled={busy}
-                  onClick={() => review.run("redraft", { intent: "redraft" })}
-                >
-                  <UiIcon name="sparkles" size={13} />
-                  {review.busy === "redraft"
-                    ? "Requesting…"
-                    : "Request a redraft"}
-                </button>
+                {redraft.button ? (
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    disabled={busy}
+                    onClick={() => review.run("redraft", { intent: "redraft" })}
+                  >
+                    <UiIcon name="sparkles" size={13} />
+                    {review.busy === "redraft"
+                      ? "Requesting…"
+                      : "Request a redraft"}
+                  </button>
+                ) : redraft.note !== "" ? (
+                  <p className="rr-note">{redraft.note}</p>
+                ) : null}
               </div>
               {noting ? (
                 <div className="rr-reason">
@@ -710,17 +727,21 @@ export function RequestReview({
                   ? "Submitting…"
                   : "Submit for approval"}
               </button>
-              <button
-                type="button"
-                className="btn btn-ghost"
-                disabled={busy}
-                onClick={() => review.run("redraft", { intent: "redraft" })}
-              >
-                <UiIcon name="sparkles" size={13} />
-                {review.busy === "redraft"
-                  ? "Requesting…"
-                  : "Request a redraft"}
-              </button>
+              {redraft.button ? (
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  disabled={busy}
+                  onClick={() => review.run("redraft", { intent: "redraft" })}
+                >
+                  <UiIcon name="sparkles" size={13} />
+                  {review.busy === "redraft"
+                    ? "Requesting…"
+                    : "Request a redraft"}
+                </button>
+              ) : redraft.note !== "" ? (
+                <p className="rr-note">{redraft.note}</p>
+              ) : null}
             </div>
           ) : stage === "AWAITING_APPROVAL" && request.viewerCanDecide ? (
             <div className="rr-decide">

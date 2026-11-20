@@ -456,6 +456,16 @@ describe("the test plan attributes a request supports", () => {
     assert.deepEqual(list?.rows[0]?.supports, ["A1", "A3"]);
     assert.deepEqual(parseCenterList(api)?.rows[0]?.supports, []);
   });
+
+  it("reads a request whose last draft was not written", () => {
+    const row = (api.rows as Array<Record<string, unknown>>)[0] ?? {};
+    const list = parseCenterList({
+      ...api,
+      rows: [{ ...row, agent: "NOT_DRAFTED", agent_label: "Not drafted" }],
+    });
+    assert.equal(list?.rows[0]?.agent, "NOT_DRAFTED");
+    assert.equal(list?.rows[0]?.agentLabel, "Not drafted");
+  });
 });
 
 describe("a sent request's progress", () => {

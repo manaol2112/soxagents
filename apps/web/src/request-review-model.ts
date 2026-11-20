@@ -219,6 +219,20 @@ export function reviewWrite(fields: Fields): ReviewWrite {
   }
 }
 
+/** What the request panel offers for a Redraft (design review, 19 November 2026: one
+ * that is always refused was offered, and answered with an error): the button while one
+ * may be asked for; otherwise the server's reason in its place, as a rule, unless the
+ * not-drafted banner already says what to do. */
+export function redraftOffer(
+  refusal: string | null,
+  notDrafted: string,
+): { button: boolean; note: string } {
+  if (refusal === null) {
+    return { button: true, note: "" };
+  }
+  return { button: false, note: notDrafted === "" ? refusal : "" };
+}
+
 /** What to tell the person when a call did not go through, or null when it did. */
 export function reviewProblem(status: number, detail: string): string | null {
   if (status === 200) {

@@ -21,6 +21,7 @@ import {
   wordingDraft,
 } from "../apps/web/src/request-details-model.ts";
 import {
+  redraftOffer,
   reviewProblem,
   reviewWrite,
 } from "../apps/web/src/request-review-model.ts";
@@ -613,6 +614,47 @@ describe("what a request supports in the test plan", () => {
       { code: "A2", text: "Approved before granted", items: ["E5"] },
     ]);
     assert.deepEqual(parseRequestDetails(api)?.supports, []);
+  });
+});
+
+describe("a Redraft that cannot succeed", () => {
+  const SAMPLE =
+    "A sample request lists the selected samples, so it is not redrafted. Edit its wording instead.";
+  const REPLANNED =
+    "The planned evidence changed during drafting. Redraft the request to match the plan.";
+
+  it("reads why a Redraft is refused, and what the person is asked to do", () => {
+    const details = parseRequestDetails({
+      ...api,
+      redraft_refusal: SAMPLE,
+      planning: { ...api.planning, not_drafted: REPLANNED },
+    });
+    assert.equal(details?.redraftRefusal, SAMPLE);
+    assert.equal(details?.planning.notDrafted, REPLANNED);
+    assert.equal(parseRequestDetails(api)?.redraftRefusal, null);
+    assert.equal(parseRequestDetails(api)?.planning.notDrafted, "");
+    assert.equal(
+      parseRequestDetails({ ...api, redraft_refusal: "" })?.redraftRefusal,
+      null,
+    );
+  });
+
+  it("offers the Redraft only where it can succeed, and says why in its place", () => {
+    assert.deepEqual(redraftOffer(null, ""), { button: true, note: "" });
+    // The plan changed: the banner says to redraft, and the Redraft is there.
+    assert.deepEqual(redraftOffer(null, REPLANNED), { button: true, note: "" });
+    assert.deepEqual(redraftOffer(SAMPLE, ""), { button: false, note: SAMPLE });
+    // A banner that already says what to do is not repeated by the rule.
+    assert.deepEqual(redraftOffer("Refused.", "Edit it."), {
+      button: false,
+      note: "",
+    });
+  });
+
+  it("shows the server's no-phase answer as it is, a sentence written for people", () => {
+    const UNPHASED =
+      "This request has planned evidence but no testing phase, so it is not redrafted. Edit its wording instead.";
+    assert.equal(reviewProblem(409, UNPHASED), UNPHASED);
   });
 });
 

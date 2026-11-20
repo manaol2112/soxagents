@@ -586,6 +586,11 @@
   color: var(--ai);
 }
 
+/* The agent's last draft was not written: the person acts (the request panel says how). */
+.ec-agent span.ec-agent-not_drafted {
+  color: var(--warning);
+}
+
 .ec-unassigned {
   color: var(--warning);
   font-weight: 600;
