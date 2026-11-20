@@ -1,5 +1,6 @@
 import {
   type ControlReview,
+  coverageCardOf,
   mayAssessCoverage,
   REVIEW_COVERAGE_ANCHOR,
 } from "./review-model";
@@ -18,6 +19,7 @@ export function CoverageForm({
   ids,
   gap,
   held = "",
+  said = false,
   canAct,
 }: {
   review: ControlReview;
@@ -27,31 +29,29 @@ export function CoverageForm({
   /** What holds the signed review that a coverage assessment does not clear, in the
    * journey's words; "" when nothing does. Said, never offered a coverage decision. */
   held?: string;
+  /** The Review step's decision line already gives the reason and how it clears (the
+   * control's own review while its hold stands): the card does not repeat them. */
+  said?: boolean;
   canAct: boolean;
 }) {
   if (review.status !== "SIGNED_OFF") {
     return null;
   }
-  const covered = review.coverage?.sheet_version;
   const may = mayAssessCoverage(review, canAct);
-  // A reason a coverage assessment does not clear comes first (review-model.reviewHoldOf):
-  // reopening clears a gap with it, so the form is offered only where it clears what holds
-  // the review (design review, 19 November 2026).
-  const offered = gap !== "" && held === "";
-  const reason = held !== "" ? held : gap;
+  const { state, offered, remedy } = coverageCardOf({
+    covered: review.coverage?.sheet_version,
+    gap,
+    held,
+    said,
+  });
   return (
     <section
       className="cw-coverage"
       aria-labelledby={`cw-coverage-${review.id}`}
     >
       <h3 id={`cw-coverage-${review.id}`}>Review coverage</h3>
-      <p className="cw-coverage-state">
-        {typeof covered === "number"
-          ? `Signed off against testing version ${covered}.`
-          : "The version this review covered was not recorded."}
-        {reason !== "" ? ` ${reason}.` : " Nothing has changed since."}
-      </p>
-      {held !== "" ? (
+      <p className="cw-coverage-state">{state}</p>
+      {held !== "" && remedy ? (
         <p className="cw-coverage-waits">
           The reviewer reopens the review and signs it again on the current
           records.
@@ -111,12 +111,12 @@ export function CoverageForm({
               <UiIcon name="arrow" size={14} />
             </button>
           </form>
-        ) : (
+        ) : remedy ? (
           <p className="cw-coverage-waits">
             A reviewer who did not prepare this work documents whether the
             signed review covers it, or a new review is performed.
           </p>
-        )
+        ) : null
       ) : null}
     </section>
   );

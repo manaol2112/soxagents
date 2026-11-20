@@ -419,6 +419,50 @@ export function reviewHoldOf(input: {
   return null;
 }
 
+/** The reviewer agent's task chip on the Independent review row, or none while a hold
+ * stands (design review, 19 November 2026, fix first: "Independent reviewer · Complete"
+ * under "Needs attention" read as the review being both complete and outstanding). The
+ * agent's re-performance stays under the step and in AI activity. */
+export function reviewRowTask<T>(
+  task: T | undefined,
+  hold: ReviewHold | null,
+): T | undefined {
+  return hold === null ? task : undefined;
+}
+
+/** What a signed review's coverage card says (coverage-form.tsx). `said` is true where the
+ * Review step's decision line already gives the reason and how it clears (the control's
+ * own review while its hold stands): the card then gives only the version it covered and
+ * the form, never the same two sentences again (design review, 19 November 2026, fix
+ * first). A round's review has no decision line, so its card says both. */
+export function coverageCardOf(input: {
+  /** review.coverage.sheet_version: a number where the version was recorded. */
+  covered: unknown;
+  gap: string;
+  held: string;
+  said: boolean;
+}): { state: string; offered: boolean; remedy: boolean } {
+  const reason = input.held !== "" ? input.held : input.gap;
+  const version =
+    typeof input.covered === "number"
+      ? `Signed off against testing version ${input.covered}.`
+      : "The version this review covered was not recorded.";
+  const tail =
+    reason === ""
+      ? " Nothing has changed since."
+      : input.said
+        ? ""
+        : ` ${reason}.`;
+  return {
+    state: `${version}${tail}`,
+    // A reason a coverage assessment does not clear comes first (reviewHoldOf):
+    // reopening clears a gap with it, so the form is offered only where it clears what
+    // holds the review.
+    offered: input.gap !== "" && input.held === "",
+    remedy: reason !== "" && !input.said,
+  };
+}
+
 export const SEVERITY_LABEL: Record<NoteSeverity, string> = {
   MUST_FIX: "Must fix",
   SHOULD_FIX: "Should fix",

@@ -198,6 +198,7 @@ import {
   reviewFor as controlReviewFor,
   openNotes,
   reviewHoldOf,
+  reviewRowTask,
   roundReviewsFor,
 } from "./review-model";
 import { ReviewTab } from "./review-view";
@@ -3454,7 +3455,7 @@ function ControlRecord({
                           ? undefined
                           : "Once the testing workpaper is prepared, the independent reviewer agent re-performs the testing against the evidence and proposes review notes; a reviewer who did not test or prepare decides each note and signs the control off."
                       }
-                      task={taskOf("review")}
+                      task={reviewRowTask(taskOf("review"), reviewHold)}
                     >
                       <PhaseStep
                         number={1}
@@ -3506,6 +3507,7 @@ function ControlRecord({
                         ids={ids}
                         gap={coverageGaps.control}
                         held={control.reviewHeldBy ?? ""}
+                        said={reviewHold !== null}
                         canAct={canAct}
                       />
                     ) : null}

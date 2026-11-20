@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import {
@@ -6,11 +7,13 @@ import {
   workflowOf,
 } from "../apps/web/src/control-workflow-model.ts";
 import {
+  coverageCardOf,
   REVIEW_COVERAGE_ANCHOR,
   REVIEW_OUTSTANDING,
   REVIEW_REOPEN_ANCHOR,
   type ReviewHold,
   reviewHoldOf,
+  reviewRowTask,
 } from "../apps/web/src/review-model.ts";
 import { quietLineOf } from "../apps/web/src/step-frame-model.ts";
 import { panelFrame } from "../apps/web/src/step-panel-model.ts";
@@ -202,5 +205,132 @@ describe("the hold on the control's own signed review", () => {
     ]) {
       assert.equal(hold?.viewerActs, false);
     }
+  });
+});
+
+// E3 design re-check (19 November 2026), fix first: (1) the Independent review row showed
+// the reviewer agent's kickoff task, "Independent reviewer · Complete", under "Needs
+// attention" and above "Review outstanding"; (2) the Review coverage card repeated, word
+// for word, the reason and the remedy the step's decision line (or quiet line) gives.
+const REOPENS =
+  "The reviewer reopens the review and signs it again on the current records.";
+const ASSESSES =
+  "A reviewer who did not prepare this work documents whether the signed review covers it";
+
+describe("the Independent review row while a hold stands", () => {
+  const task = { kind: "review", status: "SUCCEEDED" };
+
+  it("shows no agent task status beside the hold", () => {
+    for (const hold of [
+      { reason: CHANGED, clears: "reopen", viewerActs: true },
+      { reason: GAP, clears: "coverage", viewerActs: false },
+    ] as const) {
+      assert.equal(reviewRowTask(task, hold), undefined);
+    }
+  });
+
+  it("shows the agent's task when nothing holds the review", () => {
+    assert.equal(reviewRowTask(task, null), task);
+    assert.equal(reviewRowTask(undefined, null), undefined);
+  });
+
+  it("is what the controls page renders, and the coverage card is told the line said it", () => {
+    const view = readFileSync("apps/web/src/controls-view.tsx", "utf8");
+    assert.match(
+      view,
+      /task=\{reviewRowTask\(taskOf\("review"\), reviewHold\)\}/,
+    );
+    assert.doesNotMatch(view, /task=\{taskOf\("review"\)\}/);
+    assert.match(view, /said=\{reviewHold !== null\}/);
+    const form = readFileSync("apps/web/src/coverage-form.tsx", "utf8");
+    // The card's words come from coverageCardOf, and each remedy line waits on `remedy`.
+    assert.match(form, /coverageCardOf\(/);
+    assert.match(form, /held !== "" && remedy \?/);
+    assert.match(form, /\) : remedy \? \(/);
+  });
+});
+
+describe("the Review coverage card", () => {
+  it("gives only the version where the decision line gives the reason (held)", () => {
+    const card = coverageCardOf({
+      covered: 2,
+      gap: GAP,
+      held: CHANGED,
+      said: true,
+    });
+    assert.equal(card.state, "Signed off against testing version 2.");
+    assert.equal(card.offered, false);
+    assert.equal(card.remedy, false);
+  });
+
+  it("gives only the version and the form where the decision line gives the gap", () => {
+    const card = coverageCardOf({ covered: 3, gap: GAP, held: "", said: true });
+    assert.equal(card.state, "Signed off against testing version 3.");
+    assert.equal(card.offered, true);
+    assert.equal(card.remedy, false);
+  });
+
+  it("never repeats the reason or the remedy the step frame says", () => {
+    for (const hold of [
+      { reason: CHANGED, clears: "reopen", viewerActs: true },
+      { reason: CHANGED, clears: "reopen", viewerActs: false },
+      { reason: GAP, clears: "coverage", viewerActs: true },
+      { reason: GAP, clears: "coverage", viewerActs: false },
+    ] as const) {
+      const { frame } = reviewStep(signed(hold));
+      const line = quietLineOf(frame.need)?.text ?? frame.need.title;
+      assert.ok(line.includes(hold.reason), line);
+      const card = coverageCardOf({
+        covered: 1,
+        gap: hold.clears === "coverage" ? hold.reason : "",
+        held: hold.clears === "reopen" ? hold.reason : "",
+        said: true,
+      });
+      assert.ok(!card.state.includes(hold.reason), card.state);
+      assert.equal(card.remedy, false);
+    }
+  });
+
+  it("says the reason and the remedy on a round's review, which has no decision line", () => {
+    const card = coverageCardOf({
+      covered: 1,
+      gap: GAP,
+      held: "",
+      said: false,
+    });
+    assert.equal(card.state, `Signed off against testing version 1. ${GAP}.`);
+    assert.equal(card.offered, true);
+    assert.equal(card.remedy, true);
+    const held = coverageCardOf({
+      covered: null,
+      gap: "",
+      held: CHANGED,
+      said: false,
+    });
+    assert.equal(
+      held.state,
+      `The version this review covered was not recorded. ${CHANGED}.`,
+    );
+    assert.equal(held.offered, false);
+    assert.equal(held.remedy, true);
+  });
+
+  it("says nothing has changed where nothing holds the review", () => {
+    const card = coverageCardOf({ covered: 4, gap: "", held: "", said: false });
+    assert.equal(
+      card.state,
+      "Signed off against testing version 4. Nothing has changed since.",
+    );
+    assert.equal(card.offered, false);
+    assert.equal(card.remedy, false);
+  });
+
+  it("keeps the remedy wording the step frame uses", () => {
+    const form = readFileSync("apps/web/src/coverage-form.tsx", "utf8").replace(
+      /\s+/g,
+      " ",
+    );
+    assert.ok(form.includes(REOPENS.replace(/\s+/g, " ")));
+    assert.ok(form.includes(ASSESSES));
   });
 });
