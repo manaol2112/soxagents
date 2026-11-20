@@ -10,6 +10,12 @@
 
 For Medium and High: what else this could affect, and how that was checked.
 
+## Audit invariants touched (docs/audit-invariants.md)
+
+<!-- The ids (I1 to I16) this change could affect. For High: the "what happens later"
+answers, each naming the invariant and the test that holds it, or the increment that
+will. A new model entry point joins services/api/tests/test_model_contract.py. -->
+
 ## Checks actually run
 
 <!-- Commands and their results. Say what was not run and why. -->
