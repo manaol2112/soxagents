@@ -2777,6 +2777,8 @@ def set_criteria(
             return False
         from ai_workforce_api.criteria_history import writing
 
+        kept = "SELECT max(version) FROM attribute_criteria_versions WHERE attribute_id = %s"
+        last = cursor.execute(kept, (attribute_id,)).fetchone()
         # The criteria history names the person as their writer (B1j, migration 0172).
         with writing(cursor, by=actor, cause=""):
             cursor.execute(
@@ -2789,9 +2791,16 @@ def set_criteria(
                 """,
                 (*sent, attribute_id),
             )  # fmt: skip
+        # The version the trigger kept of the criteria this replaced, if it kept one (none
+        # when the attribute had no criteria), for the History to show the change from the
+        # stored versions (control_activity; product owner, 20 November 2026).
+        now = cursor.execute(kept, (attribute_id,)).fetchone()
+        before = None if last is None else last[0]
+        after = None if now is None else now[0]
         _audit(
             cursor, organization_id, project_id, actor, "control_attribute.criteria_set",
-            "control_attribute", attribute_id, {},
+            "control_attribute", attribute_id,
+            {"criteria_version": after if after is not None and after != before else None},
         )  # fmt: skip
         # The person's criteria may leave the attributes accepted: the understanding counts
         # as completed from then on (B1l point 2), in the same step.

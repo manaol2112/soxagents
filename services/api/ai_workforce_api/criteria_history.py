@@ -212,3 +212,141 @@ def versions(
             for row in rows
         ]
     )
+
+
+# A change of an attribute's criteria as the control's History shows it (product owner, 20
+# November 2026: "remove the previous criteria link here and probably add that as part of the
+# history that it was updated"). Each kept version is one change: the criteria it holds are
+# the earlier ones, and the criteria that replaced them are the next version's, or the
+# attribute's own where no later change replaced them. Who wrote the new criteria, and why,
+# are the new criteria's stamps (the trigger's, migration 0172). Read from the stored versions
+# only: a change no version records is never reconstructed.
+
+
+class CriteriaText(BaseModel):
+    condition: str
+    pass_criteria: str
+    fail_criteria: str
+    judgment_required: bool | None
+
+
+class CriteriaChange(BaseModel):
+    """One change, for the History row that opens on request: the attribute, the criteria
+    before and after, and the reason the writer recorded ("" when none was)."""
+
+    attribute: str
+    earlier: CriteriaText
+    new: CriteriaText
+    reason: str = ""
+
+
+class KeptChange(BaseModel):
+    """A change read from the kept versions, with what the History needs to place it: the
+    attribute row and the version it replaced, when, and who wrote the new criteria (a
+    person's id where one is on record)."""
+
+    id: UUID
+    attribute_id: UUID
+    version: int
+    at: datetime
+    written_by: WrittenBy
+    person: UUID | None
+    change: CriteriaChange
+    unchanged: bool
+
+
+def attribute_name(code: str | None, text: str | None) -> str:
+    """An attribute as the History names it: its code and its words, within one line."""
+    said = line(text or "", 160)
+    named = line(code or "", 12)
+    return f"Attribute {named}: {said}" if named and said else said or named
+
+
+def reason_words(cause: str) -> str:
+    """The recorded cause of a change in the History's words; "" when none is recorded. A
+    cause "Reopened: <matter>" is a person's change of an assumption
+    (attribute_assumptions.reopened_cause); any other names the answer the run followed."""
+    said = line(cause, CAUSE_LIMIT)
+    if said == "":
+        return ""
+    if said.startswith("Reopened:"):
+        matter = said.removeprefix("Reopened:").strip()
+        return f"Updated after the assumption on {matter} changed" if matter else ""
+    return f"Updated from the answer on {said}"
+
+
+def kept_changes(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
+) -> list[KeptChange]:
+    """Every change of the criteria of the control's attributes that a kept version records,
+    oldest first. `unchanged` marks a version kept when only the acceptance of the criteria
+    ended (migration 0174, section 3b): the criteria before and after are the same."""
+    rows = connection.execute(
+        """
+        SELECT v.id, v.attribute_id, v.version, v.replaced_at, a.code, a.text,
+               v.condition, v.pass_criteria, v.fail_criteria, v.judgment_required,
+               CASE WHEN n.id IS NULL THEN a.condition ELSE n.condition END,
+               CASE WHEN n.id IS NULL THEN a.pass_criteria ELSE n.pass_criteria END,
+               CASE WHEN n.id IS NULL THEN a.fail_criteria ELSE n.fail_criteria END,
+               CASE WHEN n.id IS NULL THEN a.judgment_required ELSE n.judgment_required END,
+               CASE WHEN n.id IS NULL THEN a.criteria_origin ELSE n.criteria_origin END,
+               CASE WHEN n.id IS NULL THEN a.criteria_written_by ELSE n.written_by END,
+               CASE WHEN n.id IS NULL THEN a.criteria_writer ELSE n.writer END,
+               CASE WHEN n.id IS NULL THEN a.criteria_cause ELSE n.cause END,
+               u.display_name
+        FROM attribute_criteria_versions v
+        JOIN control_attributes a
+             ON a.id = v.attribute_id AND a.engagement_control_id = v.engagement_control_id
+        LEFT JOIN attribute_criteria_versions n
+             ON n.attribute_id = v.attribute_id AND n.version = v.version + 1
+        LEFT JOIN users u
+             ON u.id = CASE WHEN n.id IS NULL THEN a.criteria_written_by ELSE n.written_by END
+        WHERE v.project_id = %s AND v.engagement_control_id = %s
+        ORDER BY v.replaced_at, v.id
+        """,
+        (project_id, control_id),
+    ).fetchall()
+    found: list[KeptChange] = []
+    for row in rows:
+        earlier = CriteriaText(
+            condition=str(row[6]), pass_criteria=str(row[7]), fail_criteria=str(row[8]),
+            judgment_required=row[9],
+        )  # fmt: skip
+        new = CriteriaText(
+            condition=str(row[10] or ""), pass_criteria=str(row[11] or ""),
+            fail_criteria=str(row[12] or ""), judgment_required=row[13],
+        )  # fmt: skip
+        found.append(
+            KeptChange(
+                id=row[0],
+                attribute_id=row[1],
+                version=int(row[2]),
+                at=row[3],
+                written_by=written_by(
+                    None if row[14] is None else str(row[14]),
+                    None if row[18] is None else str(row[18]),
+                    str(row[16] or ""),
+                ),
+                person=row[15],
+                change=CriteriaChange(
+                    attribute=attribute_name(row[4], row[5]),
+                    earlier=earlier,
+                    new=new,
+                    reason=reason_words(str(row[17] or "")),
+                ),
+                unchanged=earlier == new,
+            )
+        )
+    return found
+
+
+def attribute_names(connection: psycopg.Connection[Any], control_id: UUID) -> dict[UUID, str]:
+    """The names of the control's attributes, every row (a reworded one's earlier rows
+    included), for the History rows that name one."""
+    return {
+        UUID(str(row[0])): attribute_name(row[1], row[2])
+        for row in connection.execute(
+            "SELECT id, code, text FROM control_attributes WHERE engagement_control_id = %s",
+            (control_id,),
+        ).fetchall()
+    }
