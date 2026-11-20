@@ -117,11 +117,21 @@ def test_a_control_tested_once_reuses_its_screenshot_reviews() -> None:
     # wording it was reviewed against (evidence_review records it, AttributeTest.attribute).
     # Reason: after a removal, a new order or a rewording, a position names another
     # attribute, and a pass would be given to a test never made.
-    files = (ItemFile("settings.png", "configuration", "", review),)
+    # Rewritten 19 November 2026 (item 17 with D9 and FO-22). Old: the agent's review stood
+    # in undecided, and its not determinable answer was UNABLE. New: it stands in only once
+    # a person decided it (undecided: None, so the item is unable), and an answer that is
+    # not a clean pass goes to a person (REVIEW). Reason: an agent's undecided review is a
+    # proposal, and a review cites no passage a person can check (audit invariant I5).
     attributes = ("Minimum length is 12", "Lockout after 5 attempts")
+    undecided = (ItemFile("settings.png", "configuration", "", review),)
+    assert from_reviews(undecided, attributes) is None
+    checks = [{"check": key, "result": "OK"} for key in ("legibility", "system", "date_period",
+                                                          "editing", "applicability")]  # fmt: skip
+    decided = {**review, "checks": checks, "decision": "OVERRIDDEN", "conclusion": "NO_EXCEPTION"}
+    files = (ItemFile("settings.png", "configuration", "", decided),)
     results = from_reviews(files, attributes)
     assert results is not None
-    assert [item["result"] for item in results] == ["PASS", "UNABLE"]
+    assert [item["result"] for item in results] == ["PASS", "REVIEW"]
     assert results[0]["note"] == "settings.png: Minimum length 12"
     # Without a review for every file, or for every attribute, the tester tests it.
     no_review = (*files, ItemFile("policy.pdf", "policy", "text", None))
@@ -1121,10 +1131,20 @@ def test_a_screenshot_review_is_reused_by_the_attribute_it_answered() -> None:
              "observed": "Lockout after 10"},
         ]
     }  # fmt: skip
+    # Rewritten 19 November 2026 (item 17 with FO-22). Old: the agent's undecided review
+    # stood in, so its exception and its pass were reused. New: the review is decided by a
+    # person (here, the exception accepted), and a review's exception goes to a person
+    # (REVIEW, as it cites no passage); the answers still follow their attribute, as the
+    # notes show. Reason: the attribute mapping is what this test guards, unchanged.
+    review = {**review, "checks": [], "decision": "ACCEPTED", "conclusion": "EXCEPTION"}  # type: ignore[dict-item]
     files = (ItemFile("settings.png", "configuration", "", review),)
     reordered = from_reviews(files, ("Lockout after 5 attempts", "Minimum length is 12"))
     assert reordered is not None
-    assert [item["result"] for item in reordered] == ["EXCEPTION", "PASS"]
+    assert [item["result"] for item in reordered] == ["REVIEW", "REVIEW"]
+    assert [item["note"] for item in reordered] == [
+        "settings.png: Lockout after 10",
+        "settings.png: 12",
+    ]
     assert [item["index"] for item in reordered] == [0, 1]
     assert from_reviews(files, ("Lockout after 3 attempts", "Minimum length is 12")) is None
 
@@ -1506,3 +1526,386 @@ def test_items_tested_on_an_unfilled_value_hold_sign_off_until_tested_again_with
         f"{_base(team)}/test-sheets/{sheet['id']}/sign-off", json={"version": retested["version"]}
     )
     assert signed.status_code == 200, signed.text
+
+
+def test_testing_sign_off_waits_while_attributes_are_unsettled(migrated: Database) -> None:
+    """FO-11 (audit invariant I1, 19 November 2026). Before, the testing sign-off read the
+    plan's gate with no phase, so only the plan's approval held it: a sheet signed off while
+    an agent's attribute proposal waited for a person. Now the gate reads the phase tested,
+    so the attributes are settled first."""
+    from test_workpapers import _tested_control
+
+    team, client, sheet, _file = _tested_control(migrated, "sheet-unsettled", sign=False)
+    base = _base(team)
+    with connect(migrated.url) as connection:
+        added = connection.execute(
+            """
+            INSERT INTO control_attributes (
+                organization_id, project_id, engagement_control_id, position, text, status,
+                source_kind, proposal
+            )
+            SELECT organization_id, project_id, id, 99, 'Approval is evidenced before access',
+                   'PROPOSED', 'AGENT', 'ADD'
+            FROM engagement_controls WHERE id = %s
+            RETURNING id
+            """,
+            (UUID(sheet["control_id"]),),
+        ).fetchone()
+        connection.commit()
+    assert added is not None
+    current = _sheet(client, team)
+    held = client.post(
+        f"{base}/test-sheets/{current['id']}/sign-off", json={"version": current["version"]}
+    )
+    assert held.status_code == 409
+    assert "settle the control's attributes first" in held.json()["detail"]
+    with connect(migrated.url) as connection:
+        connection.execute("DELETE FROM control_attributes WHERE id = %s", (added[0],))
+        connection.commit()
+    current = _sheet(client, team)
+    signed = client.post(
+        f"{base}/test-sheets/{current['id']}/sign-off", json={"version": current["version"]}
+    )
+    assert signed.status_code == 200, signed.text
+
+
+def _tested_with(
+    migrated: Database, slug: str, answers: list[dict[str, Any]]
+) -> tuple[dict[str, Any], TestClient, dict[str, Any]]:
+    """A sampled control of three items, tested on the given answers (one per item), not
+    signed off."""
+    team, client, scheduler = _engagement(migrated, slug)
+    base = _base(team)
+    kickoff = _request(migrated, team, "ITGC-AC-01")
+    year = _year(migrated, team)
+    population = "User ID,Name,Date granted\n" + "".join(
+        f"u000{n},Demo User {n},{year}-0{n}-10\n" for n in range(1, 4)
+    )
+    _add(client, team, "access population.csv", population, kickoff["id"])
+    _read_all(migrated, scheduler)
+    plan = client.get(f"{base}/control-tests").json()[0]
+    _accept_population(client, team, plan["engagement_control_id"])
+    approved = client.post(
+        f"{base}/control-tests/{plan['id']}/approve", json={"version": plan["version"]}
+    ).json()
+    sheet = _sheet(client, team)
+    tickets = "ticket,user,approved_by\n" + "".join(
+        f"T-{n},{item['label']},Demo Manager\n" for n, item in enumerate(sheet["items"])
+    )
+    _add(client, team, "access tickets.csv", tickets, approved["sample_request_id"])
+    _read_all(migrated, scheduler)
+    with connect(migrated.url) as connection:
+        run_sheet(connection, _Citing(list(answers)), UUID(sheet["id"]))
+    return team, client, _sheet(client, team)
+
+
+def test_an_agent_not_applicable_is_a_proposal_until_a_person_confirms_it(
+    migrated: Database,
+) -> None:
+    """Decision D1 (product owner, 19 November 2026; audit invariant I7). Before, the
+    tester's not applicable concluded the attribute, so a sheet whose only support was an
+    agent's not applicable read EFFECTIVE. Now, on an open sheet, it is a proposal a person
+    confirms with a reason: until then its final is REVIEW and the sheet is incomplete. A
+    signed sheet keeps what was signed, and the review raises the unconfirmed ones."""
+    from ai_workforce_api.control_reviews import ControlFacts, rules_findings
+    from ai_workforce_api.test_sheets import _sheet as sheet_body
+
+    proposed = [
+        {"index": 0, "result": "NOT_APPLICABLE", "note": "No change was made in the period."},
+        {"index": 1, "result": "PASS", "note": "Seen."},
+    ]
+    assert final_results(2, proposed, []) == ("NOT_APPLICABLE", "PASS")
+    finals = final_results(2, proposed, [], confirm_not_applicable=True)
+    assert finals == ("REVIEW", "PASS")
+    assert conclusion([ItemView(True, True, finals)]) == "INCOMPLETE"
+    person = [{"index": 0, "result": "NOT_APPLICABLE", "reason": "No change was made.",
+               "by": "someone", "at": "2027-01-01"}]  # fmt: skip
+    assert final_results(2, proposed, person, confirm_not_applicable=True) == (
+        "NOT_APPLICABLE",
+        "PASS",
+    )
+
+    attributes = 5  # ITGC-AC-01's approved attributes
+    na_first = {
+        "results": [
+            {"index": 0, "result": "NOT_APPLICABLE",
+             "note": "No access was granted to this user in the period, so no approval applies."},
+            *[{"index": i, "result": "PASS", "note": "Seen: pass."} for i in range(1, attributes)],
+        ]
+    }  # fmt: skip
+    passing = _answer(["PASS"] * attributes)
+    team, client, sheet = _tested_with(migrated, "agent-na", [na_first, passing, passing])
+    assert len(sheet["attributes"]) == attributes
+    cell = sheet["items"][0]["cells"][0]
+    assert (cell["proposed"], cell["final"]) == ("NOT_APPLICABLE", "REVIEW")
+    assert sheet["proposed_conclusion"] == "INCOMPLETE"
+    assert "1 result needs human review: a person decides" in sheet["blocking"]
+    path = f"{_base(team)}/test-sheets/{sheet['id']}/items/{sheet['items'][0]['id']}/override"
+    version = sheet["items"][0]["version"]
+    short = client.post(
+        path, json={"version": version, "index": 0, "result": "NOT_APPLICABLE", "reason": "N/A."}
+    )
+    assert short.status_code == 422
+    missing = client.post(
+        path,
+        json={"version": version, "index": 0, "result": "NOT_APPLICABLE",
+              "reason": "The evidence was not provided by the client."},
+    )  # fmt: skip
+    assert missing.status_code == 422
+    reason = "No access was granted to this user in the period; the HR record shows no change."
+    confirmed = client.post(
+        path, json={"version": version, "index": 0, "result": "NOT_APPLICABLE", "reason": reason}
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    sheet = _sheet(client, team)
+    assert sheet["items"][0]["cells"][0]["final"] == "NOT_APPLICABLE"
+    assert sheet["proposed_conclusion"] == "EFFECTIVE"
+    with connect(migrated.url) as connection:
+        audited = connection.execute(
+            "SELECT payload FROM audit_events WHERE target_id = %s "
+            "AND action = 'testing.result_overridden'",
+            (UUID(sheet["id"]),),
+        ).fetchone()
+        assert audited is not None and audited[0]["reason"] == reason
+        # A sheet signed before D1 keeps its agent's not applicable on the record, and the
+        # review raises it for the reviewer to decide.
+        connection.execute(
+            "UPDATE test_items SET overrides = '[]'::jsonb WHERE id = %s",
+            (UUID(sheet["items"][0]["id"]),),
+        )
+        connection.execute(
+            "UPDATE test_sheets SET status = 'SIGNED_OFF', signed_by = %s, "
+            "signed_at = clock_timestamp(), conclusion = 'EFFECTIVE' WHERE id = %s",
+            (team["owner_id"], UUID(sheet["id"])),
+        )
+        connection.commit()
+        signed = sheet_body(connection, UUID(str(team["project"])), UUID(sheet["id"]))
+        assert signed.items[0].cells[0].final == "NOT_APPLICABLE"
+        found = rules_findings(
+            signed, ControlFacts("ITGC-AC-01", "EVENT", "", "MANUAL", True), (), None
+        )
+    raised = [f for f in found if f.target.get("rule") == "UNCONFIRMED_NA"]
+    assert [(f.severity, f.target["indexes"]) for f in raised] == [("MUST_FIX", [0])]
+
+
+def test_a_not_applicable_override_needs_ten_characters_and_never_missing_evidence() -> None:
+    """Decision D1 (19 November 2026). Before, any reason of 3 characters confirmed a not
+    applicable, missing evidence included. Now a not applicable needs at least 10, and the
+    evidence planner's rule (missing evidence is never the reason) is reused; a pass or an
+    exception keeps its 3."""
+    from pydantic import ValidationError
+
+    from ai_workforce_api.test_sheets import OverrideBody
+
+    def body(result: str, reason: str) -> OverrideBody:
+        return OverrideBody.model_validate(
+            {"version": 1, "index": 0, "result": result, "reason": reason}
+        )
+
+    for refused in ("N/A here", "Evidence not provided.", "Awaiting evidence from IT."):
+        with pytest.raises(ValidationError):
+            body("NOT_APPLICABLE", refused)
+    assert body("NOT_APPLICABLE", "No change was made to the system in the period.").reason
+    assert body("PASS", "Seen.").reason == "Seen."
+    assert body("EXCEPTION", "Late.").reason == "Late."
+
+
+def test_comparison_primitives_leave_ambiguous_values_open() -> None:
+    """Item 5 with FO-18 (audit invariants I6, I10; 19 November 2026). Before, a value was
+    found inside a longer word ("Lee" in "Ashlee"), two values differing only in separators
+    matched, a non-Latin name was "", ISO times read as 23:59, an ambiguous slashed date
+    was read month first, and "1,5" read as 15. Now each is decided only when it can be:
+    otherwise the comparison is open (holds None), and a pass on it goes to a person."""
+    from ai_workforce_api.testing_checks import date_orders
+    from ai_workforce_api.testing_checks import evaluate as evaluate_checks
+
+    texts = [(
+        "ticket.txt",
+        "Approved by Ashlee Park on 2027-03-15T10:00\n"
+        "Requester: jsmith2\n"
+        "Requested by j.smith on 2027-03-15\n"
+        "Approver: Elena Rossi\n"
+        "Granted on 10/03/2027 at 10:00 PM\n"
+        "Change size 1,5 and 1,500\n"
+        "Owner Иван Петров, reviewer Иван Петров\n"
+        "Approved 03/15/2027",
+    )]  # fmt: skip
+    detail = (("User ID", "jsmith"), ("Name", "Rossi, Elena"), ("Granted", "10/03/2027"),
+              ("Approved", "2027-03-15"))  # fmt: skip
+
+    def side(value: str, file: int, quote: str = "", label: str = "Value") -> dict[str, Any]:
+        return {"label": label, "value": value, "file": file, "quote": quote}
+
+    def check(kind: str, left: dict[str, Any], right: dict[str, Any], orders: Any = None) -> Any:
+        [found] = evaluate_checks([{"kind": kind, "left": left, "right": right}], texts, detail,
+                                  orders)  # fmt: skip
+        return found
+
+    # A value is found only as whole tokens.
+    assert not check("equal", side("Lee", 0, "Approved by Ashlee Park"),
+                     side("Lee", -1)).left.verified  # fmt: skip
+    assert not check("equal", side("jsmith", 0, "Requester: jsmith2"),
+                     side("jsmith", -1, "", "User ID")).left.verified  # fmt: skip
+    assert not check("on_or_before", side("2027-03-1", 0, "on 2027-03-15T10:00"),
+                     side("2027-03-15", -1, "", "Approved")).left.verified  # fmt: skip
+    # Separators alone, or a name against an account, cannot be told apart.
+    loose = check("equal", side("j.smith", 0, "Requested by j.smith"),
+                  side("jsmith", -1, "", "User ID"))  # fmt: skip
+    assert loose.holds is None
+    # A "Last, First" name is the same person as "First Last".
+    named = check("equal", side("Elena Rossi", 0, "Approver: Elena Rossi"),
+                  side("Rossi, Elena", -1, "", "Name"))  # fmt: skip
+    assert named.holds is True
+    # Non-Latin names compare as themselves, never as "".
+    cyrillic = check("different", side("Иван Петров", 0, "Owner Иван Петров"),
+                     side("Иван Петров", 0, "reviewer Иван Петров"))  # fmt: skip
+    assert (cyrillic.left.verified, cyrillic.holds) == (True, False)
+    # A date written two ways is the same date.
+    two_ways = check("equal", side("03/15/2027", 0, "Approved 03/15/2027"),
+                     side("2027-03-15", -1, "", "Approved"))  # fmt: skip
+    assert two_ways.holds is True
+    # The same day with a date alone on one side is open; an ISO time is read whole.
+    same_day = check("on_or_before", side("2027-03-15T10:00", 0, "on 2027-03-15T10:00"),
+                     side("2027-03-15", -1, "", "Approved"))  # fmt: skip
+    assert same_day.holds is None
+    # An ambiguous slashed date is read only where its own column tells the order.
+    granted = side("10/03/2027", -1, "", "Granted")
+    approved = side("2027-03-15T10:00", 0, "on 2027-03-15T10:00")
+    assert check("on_or_before", granted, approved).holds is None
+    assert date_orders([(("Granted", "10/03/2027"),)]) == {}
+    day_first = date_orders([(("Granted", "10/03/2027"),), (("Granted", "25/03/2027"),)])
+    assert day_first == {"Granted": "dmy"}
+    assert check("on_or_before", granted, approved, day_first).holds is True
+    # A quoted file's ambiguous slashed date is never read.
+    quoted = check("on_or_before", side("10/03/2027", 0, "Granted on 10/03/2027"),
+                   side("2027-03-15", -1, "", "Approved"), day_first)  # fmt: skip
+    assert quoted.holds is None
+    # A decimal comma is open; grouping in threes is a number.
+    assert check("at_most", side("1,5", 0, "Change size 1,5"),
+                 side("1,500", 0, "and 1,500")).holds is None  # fmt: skip
+
+
+def test_a_not_applicable_with_a_failing_check_goes_to_a_person() -> None:
+    """Critic 13 (19 November 2026). A not applicable whose own comparison does not hold
+    is decided by a person, never turned into a rule-decided exception (the values may be
+    placeholders); before, it stood unchanged."""
+    from ai_workforce_api.testing_checks import apply as apply_checks
+    from ai_workforce_api.testing_checks import evaluate as evaluate_checks
+
+    texts = [("ticket.txt", "Approved on 2027-04-01\nGranted on 2027-03-01")]
+    raw = [{"kind": "on_or_before",
+            "left": {"label": "Approved", "value": "2027-04-01", "file": 0,
+                     "quote": "Approved on 2027-04-01"},
+            "right": {"label": "Granted", "value": "2027-03-01", "file": 0,
+                      "quote": "Granted on 2027-03-01"}}]  # fmt: skip
+    checks = evaluate_checks(raw, texts, ())
+    assert checks[0].holds is False
+    kept = apply_checks({"index": 0, "result": "NOT_APPLICABLE", "note": "No grant."}, checks)
+    assert (kept["result"], kept["rule"]) == ("REVIEW", "NA_CHECK")
+
+
+def test_a_screenshot_review_stands_in_only_once_a_person_decided_it() -> None:
+    """Item 17 with D9 and FO-22 (audit invariants I5, I7; 19 November 2026). The full
+    matrix: a person's decision (accepted or overridden) and conclusion, against the
+    review's answer. Before, the agent's undecided review stood in, an exception in it stood
+    even when the person overrode it to no exception, and an unclear system or period still
+    passed."""
+    ok = [{"check": key, "result": "OK"} for key in ("legibility", "system", "date_period",
+                                                      "editing", "applicability")]  # fmt: skip
+    unclear = [{**check, "result": "UNCLEAR"} if check["check"] == "system" else check
+               for check in ok]  # fmt: skip
+    attributes = ("Minimum length is 12",)
+
+    def outcome(decision: Any, conclusion: Any, answer: str, checks: Any = ok) -> Any:
+        review = {"checks": checks, "decision": decision, "conclusion": conclusion,
+                  "attributes": [{"index": 0, "attribute": attributes[0], "result": answer,
+                                  "observed": "Seen."}]}  # fmt: skip
+        found = from_reviews((ItemFile("s.png", "configuration", "", review),), attributes)
+        return None if found is None else found[0]["result"]
+
+    for answer in ("PASS", "EXCEPTION", "NOT_DETERMINABLE"):
+        assert outcome(None, None, answer) is None
+        for decision in ("ACCEPTED", "OVERRIDDEN"):
+            assert outcome(decision, "CANNOT_CONCLUDE", answer) is None
+            assert outcome(decision, "EXCEPTION", answer) == "REVIEW"
+            expected = "PASS" if answer == "PASS" else "REVIEW"
+            assert outcome(decision, "NO_EXCEPTION", answer) == expected, (decision, answer)
+    # An unclear system holds a pass a person accepted, not one a person overrode.
+    assert outcome("ACCEPTED", "NO_EXCEPTION", "PASS", unclear) == "REVIEW"
+    assert outcome("OVERRIDDEN", "NO_EXCEPTION", "PASS", unclear) == "PASS"
+    issue = [{**check, "result": "ISSUE"} if check["check"] == "editing" else check
+             for check in ok]  # fmt: skip
+    assert outcome("OVERRIDDEN", "NO_EXCEPTION", "PASS", issue) == "REVIEW"
+
+
+def test_no_attribute_is_invented_and_a_sheet_without_one_cannot_conclude() -> None:
+    """FO-21 (audit invariant I1, 19 November 2026). Before, a control with no approved
+    attribute was tested on an invented "The control operated as described", which a tester
+    could pass and the sheet conclude on. Now none is invented, a placeholder that only
+    restates the control is no attribute, and an item with no attribute cannot conclude."""
+    from ai_workforce_api.testing_engine import _attributes
+
+    assert _attributes([]) == []
+    assert _attributes(None) == []
+    assert _attributes(["The control operated as described in the control activity."]) == []
+    assert _attributes(["Access is approved before it is granted."]) == [
+        "Access is approved before it is granted."
+    ]
+    assert conclusion([ItemView(True, True, ())]) == "INCOMPLETE"
+    assert conclusion([ItemView(True, True, ("PASS",))]) == "EFFECTIVE"
+
+
+def test_required_evidence_follows_the_attribute_through_a_rewording(
+    migrated: Database,
+) -> None:
+    """Item 16 (audit invariant I11, 19 November 2026). Before, the plan's REQUIRED
+    evidence was given to an attribute only by its exact wording, so a reworded attribute
+    lost it, and a removed requirement was still given. Now a requirement follows the
+    attribute by its id through the wordings it replaced, and a removed one is left out."""
+    from test_workpapers import _tested_control
+
+    from ai_workforce_api.testing_engine import plan_evidence
+
+    team, client, sheet, _file = _tested_control(migrated, "plan-by-id", sign=False)
+    control = UUID(sheet["control_id"])
+    attributes = tuple(_sheet(client, team)["attributes"])
+    with connect(migrated.url) as connection:
+        before = plan_evidence(connection, UUID(sheet["id"]), control, attributes)
+        index = next(i for i, found in enumerate(before) if found)
+        old = connection.execute(
+            "SELECT id FROM control_attributes WHERE engagement_control_id = %s "
+            "AND status = 'APPROVED' AND text = %s",
+            (control, attributes[index]),
+        ).fetchone()
+        assert old is not None
+        reworded = attributes[index].rstrip(".") + ", as the approved ticket shows."
+        # An approved change, as control_attributes applies one: the old wording retired,
+        # the new one approved in its place.
+        connection.execute(
+            "UPDATE control_attributes SET status = 'RETIRED' WHERE id = %s", (old[0],)
+        )
+        connection.execute(
+            """
+            INSERT INTO control_attributes (
+                organization_id, project_id, engagement_control_id, position, text, status,
+                source_kind, replaces_id
+            )
+            SELECT organization_id, project_id, engagement_control_id, 97, %s, 'APPROVED',
+                   source_kind, id
+            FROM control_attributes WHERE id = %s
+            """,
+            (reworded, old[0]),
+        )
+        connection.commit()
+        renamed = (*attributes[:index], reworded, *attributes[index + 1 :])
+        after = plan_evidence(connection, UUID(sheet["id"]), control, renamed)
+        assert after[index] == before[index]
+        # A removed requirement is not given.
+        connection.execute(
+            "UPDATE evidence_requirements SET status = 'REMOVED' WHERE engagement_control_id = %s "
+            "AND title = %s",
+            (control, before[index][0]["evidence"]),
+        )
+        connection.commit()
+        removed = plan_evidence(connection, UUID(sheet["id"]), control, renamed)
+    assert before[index][0]["evidence"] not in [entry["evidence"] for entry in removed[index]]

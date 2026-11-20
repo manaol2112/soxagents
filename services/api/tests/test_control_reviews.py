@@ -30,10 +30,14 @@ def test_the_reviewer_re_performs_each_result_without_the_testers_answer() -> No
         {"index": 9, "result": "PASS", "note": "No such attribute."},
     ]
     found = disagreements(item, "T-1", finals, reviewed)
+    # Rewritten 19 November 2026 (item 4): old, a reviewer who found an attribute the
+    # tester marked not applicable applies raised an OBSERVATION; new, a SHOULD_FIX.
+    # Reason: a not applicable the reviewer disputes can hide an untested attribute, so it
+    # is addressed before sign-off, not only noted.
     assert [(f.severity, f.target["indexes"]) for f in found] == [
         ("MUST_FIX", [0]),
         ("SHOULD_FIX", [1]),
-        ("OBSERVATION", [2]),
+        ("SHOULD_FIX", [2]),
     ]
     assert found[0].text.startswith(
         "T-1: attribute A is marked passed, but the reviewer found an exception"
@@ -379,12 +383,44 @@ def test_the_reviewer_decides_notes_a_must_fix_reopens_the_work_and_signs_off(
     # read here rather than prepared (rewritten 8 November 2026).
     papers = client.get(f"{base}/workpapers", params={"control_id": sheet["control_id"]}).json()
     assert [w["status"] for w in papers if w["stage"] == "DESIGN"] == ["PREPARED"]
-    signed_off = reviewer.post(
+    # Rewritten 19 November 2026 (FO-1 with UH-9). Old: the review signed with the note
+    # "Reviewed." over a re-performance no model ran (RULES). New: it signs only over a full
+    # re-performance by the agent, or with the reviewer's record that they re-performed the
+    # testing by hand and a note of at least 10 characters saying what, kept on the
+    # coverage. Reason: a review signed over a re-performance nobody did is no independent
+    # re-performance (I13); the sign-off itself is unchanged.
+    assert review["attestation_needed"] is True
+    due = review["reperformance"]["due"]
+    assert (review["reperformance"]["source"], due, review["reperformance"]["done"]) == (
+        "RULES",
+        3,
+        0,
+    )
+    unattested = reviewer.post(
         f"{path}/sign-off", json={"version": review["version"], "note": "Reviewed."}
+    )
+    assert unattested.status_code == 409
+    assert "re-performed 0 of 3 items" in unattested.json()["detail"]
+    short = reviewer.post(
+        f"{path}/sign-off",
+        json={"version": review["version"], "note": "Reviewed.", "reperformed_by_hand": True},
+    )
+    assert short.status_code == 409 and "at least 10 characters" in short.json()["detail"]
+    attested = "Re-performed T-0 to T-2 by hand against the tickets."
+    signed_off = reviewer.post(
+        f"{path}/sign-off",
+        json={"version": review["version"], "note": attested, "reperformed_by_hand": True},
     )
     assert signed_off.status_code == 200, signed_off.text
     review = signed_off.json()
-    assert (review["status"], review["signoff_note"]) == ("SIGNED_OFF", "Reviewed.")
+    assert (review["status"], review["signoff_note"]) == ("SIGNED_OFF", attested)
+    covered = review["coverage"]["reperformance"]
+    assert (covered["by_hand"], covered["items_due"], covered["items_reperformed"]) == (
+        True,
+        3,
+        0,
+    )
+    assert covered["attestation"] == attested and covered["by"] == str(team["reviewer_id"])
     row = _row(client, team, sheet["control_id"])
     assert (row["stage"], row["conclusion"], row["review_left"]) == (
         "CONCLUDED",
@@ -437,8 +473,17 @@ def test_the_console_reads_and_decides_a_review_for_the_person(migrated: Databas
     team, client, sheet, _ticket_file = _prepared_control(migrated, "review-console", "LOG")
     base = _base(team)
     review = client.get(f"{base}/reviews").json()[0]
+    # Rewritten 19 November 2026 (FO-1). Old: the console signed the review off over a
+    # re-performance no model ran (run_reperformance with no provider). New: the model
+    # re-performs every item, since a review signs over a partial or rules-only
+    # re-performance only with the reviewer's record of one by hand, which the console's
+    # sign-off tool does not carry yet (refused, fail closed). Reason: the console path is
+    # tested as before over a full re-performance; the hold is tested in
+    # test_the_review_signs_only_over_a_full_re_performance_or_one_recorded_by_hand.
+    passing = _all_pass(len(sheet["attributes"]))
     with connect(migrated.url) as connection:
-        assert run_reperformance(connection, None, UUID(review["id"])) == "DONE"
+        provider = _Provider([passing, passing, passing])
+        assert run_reperformance(connection, provider, UUID(review["id"])) == "DONE"
 
         def context_for(user_id: UUID) -> ToolContext:
             return ToolContext(
@@ -821,3 +866,375 @@ def test_the_review_waits_while_the_plan_is_revised_and_not_approved(migrated: D
     assert valid.status_code == 200, valid.text
     review = client.get(f"{base}/reviews").json()[0]
     assert impact not in review["blocking"]
+
+
+def _disagreeing(attributes: int) -> dict[str, Any]:
+    """The reviewer finding an exception on attribute A of the first item, every other
+    attribute met: one re-performance note, MUST_FIX."""
+    return {
+        "results": [
+            {
+                "index": 0,
+                "result": "EXCEPTION",
+                "note": "The approver is the requester.",
+                "citations": [{"file": 0, "quote": "Demo Manager"}],
+                "elements": [],
+            },
+            *_all_pass(attributes)["results"][1:],
+        ]
+    }
+
+
+def _proposed(review: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {note["id"]: note for note in review["notes"] if note["status"] == "PROPOSED"}
+
+
+def test_a_run_that_re_performs_nothing_keeps_the_proposed_notes(migrated: Database) -> None:
+    """FO-2 (audit invariants I13, 19 November 2026). Before, every run withdrew every
+    proposed agent note, so a must-fix no person had decided disappeared on a run whose
+    model calls all failed (FALLBACK) or that no model ran (RULES). Now a run withdraws only
+    the notes it raises again: the rules' notes when the rules ran, and a re-performance
+    note only when the model re-performed its item in this run."""
+    team, client, sheet, _file = _prepared_control(migrated, "review-keep-notes", "LOG")
+    base = _base(team)
+    review = client.get(f"{base}/reviews").json()[0]
+    path = f"{base}/reviews/{review['id']}"
+    attributes = len(sheet["attributes"])
+    passing = _all_pass(attributes)
+    with connect(migrated.url) as connection:
+        provider = _Provider([_disagreeing(attributes), passing, passing])
+        assert run_reperformance(connection, provider, UUID(review["id"])) == "DONE"
+    review = client.get(f"{base}/reviews").json()[0]
+    first = _proposed(review)
+    reperformed = {key for key, note in first.items() if "reviewer_result" in note["target"]}
+    rules = set(first) - reperformed
+    assert reperformed and rules
+    assert {first[key]["target"]["source"] for key in reperformed} == {"REPERFORMANCE"}
+    assert {first[key]["target"]["source"] for key in rules} == {"RULES"}
+
+    # Every model call fails, then no model runs: the rules ran again, the model
+    # re-performed nothing.
+    for provider_or_none in (_Provider([None]), None):
+        asked = client.post(f"{path}/reperform", json={"version": review["version"]})
+        assert asked.status_code == 200, asked.text
+        with connect(migrated.url) as connection:
+            assert run_reperformance(connection, provider_or_none, UUID(review["id"])) == "DONE"
+        review = client.get(f"{base}/reviews").json()[0]
+        assert review["reperform_source"] == ("FALLBACK" if provider_or_none else "RULES")
+        again = _proposed(review)
+        assert reperformed <= set(again), "the undecided must-fix is kept"
+        assert not rules & set(again), "the rules' notes are raised again"
+        assert len(set(again) - reperformed) == len(rules)
+
+    # A run the model completes re-performs the item: its note is raised again.
+    asked = client.post(f"{path}/reperform", json={"version": review["version"]})
+    assert asked.status_code == 200, asked.text
+    with connect(migrated.url) as connection:
+        provider = _Provider([_disagreeing(attributes), passing, passing])
+        assert run_reperformance(connection, provider, UUID(review["id"])) == "DONE"
+    review = client.get(f"{base}/reviews").json()[0]
+    last = _proposed(review)
+    assert not reperformed & set(last)
+    assert sorted(n["severity"] for n in last.values() if "reviewer_result" in n["target"]) == (
+        sorted(first[key]["severity"] for key in reperformed)
+    )
+
+
+def _claimed(connection: Any, review_id: UUID, ago: str = "0 seconds") -> Any:
+    """The review claimed for a run, as run_reperformance claims it: its start returned."""
+    row = connection.execute(
+        "UPDATE control_reviews SET reperform_status = 'WORKING', "
+        "reperform_started_at = clock_timestamp() - %s::interval WHERE id = %s "
+        "RETURNING reperform_started_at",
+        (ago, review_id),
+    ).fetchone()
+    connection.commit()
+    assert row is not None
+    return row[0]
+
+
+def test_a_run_that_lost_its_claim_changes_nothing(migrated: Database) -> None:
+    """FO-2 (19 November 2026). Before, _finish withdrew and wrote the notes before it
+    checked the claim, and checked only that the review was WORKING: a run whose lease
+    another run had taken, or one cancelled, still rewrote the notes. Now the claim is taken
+    first, against the run's own start, and a stale run records nothing."""
+    from ai_workforce_api.control_reviews import Finding, RunRecord, _finish
+
+    team, client, _sheet_body, _file = _prepared_control(migrated, "review-stale", "LOG")
+    review_id = UUID(client.get(f"{_base(team)}/reviews").json()[0]["id"])
+    stale = Finding("GENERAL", {}, "MUST_FIX", "A stale run's note.")
+    with connect(migrated.url) as connection:
+        assert run_reperformance(connection, None, review_id) == "DONE"
+        before = connection.execute(
+            "SELECT id, status FROM review_notes WHERE control_review_id = %s ORDER BY id",
+            (review_id,),
+        ).fetchall()
+        first = _claimed(connection, review_id, "1 hour")
+        # A second run reclaims the review after the first one's lease ran out.
+        second = _claimed(connection, review_id)
+        recorded = _finish(
+            connection, review_id, 1, "MODEL", "", None, [stale],
+            started_at=first, run=RunRecord(rules_ran=True, due=()),
+        )  # fmt: skip
+        assert recorded is False
+        after = connection.execute(
+            "SELECT id, status FROM review_notes WHERE control_review_id = %s ORDER BY id",
+            (review_id,),
+        ).fetchall()
+        assert after == before
+        status = connection.execute(
+            "SELECT reperform_status FROM control_reviews WHERE id = %s", (review_id,)
+        ).fetchone()
+        assert status == ("WORKING",)
+        assert _finish(
+            connection, review_id, 1, "MODEL", "", None, [stale],
+            started_at=second, run=RunRecord(rules_ran=True, due=()),
+        )  # fmt: skip
+
+
+def test_notes_over_the_cap_keep_the_most_severe_and_count_the_rest(migrated: Database) -> None:
+    """FO-2 (19 November 2026). Before, findings[:MAX_NOTES] kept the first 200 raised, the
+    rules' first, so must-fix disagreements past them were dropped without a trace. Now the
+    most severe are kept, and the run records how many it dropped."""
+    from ai_workforce_api.control_reviews import MAX_NOTES, Finding, RunRecord, _finish
+
+    team, client, _sheet_body, _file = _prepared_control(migrated, "review-cap", "LOG")
+    review_id = UUID(client.get(f"{_base(team)}/reviews").json()[0]["id"])
+    findings = [
+        Finding("GENERAL", {}, "OBSERVATION", f"Observation {n}.") for n in range(MAX_NOTES)
+    ] + [Finding("GENERAL", {}, "MUST_FIX", "The must-fix raised last.")]
+    version = _sheet(client, team)["version"]
+    with connect(migrated.url) as connection:
+        started = _claimed(connection, review_id)
+        assert _finish(
+            connection, review_id, version, "RULES", "", None, findings,
+            started_at=started, run=RunRecord(rules_ran=True, due=()),
+        )  # fmt: skip
+        severities = [
+            row[0]
+            for row in connection.execute(
+                "SELECT severity FROM review_notes WHERE control_review_id = %s "
+                "AND status = 'PROPOSED'",
+                (review_id,),
+            ).fetchall()
+        ]
+        payload = connection.execute(
+            "SELECT payload FROM audit_events WHERE target_id = %s "
+            "AND action = 'review.reperformed' ORDER BY created_at DESC LIMIT 1",
+            (review_id,),
+        ).fetchone()
+    assert len(severities) == MAX_NOTES and "MUST_FIX" in severities
+    assert payload is not None and payload[0]["dropped"] == 1
+    # Any drop holds the sign-off: the review cannot show every note it raised.
+    review = client.get(f"{_base(team)}/reviews").json()[0]
+    assert "1 reviewer agent note over the limit of 200 was not recorded" in review["blocking"]
+
+
+def test_the_review_signs_only_over_a_full_re_performance_or_one_recorded_by_hand(
+    migrated: Database,
+) -> None:
+    """FO-1 with UH-9 (audit invariant I13, 19 November 2026). Before, the review signed
+    over a re-performance whose model calls all failed (FALLBACK), that no model ran
+    (RULES), that the model did in part, or that read no signed sheet (a missing reviewed
+    version skipped the version check). Now the run's typed record says how many items were
+    due and re-performed, and the review needs the reviewer's record of a re-performance by
+    hand unless the agent re-performed them all; a design not effective, where nothing was
+    tested, and a sheet with nothing to re-perform need none."""
+    from ai_workforce_api.control_reviews import ReperformanceBody, needs_attestation
+
+    full = ReperformanceBody(known=True, source="MODEL", due=3, done=3)
+    assert needs_attestation(True, full) is False
+    assert needs_attestation(True, ReperformanceBody(source="SEEDED")) is False
+    assert needs_attestation(False, ReperformanceBody()) is False  # D&I not effective
+    assert needs_attestation(True, ReperformanceBody(known=True, source="RULES")) is False
+    for partial in (
+        ReperformanceBody(known=True, source="MODEL", due=3, done=2),
+        ReperformanceBody(known=True, source="MODEL", due=40, done=30, capped=True),
+        ReperformanceBody(known=True, source="FALLBACK", due=3),
+        ReperformanceBody(known=True, source="RULES", due=3),
+        ReperformanceBody(source="MODEL"),  # re-performed before the record was kept
+    ):
+        assert needs_attestation(True, partial) is True, partial
+
+    team, client, sheet, _file = _prepared_control(migrated, "review-attest", "LOG")
+    base = _base(team)
+    review = client.get(f"{base}/reviews").json()[0]
+    path = f"{base}/reviews/{review['id']}"
+    attributes = len(sheet["attributes"])
+    passing = _all_pass(attributes)
+    rejected = {"results": [{"index": 99, "result": "PASS", "note": "x"}]}
+    runs: list[tuple[list[dict[str, Any] | None], str, int, bool]] = [
+        ([None], "FALLBACK", 0, True),
+        ([passing, rejected, rejected], "MODEL", 1, True),
+        ([passing, passing, passing], "MODEL", 3, False),
+    ]
+    for outputs, source, done, attest in runs:
+        if review["reperform_state"] != "QUEUED":
+            asked = client.post(f"{path}/reperform", json={"version": review["version"]})
+            assert asked.status_code == 200, asked.text
+        with connect(migrated.url) as connection:
+            assert run_reperformance(connection, _Provider(outputs), UUID(review["id"])) == "DONE"
+        review = client.get(f"{base}/reviews").json()[0]
+        record = review["reperformance"]
+        assert (record["known"], record["source"], record["due"], record["done"]) == (
+            True,
+            source,
+            3,
+            done,
+        )
+        assert review["attestation_needed"] is attest
+        assert (review["failure_note"] != "") is attest
+    # A run that read no signed sheet re-performed nothing: the version is not skipped.
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE control_reviews SET sheet_version_reviewed = NULL WHERE id = %s",
+            (UUID(review["id"]),),
+        )
+        connection.commit()
+    review = client.get(f"{base}/reviews").json()[0]
+    assert "the testing has not been re-performed" in review["blocking"]
+
+
+def test_the_disagreement_table_covers_every_reachable_pair() -> None:
+    """Item 4 and UH-4 (audit invariant I13, 19 November 2026). Before, a reviewer who
+    could not conclude (UNABLE or REVIEW) on a tester's not applicable or exception raised
+    nothing, and the reason of a note was the pair's alone, so an attribute the reviewer
+    left out read as a finding on the evidence. Now every pair where the tester's final is
+    decided (a pass, an exception, not applicable: what a signed sheet holds) and the
+    reviewer's differs raises a note, and its reason follows the typed rule."""
+    item = UUID("01a12dd4-0000-7000-8000-000000000002")
+    decided = ("PASS", "EXCEPTION", "NOT_APPLICABLE")
+    results = ("PASS", "EXCEPTION", "UNABLE", "REVIEW", "NOT_APPLICABLE")
+    for final in decided:
+        for reviewer in results:
+            if reviewer == final:
+                continue
+            found = disagreements(
+                item, "T-1", [final], [{"index": 0, "result": reviewer, "note": "x"}]
+            )
+            assert len(found) == 1, (final, reviewer)
+    left_out = disagreements(
+        item, "T-1", ["PASS"], [{"index": 0, "result": "UNABLE", "rule": "OMITTED"}]
+    )
+    assert "the reviewer gave no result for it" in left_out[0].text
+    unshown = disagreements(
+        item, "T-1", ["PASS"], [{"index": 0, "result": "UNABLE", "rule": "ELEMENT_GAP"}]
+    )
+    assert "could not show each element" in unshown[0].text
+    plain = disagreements(item, "T-1", ["PASS"], [{"index": 0, "result": "UNABLE"}])
+    assert "found the evidence insufficient" in plain[0].text
+
+
+def test_the_review_waits_on_urgent_workpaper_notes(migrated: Database) -> None:
+    """Item 19, OE part (19 November 2026). Before, an urgent review note open on the
+    prepared effectiveness workpaper held that workpaper's own sign-off but not the
+    control's review, which signed off over it. Now the review waits for it too."""
+    team, client, _sheet_body, _file = _prepared_control(migrated, "review-urgent", "LOG")
+    base = _base(team)
+    paper = next(
+        w
+        for w in client.get(
+            f"{base}/workpapers", params={"control_id": _sheet_body["control_id"]}
+        ).json()
+        if w["stage"] == "EFFECTIVENESS"
+    )
+    held = "effectiveness workpaper: clear or dismiss the urgent review notes first (1)"
+    assert held not in client.get(f"{base}/reviews").json()[0]["blocking"]
+    with connect(migrated.url) as connection:
+        connection.execute(
+            """
+            INSERT INTO workpaper_review_notes (
+                organization_id, project_id, workpaper_id, number, anchor_kind,
+                workpaper_version, text, criticality, owner_id, raised_by
+            )
+            VALUES (%s, %s, %s, 1, 'WORKPAPER', 1, 'Explain the population source.', 'URGENT',
+                    %s, %s)
+            """,
+            (team["org"], team["project"], UUID(paper["id"]), team["owner_id"],
+             team["reviewer_id"]),
+        )  # fmt: skip
+        connection.commit()
+    assert held in client.get(f"{base}/reviews").json()[0]["blocking"]
+
+
+def _facts(prompt: str) -> dict[str, Any]:
+    """The control-and-item facts a tester's or re-performer's prompt carries."""
+    import json
+
+    start = prompt.index("<control_and_item>") + len("<control_and_item>")
+    end = prompt.index("</control_and_item>")
+    found: dict[str, Any] = json.loads(prompt[start:end])
+    return found
+
+
+def test_the_re_performer_reads_the_testers_criteria_and_basis(migrated: Database) -> None:
+    """Item 8 (audit invariant I11, 19 November 2026). Before, the re-performer was given
+    neither the attributes' library definitions nor a person's owned criteria, the design or
+    the walkthrough, and was told to re-perform by a replace on the tester's first sentence
+    (which a rewording would silently undo). Now it reads the basis the tester's own builder
+    gives (testing_basis), the period as the tester reads it, a typed re-perform instruction,
+    and its call records the basis re-performed as the tester's call does."""
+    from ai_workforce_api.pbc_drafting import load_context
+    from ai_workforce_api.testing_engine import testing_basis
+
+    team, client, sheet, _file = _prepared_control(migrated, "review-basis", "LOG")
+    review = client.get(f"{_base(team)}/reviews").json()[0]
+    control = UUID(sheet["control_id"])
+    attributes = tuple(sheet["attributes"])
+    provider = _Provider([_all_pass(len(attributes))])
+    with connect(migrated.url) as connection:
+        basis = testing_basis(connection, control, attributes)
+        period = load_context(connection, UUID(str(team["project"])), control).period
+        assert run_reperformance(connection, provider, UUID(review["id"])) == "DONE"
+        inputs = connection.execute(
+            "SELECT inputs FROM model_calls WHERE target_id = %s ORDER BY created_at LIMIT 1",
+            (UUID(review["id"]),),
+        ).fetchone()
+    assert any(basis.definitions) or basis.design or basis.walkthrough, "a basis to read"
+    prompt = provider.requests[0].prompt
+    assert prompt.startswith("Re-perform the test of this item against each attribute.")
+    facts = _facts(prompt)
+    assert facts["audit_period"] == period
+    assert facts["control"].get("design") == (basis.design or None)
+    for index, entry in enumerate(facts["attributes"]):
+        assert entry.get("definition") == (basis.definitions[index] or None), index
+        assert entry.get("tailored_criteria") == (basis.tailored[index] or None), index
+    assert "mapped_passages" not in prompt
+    assert inputs is not None
+    assert {"criteria_sha256", "attribute_basis"} <= set(inputs[0])
+    assert len(inputs[0]["attribute_basis"]) == len(attributes)
+
+
+def test_the_weakest_supported_items_are_re_performed_first() -> None:
+    """Critic 8 (19 November 2026). Before, a capped re-performance took the first
+    MAX_REVIEWED_ITEMS items in sheet order. Now the items whose results rest most thinly
+    on the evidence (a person's override, a final not applicable, a pass on one citation or
+    a box alone, a rule check that failed) come first; ties keep the sheet's order; an item
+    not tested or without files is not due."""
+    from ai_workforce_api.control_reviews import reperform_order
+    from ai_workforce_api.test_sheets import CellBody, ItemBody, ItemFileBody
+
+    two = [{"file": 0, "quote": "Approved by Demo Manager"}, {"file": 0, "quote": "Ticket 7"}]
+
+    def make(n: int, state: str = "TESTED", files: bool = True, **fields: Any) -> ItemBody:
+        cell = CellBody(index=0, proposed="PASS", note="", final="PASS", override_reason="",
+                        overridden_by=None, citations=two)  # fmt: skip
+        return ItemBody(
+            id=UUID(int=n), position=n, label=f"S-{n}", detail=[],
+            files=[ItemFileBody(id=UUID(int=100 + n), file_name="t.txt")] if files else [],
+            state=state, source="MODEL", note="", version=1,  # type: ignore[arg-type]
+            cells=[cell.model_copy(update=fields)],
+        )  # fmt: skip
+
+    strong = make(1)
+    overridden = make(2, overridden_by="a person", final="EXCEPTION", proposed="PASS")
+    one_cite = make(3, citations=two[:1])
+    box_only = make(4, citations=[two[0], {"file": 0, "quote": "", "box": [0, 0, 1, 1]}])
+    not_tested = make(5, state="WAITING")
+    no_files = make(6, files=False)
+    strong_two = make(7)
+    na = make(8, final="NOT_APPLICABLE", proposed="NOT_APPLICABLE")
+    ordered = reperform_order(
+        [strong, overridden, one_cite, box_only, not_tested, no_files, strong_two, na]
+    )
+    assert [found.position for found in ordered] == [2, 3, 4, 8, 1, 7]

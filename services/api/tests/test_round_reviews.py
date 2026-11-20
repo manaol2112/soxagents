@@ -109,9 +109,15 @@ def _sign_review(
             )
             assert decided.status_code == 200, decided.text
             review = decided.json()
+    # Rewritten 20 November 2026 (FO-1, audit invariant I13). Old: the review signed over a
+    # re-performance no model ran (RULES). New: such a sign-off records that the reviewer
+    # re-performed the testing by hand, with a note of what. Reason: a review signs only over a
+    # full agent re-performance or the reviewer's own; what this helper sets up is unchanged.
     signed = reviewer.post(
-        f"{path}/sign-off", json={"version": review["version"], "note": "Reviewed."}
-    )
+        f"{path}/sign-off",
+        json={"version": review["version"], "note": "Re-performed every item by hand.",
+              "reperformed_by_hand": True},
+    )  # fmt: skip
     assert signed.status_code == 200, signed.text
     body: dict[str, Any] = signed.json()
     return body
