@@ -1456,3 +1456,30 @@ def test_a_plan_too_long_for_the_prompt_is_worded_by_the_plan_without_a_model_ca
     )
     wording = _wording(migrated, request)
     assert all(f"Signed access approval for site {n}" in wording for n in range(9))
+
+
+def test_the_mapping_check_says_only_what_it_checks() -> None:
+    """The approval panel's "Mapped to the test plan" check reads the request's
+    requirements, not its wording, so it never says the wording is traced (one screen, one
+    story). Old (to 19 November 2026): "2 planned items, each traced to the test plan.";
+    new: what is checked, by phase; why: owner decision 19 November 2026 (FO-28), a model
+    draft or a person's edit could leave a planned item out of the wording."""
+    from ai_workforce_api.request_quality import quality_from
+
+    rows = [
+        (uuid4(), "E1", "Signed approval", ["CONTROL_EXECUTION"], None, None, False, True),
+        (uuid4(), "E2", "Access policy", ["PROCESS_DOCUMENTATION"], None, None, False, False),
+    ]
+
+    def mapping(phase: str) -> str:
+        checks = quality_from(
+            uuid4(), uuid4(), phase, "Please send the approval.", "DRAFT", rows, None, False
+        )
+        return next(check.detail for check in checks if check.key == "mapping")
+
+    assert mapping("INTERIM") == (
+        "2 planned items from the test plan. Each item that evidences an attribute is "
+        "linked to an approved attribute."
+    )
+    assert mapping("DESIGN") == "2 planned items from the test plan."
+    assert "traced" not in mapping("INTERIM") + mapping("DESIGN")

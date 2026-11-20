@@ -244,6 +244,12 @@ def quality_from(
         for row in items
         if set(row[3]) & EVIDENCES_ATTRIBUTES and not row[7] and phase != "DESIGN"
     ]
+    # It says only what it checks: the request's planned items, not its wording, which a
+    # person's edit can change (FO-28; old, to 19 November 2026: "each traced to the test
+    # plan", which the wording did not have to be).
+    planned = f"{len(items)} planned item{'s' if len(items) != 1 else ''} from the test plan."
+    if phase != "DESIGN":
+        planned += " Each item that evidences an attribute is linked to an approved attribute."
     checks.append(
         Check(
             key="mapping",
@@ -253,8 +259,7 @@ def quality_from(
                 f"{unmapped[0]} evidences no approved attribute of the test plan. Link it in "
                 "the test plan first."
                 if unmapped
-                else f"{len(items)} planned item{'s' if len(items) != 1 else ''}, each traced "
-                "to the test plan."
+                else planned
                 if items
                 else "Written request: no planned item."
             ),
