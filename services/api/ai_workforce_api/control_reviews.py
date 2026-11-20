@@ -720,7 +720,7 @@ def endorsed(
             verified = (
                 status == "SHOWN"
                 and len(cited) == len(files)
-                and bool(check_citations([citation], cited))
+                and bool(check_citations([citation], cited, supports=True))
                 and not _untrusted_passage(citation, files)
             )
             elements.append({

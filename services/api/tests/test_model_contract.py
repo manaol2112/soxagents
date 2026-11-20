@@ -643,7 +643,12 @@ CASES: dict[tuple[str, Behaviour], Case] = {
     ("evidence_analysis:run_analysis", B.UNKNOWN_IDS): Case(
         _reader, ("NOT_COVERED",), ("COVERED",)
     ),
-    ("evidence_review:run_review", B.EMPTY): Case(_screenshot, "CANNOT_CONCLUDE", "NO_EXCEPTION"),
+    # Dated note (FO-22, 20 November 2026): old, an empty answer had its checks filled in
+    # as unclear and closed as CANNOT_CONCLUDE; new, an answer that leaves a check out is
+    # rejected and no review is kept, so a person reviews the screenshot (NO_REVIEW, the
+    # malformed answer's state); why, a check the agent never made is not its answer. The
+    # cell stays fail closed against the same favourable control.
+    ("evidence_review:run_review", B.EMPTY): Case(_screenshot, "NO_REVIEW", "NO_EXCEPTION"),
     ("evidence_review:run_review", B.MALFORMED): Case(
         _screenshot, "NO_REVIEW", "NO_EXCEPTION", "MALFORMED"
     ),

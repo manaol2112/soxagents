@@ -817,3 +817,25 @@ def test_a_reviewer_that_cannot_show_the_elements_raises_every_planted_pass(
         # exceptions are left to the rules and a person, not raised on its word.
         assert {m["planted"] for m in found["missed"]} <= {"FALSE_EXCEPTION"}
     assert caught == sum(v == "FALSE_PASS" for v in plan.values()) == 16
+
+
+def test_a_negated_passage_shows_no_element() -> None:
+    """Review N-a (audit invariants I6, I10; 20 November 2026). Before, an element marked
+    SHOWN with "was not approved by the line manager" verified, so the re-performance
+    endorsed a pass on the file's denial. Now the passage shows nothing and the pass is
+    not endorsed."""
+    from ai_workforce_api.control_reviews import endorsed
+    from ai_workforce_api.testing_engine import ItemFile
+
+    text = "Access was not approved by the line manager on 2027-06-03\n"
+    files = (ItemFile("ticket.txt", "other", text, None, uuid4()),)
+    for quote in ("was not approved by the line manager", "approved by the line manager"):
+        kept = endorsed(
+            [{"index": 0, "result": "PASS", "note": "Approved.", "citations": [{}]}],
+            {"results": [{"index": 0, "elements": [
+                {"element": "the approval", "status": "SHOWN", "file": 0, "quote": quote}
+            ]}]},
+            files,
+        )  # fmt: skip
+        assert kept[0]["elements"][0]["verified"] is False, quote
+        assert kept[0]["result"] == "UNABLE", quote

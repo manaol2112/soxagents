@@ -684,7 +684,9 @@ def check_results(
         if parsed.index < attributes and parsed.index not in by_index:
             by_index[parsed.index] = parsed
             if len(cited) == len(files):
-                citations[parsed.index] = check_citations(data.get("citations"), cited)
+                citations[parsed.index] = check_citations(
+                    data.get("citations"), cited, supports=parsed.result != "EXCEPTION"
+                )
             extra[parsed.index] = {
                 key: _clean(str(data.get(key) or ""), 400)
                 for key in ("observed", "expected", "limitations")
