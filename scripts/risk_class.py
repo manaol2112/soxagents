@@ -253,23 +253,21 @@ def dependabot_exempt(
 ) -> bool:
     """Owner decision M3: every change modifies a dependency file, or a workflow's `uses:`
     pins only. Anything else (an added, deleted or renamed file, any other line) is handled
-    as any pull request is."""
+    as any pull request is. Both the base and the head mapping must exempt a path, and a
+    path that either marks "pins" needs a pins-only diff."""
     if not changes:
         return False
     for change in changes:
         if change.status != "M":
             return False
         path = change.paths[0]
-        kinds = {rule.dependabot for m in mappings for rule in m.rules if rule.matches(path)} - {
-            None
-        }
-        others = any(
-            rule.matches(path) and rule.dependabot is None and rule.level == HIGH
-            for m in mappings
-            for rule in m.rules
-        )
-        if others or not kinds:
-            return False
+        kinds: set[str] = set()
+        for mapping in mappings:  # the stricter of base and head: each must exempt the path
+            matching = [rule for rule in mapping.rules if rule.matches(path)]
+            found = {rule.dependabot for rule in matching if rule.dependabot is not None}
+            if not found or any(r.dependabot is None and r.level == HIGH for r in matching):
+                return False
+            kinds |= found
         if kinds == {"any"}:
             continue
         if not only_pin_lines(repo.file_diff(base, head, path)):
