@@ -907,8 +907,8 @@ def _sheet(connection: psycopg.Connection[Any], project_id: UUID, sheet_id: UUID
         blocking.append(
             _items(
                 out_of_date,
-                "was tested against attributes or criteria that changed since: test it again",
-                "were tested against attributes or criteria that changed since: test them again",
+                "was tested before the attributes or criteria changed: test it again",
+                "were tested before the attributes or criteria changed: test them again",
             )
         )
     if counts["no_evidence"]:

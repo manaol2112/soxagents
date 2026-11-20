@@ -1288,11 +1288,13 @@ def phase_word(phase: str) -> str:
 
 
 # A phase the plan leaves PENDING (FP-7): what its status says and what it waits for.
-UNDECIDED_LABEL = "Whether it applies is undecided"
+# The label is the test plan's own word for a PENDING phase (evidence-plan-model.ts
+# APPLICABILITY_LABELS), so the Phases view and the plan say the same thing.
+UNDECIDED_LABEL = "Pending determination"
 
 
 def undecided_wait(phase: str) -> str:
-    return f"Decide whether the {phase_word(phase)} phase applies."
+    return f"Decide in the test plan whether the {phase_word(phase)} phase applies."
 
 
 def request_released(

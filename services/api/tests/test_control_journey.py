@@ -481,7 +481,9 @@ def test_the_journey_agrees_with_the_register_wherever_it_does_not_report_a_conf
                 not_final=[
                     NotFinal(
                         kind="DESIGN",
-                        text="D&I conclusion no longer holds: a design deficiency was logged "
+                        # Reworded 19 November 2026 (E3 design review): "no longer holds"
+                        # became "out of date"; the step follows the typed fields.
+                        text="D&I conclusion out of date: a design deficiency was logged "
                         "after the sign-off",
                         step="REVIEW",
                         phase="DESIGN",
@@ -937,7 +939,9 @@ def test_an_effective_d_and_i_sign_off_out_of_date_keeps_the_conclusion_open() -
     assert [(r.kind, r.text, r.step, r.phase) for r in finality(lapsed).reasons] == [
         (
             "DESIGN",
-            "D&I conclusion no longer holds: a design deficiency was logged after the sign-off",
+            # Reworded 19 November 2026 (E3 design review): old "D&I conclusion no longer
+            # holds: ..."; new "D&I conclusion out of date: ...", the same reason.
+            "D&I conclusion out of date: a design deficiency was logged after the sign-off",
             "REVIEW",
             "DESIGN",
         )

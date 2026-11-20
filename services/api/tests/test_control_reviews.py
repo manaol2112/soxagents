@@ -742,10 +742,10 @@ def test_an_undecided_deficiency_proposal_holds_the_review(migrated: Database) -
     )
     assert prepared.status_code == 200, prepared.text
     review = client.get(f"{base}/reviews").json()[0]
-    held = (
-        "the proposed deficiency is not logged or dismissed yet: decide it on the test sheet "
-        "before the testing is re-performed"
-    )
+    # Reworded 19 November 2026 (E3 design review): old "the proposed deficiency is not
+    # logged or dismissed yet: decide it on the test sheet before the testing is
+    # re-performed"; new, the same hold without a second colon inside "Before sign-off:".
+    held = "the proposed deficiency is not yet logged or dismissed on the test sheet"
     assert held in review["blocking"]
     reviewer = _session(migrated, team["reviewer_id"])
     refused = reviewer.post(f"{base}/reviews/{review['id']}/sign-off", json={"version": 1})
@@ -799,10 +799,10 @@ def test_the_review_waits_while_the_plan_is_revised_and_not_approved(migrated: D
     )
     assert approved.status_code == 200, approved.text
     review = client.get(f"{base}/reviews").json()[0]
-    impact = (
-        "1 signed-off result predates the plan's approved revision: a reviewer decides the "
-        "impact assessment first"
-    )
+    # Reworded 19 November 2026 (E3 design review): old "1 signed-off result predates the
+    # plan's approved revision: a reviewer decides the impact assessment first"; new, the
+    # same hold said once, without a second colon.
+    impact = "1 signed-off result awaits a reviewer's impact decision"
     assert "approve the test plan first" not in review["blocking"]
     assert impact in review["blocking"]
     refused = reviewer.post(

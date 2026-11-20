@@ -442,9 +442,11 @@ def test_an_open_sheet_follows_reapproved_attributes_and_signs_off_only_after_re
     current = next(
         s for s in client.get(f"{_base(team)}/test-sheets").json() if s["id"] == sheet["id"]
     )
+    # Reworded 19 November 2026 (E3 design review): old "... were tested against
+    # attributes or criteria that changed since: test them again"; new, the same count.
     line = (
-        f"{len(current['items'])} items were tested against attributes or criteria that "
-        "changed since: test them again"
+        f"{len(current['items'])} items were tested before the attributes or criteria "
+        "changed: test them again"
     )
     assert line in current["blocking"] and current["counts"]["out_of_date"] == len(current["items"])
     assert current["proposed_conclusion"] == "INCOMPLETE"

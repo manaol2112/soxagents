@@ -2,6 +2,7 @@
 8 November 2026: "the agent proposes, a person rates"; "OE can't start if design is
 failing")."""
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
@@ -427,6 +428,11 @@ def test_an_undecided_phase_holds_the_proposal_and_never_reads_does_not_apply() 
     # An undecided D&I phase holds an effective proposal as well.
     proposed, _, waiting, _ = propose(_facts(undecided=("DESIGN",)))
     assert proposed is None and waiting == ["it is decided whether D&I testing applies"]
+    # Several undecided phases are said in one clause, in the phases' order (E3 design
+    # review, 19 November 2026; before, one clause each).
+    proposed, _, waiting, _ = propose(_facts(undecided=("ROLLFORWARD", "DESIGN")))
+    assert proposed is None
+    assert waiting == ["it is decided whether D&I and roll-forward testing apply"]
 
 
 _T1 = datetime(2026, 10, 1, tzinfo=UTC)
@@ -489,8 +495,11 @@ def test_a_signed_review_is_final_only_with_finality_and_the_verdict_it_signed()
     # The records now propose another verdict than the review signed: the review is owed.
     found = _signed_conclusion(_final_facts(), "NOT_EFFECTIVE")
     assert found.status == "PROPOSED" and found.final is None
+    # Reworded 19 November 2026 (E3 design review): old "Conclusion changed since the
+    # review signed it: review outstanding"; new, the same reason said without "changed
+    # since", which read as a coverage gap that a coverage assessment could clear.
     assert [(r.kind, r.text) for r in found.reasons] == [
-        ("REVIEW", "Conclusion changed since the review signed it: review outstanding")
+        ("REVIEW", "Conclusion differs from the one the review signed: review outstanding")
     ]
     # The register shows not effective: the records propose it (an OE deficiency logged
     # after the sign-off). Rewritten 19 November 2026 (ST-2, one screen one story, product
@@ -536,8 +545,9 @@ def test_a_signed_review_is_final_only_with_finality_and_the_verdict_it_signed()
     )
     found = _signed_conclusion(closed, "EFFECTIVE")
     assert found.status == "PROPOSED" and found.final is None
+    # Reworded 19 November 2026 (E3 design review), as above.
     assert [r.text for r in found.reasons] == [
-        "Conclusion changed since the review signed it: review outstanding"
+        "Conclusion differs from the one the review signed: review outstanding"
     ]
     # Once a review signed after the closure records the verdict, it is final.
     reviewed = _final_facts(
@@ -598,9 +608,60 @@ def test_a_review_signed_before_verdicts_were_marked_rests_on_finality() -> None
     )  # fmt: skip
     found = _signed_conclusion(marked_none, "EFFECTIVE")
     assert found.status == "PROPOSED"
+    # Reworded 19 November 2026 (E3 design review), as above.
     assert [r.text for r in found.reasons] == [
-        "Conclusion changed since the review signed it: review outstanding"
+        "Conclusion differs from the one the review signed: review outstanding"
     ]
+
+
+def test_only_the_gaps_a_coverage_assessment_clears_are_typed_as_coverage() -> None:
+    """E3 design review (19 November 2026). The web read which reasons were coverage gaps
+    from their wording, so a conclusion that moved since the review signed it ("changed
+    since ... review") was offered "It covers them (COVERS)", which can never clear it:
+    only a review signed on the records as they are does. Now each reason says so in a
+    typed field, `coverage`, set on exactly the reasons a reviewer's coverage assessment
+    clears, and on no other."""
+    # The verdict moved since the review signed it: a review reason, never coverage.
+    moved = _signed_conclusion(_final_facts(), "NOT_EFFECTIVE")
+    assert [(r.kind, r.coverage) for r in moved.reasons] == [("REVIEW", False)]
+    # A coverage assessment does not clear it.
+    assessed = _signed_conclusion(_final_facts(coverage_assessed=True), "NOT_EFFECTIVE")
+    assert [(r.text, r.coverage) for r in assessed.reasons] == [
+        ("Conclusion differs from the one the review signed: review outstanding", False)
+    ]
+    rolled = RoundFacts(
+        kind="ROLLFORWARD", status="SIGNED_OFF", conclusion="EFFECTIVE",
+        review_status="SIGNED_OFF", sheet_version=3, covered_version=2,
+        review_signed_at=_T2, review_coverage={"sheet_version": 2, "conclusion": "EFFECTIVE"},
+    )  # fmt: skip
+    gaps = {
+        "a later sheet version": _final_facts(sheet_version=4),
+        "no version recorded": _final_facts(review_coverage={"workpapers": []}),
+        "a later workpaper": _final_facts(workpaper_versions={"INTERIM": 2}),
+        "signed after the review": _final_facts(sheet_signed_at=_T4),
+        "prepared after the review": _final_facts(design_prepared_at=_T4),
+    }
+    for name, facts in gaps.items():
+        reasons = finality(facts).reasons
+        assert reasons and all(r.kind == "REVIEW" and r.coverage for r in reasons), name
+        # Exactly what a coverage assessment clears.
+        assert finality(replace(facts, coverage_assessed=True)).final is True, name
+    round_gap = [r for r in finality(_final_facts(rounds=(rolled,))).reasons if r.coverage]
+    assert [(r.phase, r.coverage) for r in round_gap] == [("ROLLFORWARD", True)]
+    assessed_round = replace(rolled, coverage_assessed=True)
+    assert not [r for r in finality(_final_facts(rounds=(assessed_round,))).reasons if r.coverage]
+    # Nothing else is coverage: a review not signed, a lapsed D&I sign-off, an undecided
+    # phase, outstanding testing.
+    others = (
+        _final_facts(review_status="OPEN", review_coverage=None),
+        _final_facts(design_out_of_date=("a design deficiency was logged after the sign-off",)),
+        _final_facts(applicability={"DESIGN": "APPLICABLE", "INTERIM": "APPLICABLE",
+                                    "ROLLFORWARD": "PENDING"}),
+        _final_facts(sheet_status="OPEN"),
+    )  # fmt: skip
+    for facts in others:
+        reasons = finality(facts).reasons
+        assert reasons and not any(r.coverage for r in reasons), [r.text for r in reasons]
 
 
 def test_a_d_and_i_sign_off_that_lapses_after_a_full_sign_off_takes_the_conclusion_off_final(
@@ -637,9 +698,14 @@ def test_a_d_and_i_sign_off_that_lapses_after_a_full_sign_off_takes_the_conclusi
     assert row["final"] is False
     design = next(r for r in row["not_final"] if r["kind"] == "DESIGN")
     assert (design["step"], design["phase"]) == ("REVIEW", "DESIGN")
+    # Reworded 19 November 2026 (E3 design review): old "D&I conclusion no longer holds:
+    # ..."; new "D&I conclusion out of date: ...", the same reason; the typed fields route
+    # it (DESIGN at REVIEW), never the wording.
     assert design["text"] == (
-        "D&I conclusion no longer holds: a design deficiency was logged after the sign-off"
+        "D&I conclusion out of date: a design deficiency was logged after the sign-off"
     )
+    # The API says it is not a coverage gap, in the typed field the web reads.
+    assert design["coverage"] is False
     # The register and the export do not read Effective once the records stop supporting
     # it: no D&I verdict holds (one screen one story, ST-2).
     assert row["conclusion"] == "NOT_CONCLUDED"

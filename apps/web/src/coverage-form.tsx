@@ -13,12 +13,16 @@ export function CoverageForm({
   review,
   ids,
   gap,
+  held = "",
   canAct,
 }: {
   review: ControlReview;
   ids: Ids;
   /** Why coverage is in question, in the journey's words; "" when it is not. */
   gap: string;
+  /** What holds the signed review that a coverage assessment does not clear, in the
+   * journey's words; "" when nothing does. Said, never offered a coverage decision. */
+  held?: string;
   canAct: boolean;
 }) {
   if (review.status !== "SIGNED_OFF") {
@@ -39,8 +43,18 @@ export function CoverageForm({
         {typeof covered === "number"
           ? `Signed off against testing version ${covered}.`
           : "The version this review covered was not recorded."}
-        {gap !== "" ? ` ${gap}.` : " Nothing has changed since."}
+        {gap !== ""
+          ? ` ${gap}.`
+          : held !== ""
+            ? ""
+            : " Nothing has changed since."}
       </p>
+      {gap === "" && held !== "" ? (
+        <p className="cw-coverage-waits">
+          {held}. A coverage assessment does not clear this: the reviewer
+          reopens the review and signs it again on the current records.
+        </p>
+      ) : null}
       {gap !== "" ? (
         may ? (
           <form

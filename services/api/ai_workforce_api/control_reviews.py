@@ -1222,8 +1222,8 @@ def _review(
     )
     if predating:
         blocking.append(
-            f"{predating} signed-off result{' predates' if predating == 1 else 's predate'} "
-            "the plan's approved revision: a reviewer decides the impact assessment first"
+            f"{predating} signed-off result{' awaits' if predating == 1 else 's await'} "
+            "a reviewer's impact decision"
         )
     # The control's own review rests on its D&I conclusion (B0/B3, 8 November 2026). A design
     # signed off as not effective is reviewed without OE: nothing was tested to re-perform.
@@ -2218,10 +2218,7 @@ def _clear_note(
     return _result(connection, project_id, review_id, principal.id), []
 
 
-UNDECIDED_PROPOSAL = (
-    "the proposed deficiency is not logged or dismissed yet: decide it on the test sheet "
-    "before the testing is re-performed"
-)
+UNDECIDED_PROPOSAL = "the proposed deficiency is not yet logged or dismissed on the test sheet"
 
 
 def _sign_off(

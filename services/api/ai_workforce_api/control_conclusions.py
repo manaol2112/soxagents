@@ -55,15 +55,28 @@ _APPLIES = ("APPLICABLE", "CONDITIONAL")
 _PHASE_WORDS = {"INTERIM": "Interim testing", "ROLLFORWARD": "Roll-forward testing"}
 # A phase the plan leaves PENDING is undecided (FP-7, decision D5, product owner, 19 November
 # 2026): it holds the proposal until a person decides it, and never reads as not applicable.
-_UNDECIDED_WORDS = {
-    "DESIGN": "D&I testing",
-    "INTERIM": "interim testing",
-    "ROLLFORWARD": "roll-forward testing",
-}
+_UNDECIDED_WORDS = {"DESIGN": "D&I", "INTERIM": "interim", "ROLLFORWARD": "roll-forward"}
 
 
-def _undecided(phase: str) -> str:
-    return f"it is decided whether {_UNDECIDED_WORDS[phase]} applies"
+def undecided_clause(phases: Sequence[str]) -> str:
+    """The undecided phases in one clause, in the phases' order: "roll-forward testing
+    applies", "D&I and roll-forward testing apply"; "" when none is. The conclusion's
+    wait and the queue's decision say it the same way."""
+    words = [
+        _UNDECIDED_WORDS[phase] for phase in ("DESIGN", "INTERIM", "ROLLFORWARD") if phase in phases
+    ]
+    if not words:
+        return ""
+    named = words[0] if len(words) == 1 else f"{', '.join(words[:-1])} and {words[-1]}"
+    return f"{named} testing {'applies' if len(words) == 1 else 'apply'}"
+
+
+def _undecided(phases: Sequence[str]) -> list[str]:
+    """What the proposal waits for while phases are undecided: one clause for all of them
+    ("it is decided whether D&I and roll-forward testing apply"); nothing when none is.
+    One clause, not one per phase (E3 design review, 19 November 2026)."""
+    clause = undecided_clause(phases)
+    return [f"it is decided whether {clause}"] if clause else []
 
 
 class ConclusionState(Exception):
@@ -191,11 +204,9 @@ def propose(facts: Facts) -> tuple[Verdict | None, list[str], list[str], list[Ph
         return (
             None,
             [],
-            ["the D&I conclusion is signed off"]
-            + [_undecided(phase) for phase in ("DESIGN", "INTERIM", "ROLLFORWARD")
-               if phase in facts.undecided],
+            ["the D&I conclusion is signed off", *_undecided(facts.undecided)],
             phases,
-        )  # fmt: skip
+        )
     standing = [item for item in facts.deficiencies]
     design_refs = [ref for ref, kind, _ in standing if kind == "DESIGN"]
     if facts.design == "NOT_EFFECTIVE":
@@ -223,7 +234,14 @@ def propose(facts: Facts) -> tuple[Verdict | None, list[str], list[str], list[Ph
             phases,
         )
     reasons = ["The D&I conclusion is signed off as effective."]
-    waiting: list[str] = [_undecided("DESIGN")] if "DESIGN" in facts.undecided else []
+    # The undecided phases, said once, before what each phase still owes.
+    waiting: list[str] = _undecided(
+        tuple(
+            phase
+            for phase in facts.undecided
+            if phase == "DESIGN" or not facts.phases.get(phase, (False,))[0]
+        )
+    )
     failed = False
     for phase in ("INTERIM", "ROLLFORWARD"):
         applies, status, conclusion, dismissed = facts.phases.get(phase, (False, None, None, False))
@@ -240,7 +258,6 @@ def propose(facts: Facts) -> tuple[Verdict | None, list[str], list[str], list[Ph
                 result.conclusion = (
                     "NOT_EFFECTIVE" if conclusion == "NOT_EFFECTIVE" else "EFFECTIVE"
                 )
-            waiting.append(_undecided(phase))
         elif applies:
             if status == "SIGNED_OFF":
                 result.state = "SIGNED_OFF"
@@ -392,8 +409,8 @@ def facts_of(connection: psycopg.Connection[Any], project_id: UUID, control_id: 
 
 # FINAL (ST-2, product owner, 19 November 2026)
 
-CONCLUSION_CHANGED = "Conclusion changed since the review signed it: review outstanding"
-NOTHING_PROPOSED = "No conclusion is proposed from the records yet"
+CONCLUSION_CHANGED = "Conclusion differs from the one the review signed: review outstanding"
+NOTHING_PROPOSED = "No conclusion proposed yet"
 
 
 @dataclass(frozen=True)

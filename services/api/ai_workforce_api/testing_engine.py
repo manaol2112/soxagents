@@ -1080,7 +1080,7 @@ class TooManyAttributes(Exception):
 
     def __init__(self, count: int) -> None:
         self.detail = (
-            f"the control has {count} approved test attributes and a test sheet holds at "
+            f"The control has {count} approved test attributes and a test sheet holds at "
             f"most {MAX_ATTRIBUTES}; combine or remove attributes before testing"
         )
 

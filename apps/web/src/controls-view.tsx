@@ -129,6 +129,7 @@ import {
   CATEGORIES,
   type ControlFiles,
   type ControlRow,
+  coverageGapsOf,
   DEFICIENCY_STATUSES,
   DETAIL_TABS,
   type Deficiency,
@@ -1176,22 +1177,8 @@ function ControlRecord({
     (item) => item.status === "PENDING" && item.viewerCanDecide,
   );
   const roundReviews = roundReviewsFor(engagement.reviews, control.id);
-  const reasons = control.notFinalBecause ?? [];
-  const coverageGaps = {
-    control:
-      reasons.find(
-        (text) =>
-          /review/i.test(text) &&
-          /changed since|did not record|after the review/i.test(text) &&
-          !/^(Roll-forward|Retest|The roll-forward|The retest)/.test(text),
-      ) ?? "",
-    "roll-forward":
-      reasons.find((text) =>
-        /^(Roll-forward|The roll-forward) .*review/i.test(text),
-      ) ?? "",
-    retest:
-      reasons.find((text) => /^(Retest|The retest) .*review/i.test(text)) ?? "",
-  };
+  // Only the reasons the API types as coverage gaps (never their wording).
+  const coverageGaps = coverageGapsOf(control);
   const index = siblings.findIndex((item) => item.id === control.id);
   const previous = index > 0 ? siblings[index - 1] : undefined;
   const next =
@@ -3501,6 +3488,7 @@ function ControlRecord({
                         review={review}
                         ids={ids}
                         gap={coverageGaps.control}
+                        held={control.reviewHeldBy ?? ""}
                         canAct={canAct}
                       />
                     ) : null}

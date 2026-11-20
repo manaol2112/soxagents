@@ -108,6 +108,15 @@ class NotFinal(BaseModel):
     text: str
     step: Step
     phase: Phase | None = None
+    # A gap in what the signed review recorded it covered (a later sheet or workpaper
+    # version, or work signed or prepared after it): exactly the reasons a reviewer's
+    # coverage assessment clears (control_reviews.assess_coverage, coverage_assessed).
+    # Every other reason, a verdict that moved since the review signed it among them,
+    # clears only through a review signed on the records as they are. Typed so no screen
+    # or queue reads it from the wording (E3 design review, 19 November 2026: the web
+    # matched the prose and offered COVERS on a changed conclusion, which COVERS can
+    # never clear).
+    coverage: bool = False
 
 
 class Finality(BaseModel):
@@ -208,6 +217,7 @@ def _coverage_gaps(facts: FinalityFacts) -> list[NotFinal]:
                 else "The review did not record the testing version it covered: review outstanding",
                 step="REVIEW",
                 phase="INTERIM",
+                coverage=True,
             )
         )
     covered_papers = {
@@ -224,6 +234,7 @@ def _coverage_gaps(facts: FinalityFacts) -> list[NotFinal]:
                     "review outstanding",
                     step="REVIEW",
                     phase="DESIGN" if stage == "DESIGN" else "INTERIM",
+                    coverage=True,
                 )
             )
     return gaps
@@ -329,6 +340,7 @@ def finality(facts: FinalityFacts | None) -> Finality:
                         text="Interim testing signed off after the review: review outstanding",
                         step="REVIEW",
                         phase="INTERIM",
+                        coverage=True,
                     )
                 )
             elif facts.review_coverage is not None:
@@ -346,7 +358,7 @@ def finality(facts: FinalityFacts | None) -> Finality:
                     kind="DESIGN",
                     text="D&I conclusion not signed off"
                     if first == DESIGN_NOT_SIGNED
-                    else f"D&I conclusion no longer holds: {first}",
+                    else f"D&I conclusion out of date: {first}",
                     step="REVIEW",
                     phase="DESIGN",
                 )
@@ -372,6 +384,7 @@ def finality(facts: FinalityFacts | None) -> Finality:
                     "outstanding",
                     step="REVIEW",
                     phase="DESIGN",
+                    coverage=True,
                 )
             )
     for kind, phase, word in (
@@ -432,6 +445,7 @@ def finality(facts: FinalityFacts | None) -> Finality:
                         "covered: review outstanding",
                         step="REVIEW",
                         phase=phase,  # type: ignore[arg-type]
+                        coverage=True,
                     )
                 )
         elif kind == "ROLLFORWARD" and applies["ROLLFORWARD"] and not failed:

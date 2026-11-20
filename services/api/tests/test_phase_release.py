@@ -311,8 +311,13 @@ def test_an_undecided_phase_waits_for_the_plan_not_not_applicable(migrated: Data
     sign_off_design(migrated, team["project"], [control])
     status = _phase(_progress(team), control, "ROLLFORWARD")
     assert status["step"] == "AWAITING_PLAN" and status["applicability"] == "PENDING"
-    assert status["waiting_for"] == "Decide whether the roll-forward phase applies."
-    assert status["step_label"] == "Whether it applies is undecided"
+    # Reworded 19 November 2026 (E3 design review): old "Decide whether the roll-forward
+    # phase applies." and "Whether it applies is undecided"; new, where it is decided and
+    # the test plan's own word for a PENDING phase (evidence-plan-model.ts).
+    assert status["waiting_for"] == (
+        "Decide in the test plan whether the roll-forward phase applies."
+    )
+    assert status["step_label"] == "Pending determination"
     refused = team["owner"].post(
         f"{_project(team)}/controls/{control}/phases/ROLLFORWARD/release",
         json={"reason": "Released early, before the phase is decided at all."},
@@ -330,4 +335,5 @@ def test_an_undecided_phase_waits_for_the_plan_not_not_applicable(migrated: Data
         connection.commit()
         wait, _ = design_state(connection, UUID(str(team["project"])), UUID(control))
     assert wait is not None and "does not apply" not in wait[1]
-    assert wait[1] == "Decide whether the D&I phase applies."
+    # Reworded 19 November 2026 (E3 design review), as above.
+    assert wait[1] == "Decide in the test plan whether the D&I phase applies."

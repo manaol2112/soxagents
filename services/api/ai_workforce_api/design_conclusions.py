@@ -1108,7 +1108,7 @@ def _held(
 
 
 # Why a standing sign-off that no longer holds lapsed, where its records name nothing more.
-LAPSED = "the D&I sign-off no longer holds on the records as they stand"
+LAPSED = "the records changed after the sign-off"
 
 
 def lapsed_reasons(
