@@ -819,10 +819,13 @@ def test_a_person_who_rewords_a_request_while_it_is_drafted_keeps_their_wording(
             (request_id,),
         ).fetchone()
     assert wording == (mine,)
-    assert draft == (
-        "SKIPPED",
-        "The request was reworded while it was drafted; that wording stays.",
-        None,
+    # Old (to 20 November 2026): the note stored the sentence. New (G2 review, B1): it
+    # stores the reason's token, and the sentence is what the draft shows for it.
+    assert draft == ("SKIPPED", "REWORDED", None)
+    from ai_workforce_api.pbc_drafting import shown_note
+
+    assert shown_note("SKIPPED", "REWORDED") == (
+        "The request was reworded while it was drafted; that wording stays."
     )
     assert audit == (1,)
 

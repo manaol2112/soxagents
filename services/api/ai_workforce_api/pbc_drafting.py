@@ -1000,10 +1000,113 @@ TOO_MANY_REDRAFT = (
     "too many for a redraft. Edit its wording to change it."
 )
 REPLANNED = "The planned evidence changed during drafting. Redraft the request to match the plan."
-# The notes of a draft that was not written which ask the person to act: the request's
-# wording was written for other planned items. The others (a sample, no-phase or over-full
-# request, one sent or reworded meanwhile) need nothing done (not_drafted_note).
-NEEDS_ACTION = (REPLANNED,)
+REWORDED = "The request was reworded while it was drafted; that wording stays."
+NOT_DRAFT = "The request is no longer a draft."
+IN_HAND = "Evidence for its items was in hand; the rest are asked for on their own."
+JOINED = "Items joined it after it was drafted; the plan's wording stands."
+DEMO = "Prepared with the demo; drafted in a later step."
+UNKNOWN_SKIP = "The last draft was not used. Redraft the request to match the plan."
+
+# The token a SKIPPED draft's note stores for why it was not written (SKIP_REASONS).
+SkipToken = Literal[
+    "REPLANNED",
+    "SAMPLE",
+    "UNPHASED",
+    "TOO_MANY",
+    "REWORDED",
+    "NOT_DRAFT",
+    "IN_HAND",
+    "JOINED",
+    "DEMO",
+]
+
+
+@dataclass(frozen=True)
+class SkipReason:
+    """Why a draft was not written: what is shown, and whether the person must act."""
+
+    # The sentence people read wherever the draft is shown (_draft, not_drafted_note).
+    shown: str
+    # The request's wording was written for other planned items, so the person is asked
+    # to redraft it ("Plan changed", "Needs redraft"). The others need nothing done.
+    needs_action: bool
+    # The sentences stored as the note before the tokens (to 20 November 2026), read
+    # back as this reason (skip_reason), so a row written then routes as it did.
+    earlier: tuple[str, ...] = ()
+
+
+# The one table of the reasons a draft is not written (G2 review, 20 November 2026: the
+# "Plan changed" state was decided by matching the stored sentence, so a row written with
+# an older sentence showed no banner, and any copy edit would have broken every stored
+# row). The note stores the token; what is shown and how it routes are read from here,
+# never by comparing a note with a sentence. "UNKNOWN" is no token a writer stores: it is
+# what a note that is neither a token nor a known sentence reads as, and it fails closed,
+# so wording whose draft was set aside for a reason not known is never read as current.
+SKIP_REASONS: dict[str, SkipReason] = {
+    # The earlier sentences are written out, not named: they are what rows hold, so a copy
+    # edit of a shown sentence leaves them as they were stored.
+    "REPLANNED": SkipReason(
+        REPLANNED,
+        True,
+        (
+            "The planned evidence changed while the request was drafted; redraft it.",
+            "The planned evidence changed during drafting. Redraft the request to match the plan.",
+        ),
+    ),
+    "SAMPLE": SkipReason(
+        SAMPLE_REQUEST, False, ("A sample request lists the selected samples; its wording stays.",)
+    ),
+    "UNPHASED": SkipReason(
+        UNPHASED,
+        False,
+        ("The request carries planned evidence without a testing phase; its wording stays.",),
+    ),
+    "TOO_MANY": SkipReason(
+        TOO_MANY,
+        False,
+        (
+            "The plan has more items than one drafted request can hold; the request keeps its "
+            "current wording.",
+            "The test plan has more items than one drafted request can hold; the request keeps "
+            "the test plan's wording of every item.",
+            "The request uses the test plan's wording for each of its planned items, as there "
+            "are too many for a redraft.",
+        ),
+    ),
+    "REWORDED": SkipReason(
+        REWORDED, False, ("The request was reworded while it was drafted; that wording stays.",)
+    ),
+    "NOT_DRAFT": SkipReason(NOT_DRAFT, False, ("The request is no longer a draft.",)),
+    "IN_HAND": SkipReason(
+        IN_HAND,
+        False,
+        ("Evidence for its items was in hand; the rest are asked for on their own.",),
+    ),
+    "JOINED": SkipReason(
+        JOINED, False, ("Items joined it after it was drafted; the plan's wording stands.",)
+    ),
+    "DEMO": SkipReason(DEMO, False, ("Prepared with the demo; drafted in a later step",)),
+    "UNKNOWN": SkipReason(UNKNOWN_SKIP, True),
+}
+# A stored note is cut at 200 characters (pbc_drafts_note), so the sentences are as well.
+_EARLIER: dict[str, str] = {
+    sentence[:200]: token for token, reason in SKIP_REASONS.items() for sentence in reason.earlier
+}
+
+
+def skip_reason(note: str) -> SkipReason:
+    """The reason a SKIPPED draft's note records: its token, or a sentence stored before
+    the tokens read back as its token; UNKNOWN for anything else (fail closed)."""
+    token = note if note in SKIP_REASONS else _EARLIER.get(note, "UNKNOWN")
+    return SKIP_REASONS[token]
+
+
+def shown_note(status: str, note: str) -> str:
+    """A draft's note as people read it: a SKIPPED draft's reason as its sentence, any
+    other note as it was written."""
+    return skip_reason(note).shown if status == "SKIPPED" else note
+
+
 PROMPT_TOO_SHORT = (
     "The planned items are too long for one model call; the reviewed rules drafted the request."
 )
@@ -1011,9 +1114,9 @@ PROMPT_TOO_SHORT = (
 
 def _kept_wording(
     connection: psycopg.Connection[Any] | psycopg.Cursor[Any], request_id: UUID
-) -> tuple[str, str] | None:
-    """Why a request's wording is never drafted, as (the draft's note, a Redraft's answer),
-    or None when it may be.
+) -> tuple[SkipToken, str] | None:
+    """Why a request's wording is never drafted, as (the draft's note token, a Redraft's
+    answer), or None when it may be.
 
     A sample request (control_tests._draft_sample_request) lists the samples the audit team
     selected, which no draft holds. It is known by its own link (control_tests.
@@ -1044,11 +1147,11 @@ def _kept_wording(
     if row is None:
         return None
     if row[0]:
-        return SAMPLE_REQUEST, SAMPLE_REDRAFT
+        return "SAMPLE", SAMPLE_REDRAFT
     if row[1]:
-        return UNPHASED, UNPHASED_REDRAFT
+        return "UNPHASED", UNPHASED_REDRAFT
     if row[2]:
-        return TOO_MANY, TOO_MANY_REDRAFT
+        return "TOO_MANY", TOO_MANY_REDRAFT
     return None
 
 
@@ -1062,12 +1165,16 @@ def redraft_refusal(
 
 
 def not_drafted_note(status: str, note: str) -> str:
-    """A draft that was not written, as the person is asked to act on it: its note when the
-    request's wording was written for other planned items (NEEDS_ACTION), "" otherwise."""
-    return note if status == "SKIPPED" and note in NEEDS_ACTION else ""
+    """A draft that was not written, as the person is asked to act on it: its reason's
+    sentence when the request's wording was written for other planned items, or the
+    reason is not known (fail closed); "" otherwise. Routed on the note's token."""
+    if status != "SKIPPED":
+        return ""
+    reason = skip_reason(note)
+    return reason.shown if reason.needs_action else ""
 
 
-def _held(connection: psycopg.Connection[Any], draft_id: UUID, note: str) -> str:
+def _held(connection: psycopg.Connection[Any], draft_id: UUID, note: SkipToken) -> str:
     """A claimed draft that writes nothing: the request keeps its wording, and the draft
     says why."""
     with transaction(connection) as cursor:
@@ -1079,7 +1186,7 @@ def _held(connection: psycopg.Connection[Any], draft_id: UUID, note: str) -> str
                 updated_at = clock_timestamp()
             WHERE id = %s
             """,
-            (note[:200], draft_id),
+            (note, draft_id),
         )
     return "SKIPPED"
 
@@ -1134,7 +1241,7 @@ def run_draft(
         # No draft holds every item, the plan's own included: the wording is not replaced
         # by one that leaves items out (_kept_wording reads the same count; this holds the
         # items as the draft would carry them).
-        return _held(connection, draft_id, TOO_MANY)
+        return _held(connection, draft_id, "TOO_MANY")
     content: DraftContent | None = None
     source = "RULES"
     # A prompt cut short loses the last planned items, and a draft without them is
@@ -1220,7 +1327,7 @@ def run_draft(
             ),
         ).fetchone()
         final = "DRAFTED" if updated is not None else "SKIPPED"
-        skipped = "The request is no longer a draft."
+        skipped: SkipToken = "NOT_DRAFT"
         if updated is None:
             changed = cursor.execute(
                 "SELECT evidence_description FROM pbc_requests WHERE id = %s AND status = 'DRAFT'",
@@ -1230,11 +1337,11 @@ def run_draft(
                 # Still a draft, so it was reworded while the agent drafted: before, the
                 # agent's wording overwrote that wording silently (bug hunt, 9 November
                 # 2026). It stays, and the record says why the draft was not used.
-                skipped = "The request was reworded while it was drafted; that wording stays."
+                skipped = "REWORDED"
                 if (None if changed[0] is None else str(changed[0])) == started_wording:
                     # The wording is as it was, so its planned items changed: the draft was
                     # checked against a set the request no longer carries.
-                    skipped = REPLANNED
+                    skipped = "REPLANNED"
                 cursor.execute(
                     """
                     INSERT INTO audit_events (
@@ -1264,7 +1371,7 @@ def run_draft(
                 source if final == "DRAFTED" else None,
                 Json(content.model_dump()) if final == "DRAFTED" else None,
                 call_id,
-                (note if final == "DRAFTED" else skipped)[:200],
+                note[:200] if final == "DRAFTED" else skipped,
                 draft_id,
             ),
         )
@@ -2310,7 +2417,7 @@ def _draft(row: tuple[Any, ...]) -> DraftBody:
         status=str(row[3]),
         source=None if row[4] is None else str(row[4]),
         content=None if row[5] is None else DraftContent.model_validate(row[5]),
-        note=str(row[6]),
+        note=shown_note(str(row[3]), str(row[6])),
         attempts=int(row[7]),
         updated_at=row[8],
         version=int(row[9]),

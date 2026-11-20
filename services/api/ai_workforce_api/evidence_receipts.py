@@ -533,11 +533,11 @@ def _set_aside(
         """
         UPDATE pbc_drafts
         SET status = 'SKIPPED', source = NULL, content = NULL, lease_until = NULL,
-            note = 'Evidence for its items was in hand; the rest are asked for on their own.',
-            version = version + 1, updated_at = clock_timestamp()
+            note = %s, version = version + 1, updated_at = clock_timestamp()
         WHERE pbc_request_id = %s
         """,
-        (request_id,),
+        # The reason's token (pbc_drafting.SKIP_REASONS holds what is shown for it).
+        ("IN_HAND", request_id),
     )
 
 
@@ -583,11 +583,10 @@ def _request_again(
             """
             UPDATE pbc_drafts
             SET status = 'SKIPPED', source = NULL, content = NULL, lease_until = NULL,
-                note = 'Items joined it after it was drafted; the plan''s wording stands.',
-                version = version + 1, updated_at = clock_timestamp()
+                note = %s, version = version + 1, updated_at = clock_timestamp()
             WHERE pbc_request_id = ANY(%s) AND status <> 'DRAFTING'
             """,
-            (issued.rewritten,),
+            ("JOINED", issued.rewritten),
         )
     placed = cursor.execute(
         "SELECT q.pbc_request_id FROM evidence_requirements q "

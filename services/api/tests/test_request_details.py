@@ -43,6 +43,7 @@ from ai_workforce_api.pbc_drafting import (
     load_context,
     planned_draft,
     run_draft,
+    shown_note,
     with_plan,
 )
 from ai_workforce_api.pbc_drafting import render as render_draft
@@ -1481,10 +1482,11 @@ def test_a_sample_request_keeps_its_list_of_selected_samples(migrated: Database)
         assert run_draft(connection, model, queued) == "SKIPPED"
     assert model.requests == []
     assert _wording(migrated, sample) == asked
-    assert _draft_record(migrated, queued) == (
-        "SKIPPED",
-        None,
-        "A sample request lists the selected samples; its wording stays.",
+    # Old (to 20 November 2026): the note stored the sentence. New (G2 review, B1): it
+    # stores the reason's token, and the sentence is what the draft shows for it.
+    assert _draft_record(migrated, queued) == ("SKIPPED", None, "SAMPLE")
+    assert shown_note("SKIPPED", "SAMPLE") == (
+        "A sample request lists the selected samples; its wording stays."
     )
 
 
@@ -1533,10 +1535,11 @@ def test_a_request_with_planned_evidence_but_no_phase_keeps_its_wording(
         assert run_draft(connection, model, queued) == "SKIPPED"
     assert model.requests == []
     assert _wording(migrated, request) == before
-    assert _draft_record(migrated, queued) == (
-        "SKIPPED",
-        None,
-        "The request carries planned evidence without a testing phase; its wording stays.",
+    # Old (to 20 November 2026): the note stored the sentence. New (G2 review, B1): it
+    # stores the reason's token, and the sentence is what the draft shows for it.
+    assert _draft_record(migrated, queued) == ("SKIPPED", None, "UNPHASED")
+    assert shown_note("SKIPPED", "UNPHASED") == (
+        "The request carries planned evidence without a testing phase; its wording stays."
     )
 
 
@@ -1567,13 +1570,14 @@ def test_a_plan_change_while_the_request_is_drafted_keeps_the_draft_out(
     assert _wording(migrated, request) == before
     # Old (to 19 November 2026): "...changed while the request was drafted; redraft it.",
     # stored and shown nowhere (design review). New: what to do, on the panel and the row.
-    assert _draft_record(migrated, draft) == (
-        "SKIPPED",
-        None,
-        "The planned evidence changed during drafting. Redraft the request to match the plan.",
-    )
+    # Old (to 20 November 2026): the note stored that sentence. New (G2 review, B1): it
+    # stores the reason's token, and the panel shows the sentence for it.
+    assert _draft_record(migrated, draft) == ("SKIPPED", None, "REPLANNED")
     shown = _details(team, str(request))
     assert shown["planning"]["not_drafted"] == REPLANNED
+    assert REPLANNED == (
+        "The planned evidence changed during drafting. Redraft the request to match the plan."
+    )
     # A Redraft drafts it to the plan as it now is, so it is offered.
     assert shown["redraft_refusal"] is None
     # Rewritten 20 November 2026 (design review: "Not drafted" sat beside "Ready for review"
@@ -1614,12 +1618,49 @@ def test_a_plan_larger_than_one_draft_keeps_the_requests_wording(
     # hold" sat beside a 15-item request holding all 15). Old: "The test plan has more items
     # than one drafted request can hold; the request keeps the test plan's wording of every
     # item."; new: which wording the request uses, and why it is not redrafted.
-    assert _draft_record(migrated, draft) == (
-        "SKIPPED",
-        None,
+    # Old (to 20 November 2026): the note stored the sentence. New (G2 review, B1): it
+    # stores the reason's token, and the sentence is what the draft shows for it.
+    assert _draft_record(migrated, draft) == ("SKIPPED", None, "TOO_MANY")
+    assert shown_note("SKIPPED", "TOO_MANY") == (
         "The request uses the test plan's wording for each of its planned items, as there are "
-        "too many for a redraft.",
+        "too many for a redraft."
     )
+
+
+def test_a_stored_skip_reason_shows_and_routes_by_its_token(migrated: Database) -> None:
+    """G2 review, 20 November 2026 (B1), end to end: the panel's banner, the Evidence
+    list's "Needs redraft" and the draft's shown note read the stored token. A row with the
+    old sentence still needs a redraft; one with an unknown note is not read as current;
+    one whose reason needs nothing done shows nothing."""
+    from ai_workforce_api import pbc_drafting
+
+    team = _ready_engagement(migrated, "rd-token")
+    draft, request, _control = _phase_draft(migrated, team, "DESIGN")
+
+    def stored(note: str) -> dict[str, Any]:
+        with connect(migrated.url) as connection:
+            connection.execute(
+                "UPDATE pbc_drafts SET status = 'SKIPPED', source = NULL, content = NULL, "
+                "note = %s, version = version + 1 WHERE id = %s",
+                (note, draft),
+            )
+            connection.commit()
+        planning: dict[str, Any] = _details(team, str(request))["planning"]
+        return planning
+
+    assert stored("REPLANNED")["not_drafted"] == REPLANNED
+    assert _row_agent(team, request) == ("NOT_DRAFTED", "Needs redraft")
+    listed = team["owner"].get(f"{_project(team)}/pbc-drafts")
+    assert listed.status_code == 200, listed.text
+    assert [d["note"] for d in listed.json() if d["id"] == str(draft)] == [REPLANNED]
+    old = "The planned evidence changed while the request was drafted; redraft it."
+    assert stored(old)["not_drafted"] == REPLANNED
+    assert _row_agent(team, request) == ("NOT_DRAFTED", "Needs redraft")
+    unknown = stored("A reason no table holds.")["not_drafted"]
+    assert unknown != "" and unknown == pbc_drafting.shown_note("SKIPPED", "")
+    assert _row_agent(team, request) == ("NOT_DRAFTED", "Needs redraft")
+    assert stored("REWORDED")["not_drafted"] == ""
+    assert _row_agent(team, request)[0] != "NOT_DRAFTED"
 
 
 def _row_agent(team: dict[str, Any], request: UUID) -> tuple[str, str]:
@@ -1679,7 +1720,12 @@ def test_more_planned_items_than_a_draft_holds_are_not_offered_a_redraft(
         assert run_draft(connection, model, queued) == "SKIPPED"
     assert model.requests == []
     assert _wording(migrated, request) == before
-    assert _draft_record(migrated, queued) == ("SKIPPED", None, TOO_MANY)
+    # Old (to 20 November 2026): the note stored TOO_MANY's sentence. New (G2 review,
+    # B1): its token; the sentence is what the draft shows for it.
+    assert _draft_record(migrated, queued) == ("SKIPPED", None, "TOO_MANY")
+    listed = team["owner"].get(f"{_project(team)}/pbc-drafts")
+    assert listed.status_code == 200, listed.text
+    assert [d["note"] for d in listed.json() if d["id"] == str(queued)] == [TOO_MANY]
     assert _details(team, str(request))["planning"]["not_drafted"] == ""
     assert _row_agent(team, request)[0] != "NOT_DRAFTED"
     with connect(migrated.url) as connection:
@@ -1706,18 +1752,140 @@ def test_a_skipped_draft_that_needs_nothing_done_says_nothing() -> None:
         not_drafted_note,
     )
 
+    # A row written before the tokens (to 20 November 2026) holds the sentence: it reads
+    # as its token, so each is checked both ways.
     assert not_drafted_note("SKIPPED", REPLANNED) == REPLANNED
+    assert not_drafted_note("SKIPPED", "REPLANNED") == REPLANNED
     for note in (
         TOO_MANY,
         SAMPLE_REQUEST,
         UNPHASED,
         "The request is no longer a draft.",
         "The request was reworded while it was drafted; that wording stays.",
+        "Evidence for its items was in hand; the rest are asked for on their own.",
+        "Items joined it after it was drafted; the plan's wording stands.",
+        "Prepared with the demo; drafted in a later step",
+        "TOO_MANY",
+        "SAMPLE",
+        "UNPHASED",
+        "NOT_DRAFT",
+        "REWORDED",
+        "IN_HAND",
+        "JOINED",
+        "DEMO",
     ):
-        assert not_drafted_note("SKIPPED", note) == ""
+        assert not_drafted_note("SKIPPED", note) == "", note
     assert not_drafted_note("DRAFTED", REPLANNED) == ""
+    assert not_drafted_note("DRAFTED", "REPLANNED") == ""
     for sentence in (SAMPLE_REDRAFT, UNPHASED_REDRAFT, TOO_MANY_REDRAFT, TOO_MANY, REPLANNED):
         assert re.fullmatch(r"[A-Z][^\n]{2,300}\.", sentence), sentence
+    from ai_workforce_api.pbc_drafting import SKIP_REASONS
+
+    for token, reason in SKIP_REASONS.items():
+        assert re.fullmatch(r"[A-Z][^\n]{2,199}\.", reason.shown), token
+
+
+def test_the_replanned_token_needs_a_redraft_whatever_its_sentence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """G2 review, 20 November 2026 (B1): "Plan changed" was decided by matching the stored
+    note with REPLANNED's sentence, so a copy edit would have left every stored row without
+    its banner. The note stores the token, and the row routes on it whatever is shown."""
+    from ai_workforce_api import pbc_drafting
+
+    assert pbc_drafting.not_drafted_note("SKIPPED", "REPLANNED") == REPLANNED
+    edited = replace(pbc_drafting.SKIP_REASONS["REPLANNED"], shown="Edited copy of the reason.")
+    monkeypatch.setitem(pbc_drafting.SKIP_REASONS, "REPLANNED", edited)
+    assert pbc_drafting.not_drafted_note("SKIPPED", "REPLANNED") == "Edited copy of the reason."
+    assert pbc_drafting.shown_note("SKIPPED", "REPLANNED") == "Edited copy of the reason."
+
+
+def test_a_replanned_row_written_with_the_old_sentence_still_needs_a_redraft() -> None:
+    """G2 review, 20 November 2026 (B1): a row written before 19 November 2026 holds the
+    old sentence, which matched nothing, so it showed no banner and no "Needs redraft"
+    (fail-open). It reads as its token, and shows the current sentence."""
+    from ai_workforce_api import pbc_drafting
+
+    old = "The planned evidence changed while the request was drafted; redraft it."
+    assert pbc_drafting.not_drafted_note("SKIPPED", old) == REPLANNED
+
+
+def test_an_unknown_skipped_note_does_not_read_as_current() -> None:
+    """G2 review, 20 November 2026 (B1): a SKIPPED note that is neither a token nor a
+    known sentence fails closed: the wording is not read as current, so the person is asked
+    to redraft rather than told nothing."""
+    from ai_workforce_api import pbc_drafting
+
+    for note in ("A reason no table holds.", "", "replanned"):
+        shown = pbc_drafting.not_drafted_note("SKIPPED", note)
+        assert shown != "", note
+        assert shown == pbc_drafting.shown_note("SKIPPED", note), note
+    assert pbc_drafting.not_drafted_note("DRAFTED", "A reason no table holds.") == ""
+
+
+def test_no_code_routes_on_a_skip_reasons_sentence() -> None:
+    """G2 review, 20 November 2026 (B1), the class: no module compares a note with a skip
+    reason's sentence, or writes one into a note; the sentences live in pbc_drafting's
+    table alone, and every route reads the token (pbc_drafting.skip_reason)."""
+    import ast
+    from pathlib import Path
+
+    from ai_workforce_api import pbc_drafting
+
+    root = Path(pbc_drafting.__file__).resolve().parents[3]
+    sentences = {
+        sentence[:200]
+        for reason in pbc_drafting.SKIP_REASONS.values()
+        for sentence in (reason.shown, *reason.earlier)
+    }
+    names = {
+        name
+        for name, value in vars(pbc_drafting).items()
+        if isinstance(value, str) and value[:200] in sentences
+    } | {"NEEDS_ACTION"}
+    assert {"REPLANNED", "TOO_MANY", "SAMPLE_REQUEST", "UNPHASED"} <= names
+
+    def sentence_like(node: ast.expr) -> bool:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value[:200] in sentences
+        if isinstance(node, ast.Name):
+            return node.id in names
+        if isinstance(node, ast.Attribute):
+            return node.attr in names
+        return False
+
+    offenders: list[str] = []
+    sources = [
+        *(root / "services" / "api" / "ai_workforce_api").rglob("*.py"),
+        *(root / "scripts").rglob("*.py"),
+    ]
+    assert len(sources) > 50
+    for path in sources:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        here = path.resolve() == Path(pbc_drafting.__file__).resolve()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Compare) and any(
+                sentence_like(side) for side in (node.left, *node.comparators)
+            ):
+                offenders.append(f"{path.name}:{node.lineno} compares with a sentence")
+            if (
+                not here
+                and isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and any(s in node.value.replace("''", "'") for s in sentences)
+            ):
+                offenders.append(f"{path.name}:{node.lineno} holds a sentence")
+    web = root / "apps" / "web" / "src"
+    for path in [*web.rglob("*.ts"), *web.rglob("*.tsx")]:
+        text = path.read_text(encoding="utf-8")
+        # A whole string literal: other copy may open with the same words (a 409's answer).
+        offenders += [
+            f"{path.name} holds a sentence"
+            for s in sentences
+            for quote in ('"', "'", "`")
+            if f"{quote}{s}{quote}" in text
+        ]
+    assert offenders == []
 
 
 def test_a_plan_too_long_for_the_prompt_is_worded_by_the_plan_without_a_model_call(

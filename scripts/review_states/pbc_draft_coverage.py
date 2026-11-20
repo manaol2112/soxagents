@@ -106,7 +106,7 @@ def _control_of(connection: Any, request: UUID) -> UUID:
 
 
 def _overfull(seed: Any, team: dict[str, Any], client: Any, request: UUID) -> None:
-    from ai_workforce_api.pbc_drafting import MAX_ITEMS, TOO_MANY, run_draft
+    from ai_workforce_api.pbc_drafting import MAX_ITEMS, run_draft
 
     with connect(seed.database.url) as connection:
         control = _control_of(connection, request)
@@ -147,13 +147,14 @@ def _overfull(seed: Any, team: dict[str, Any], client: Any, request: UUID) -> No
         note = connection.execute(
             "SELECT note FROM pbc_drafts WHERE pbc_request_id = %s", (request,)
         ).fetchone()
-    assert note is not None and note[0] == TOO_MANY, note
+    # The reason's token (pbc_drafting.SKIP_REASONS holds what is shown for it).
+    assert note is not None and note[0] == "TOO_MANY", note
 
 
 def _replanned(seed: Any, team: dict[str, Any], client: Any, request: UUID) -> None:
     from test_request_details import _asked, _coverage_draft, _planned_of, _ScriptedModel
 
-    from ai_workforce_api.pbc_drafting import REPLANNED, run_draft
+    from ai_workforce_api.pbc_drafting import run_draft
 
     with connect(seed.database.url) as connection:
         control = _control_of(connection, request)
@@ -183,7 +184,7 @@ def _replanned(seed: Any, team: dict[str, Any], client: Any, request: UUID) -> N
     with connect(seed.database.url) as connection:
         assert run_draft(connection, model, draft) == "SKIPPED"
         note = connection.execute("SELECT note FROM pbc_drafts WHERE id = %s", (draft,)).fetchone()
-    assert note is not None and note[0] == REPLANNED, note
+    assert note is not None and note[0] == "REPLANNED", note
 
 
 def _rejected(seed: Any, team: dict[str, Any], client: Any, request: UUID) -> None:
