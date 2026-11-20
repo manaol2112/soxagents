@@ -406,7 +406,8 @@ export const TICKMARK_WORDS: Record<
   NOT_AVAILABLE: {
     label: "Evidence not available, accepted",
     shown: "Evidence not available, accepted",
-    hint: "The evidence cannot be produced, and you accept that as a limitation.",
+    // D1 (product owner, 19 November 2026): it settles the follow-up, never the attribute.
+    hint: "The evidence cannot be produced. This settles the follow-up but does not show the attribute, so the D&I conclusion cannot be Effective on it: provide alternative evidence, or conclude Not effective.",
     quiet: "accepted without evidence",
     icon: "minus",
     tone: "neutral",

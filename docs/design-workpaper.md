@@ -507,6 +507,45 @@ a conclusion could be signed, or keep clearing OE, without resting on the record
 - *An attribute shown only on files a person decided are not relied on* is sent with
   `shown_by: "NOT_RELIED"`, and the page says so under its result.
 
+**"Evidence not available" settles the follow-up, never the attribute (D1, product owner,
+19 November 2026).** "Evidence not available, accepted" is a scope limitation a person
+accepts, not evidence (audit invariant I3). It still settles what the request's follow-up
+waits for (`attribute_dispositions.CLOSING`, `closed_by_tickmark`), but the attribute stays
+open in both Design and Implementation (`design_conclusions.SETTLES_THE_ATTRIBUTE` holds
+only `SHOWN_ON_REVIEW` and `NOT_APPLICABLE`). So `EFFECTIVE`, `NO_INSTANCE` and
+`EXCEPTIONS_NOTED` are refused while it stands, and a sign-off held to its rules that
+rests on it goes out of date on read (`rule_broken`), and OE closes for it. The
+proposal says once, as its own reason after the open results, what it needs: "Attribute D
+is accepted as not available, so it is not shown. Provide alternative evidence, or conclude
+Not effective." The ways back are a file whose current check shows the attribute, or "Shown,
+on my review" on an annotation; but where the tickmark stands on any request it is read
+first (`_DISPOSITION_PRECEDENCE` keeps "not available" ahead, which fails closed), so it
+is reopened with a reason before another request's showing counts. For a genuine scope
+limitation the only conclusion that can be signed is therefore Not effective, which needs
+a design deficiency logged first; Not concluded is never signed. The drafting agent is
+given `closes_the_attribute: false` for it. Before, "not available" counted as shown:
+Effective was proposed and signed on it, and OE opened.
+
+**Every attribute not applicable: the preparer concludes (D1, product owner, 19 November
+2026).** Where every approved attribute is marked not applicable, nothing was shown, so
+the records propose `NOT_CONCLUDED` ("Every attribute is marked not applicable; the
+preparer concludes.") and never `EFFECTIVE` (audit invariant I14). The preparer may still
+record Effective, with the reason a choice that differs from the proposal needs.
+
+**A check run again after the sign-off puts it out of date (D5, product owner, 19 November
+2026).** Any D&I check of the control's requests created or finished after the sign-off
+(`evidence_assessments.created_at` or `finished_at` after `signed_at`), whatever its
+result, puts the sign-off out of date: "the evidence of request X was checked again after
+the sign-off" (requests named, at most three, then how many more). It applies to every
+sign-off, including one made before choices. Time-based, no migration. Every way a run is
+made counts: a person's Check again, a file added, a basis changed, the retry worker, the
+backfill, a reading or OCR finishing, a sibling instance's filing shared to the control, and
+a run copied for an unchanged basis. Each such lapse shuts the OE gate (`oe_gate_reason`)
+until a reviewer signs again, which supersedes the old sign-off and, through
+`_reopen_standing`, reopens the control's review: a D&I re-sign and a control-review
+re-sign, even when the result is the same. Before, a check run again with the same result
+left the sign-off standing, so OE stayed open on an assessment no reviewer saw.
+
 **The body** of `GET …/design-conclusions/{control_id}` gains `proposed_conclusion`,
 `proposed_reasons`, `choice` (`{id, kind, basis, reason, proposed_kind, recorded_by,
 recorded_at, workpaper_version}` or null), `can_choose`, `design` and `implementation`
@@ -555,6 +594,26 @@ the preparer's sign-off; the reviewer's sign-off stays in D&I Conclusion and Rev
   Reopen, the versions and the Excel export); the testing workpaper's card is unchanged.
 - The reviewer still cannot be the preparer, nor the person who recorded the conclusion,
   where independence is required (3.6).
+- **The conclusion in the preparer's own words (D4, product owner, 19 November 2026).**
+  Before Prepare (and "Sign and send"), the latest workpaper version that changed the
+  conclusion section (`design_workpaper.conclusion_section`, the one finder) must be a
+  person's save made after the standing conclusion was recorded
+  (`workpaper_service.conclusion_in_own_words`): typed and time-based, never read from the
+  text. Otherwise the prepare is refused: "write the conclusion section in your own words
+  for the conclusion you recorded, then prepare"; a template with no conclusion section
+  cannot be prepared (fails closed). A new conclusion recorded later needs new words; the
+  same text saved again is not a change. The body's `conclusion.in_own_words` says it, so
+  section 7 lists the need before the press. The demo seeding its own engagement keeps the
+  rules it had. Other agent sections stay as drafted (owner decision). Before, the agent's
+  paragraph, even one saying "not effective" under an Effective conclusion, was attested
+  and signed unchanged. Known limit: "Use the draft" (3.11) saves the agent's proposal as
+  the person's in one press, which counts as the person's words.
+- **Uncited walkthrough results (D4).** A walkthrough row the agent drafts whose step,
+  evidence and result cite no passage found in a file keeps its step and evidence, and its
+  result reads "No source was cited for this result, so it was emptied: read the
+  walkthrough again." (`workpaper_service._apply`, from the count of citations found).
+  The procedure "Walked one instance of the control through N steps" is written only for a
+  walkthrough a person recorded (source `PERSON`), never for the agent's draft of it.
 
 ## 3.8 One D&I step: the preparer sends it for review, the reviewer signs in section 7 (product owner, 16 November 2026)
 

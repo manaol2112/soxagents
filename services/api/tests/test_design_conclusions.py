@@ -16,7 +16,7 @@ import psycopg
 import pytest
 from fastapi.testclient import TestClient
 from psycopg.types.json import Jsonb
-from support import Database, consider_design_points
+from support import Database, conclude_in_own_words, consider_design_points
 from test_attribute_dispositions import REASON, _ids
 from test_attribute_dispositions import _record as _tickmark
 from test_attribute_dispositions import _reopen as _reopen_tickmark
@@ -482,8 +482,11 @@ class _Signing:
     def prepare(self) -> None:
         bench = self.bench
         # Every point of the workpaper is settled first, as preparing it needs (section
-        # 3.9): the check's review leaves the ticket's reliability open.
+        # 3.9): the check's review leaves the ticket's reliability open. And, since 19
+        # November 2026 (D4, rewritten: old, the agent's conclusion text was prepared as
+        # it was), the conclusion section is saved in the preparer's own words.
         consider_design_points(bench.owner, bench.base, bench.control)
+        conclude_in_own_words(bench.owner, bench.base, bench.control)
         listed = bench.owner.get(f"{bench.base}/workpapers", params={"control_id": bench.control})
         paper = next(item for item in listed.json() if item["stage"] == "DESIGN")
         prepared = bench.owner.post(
@@ -649,10 +652,15 @@ def test_an_exception_a_person_recorded_is_never_signed_over_as_effective(
     )
 
     # Lifted by changing the tickmarks, each with a reason: A's is reopened, B's is
-    # changed to an accepted limitation. Nothing waits, and the reviewer signs.
+    # changed to not applicable. Nothing waits, and the reviewer signs.
+    # Rewritten 19 November 2026 (D1, product owner). Old: B's exception was changed to
+    # "Evidence not available, accepted" and Effective was signed on it. New: B is changed
+    # to "Not applicable", which settles the attribute; an accepted limitation no longer
+    # does, so Effective could not be signed on it (test_an_accepted_limitation_is_not_
+    # evidence...). Why: a scope limitation is not evidence. Every assertion is kept.
     assert _reopen_tickmark(bench, ids["A"], case.tickmark("A")["id"]).status_code == 200
     assert case.body()["blocking"] == [EXCEPTION_ON.format(code="B")]
-    changed = _tickmark(bench, ids["B"], "NOT_AVAILABLE", replaces=case.tickmark("B")["id"])
+    changed = _tickmark(bench, ids["B"], "NOT_APPLICABLE", replaces=case.tickmark("B")["id"])
     assert changed.status_code == 200, changed.text
     body = case.body()
     assert (body["blocking"], body["exceptions"], body["can_sign"]) == ([], [], True)
@@ -724,8 +732,13 @@ def test_a_tickmark_changed_after_the_sign_off_puts_it_out_of_date(migrated: Dat
     ]
     # Tickmarks on two attributes as well: each kind has its own reason, the attributes
     # in their order.
+    # Rewritten 19 November 2026 (D1). Old: A was accepted as not available, and Effective
+    # signed again over it. New: A is marked not applicable; a limitation accepted after an
+    # Effective sign-off also breaks its rule (its own test: test_an_effective_sign_off_
+    # goes_out_of_date_when_its_attribute_becomes_not_available). Why: a scope limitation
+    # is not evidence. The reasons asserted are kept.
     assert _tickmark(bench, ids["C"], "NOT_APPLICABLE").status_code == 200
-    assert _tickmark(bench, ids["A"], "NOT_AVAILABLE").status_code == 200
+    assert _tickmark(bench, ids["A"], "NOT_APPLICABLE").status_code == 200
     assert out_of_date()["out_of_date"] == [
         "tickmarks on attributes A and C changed after the sign-off",
         "the reliability decision on ticket REQ-1041.txt changed after the sign-off",

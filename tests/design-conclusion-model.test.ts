@@ -16,10 +16,12 @@ import {
   draftUnchanged,
   EXCEPTIONS_NEED,
   holdsBelow,
+  lapsedNext,
   NOT_READY_TO_SIGN,
   namedConclusion,
   outOfDateNext,
   parseDesignConclusion,
+  preparedReviewWords,
   RECORDED_BY_VIEWER,
   RECORDED_UNREAD,
   reasonOnChoosing,
@@ -1142,6 +1144,78 @@ describe("the independent review of the preparer's conclusion", () => {
     assert.match(
       RECORDED_UNREAD,
       /^Recorded, but the page could not read it again/,
+    );
+  });
+});
+
+// Design review, 20 November 2026: a sign-off that lapsed on a re-check (D5) read
+// "Reviewed not sent for review" under "the sign-off ... is out of date", and the
+// preparer was told only that OE waits.
+describe("a lapsed sign-off of a prepared workpaper with no request standing", () => {
+  const RILEY = "01900000-0000-7000-8000-000000000021";
+  const SAM = "01900000-0000-7000-8000-000000000022";
+  const reviewer = (id: string, name: string, offered: boolean) => ({
+    id,
+    name,
+    role: "REVIEWER",
+    waiting: 0,
+    offered,
+    why_not: offered ? "" : "Cannot review their own workpaper",
+  });
+  const lapsed = (reviewers: unknown[]) => {
+    const parsed = parseDesignConclusion(
+      body({
+        status: "OUT_OF_DATE",
+        proposed_conclusion: "EFFECTIVE",
+        choice: { ...choice, kind: "EFFECTIVE", proposed_kind: "EFFECTIVE" },
+        can_sign: false,
+        viewer_is_reviewer: false,
+        viewer_prepared: true,
+        signed: { ...signoff, verdict: "EFFECTIVE", conclusion: "EFFECTIVE" },
+        out_of_date: ["the evidence was checked again after the sign-off"],
+        review_request: null,
+        reviewers,
+      }),
+    );
+    assert.ok(parsed !== null);
+    return parsed;
+  };
+
+  it("says the sign-off is out of date, never that no review happened", () => {
+    const stale = lapsed([reviewer(RILEY, "Riley Reviewer", true)]);
+    assert.equal(preparedReviewWords(stale), "· sign-off out of date");
+    assert.equal(
+      preparedReviewWords({ status: "TO_SIGN", reviewFlow: true }),
+      "not sent for review",
+    );
+    assert.equal(
+      preparedReviewWords({ status: "TO_SIGN", reviewFlow: false }),
+      "not signed off yet",
+    );
+  });
+
+  it("says who it waits for", () => {
+    assert.equal(
+      lapsedNext(lapsed([reviewer(RILEY, "Riley Reviewer", true)])),
+      "Waiting for Riley Reviewer to sign off again. OE waits until then.",
+    );
+    assert.equal(
+      lapsedNext(
+        lapsed([
+          reviewer(RILEY, "Riley Reviewer", true),
+          reviewer(SAM, "Sam Second", true),
+        ]),
+      ),
+      "Waiting for Riley Reviewer or another reviewer to sign off again. OE waits until then.",
+    );
+    assert.equal(
+      lapsedNext(
+        lapsed([
+          reviewer(RILEY, "Riley Reviewer", false),
+          reviewer(SAM, "Sam Second", false),
+        ]),
+      ),
+      "Waiting for a reviewer to sign off again. OE waits until then.",
     );
   });
 });

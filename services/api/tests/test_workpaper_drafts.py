@@ -484,7 +484,13 @@ def test_saving_a_section_deletes_my_working_copy_and_preparing_deletes_every_on
     assert whose() == [(desk.text, owner_id, second)]
     # The save, the sign-off and the reopening are the workpaper's audit events since the
     # first working copy was kept: no working copy, kept, replaced or deleted, ever is one.
+    # Rewritten 19 November 2026 (D4). Old: one "workpaper.edited" (the section saved
+    # above). New: two: recording the conclusion (desk.conclude, support.record_design_
+    # choice) now also saves the conclusion section in the preparer's own words, as
+    # preparing needs. Why: the prepare is refused on the drafted conclusion text. The
+    # rest is as before: no working copy is ever an audit event.
     assert desk.audited()[audited:] == [
+        "workpaper.edited",
         "workpaper.edited",
         "workpaper.prepared",
         "workpaper.reopened",

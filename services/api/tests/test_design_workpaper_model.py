@@ -1015,15 +1015,19 @@ def test_a_note_is_the_attributes_by_its_wording() -> None:
 def test_a_procedure_is_listed_only_where_the_records_show_it_was_done() -> None:
     # Files in force and nothing checked, no walkthrough: nothing was done.
     assert procedures_of(REQUESTS, {}, ATTRIBUTES, _walk()) == []
-    # A walkthrough a person or the agent recorded, and nothing else.
+    # A walkthrough a person recorded, and nothing else.
+    # Rewritten 19 November 2026 (D4, product owner). Old: the agent's draft of the steps
+    # (AGENT) was listed as a walkthrough performed. New: only a person's (PERSON) is; the
+    # agent's is not, as a template's starter rows are not. Why: an agent's observation is
+    # never written up as a procedure performed (audit invariant I12).
     walked = "Walked one instance of the control through 3 steps, recorded in the walkthrough."
-    assert procedures_of(REQUESTS, {}, ATTRIBUTES, _walk(3, "AGENT")) == [walked]
+    assert procedures_of(REQUESTS, {}, ATTRIBUTES, _walk(3, "AGENT")) == []
     assert procedures_of(REQUESTS, {}, ATTRIBUTES, _walk(3, "PERSON")) == [walked]
     # A template's starter rows are not a walkthrough.
     assert procedures_of(REQUESTS, {}, ATTRIBUTES, _walk(3, "RECORDS")) == []
     # A current check read two files: inspected, and no comparison or report is claimed.
     plain = {R1: _check(_item(A))}
-    assert procedures_of(REQUESTS, plain, ATTRIBUTES, _walk(1)) == [
+    assert procedures_of(REQUESTS, plain, ATTRIBUTES, _walk(1, "PERSON")) == [
         "Inspected 2 files received for 1 request: \u201cWalkthrough instance\u201d.",
         "Walked one instance of the control through 1 step, recorded in the walkthrough.",
     ]
@@ -1263,10 +1267,13 @@ def test_a_conclusion_is_signed_only_from_its_sign_off_record() -> None:
     # adds the records' proposed conclusion, its reasons and the preparer's choice to the
     # conclusion part. Old expectation: exactly the five keys below. New: the same five,
     # unchanged, and the three added ones as the D&I conclusion gives them.
+    # 19 November 2026 (D4): the shape grew by `in_own_words` (False here: the section is
+    # the agent's and no conclusion is recorded); every other key is as it was.
     assert proposed.model_dump() == {
         "text": "The evidence supports an effective design. [^1]", "source": "AGENT",
         "proposed": "EFFECTIVE", "words": "Effective", "signed": False,
         "proposed_conclusion": "NOT_CONCLUDED", "proposed_reasons": [], "choice": None,
+        "in_own_words": False,
     }  # fmt: skip
     signed = conclusion_of(section, _conclusion("SIGNED_OFF", "EFFECTIVE", "EFFECTIVE"))
     assert (signed.signed, signed.words) == (True, "Effective")
@@ -1281,7 +1288,7 @@ def test_a_conclusion_is_signed_only_from_its_sign_off_record() -> None:
     assert none.model_dump() == {
         "text": "", "source": "RECORDS", "proposed": None, "words": "Not concluded yet",
         "signed": False, "proposed_conclusion": "NOT_CONCLUDED", "proposed_reasons": [],
-        "choice": None,
+        "choice": None, "in_own_words": False,
     }  # fmt: skip
 
 
@@ -1884,8 +1891,10 @@ def test_the_drafter_is_given_the_results_and_the_tickmarks_as_bounded_data() ->
             "reason": "The approval is dated after the grant.", "relied_on": "",
         },
         {
+            # Rewritten 19 November 2026 (D1). Old: True. New: False: "not available"
+            # settles the follow-up, never the attribute (a limitation is not evidence).
             "attribute": "B", "tickmark": "Evidence not available, accepted",
-            "closes_the_attribute": True, "recorded_by": "Dana Lee",
+            "closes_the_attribute": False, "recorded_by": "Dana Lee",
             "recorded_on": "14 November 2026",
             "reason": record["tickmarks"][1]["reason"], "relied_on": "o" * view.DRAFTER_RELIED_ON,
         },
@@ -2266,3 +2275,30 @@ def test_every_standing_exception_is_read_whatever_the_state_of_its_requests_che
     assert [(e.code, e.requirement_id, e.check_current) for e in found_all] == [
         ("A", R2, False), ("B", R1, True), ("B", R2, False),
     ]  # fmt: skip
+
+
+def test_an_accepted_limitation_on_one_request_is_read_first_over_a_review_on_another() -> None:
+    """D1 (product owner, 19 November 2026; audit invariant I3), pure. B is accepted as not
+    available on R1 and shown on review on R2. The attribute reads by the most cautious
+    closing tickmark (read_by: "not available" first), so it stays not available and open
+    in both results until that tickmark is reopened; a showing on another request does not
+    lift it. Reopened (only the review stands), it is settled."""
+    from ai_workforce_api import design_conclusions
+
+    limited = _disposed("NOT_AVAILABLE", B, R1)
+    reviewed = _disposed("SHOWN_ON_REVIEW", B, R2, recorded_at=RECORDED_AT)
+    assert view.read_by([reviewed, limited]) is limited
+    both = design_conclusions.results_of(
+        [design_conclusions.AttributeStanding("B", view.read_by([reviewed, limited]).kind, None)]
+    )
+    assert (both.design.result, both.implementation.result) == ("OPEN", "OPEN")
+    # Said once, in the proposal (design review, 20 November 2026), not in each result.
+    assert both.not_available == ("B",)
+    assert "accepted as not available" in design_conclusions.proposal_of(0, both)[1][-1]
+    only_review = design_conclusions.results_of(
+        [design_conclusions.AttributeStanding("B", view.read_by([reviewed]).kind, None)]
+    )
+    assert (only_review.design.result, only_review.implementation.result) == (
+        "DESIGNED",
+        "IN_PLACE",
+    )
