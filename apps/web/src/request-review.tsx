@@ -373,7 +373,8 @@ export function RequestReview({
         {redraft.banner && editable && (approver || !written) && !editing ? (
           <button
             type="button"
-            className="btn btn-sm"
+            // Secondary: Approve and send stays the one primary action on the panel.
+            className="btn btn-secondary btn-sm"
             disabled={busy}
             onClick={() => review.run("redraft", { intent: "redraft" })}
           >
