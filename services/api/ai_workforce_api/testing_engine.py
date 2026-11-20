@@ -1276,8 +1276,8 @@ def resync_open_sheets(
         # and its sign-off is held with the reason (test_sheets._sheet).
         return []
     queued: list[UUID] = []
-    for sid, stored in cursor.execute(
-        "SELECT id, attributes FROM test_sheets WHERE project_id = %s "
+    for sid, stored, run_status in cursor.execute(
+        "SELECT id, attributes, run_status FROM test_sheets WHERE project_id = %s "
         "AND engagement_control_id = %s AND status = 'OPEN' "
         "AND (%s::uuid IS NULL OR id = %s) ORDER BY id FOR UPDATE",
         (project_id, control_id, sheet_id, sheet_id),
@@ -1326,7 +1326,12 @@ def resync_open_sheets(
         _audit(cursor, organization_id, project_id, actor, sid, "testing.sheet_resynced",
                {"attributes_before": old, "attributes": new, "items_marked": marked,
                 "plan_revision": basis.revision})  # fmt: skip
-        if marked and (queued_id := request_run(cursor, UUID(str(sid)))) is not None:
+        # A run in progress read the items before the change: the new list bumped them, so
+        # its writes are refused, and it is asked to look again when it ends. Before, only
+        # a marked item asked, so a run under way over a removal or a new order ended with
+        # its untested items left untested and no run asked for.
+        working = not same and run_status == "WORKING"
+        if (marked or working) and (queued_id := request_run(cursor, UUID(str(sid)))) is not None:
             queued.append(queued_id)
     return queued
 
@@ -1334,15 +1339,20 @@ def resync_open_sheets(
 def resync_everywhere(connection: psycopg.Connection[Any]) -> int:
     """At deploy: every open sheet of a running engagement brought in step once (sheets
     opened before ST-1 kept the attributes they opened with). Returns the sheets marked to
-    run; the worker resumes them (open_runs)."""
+    run; the worker resumes them (open_runs). Each control commits on its own, so one
+    failure keeps the others' and no plan stays locked to the end (review note N6, 19
+    November 2026: the list was read outside a transaction block, which made every
+    control's block a savepoint of it)."""
     count = 0
-    for organization_id, project_id, control_id in connection.execute(
-        """
-        SELECT DISTINCT s.organization_id, s.project_id, s.engagement_control_id
-        FROM test_sheets s JOIN projects p ON p.id = s.project_id
-        WHERE s.status = 'OPEN' AND p.status <> 'ARCHIVED' AND p.deleted_at IS NULL
-        """
-    ).fetchall():
+    with transaction(connection) as cursor:
+        controls = cursor.execute(
+            """
+            SELECT DISTINCT s.organization_id, s.project_id, s.engagement_control_id
+            FROM test_sheets s JOIN projects p ON p.id = s.project_id
+            WHERE s.status = 'OPEN' AND p.status <> 'ARCHIVED' AND p.deleted_at IS NULL
+            """
+        ).fetchall()
+    for organization_id, project_id, control_id in controls:
         with transaction(connection) as cursor:
             lock_plan(cursor, control_id)
             count += len(resync_open_sheets(cursor, organization_id, project_id, control_id, None))

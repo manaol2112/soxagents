@@ -1244,6 +1244,89 @@ def test_more_attributes_than_a_sheet_holds_leave_the_sheet_and_hold_its_sign_of
     assert current["proposed_conclusion"] == "INCOMPLETE"
 
 
+def test_a_new_order_during_a_run_asks_the_run_to_look_again(migrated: Database) -> None:
+    """ST-1 review note N5 (19 November 2026). A new list bumps every item, so a run in
+    progress has its writes refused. Before, only an item marked to be tested again asked
+    for a run: with no tested item (or a removal), the run ended and its untested items
+    stayed untested with nothing asked. Now the run is asked to look again."""
+    import json
+
+    from ai_workforce_api.db import transaction
+    from ai_workforce_api.testing_engine import lock_plan, resync_open_sheets
+
+    team, _client, sheet = _open_tested(migrated, "basis-working")
+    control = UUID(sheet["control_id"])
+    with connect(migrated.url) as connection:
+        stored = connection.execute(
+            "SELECT test_attributes FROM engagement_controls WHERE id = %s", (control,)
+        ).fetchone()
+        assert stored is not None and len(stored[0]) >= 2
+        # Nothing tested yet, and a run under way; then a new order.
+        connection.execute(
+            "UPDATE test_items SET tested_at = NULL, needs_test = true WHERE test_sheet_id = %s",
+            (sheet["id"],),
+        )
+        connection.execute(
+            "UPDATE test_sheets SET run_status = 'WORKING', "
+            "run_requested_at = '2000-01-01T00:00:00Z' WHERE id = %s",
+            (sheet["id"],),
+        )
+        connection.execute(
+            "UPDATE engagement_controls SET test_attributes = %s::jsonb WHERE id = %s",
+            (json.dumps(list(reversed(stored[0]))), control),
+        )
+        connection.commit()
+        with transaction(connection) as cursor:
+            lock_plan(cursor, control)
+            queued = resync_open_sheets(cursor, team["org"], team["project"], control, None)
+        row = connection.execute(
+            "SELECT run_status, run_requested_at, attributes FROM test_sheets WHERE id = %s",
+            (sheet["id"],),
+        ).fetchone()
+    assert row is not None
+    assert row[2] == list(reversed(stored[0]))
+    assert queued == [UUID(sheet["id"])]
+    assert row[0] == "WORKING" and row[1].year > 2000
+
+
+def test_the_deploy_pass_brings_open_sheets_in_step_one_control_at_a_time(
+    migrated: Database,
+) -> None:
+    """ST-1 review note N6 (19 November 2026). At deploy, every open sheet of a running
+    engagement is brought in step with the approved attributes. Before, the controls were
+    read outside a transaction block, so every control's block was a savepoint of one
+    transaction: a failure rolled the whole pass back and every plan stayed locked to the
+    end. Now each control commits on its own."""
+    import json
+
+    import psycopg
+    from psycopg.pq import TransactionStatus
+
+    from ai_workforce_api.testing_engine import resync_everywhere
+
+    _team, _client, sheet = _open_tested(migrated, "basis-deploy")
+    control = UUID(sheet["control_id"])
+    with connect(migrated.url) as connection:
+        stored = connection.execute(
+            "SELECT test_attributes FROM engagement_controls WHERE id = %s", (control,)
+        ).fetchone()
+        assert stored is not None and len(stored[0]) >= 2
+        connection.execute(
+            "UPDATE engagement_controls SET test_attributes = %s::jsonb WHERE id = %s",
+            (json.dumps(list(reversed(stored[0]))), control),
+        )
+        connection.commit()
+    # A fresh connection, as the deploy step (migrate.py) opens it.
+    with psycopg.connect(migrated.url, connect_timeout=3) as connection:
+        resync_everywhere(connection)
+        assert connection.info.transaction_status == TransactionStatus.IDLE
+    with connect(migrated.url) as connection:
+        row = connection.execute(
+            "SELECT attributes FROM test_sheets WHERE id = %s", (sheet["id"],)
+        ).fetchone()
+    assert row is not None and row[0] == list(reversed(stored[0]))
+
+
 def test_a_filled_in_client_value_is_the_same_attribute_and_tests_nothing_again(
     migrated: Database,
 ) -> None:
