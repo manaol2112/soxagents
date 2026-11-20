@@ -29,7 +29,7 @@ import {
   initialSelection,
   isReason,
   LAYERS,
-  LEFT_OUT_REASONS,
+  leftOutReasons,
   needsReason,
   parseSuggestion,
   reasonFacts,
@@ -195,6 +195,10 @@ function Wizard({
 
   const live = systems.find((item) => item.id === systemId) ?? null;
   const assessment = live?.assessment ?? null;
+  const reasonOptions = useMemo(
+    () => leftOutReasons(live?.socReports ?? []),
+    [live],
+  );
   const candidates = assessment?.candidates ?? [];
   const working =
     assessment !== null &&
@@ -956,7 +960,7 @@ function Wizard({
                               multiline
                               maxLength={500}
                               value={notes[item.controlRef] ?? ""}
-                              options={LEFT_OUT_REASONS}
+                              options={reasonOptions}
                               placeholder="Why it does not apply, or who tests it instead"
                               error={bad ? REASON_ERROR : null}
                               onChange={(value) =>
@@ -1012,7 +1016,7 @@ function Wizard({
                             multiline
                             maxLength={500}
                             value={areaNotes[area.domain] ?? ""}
-                            options={LEFT_OUT_REASONS}
+                            options={reasonOptions}
                             placeholder="Pick a suggestion or write the reason"
                             error={bad ? REASON_ERROR : null}
                             onChange={(value) =>

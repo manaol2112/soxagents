@@ -2468,12 +2468,22 @@ export function initialNotes(
 }
 
 /** Reasons usually given for leaving controls out of a system: one is picked, or the
- * team's own words are written instead (suggest, don't ask). */
-export const LEFT_OUT_REASONS: readonly string[] = [
-  "Relied on the service organization's SOC 1 report",
-  "Not relevant to financial reporting",
-  "Covered by another control",
-];
+ * team's own words are written instead (suggest, don't ask). A suggestion never claims
+ * more than the screen shows: reliance on a SOC 1 report is offered only once a SOC 1
+ * report for the system has been read; until then the reason says the controls are
+ * expected to be covered by one. */
+export function leftOutReasons(reports: readonly SocReport[]): string[] {
+  const onFile = reports.some(
+    (report) => report.status === "READ" && report.reportKind === "SOC1",
+  );
+  return [
+    onFile
+      ? "Relied on the service organization's SOC 1 report"
+      : "Expected to be covered by the service organization's SOC 1 report",
+    "Not relevant to financial reporting",
+    "Covered by another control",
+  ];
+}
 
 /** A reason as the API stores it: spacing collapsed. */
 function reasonText(text: string | undefined): string {

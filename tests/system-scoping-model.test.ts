@@ -15,6 +15,7 @@ import {
   filterOffers,
   initialNotes,
   initialSelection,
+  leftOutReasons,
   needsReason,
   otherRecommendations,
   parseOnboarding,
@@ -794,6 +795,52 @@ describe("SOC 1 reports to address", () => {
       ],
     );
     assert.equal(items[1]?.cuecs, 2);
+  });
+});
+
+describe("the reasons suggested for leaving controls out", () => {
+  const report = (
+    status: SocReport["status"],
+    reportKind: string,
+  ): SocReport => ({
+    id: `${status}-${reportKind}`,
+    fileName: "soc.pdf",
+    status,
+    note: "",
+    reportKind,
+    serviceOrganization: "",
+    reportType: "TYPE_2",
+    periodStart: null,
+    periodEnd: null,
+    opinion: "UNQUALIFIED",
+    opinionPage: null,
+    scope: "",
+    exceptions: [],
+    cuecs: [],
+  });
+  const relied = "Relied on the service organization's SOC 1 report";
+  const expected =
+    "Expected to be covered by the service organization's SOC 1 report";
+
+  it("offers reliance on a SOC 1 report only once one has been read", () => {
+    assert.deepEqual(leftOutReasons([report("READ", "SOC1")]), [
+      relied,
+      "Not relevant to financial reporting",
+      "Covered by another control",
+    ]);
+  });
+
+  it("never claims reliance while no SOC 1 report is on file", () => {
+    for (const reports of [
+      [],
+      [report("READING", "SOC1")],
+      [report("FAILED", "SOC1")],
+      [report("READ", "SOC2"), report("READ", "OTHER")],
+    ]) {
+      const options = leftOutReasons(reports);
+      assert.equal(options[0], expected);
+      assert.equal(options.includes(relied), false);
+    }
   });
 });
 
