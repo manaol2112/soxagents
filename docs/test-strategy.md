@@ -121,13 +121,41 @@ refreshes the times from a run's logs); the fast tier's files that are not
 critical (`make test-fast-only`, `FAST_PY` minus `CRITICAL_PY`, which no CI run reached
 before; every file of either list runs in exactly one part); every Node test, which includes
 `CRITICAL_NODE`; and the web app's production build (`make web-build`). `security.yml` runs
-the secret scan and the dependency audit. Branch protection requires `baseline`, which
+the secret scan (a pull request's own commits; every branch's whole history on a push and
+weekly) and the dependency audit. Branch protection requires `baseline`, which
 always runs and fails unless every part succeeded, `secrets` and `dependencies`. Each job has
 a time limit, and a test part stops itself at 25 minutes, under its job's 30, so its
 summary is written. A CI result is reported only once the run on GitHub shows it; a
 closeout before the push says that the critical tier has not yet run on CI. JUnit XML is
 not uploaded as an artifact: that needs a new action, a supply-chain dependency for the
 owner to decide.
+
+### The risk-class check (report only)
+
+Decided by the product owner on 19 November 2026. `.github/workflows/risk.yml` runs
+`scripts/risk_class.py` (standard library, about a second; no agent, no test suite) on every
+pull request, and again when its body is edited. The mapping is `.github/risk-paths.toml`:
+each path's minimum class (engineering standards §2) is the highest rule that matches it,
+and an unmatched path is High. The check takes the higher of the base and head mappings, so
+a pull request cannot lower its own minimum, and it runs the base commit's copy of the
+script. It fails when the template's declaration is missing, malformed or below the
+minimum; there is no per-PR exception (a wrong minimum is fixed in the mapping, itself a
+High change). Dependabot needs no declaration only when it changes dependency files or
+workflow `uses:` pins. For High it checks that the evidence exists and is current: a design
+note (a committed docs/ file, or inline; a sensitive note stays private, with its summary
+in the body, since the repository is public), the audit invariants touched, and a review
+record whose reviewed commit is in the pull request, with no High path of it changed since.
+
+It proves presence and currency only. It cannot prove that a review happened, who did it,
+that it was independent, or its quality: every agent acts with the owner's credentials. It
+is not the independent-review gate, and under `pull_request` it guards against omission
+and mistakes, not a hostile change. It reports only for now (`--report-only`, and not a
+required check). It becomes a required check after a report-only week with at least five
+pull requests: `--report-only` is dropped and the owner adds `risk-class` to branch
+protection. `services/api/tests/test_risk_class.py` (critical tier) checks the
+rules and keeps the mapping honest: every tracked file matches a rule, every API module
+whose own test is in `CRITICAL_PY` maps to High, and an excepted module writes no SQL,
+registers no route, holds no prompt and calls no model.
 
 ### G5: a milestone
 

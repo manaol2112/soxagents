@@ -138,7 +138,7 @@ contractual or regulatory requirement to version every change of input would ove
 | The API paths the web spells out exist in the API | `services/api/tests/test_web_calls_api_routes.py` (paths built elsewhere are counted, not followed) |
 | Both background workers offer the same jobs, and every job looked up by name exists | `services/api/tests/test_scheduler_parity.py` |
 | Every request status change follows the transition table or a named service move | `services/api/tests/test_request_status_moves.py` |
-| No secret in any commit | `.github/workflows/security.yml` (gitleaks over the whole history; checked false positives in `.gitleaksignore`) |
+| No secret in any commit | `.github/workflows/security.yml` (gitleaks: a pull request's own commits on each pull request, every commit of every branch on each push and weekly; checked false positives in `.gitleaksignore`) |
 | No known advisory in a locked dependency | `.github/workflows/security.yml` (`pnpm audit`, `pip-audit`), on lockfile changes and weekly; updates proposed by `.github/dependabot.yml` |
 | Every audit invariant is held by a critical-tier test, and every open part names its increment | `services/api/tests/test_audit_invariants.py` |
 | Every model entry point fails closed against the hostile model | `services/api/tests/test_model_contract.py` |

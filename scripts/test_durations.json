@@ -123,6 +123,7 @@
     "services/api/tests/test_request_details.py": 151.4,
     "services/api/tests/test_request_status_moves.py": 7.4,
     "services/api/tests/test_review_guard.py": 0.1,
+    "services/api/tests/test_risk_class.py": 1.5,
     "services/api/tests/test_round_basis.py": 71.7,
     "services/api/tests/test_round_readiness.py": 48.5,
     "services/api/tests/test_round_reviews.py": 104.9,
