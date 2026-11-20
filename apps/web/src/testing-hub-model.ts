@@ -9,7 +9,7 @@
 import type { ControlRow } from "./engagement-model.ts";
 import type { Automation } from "./execution-model.ts";
 import { ownerWords, type Queue, type QueueItem } from "./queue-model.ts";
-import type { ControlReview } from "./review-model.ts";
+import { type ControlReview, reperformHold } from "./review-model.ts";
 import type { TestRound } from "./round-model.ts";
 import { sheetHeadline, type TestSheet } from "./sheet-model.ts";
 
@@ -448,6 +448,13 @@ function reviewStage(review: ControlReview): { stage: string; tone: Tone } {
   }
   if (responded.length > 0) {
     return { stage: `${responded.length} answered to clear`, tone: "info" };
+  }
+  // A partial or failed re-performance holds the sign-off for the reviewer's record by
+  // hand (the server's typed attestationNeeded), as on the review header and the round's
+  // reviews (design review, 20 November 2026). Before, the queue said "Ready to sign off".
+  const hold = reperformHold(review);
+  if (hold !== null) {
+    return { stage: hold, tone: "warning" };
   }
   return { stage: "Ready to sign off", tone: "success" };
 }

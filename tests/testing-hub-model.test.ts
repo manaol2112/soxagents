@@ -458,4 +458,40 @@ describe("the Testing destination", () => {
       review: 3,
     });
   });
+
+  it("holds a review whose re-performance needs the reviewer's record by hand", () => {
+    // Before (design review, 20 November 2026): "Ready to sign off" in success tone over
+    // a partial or failed re-performance; the header pill and the round's reviews held it.
+    const stages = reviewRows({
+      reviews: [
+        review({
+          id: "rv-partial",
+          controlRef: "ITGC-AC-01",
+          attestationNeeded: true,
+          reperformance: { failed: false } as ControlReview["reperformance"],
+        }),
+        review({
+          id: "rv-failed",
+          controlId: "c2",
+          controlRef: "ITGC-AC-02",
+          attestationNeeded: true,
+          reperformance: { failed: true } as ControlReview["reperformance"],
+        }),
+        review({
+          id: "rv-full",
+          controlId: "c3",
+          controlRef: "ITGC-AC-03",
+          attestationNeeded: false,
+        }),
+      ],
+      queue: null,
+      organizationId: ORG,
+      projectId: PROJECT,
+    }).map((row) => [row.controlRef, row.stage, row.tone]);
+    assert.deepEqual(stages, [
+      ["ITGC-AC-01", "Re-perform needed", "warning"],
+      ["ITGC-AC-02", "Re-performance did not finish", "warning"],
+      ["ITGC-AC-03", "Ready to sign off", "success"],
+    ]);
+  });
 });

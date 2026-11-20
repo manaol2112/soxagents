@@ -312,11 +312,15 @@ def _named(failed: Sequence[str]) -> str:
 
 def partly_reperformed(done: int, failed: Sequence[str]) -> str:
     """How a re-performance the reviewer agent did only in part says so, for a person
-    (design review, 20 November 2026): how many of the items it tried it re-performed and
-    which stand as the preparer left them. The agent is "the reviewer agent", never "the
-    reviewer" (the person) or "the model"; the check's reason stays on the call's
-    outcome. Before: "2 of 3 items could not be re-performed by the model. The reviewer
-    could not finish u0002: the answer broke a rule its work is checked against." """
+    (design review, 20 November 2026): how many of the items due it re-performed and
+    which stand as the preparer left them. `failed` is every due item it did not
+    re-perform: the ones whose call failed and, on a capped run, the ones past
+    MAX_REVIEWED_ITEMS it never tried, so the count is of the items due, as the header's
+    (code review, 20 November 2026; before, only the items tried were counted and named).
+    The agent is "the reviewer agent", never "the reviewer" (the person) or "the model";
+    the check's reason stays on the call's outcome. Before: "2 of 3 items could not be
+    re-performed by the model. The reviewer could not finish u0002: the answer broke a
+    rule its work is checked against." """
     verb = "stands" if len(failed) == 1 else "stand"
     return (
         f"The reviewer agent re-performed {done} of {done + len(failed)} items. "
@@ -326,11 +330,12 @@ def partly_reperformed(done: int, failed: Sequence[str]) -> str:
 
 def not_reperformed(failed: Sequence[str]) -> str:
     """How a re-performance whose every model call failed (FALLBACK) says so, for a person
-    (design review, 20 November 2026), worded like partly_reperformed: every item it tried
-    stands as the preparer left it. The check's reason stays on the call's outcome. Before:
-    "The reviewer agent could not finish u0002: the answer broke a rule its work is checked
-    against. The reviewer agent did not re-perform the items; the rules' checks stand on
-    their own." It named one item when none was re-performed, in a check's internal words."""
+    (design review, 20 November 2026), worded like partly_reperformed: every item due,
+    tried or past the cap, stands as the preparer left it. The check's reason stays on the
+    call's outcome. Before: "The reviewer agent could not finish u0002: the answer broke a
+    rule its work is checked against. The reviewer agent did not re-perform the items; the
+    rules' checks stand on their own." It named one item when none was re-performed, in a
+    check's internal words."""
     if len(failed) == 1:
         return (
             f"The reviewer agent did not re-perform the item. "
@@ -998,6 +1003,10 @@ def run_reperformance(
         [(entry["column"], entry["value"]) for entry in item.detail] for item in sheet.items
     )
     reperformed: set[UUID] = set()
+    capped_line = (
+        f"The {MAX_REVIEWED_ITEMS} items with the weakest support were re-performed first, "
+        f"of {len(ordered)}."
+    )
     if caller is None:
         note = "No model is configured, so the reviewer re-performs the testing by hand."
     else:
@@ -1009,10 +1018,7 @@ def run_reperformance(
         reviewed_items = 0
         for item in ordered:
             if reviewed_items >= MAX_REVIEWED_ITEMS:
-                note = (
-                    f"The {MAX_REVIEWED_ITEMS} items with the weakest support were "
-                    f"re-performed first, of {len(ordered)}."
-                )
+                note = capped_line
                 break
             if caller.cancelled():
                 finish_cancelled(
@@ -1138,18 +1144,28 @@ def run_reperformance(
         # The rules' checks always stand. The model's work is MODEL only where it
         # re-performed at least one item; when every call failed, the record says the
         # rules stood in (FALLBACK) and names the failure, never the model's work.
+        # What stands is every due item not re-performed: a failed call's and, on a
+        # capped run, each one past the cap (code review, 20 November 2026; before, only
+        # the failed ones, counted of the items tried, over the header's count of due).
+        standing = [item.label for item in ordered if item.id not in reperformed]
+        # A capped run's note says which items it took first; "tried", since some failed.
+        tried_first = (
+            f" It tried the {MAX_REVIEWED_ITEMS} items with the weakest support first."
+            if len(ordered) > MAX_REVIEWED_ITEMS
+            else ""
+        )
         if model_items:
             source = "MODEL"
             if failed_items:
                 # Said for the person (design review, 20 November 2026): what the
                 # reviewer agent did and which items stand as the preparer left them;
                 # the check's reason stays on the call's outcome, not in this line.
-                note = partly_reperformed(model_items, failed_items)
+                note = partly_reperformed(model_items, standing) + tried_first
         elif failed_items:
             source = "FALLBACK"
             # Said for the person like the partial note (design review, 20 November
             # 2026): every item it tried, by name; each call's reason is on its outcome.
-            note = not_reperformed(failed_items)
+            note = not_reperformed(standing) + tried_first
     _finish(
         connection,
         review_id,

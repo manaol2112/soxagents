@@ -862,6 +862,55 @@ def test_a_partial_reperformance_names_the_items_that_stand(migrated: Database) 
     assert review["failure_note"] == "" and review["reperform_note"] == said
 
 
+def test_a_capped_reperformance_counts_and_names_every_item_due(
+    migrated: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Code review (20 November 2026). Before, a capped run (more than MAX_REVIEWED_ITEMS
+    due) with a failed item said "re-performed X of (X + failed)", counted of the items it
+    tried, beside the header's "Re-performed X of <due>", and named only the failed items as
+    standing, not the ones past the cap; its FALLBACK said "any of the <tried> items". Now
+    both count of the items due and name every item not re-performed."""
+    import ai_workforce_api.control_reviews as control_reviews
+
+    monkeypatch.setattr(control_reviews, "MAX_REVIEWED_ITEMS", 2)
+    team, client, sheet, _file = _prepared_control(migrated, "review-capped", "DISMISS")
+    _rollforward_decided(migrated, team, client, sheet["control_id"])
+    review = client.get(f"{_base(team)}/reviews").json()[0]
+    labels = [item["label"] for item in sheet["items"]]
+    assert len(labels) == 3, labels
+    rejected = {"results": [{"index": 99, "result": "PASS", "note": "x"}]}
+    provider = _Provider([_all_pass(len(sheet["attributes"])), rejected])
+    with connect(migrated.url) as connection:
+        assert run_reperformance(connection, provider, UUID(review["id"])) == "DONE"
+    review = client.get(f"{_base(team)}/reviews").json()[0]
+    record = review["reperformance"]
+    assert (record["source"], record["due"], record["done"], record["capped"]) == (
+        "MODEL", 3, 1, True,
+    ), record  # fmt: skip
+    said = review["reperform_note"]
+    assert said.startswith("The reviewer agent re-performed 1 of 3 items. "), said
+    assert " stand as the preparer left them." in said, said
+    # The failed item and the one past the cap both stand.
+    assert sum(label in said for label in labels) == 2, (said, labels)
+    assert said.endswith("It tried the 2 items with the weakest support first."), said
+    assert review["attestation_needed"] is True
+
+    # Every call failed (FALLBACK), on another control: every item due stands, counted of
+    # the items due.
+    team, client, sheet, _file = _prepared_control(migrated, "review-capped-none", "DISMISS")
+    _rollforward_decided(migrated, team, client, sheet["control_id"])
+    review = client.get(f"{_base(team)}/reviews").json()[0]
+    labels = [item["label"] for item in sheet["items"]]
+    provider = _Provider([rejected, rejected])
+    with connect(migrated.url) as connection:
+        assert run_reperformance(connection, provider, UUID(review["id"])) == "DONE"
+    review = client.get(f"{_base(team)}/reviews").json()[0]
+    said = review["reperform_note"]
+    assert said.startswith("The reviewer agent did not re-perform any of the 3 items. "), said
+    assert all(label in said for label in labels), (said, labels)
+    assert said.endswith("It tried the 2 items with the weakest support first."), said
+
+
 def test_partly_reperformed_names_at_most_three_items() -> None:
     assert partly_reperformed(2, ["u0003"]) == (
         "The reviewer agent re-performed 2 of 3 items. u0003 stands as the preparer left it."
