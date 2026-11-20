@@ -246,10 +246,11 @@ def quality_from(
     ]
     # It says only what it checks: the request's planned items, not its wording, which a
     # person's edit can change (FO-28; old, to 19 November 2026: "each traced to the test
-    # plan", which the wording did not have to be).
-    planned = f"{len(items)} planned item{'s' if len(items) != 1 else ''} from the test plan."
+    # plan", which the wording did not have to be). Its label names the test plan, so the
+    # detail does not again (design review, 19 November 2026).
+    planned = f"{len(items)} planned item{'s' if len(items) != 1 else ''}."
     if phase != "DESIGN":
-        planned += " Each item that evidences an attribute is linked to an approved attribute."
+        planned += " Attribute evidence is linked to approved attributes."
     checks.append(
         Check(
             key="mapping",

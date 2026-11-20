@@ -972,20 +972,36 @@ def draft_runner(settings: Settings, provider: ModelProvider | None = None) -> D
 PROMPT_VERSION = "evidence-coordinator/3"
 
 # What a draft that was not written says (pbc_drafts.note), and why it was not; for the
-# requests whose wording no draft replaces, also what a Redraft answers (409).
+# requests whose wording no draft replaces, also what a Redraft answers (409), which the
+# request panel shows in place of its Redraft (request_details.redraft_refusal) and the
+# console's redraft_request relays. Each is a sentence written for people (design review,
+# 19 November 2026: the no-phase answer was not one, so the panel showed a generic line).
 SAMPLE_REQUEST = "A sample request lists the selected samples; its wording stays."
 SAMPLE_REDRAFT = (
     "A sample request lists the selected samples, so it is not redrafted. Edit its wording instead."
 )
 UNPHASED = "The request carries planned evidence without a testing phase; its wording stays."
 UNPHASED_REDRAFT = (
-    "request carries planned evidence without a testing phase and cannot be redrafted"
+    "This request has planned evidence but no testing phase, so it is not redrafted. Edit its "
+    "wording instead."
 )
+# An over-full request keeps the wording the test plan wrote for it: every change to a draft
+# request's planned items rewrites it from all of them (evidence_plans.render_into), so it
+# names every planned item and nothing is asked of the person but the rule (design review,
+# 19 November 2026: a seeded 15-item request listed all 15).
 TOO_MANY = (
-    "The plan has more items than one drafted request can hold; the request keeps its "
-    "current wording."
+    "The test plan has more items than one drafted request can hold; the request keeps the "
+    "test plan's wording of every item."
 )
-REPLANNED = "The planned evidence changed while the request was drafted; redraft it."
+TOO_MANY_REDRAFT = (
+    "The test plan has more items than one drafted request can hold, so it is not redrafted. "
+    "Edit its wording instead."
+)
+REPLANNED = "The planned evidence changed during drafting. Redraft the request to match the plan."
+# The notes of a draft that was not written which ask the person to act: the request's
+# wording was written for other planned items. The others (a sample, no-phase or over-full
+# request, one sent or reworded meanwhile) need nothing done (not_drafted_note).
+NEEDS_ACTION = (REPLANNED,)
 PROMPT_TOO_SHORT = (
     "The planned items are too long for one model call; the reviewed rules drafted the request."
 )
@@ -1005,7 +1021,9 @@ def _kept_wording(
     list with the plan's items, and a retest or remediation round's, which carries none,
     with a population (FO-28 review, 19 November 2026). Fail closed besides: a request
     carrying REQUESTED requirements without a testing phase is read as one from before
-    planning, so it is not drafted either. Plain reads: no lock is taken."""
+    planning, so it is not drafted either. And a request carrying more planned items than one
+    draft holds (MAX_ITEMS) is never drafted (run_draft), so a Redraft of it is refused
+    rather than offered (design review, 19 November 2026). Plain reads: no lock is taken."""
     row = connection.execute(
         """
         SELECT r.operation_key LIKE 'samples-%%' OR EXISTS (
@@ -1014,10 +1032,12 @@ def _kept_wording(
                r.testing_phase IS NULL AND EXISTS (
                    SELECT 1 FROM evidence_requirements e
                    WHERE e.pbc_request_id = r.id AND e.status = 'REQUESTED'
-               )
+               ),
+               (SELECT count(*) FROM evidence_requirements e
+                WHERE e.pbc_request_id = r.id AND e.status = 'REQUESTED') > %s
         FROM pbc_requests r WHERE r.id = %s
         """,
-        (request_id,),
+        (MAX_ITEMS, request_id),
     ).fetchone()
     if row is None:
         return None
@@ -1025,7 +1045,24 @@ def _kept_wording(
         return SAMPLE_REQUEST, SAMPLE_REDRAFT
     if row[1]:
         return UNPHASED, UNPHASED_REDRAFT
+    if row[2]:
+        return TOO_MANY, TOO_MANY_REDRAFT
     return None
+
+
+def redraft_refusal(
+    connection: psycopg.Connection[Any] | psycopg.Cursor[Any], request_id: UUID
+) -> str | None:
+    """What a Redraft of the request answers (409) when it is always refused, or None when
+    it may be asked for: the request panel shows it in place of the Redraft."""
+    held = _kept_wording(connection, request_id)
+    return None if held is None else held[1]
+
+
+def not_drafted_note(status: str, note: str) -> str:
+    """A draft that was not written, as the person is asked to act on it: its note when the
+    request's wording was written for other planned items (NEEDS_ACTION), "" otherwise."""
+    return note if status == "SKIPPED" and note in NEEDS_ACTION else ""
 
 
 def _held(connection: psycopg.Connection[Any], draft_id: UUID, note: str) -> str:
@@ -1093,7 +1130,8 @@ def run_draft(
     )
     if len(context.planned) > MAX_ITEMS:
         # No draft holds every item, the plan's own included: the wording is not replaced
-        # by one that leaves items out.
+        # by one that leaves items out (_kept_wording reads the same count; this holds the
+        # items as the draft would carry them).
         return _held(connection, draft_id, TOO_MANY)
     content: DraftContent | None = None
     source = "RULES"

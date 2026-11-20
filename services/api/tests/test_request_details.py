@@ -29,7 +29,13 @@ from ai_workforce_api.evidence_plans import _Line, render
 from ai_workforce_api.models import ModelConfig, ModelRaw, ModelRequest
 from ai_workforce_api.pbc import PbcBody
 from ai_workforce_api.pbc_drafting import (
+    MAX_ITEMS,
     PRIMARY_KIND,
+    REPLANNED,
+    SAMPLE_REDRAFT,
+    TOO_MANY,
+    TOO_MANY_REDRAFT,
+    UNPHASED_REDRAFT,
     DraftContext,
     PlannedItem,
     _planned_title,
@@ -1369,6 +1375,8 @@ def test_a_redraft_is_held_to_every_planned_item(migrated: Database) -> None:
     a kind both planned items allow is not both of them."""
     team = _ready_engagement(migrated, "rd-recover")
     draft, request, control = _phase_draft(migrated, team, "DESIGN")
+    # Offered, so the panel shows the Redraft (design review, 19 November 2026).
+    assert _details(team, str(request))["redraft_refusal"] is None
     redraft = team["owner"].post(f"{_project(team)}/pbc-requests/{request}/redraft")
     assert redraft.status_code == 200, redraft.text
     planned = _planned_of(migrated, team["project"], control, request)
@@ -1430,12 +1438,38 @@ def test_a_sample_request_keeps_its_list_of_selected_samples(migrated: Database)
     assert (state[0], state[1]) == ("DRAFT", "INTERIM") and state[2] > 0
     asked = _wording(migrated, sample)
     assert "We selected " in asked
+    # The panel shows why in place of a Redraft that cannot succeed (design review, 19
+    # November 2026: it was offered, and answered with an error).
+    read = client.get(f"{_api_base(team)}/pbc-requests/{sample}/details")
+    assert read.status_code == 200, read.text
+    assert read.json()["redraft_refusal"] == SAMPLE_REDRAFT
     refused = client.post(f"{_api_base(team)}/pbc-requests/{sample}/redraft")
     assert refused.status_code == 409, refused.text
-    assert refused.json()["detail"] == (
-        "A sample request lists the selected samples, so it is not redrafted. Edit its "
-        "wording instead."
+    assert (
+        refused.json()["detail"]
+        == SAMPLE_REDRAFT
+        == (
+            "A sample request lists the selected samples, so it is not redrafted. Edit its "
+            "wording instead."
+        )
     )
+    # The console's redraft_request relays the same sentence, as the person reads it.
+    from ai_workforce_api.authorization import Principal, PrincipalKind
+    from ai_workforce_api.console_tools import ToolContext, ToolFailed, execute, parse
+    from ai_workforce_api.settings import Settings
+
+    with connect(migrated.url) as connection:
+        tool, parsed = parse("redraft_request", {"request_id": str(sample)})
+        context = ToolContext(
+            connection=connection,
+            settings=Settings(database_url=migrated.url),
+            principal=Principal(kind=PrincipalKind.USER, id=team["owner_id"]),
+            organization_id=team["org"],
+            project_id=team["project"],
+        )
+        with pytest.raises(ToolFailed) as relayed:
+            execute(tool, parsed, context)
+    assert str(relayed.value) == SAMPLE_REDRAFT
     # A draft queued for it (reconcile, the worker, a restart) leaves it as it is, even one
     # a model wrote that names every planned item and passes the check.
     planned = _planned_of(migrated, team["project"], control, sample)
@@ -1472,10 +1506,19 @@ def test_a_request_with_planned_evidence_but_no_phase_keeps_its_wording(
         connection.commit()
     assert held is not None and held[0] > 0
     before = _wording(migrated, request)
+    # Old (to 19 November 2026): "request carries planned evidence without a testing phase
+    # and cannot be redrafted", which is not a sentence, so the panel showed a generic
+    # line (design review). New: why, and what to do; shown in place of the Redraft.
+    assert _details(team, str(request))["redraft_refusal"] == UNPHASED_REDRAFT
     refused = team["owner"].post(f"{_project(team)}/pbc-requests/{request}/redraft")
     assert refused.status_code == 409, refused.text
-    assert refused.json()["detail"] == (
-        "request carries planned evidence without a testing phase and cannot be redrafted"
+    assert (
+        refused.json()["detail"]
+        == UNPHASED_REDRAFT
+        == (
+            "This request has planned evidence but no testing phase, so it is not redrafted. "
+            "Edit its wording instead."
+        )
     )
     queued = _queued(migrated, team, control, request)
     population = _coverage_draft(
@@ -1522,11 +1565,18 @@ def test_a_plan_change_while_the_request_is_drafted_keeps_the_draft_out(
         assert run_draft(connection, model, draft) == "SKIPPED"
     assert len(model.requests) == 1
     assert _wording(migrated, request) == before
+    # Old (to 19 November 2026): "...changed while the request was drafted; redraft it.",
+    # stored and shown nowhere (design review). New: what to do, on the panel and the row.
     assert _draft_record(migrated, draft) == (
         "SKIPPED",
         None,
-        "The planned evidence changed while the request was drafted; redraft it.",
+        "The planned evidence changed during drafting. Redraft the request to match the plan.",
     )
+    shown = _details(team, str(request))
+    assert shown["planning"]["not_drafted"] == REPLANNED
+    # A Redraft drafts it to the plan as it now is, so it is offered.
+    assert shown["redraft_refusal"] is None
+    assert _row_agent(team, request) == ("NOT_DRAFTED", "Not drafted")
 
 
 def test_a_plan_larger_than_one_draft_keeps_the_requests_wording(
@@ -1555,12 +1605,113 @@ def test_a_plan_larger_than_one_draft_keeps_the_requests_wording(
         assert run_draft(connection, model, draft) == "SKIPPED"
     assert model.requests == []
     assert _wording(migrated, request) == before
+    # Old (to 19 November 2026): "The plan has more items than one drafted request can
+    # hold; the request keeps its current wording."; new: which wording it keeps (the test
+    # plan's, of every item: evidence_plans.render_into), so nothing is asked of the person.
     assert _draft_record(migrated, draft) == (
         "SKIPPED",
         None,
-        "The plan has more items than one drafted request can hold; the request keeps its "
-        "current wording.",
+        "The test plan has more items than one drafted request can hold; the request keeps "
+        "the test plan's wording of every item.",
     )
+
+
+def _row_agent(team: dict[str, Any], request: UUID) -> tuple[str, str]:
+    """The request's agent column in the Evidence list."""
+    read = team["owner"].get(f"{_project(team)}/evidence-requests", params={"size": 100})
+    assert read.status_code == 200, read.text
+    [row] = [row for row in read.json()["rows"] if row["id"] == str(request)]
+    return str(row["agent"]), str(row["agent_label"])
+
+
+def test_more_planned_items_than_a_draft_holds_are_not_offered_a_redraft(
+    migrated: Database,
+) -> None:
+    """Design review, 19 November 2026: a request whose plan carries more planned items
+    than one draft holds was offered a Redraft that is always skipped. The panel shows why
+    in its place, and a Redraft is refused with that sentence. A queued draft keeps the
+    wording, which asks nothing of the person (the test plan words every item), so neither
+    the panel nor the Evidence list says it was not drafted. Once the request is no longer
+    a draft, no refusal is shown either."""
+    team = _ready_engagement(migrated, "rd-overfull")
+    _draft_id, request, control = _phase_draft(migrated, team, "DESIGN")
+    with connect(migrated.url) as connection:
+        carried = connection.execute(
+            "SELECT count(*) FROM evidence_requirements "
+            "WHERE pbc_request_id = %s AND status = 'REQUESTED'",
+            (request,),
+        ).fetchone()
+        assert carried is not None
+        # Copies of a planned requirement, as more than a phase plans (a person may add
+        # them), carried by the request until it holds one more than a draft can.
+        for n in range(MAX_ITEMS + 1 - int(carried[0])):
+            connection.execute(
+                """
+                INSERT INTO evidence_requirements (
+                    organization_id, project_id, plan_id, engagement_control_id, phase,
+                    requirement_key, title, description, categories, objective, rationale,
+                    necessity, period_start, period_end, status, origin, pbc_request_id
+                )
+                SELECT organization_id, project_id, plan_id, engagement_control_id, phase,
+                       %s, %s, description, categories, objective, rationale, necessity,
+                       period_start, period_end, status, 'PERSON', pbc_request_id
+                FROM evidence_requirements
+                WHERE pbc_request_id = %s AND status = 'REQUESTED'
+                ORDER BY created_at, id LIMIT 1
+                """,
+                (f"person-extra-{n}", f"Signed access approval {n}", request),
+            )
+        connection.commit()
+    before = _wording(migrated, request)
+    assert _details(team, str(request))["redraft_refusal"] == TOO_MANY_REDRAFT
+    refused = team["owner"].post(f"{_project(team)}/pbc-requests/{request}/redraft")
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"] == TOO_MANY_REDRAFT
+    queued = _queued(migrated, team, control, request)
+    model = _ScriptedModel(_coverage_draft(_asked(_TICKETS)))
+    with connect(migrated.url) as connection:
+        assert run_draft(connection, model, queued) == "SKIPPED"
+    assert model.requests == []
+    assert _wording(migrated, request) == before
+    assert _draft_record(migrated, queued) == ("SKIPPED", None, TOO_MANY)
+    assert _details(team, str(request))["planning"]["not_drafted"] == ""
+    assert _row_agent(team, request)[0] != "NOT_DRAFTED"
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE pbc_requests SET status = 'CANCELLED', "
+            "cancellation_reason = 'Replaced by another request.' WHERE id = %s",
+            (request,),
+        )
+        connection.commit()
+    gone = _details(team, str(request))
+    assert gone["planning"]["not_drafted"] == "" and gone["redraft_refusal"] is None
+    assert _row_agent(team, request)[0] != "NOT_DRAFTED"
+
+
+def test_a_skipped_draft_that_needs_nothing_done_says_nothing() -> None:
+    """Only a draft whose wording was written for other planned items asks the person to
+    act: a sample, no-phase or over-full request, or one sent or reworded meanwhile, needs
+    nothing done. Every
+    sentence the panel or the console shows is one written for people (reviewProblem shows
+    a 409 as it is only when it reads as one)."""
+    from ai_workforce_api.pbc_drafting import (
+        SAMPLE_REQUEST,
+        UNPHASED,
+        not_drafted_note,
+    )
+
+    assert not_drafted_note("SKIPPED", REPLANNED) == REPLANNED
+    for note in (
+        TOO_MANY,
+        SAMPLE_REQUEST,
+        UNPHASED,
+        "The request is no longer a draft.",
+        "The request was reworded while it was drafted; that wording stays.",
+    ):
+        assert not_drafted_note("SKIPPED", note) == ""
+    assert not_drafted_note("DRAFTED", REPLANNED) == ""
+    for sentence in (SAMPLE_REDRAFT, UNPHASED_REDRAFT, TOO_MANY_REDRAFT, TOO_MANY, REPLANNED):
+        assert re.fullmatch(r"[A-Z][^\n]{2,300}\.", sentence), sentence
 
 
 def test_a_plan_too_long_for_the_prompt_is_worded_by_the_plan_without_a_model_call(
@@ -1621,9 +1772,11 @@ def test_the_mapping_check_says_only_what_it_checks() -> None:
         )
         return next(check.detail for check in checks if check.key == "mapping")
 
+    # Design review, 19 November 2026: the label names the test plan, so the detail says
+    # it once. Old: "2 planned items from the test plan. Each item that evidences an
+    # attribute is linked to an approved attribute."; new below.
     assert mapping("INTERIM") == (
-        "2 planned items from the test plan. Each item that evidences an attribute is "
-        "linked to an approved attribute."
+        "2 planned items. Attribute evidence is linked to approved attributes."
     )
-    assert mapping("DESIGN") == "2 planned items from the test plan."
+    assert mapping("DESIGN") == "2 planned items."
     assert "traced" not in mapping("INTERIM") + mapping("DESIGN")
