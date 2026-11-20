@@ -23,6 +23,12 @@ import {
 } from "./design-conclusion-model.ts";
 import { requestsNeed } from "./design-requests-model.ts";
 import { DW_SECTION } from "./design-workpaper-sections.ts";
+import {
+  REVIEW_COVERAGE_ANCHOR,
+  REVIEW_OUTSTANDING,
+  REVIEW_REOPEN_ANCHOR,
+  type ReviewHold,
+} from "./review-model.ts";
 import { STEP_DRAFT, STEP_RETURNED } from "./review-request-model.ts";
 import { CHECKING_LINE, CHECKING_STATUS } from "./understanding-once-model.ts";
 import {
@@ -148,6 +154,38 @@ const OUT_OF_ORDER = ["Started before D&I sign-off", "Not relied on"];
  * drafts Scope & Sampling, and approving it stays the next step. */
 const AGENTS_AT_WORK = /^Being updated$/;
 
+/** A signed review a typed reason holds (design review, 19 November 2026): the reason, and
+ * the one way it clears. The reviewer acts (reopen, or record coverage, with the form in
+ * focus); anyone else waits on the reviewer. Never "done" while the reason stands. */
+function holdNeed(hold: ReviewHold): PanelNeed {
+  const clears =
+    hold.clears === "reopen"
+      ? "The reviewer reopens the review and signs it again on the current records."
+      : "A reviewer who did not prepare this work documents whether the signed review covers it, or a new review is performed.";
+  if (!hold.viewerActs) {
+    // Titled by its status, as a step that waits is, with the reason in its line.
+    return {
+      kind: "wait",
+      title: REVIEW_OUTSTANDING,
+      detail: `${hold.reason}. ${clears}`,
+    };
+  }
+  return hold.clears === "reopen"
+    ? {
+        kind: "act",
+        title: hold.reason,
+        detail: clears,
+        action: { label: "Reopen the review", anchor: REVIEW_REOPEN_ANCHOR },
+      }
+    : {
+        kind: "act",
+        title: hold.reason,
+        detail:
+          "Record whether the signed review covers the current versions, or that a review of the changed work is required.",
+        action: { label: "Record coverage", anchor: REVIEW_COVERAGE_ANCHOR },
+      };
+}
+
 function needOf(step: WorkflowStep, steps: readonly WorkflowStep[]): PanelNeed {
   if (step.tone === "skipped") {
     return {
@@ -173,6 +211,9 @@ function needOf(step: WorkflowStep, steps: readonly WorkflowStep[]): PanelNeed {
       detail:
         "The design is signed off as not effective, so this work is kept on record but not relied on.",
     };
+  }
+  if (step.key === "review" && step.hold !== undefined) {
+    return holdNeed(step.hold);
   }
   if (step.status.startsWith("Waiting on")) {
     // The step that holds it: back along the edges, past steps that are themselves only

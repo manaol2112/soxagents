@@ -596,3 +596,77 @@ def _started(database: Database, slug: str) -> tuple[dict[str, Any], TestClient,
     # Nothing is requested before a person approves each control's evidence plan.
     approve_evidence_plans(database, team["project"])
     return team, owner, f"/organizations/{team['org']}/projects/{team['project']}"
+
+
+def test_the_register_and_the_panel_read_the_same_verdict_for_an_undecided_proposal(
+    migrated: Database,
+) -> None:
+    """ST-2 (product owner, 19 November 2026). A review signed before reviews recorded a
+    verdict (here signed by SQL, as a legacy row) over testing with exceptions whose
+    proposed deficiency was never decided. Before, the panel read FINAL Effective and the
+    register and export Effective, as no deficiency stood. Now all three read the verdict
+    the records propose: not effective."""
+    from test_control_reviews import _rollforward_decided
+    from test_testing_engine import _base as _base_of
+    from test_workpapers import _tested_control
+
+    from ai_workforce_api.authorization import Principal, PrincipalKind
+    from ai_workforce_api.engagement_data import ControlFilters
+    from ai_workforce_api.engagement_data import controls as exported
+
+    team, client, sheet, _file = _tested_control(migrated, "ws-undecided")
+    control = sheet["control_id"]
+    _rollforward_decided(migrated, team, client, control)
+    base = _base_of(team)
+    with connect(migrated.url) as connection:
+        version = connection.execute(
+            "SELECT version FROM test_sheets WHERE id = %s", (sheet["id"],)
+        ).fetchone()
+        papers = connection.execute(
+            "SELECT stage, prepared_version FROM workpapers WHERE engagement_control_id = %s "
+            "AND status = 'PREPARED'",
+            (control,),
+        ).fetchall()
+        assert version is not None
+        coverage = {
+            "sheet_version": int(version[0]),
+            "workpapers": [{"stage": str(s), "version": v} for s, v in papers],
+        }
+        connection.execute(
+            """
+            INSERT INTO control_reviews (organization_id, project_id, engagement_control_id,
+                                         status, opened_by, signed_by, signed_at, coverage,
+                                         reperform_status, reperformed_at)
+            VALUES (%s, %s, %s, 'SIGNED_OFF', %s, %s, clock_timestamp(), %s::jsonb, 'IDLE',
+                    clock_timestamp())
+            """,
+            (team["org"], team["project"], control, team["owner_id"], team["reviewer_id"],
+             _json(coverage)),
+        )  # fmt: skip
+        connection.execute(
+            "UPDATE tasks SET status = 'SUCCEEDED', version = version + 1 "
+            "WHERE project_id = %s AND engagement_control_id = %s AND plan_kind = 'review'",
+            (team["project"], control),
+        )
+        connection.commit()
+    panel = client.get(f"{base}/control-conclusions/{control}").json()
+    assert panel["proposed"] == "NOT_EFFECTIVE"
+    assert panel["final"] in (None, "NOT_EFFECTIVE")
+    row = next(r for r in client.get(f"{base}/workspace/controls").json() if r["id"] == control)
+    assert row["conclusion"] == "EXCEPTION"
+    with connect(migrated.url) as connection:
+        found = exported(
+            connection,
+            Principal(kind=PrincipalKind.USER, id=team["owner_id"]),
+            team["org"],
+            team["project"],
+            ControlFilters(control_ref="ITGC-AC-01"),
+        )
+    [listed] = [r for r in found["controls"] if r["control_ref"].startswith("ITGC-AC-01")]
+    assert (listed["conclusion"], listed["failed"]) == ("EXCEPTION", True)
+
+
+def _json(value: Any) -> str:
+    import json
+
+    return json.dumps(value)

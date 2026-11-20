@@ -41,12 +41,16 @@ from ai_workforce_api.testing_engine import (
     ItemView,
     Result,
     TestScheduler,
+    approved_basis,
     conclusion,
     final_results,
+    normal_wording,
     now_text,
     propose_deficiency,
     request_run,
+    resync_open_sheets,
     schedule_runs,
+    stale_basis,
 )
 from ai_workforce_api.workpaper_service import ensure, reopen_for_testing, schedule_drafts
 from ai_workforce_api.workpaper_service import open_drafts as open_workpapers
@@ -397,6 +401,16 @@ def change_sheet(
     """One decision on a sheet, as the person. Returns the sheet and a run to schedule."""
     _person(connection, principal, organization_id, project_id, Action.TASK_UPDATE)
     with transaction(connection) as cursor:
+        # The control's plan before its sheet (the lock order of evidence_reliance): plan
+        # approval holds the plan and then brings the open sheets in step (ST-1), and a
+        # sign-off or a reopening takes the plan after the sheet (refresh_decisions), so
+        # taking the sheet first could wait on an approval that waits on it.
+        cursor.execute(
+            "SELECT p.id FROM evidence_plans p JOIN test_sheets s "
+            "ON s.engagement_control_id = p.engagement_control_id "
+            "WHERE s.id = %s AND s.project_id = %s FOR UPDATE OF p",
+            (sheet_id, project_id),
+        )
         sheet = cursor.execute(
             """
             SELECT id, status, version, engagement_control_id, method, attributes,
@@ -426,6 +440,16 @@ def retest_work(version: int) -> Work:
         cursor.execute(
             "UPDATE test_items SET needs_test = true, version = version + 1 "
             "WHERE test_sheet_id = %s",
+            (sheet[0],),
+        )
+        # Tested again on the approved attributes and criteria (ST-1): the sheet is brought
+        # in step, and as every item is tested again it rests on the approved revision.
+        resync_open_sheets(cursor, organization_id, project_id, sheet[3], principal.id, sheet[0])
+        cursor.execute(
+            "UPDATE test_sheets SET plan_revision = p.approved_revision FROM evidence_plans p "
+            "WHERE test_sheets.id = %s "
+            "AND p.engagement_control_id = test_sheets.engagement_control_id "
+            "AND p.status IN ('APPROVED', 'CHANGES_PROPOSED')",
             (sheet[0],),
         )
         # Files the tester could not place are placed again with the new evidence.
@@ -540,6 +564,11 @@ def sign_off_work(body: SignOffBody) -> Work:
             raise SheetState("the tester is still testing")
         if current.proposed_conclusion == "INCOMPLETE":
             raise SheetState("; ".join(current.blocking) or "the testing is not complete")
+        # The plan revision the results were tested under (ST-1): the earliest any tested
+        # item's call recorded, or the sheet's own for an item tested without a call; one
+        # not recorded makes it unknown. Before, the current approved revision was stamped,
+        # so a revision made after the testing was never assessed (plan_impact.detect).
+        tested_under = _tested_revision(cursor, sheet[0])
         proposal = None
         # A failed retest goes back to the deficiency it retests, not to a new one.
         if current.proposed_conclusion == "NOT_EFFECTIVE" and current.round_kind != "RETEST":
@@ -552,8 +581,7 @@ def sign_off_work(body: SignOffBody) -> Work:
                 proposal = %s, proposal_status = %s,
                 -- The plan revision the results were tested under (finality, W3), and the
                 -- end of any reopening (the audit log keeps its reason).
-                plan_revision = (SELECT p.approved_revision FROM evidence_plans p
-                                 WHERE p.engagement_control_id = test_sheets.engagement_control_id),
+                plan_revision = %s,
                 reopened_at = NULL, reopened_by = NULL, reopen_reason = '',
                 reopened_from = NULL, reopened_from_id = NULL
             WHERE id = %s
@@ -564,6 +592,7 @@ def sign_off_work(body: SignOffBody) -> Work:
                 clean_text(body.note, 1000).text,
                 None if proposal is None else Json(proposal),
                 "NONE" if proposal is None else "PROPOSED",
+                tested_under,
                 sheet[0],
             ),
         )
@@ -582,6 +611,11 @@ def sign_off_work(body: SignOffBody) -> Work:
             """,
             (sheet[0],),
         )
+        # Results tested under another revision than the approved one await a reviewer's
+        # impact assessment at once, with the agent's recommendation (W3).
+        from ai_workforce_api.plan_impact import detect
+
+        detect(cursor, organization_id, project_id, sheet[3])
         # The effectiveness workpaper opens, filled from the signed-off testing.
         ensure(cursor, organization_id, project_id, sheet[3], principal.id, ("EFFECTIVENESS",))
         if current.test_round_id is not None:
@@ -673,6 +707,13 @@ def reopen_work(
         if round_row is None:
             # Interim testing is open again: the roll-forward waits for it once more.
             refresh_decisions(cursor, organization_id, project_id, sheet[3], principal.id)
+        # Open again under an approved plan, it follows the approved attributes and
+        # criteria (ST-1): items tested against a superseded basis are tested again.
+        rerun = bool(
+            resync_open_sheets(
+                cursor, organization_id, project_id, sheet[3], principal.id, sheet[0]
+            )
+        )
         # The prepared effectiveness workpaper states the signed-off conclusion, so it opens
         # again with the testing and is redrafted at the next sign-off (bug hunt, 9 November
         # 2026). A review note reopens it itself and reports it (control_reviews.py).
@@ -689,7 +730,7 @@ def reopen_work(
             "testing.reopened",
             {"reason": clean_line(body.reason, 500)},
         )
-        return False
+        return rerun
 
     return work
 
@@ -739,13 +780,26 @@ def _sheet(connection: psycopg.Connection[Any], project_id: UUID, sheet_id: UUID
         (sheet_id,),
     ).fetchall():
         links.setdefault(item_id, []).append(ItemFileBody(id=file_id, file_name=str(name)))
+    # An open sheet is tested on the approved attributes and owned criteria (ST-1): with
+    # the plan approved, an item tested against another basis is not tested, and the sheet
+    # says so in one line, for the sheet, its sign-off and the console alike. Until the
+    # plan is approved its gate is what a person reads (sign_off_work).
+    basis = approved_basis(connection, UUID(str(row[1]))) if row[5] == "OPEN" else None
+    behind = (
+        basis is not None
+        and basis.too_many is None
+        and [normal_wording(text) for text in attributes]
+        != [normal_wording(text) for text in basis.texts]
+    )
+    out_of_date = 0
     items: list[ItemBody] = []
     views: list[ItemView] = []
     for item in connection.execute(
         """
-        SELECT id, position, label, detail, needs_test, results, overrides, source, note,
-               tested_at, version, engagement_application_id
-        FROM test_items WHERE test_sheet_id = %s ORDER BY position
+        SELECT i.id, i.position, i.label, i.detail, i.needs_test, i.results, i.overrides,
+               i.source, i.note, i.tested_at, i.version, i.engagement_application_id,
+               (SELECT m.inputs FROM model_calls m WHERE m.id = i.model_call_id)
+        FROM test_items i WHERE i.test_sheet_id = %s ORDER BY i.position
         """,
         (sheet_id,),
     ).fetchall():
@@ -753,6 +807,15 @@ def _sheet(connection: psycopg.Connection[Any], project_id: UUID, sheet_id: UUID
         results = list(item[5]) if isinstance(item[5], list) else []
         overrides = list(item[6]) if isinstance(item[6], list) else []
         tested = item[9] is not None and not bool(item[4])
+        if (
+            tested
+            and basis is not None
+            and basis.too_many is None
+            and (behind or stale_basis(item[12], basis))
+        ):
+            # Tested, but against attributes or criteria that changed since: not tested.
+            tested = False
+            out_of_date += 1
         finals = final_results(len(attributes), results, overrides)
         views.append(ItemView(has_evidence=bool(files), tested=tested, final=finals))
         by_result = {entry.get("index"): entry for entry in results if isinstance(entry, dict)}
@@ -834,12 +897,25 @@ def _sheet(connection: psycopg.Connection[Any], project_id: UUID, sheet_id: UUID
         "unable": sum(1 for result in finals_all if result == "UNABLE"),
         "review": sum(1 for result in finals_all if result == "REVIEW"),
         "unplaced": sum(1 for entry in placements if entry.placement == "UNPLACED"),
+        "out_of_date": out_of_date,
     }
     blocking: list[str] = []
+    if basis is not None and basis.too_many is not None:
+        blocking.append(basis.too_many)
+        proposed = "INCOMPLETE"
+    if out_of_date:
+        blocking.append(
+            _items(
+                out_of_date,
+                "was tested before the attributes or criteria changed: test it again",
+                "were tested before the attributes or criteria changed: test them again",
+            )
+        )
     if counts["no_evidence"]:
         blocking.append(_items(counts["no_evidence"], "has no evidence", "have no evidence"))
     failed = sum(1 for item in items if item.state == "FAILED")
-    waiting = counts["items"] - counts["tested"] - counts["no_evidence"] - failed
+    # Out of date items are said once, by their own line, not as not tested yet.
+    waiting = counts["items"] - counts["tested"] - counts["no_evidence"] - failed - out_of_date
     if failed:
         blocking.append(
             _items(
@@ -900,6 +976,36 @@ def _sheet(connection: psycopg.Connection[Any], project_id: UUID, sheet_id: UUID
         ),
         cancel_state=cancelled,
     )
+
+
+def _tested_revision(cursor: psycopg.Cursor[Any], sheet_id: UUID) -> int | None:
+    """The plan revision a sheet's results were tested under, for its sign-off (ST-1): the
+    earliest of its tested items' calls (inputs.plan_revision), and the sheet's own for an
+    item tested without a call. Unknown (None) where any of them is not recorded, which an
+    impact assessment then settles (plan_impact.detect)."""
+    rows = cursor.execute(
+        """
+        SELECT i.model_call_id IS NOT NULL,
+               (SELECT m.inputs ->> 'plan_revision' FROM model_calls m
+                WHERE m.id = i.model_call_id),
+               s.plan_revision
+        FROM test_items i JOIN test_sheets s ON s.id = i.test_sheet_id
+        WHERE i.test_sheet_id = %s AND i.tested_at IS NOT NULL
+        """,
+        (sheet_id,),
+    ).fetchall()
+    revisions: list[int | None] = [
+        (None if called in (None, "") else int(called)) if has_call else own
+        for has_call, called, own in rows
+    ]
+    if not revisions:
+        own = cursor.execute(
+            "SELECT plan_revision FROM test_sheets WHERE id = %s", (sheet_id,)
+        ).fetchone()
+        return None if own is None or own[0] is None else int(own[0])
+    if any(revision is None for revision in revisions):
+        return None
+    return min(int(revision) for revision in revisions if revision is not None)
 
 
 def run_failure_note(

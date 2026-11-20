@@ -84,6 +84,13 @@ def definition_body(item: AttributeDef) -> DefinitionBody:
 
 
 def _control(cursor: psycopg.Cursor[Any], control_id: UUID) -> tuple[Any, ...] | None:
+    """The control's row, locked after its plan (lock order: evidence_reliance): the
+    statement's refresh takes the plan and then rewrites the row (control_design.
+    refresh_statement), so a link or an adoption holding the row first could wait on a fill
+    waiting on it."""
+    from ai_workforce_api.testing_engine import lock_plan
+
+    lock_plan(cursor, control_id)
     row = cursor.execute(
         "SELECT organization_id, project_id, library_key, library_version "
         "FROM engagement_controls WHERE id = %s FOR UPDATE",
