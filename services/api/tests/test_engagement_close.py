@@ -9,10 +9,11 @@ from fastapi.testclient import TestClient
 from psycopg.types.json import Json
 from support import Database, approve_evidence_plans
 from test_execution import _add_project_member, _add_user
-from test_onboarding import _base, _complete_setup, _new_engagement
+from test_onboarding import _base, _choose_methodology, _complete_setup, _new_engagement
 from test_outbound import _session, migrated
 from test_projects import _edit
 
+from ai_workforce_api.control_conclusions import CONCLUSION_CHANGED
 from ai_workforce_api.db import connect
 
 __all__ = ["migrated"]
@@ -35,8 +36,19 @@ def _launched(migrated: Database, slug: str) -> dict[str, Any]:
 
 
 def _finish_the_work(migrated: Database, team: dict[str, Any]) -> UUID:
-    """One control left in scope, tested and reviewed and signed off; every request
-    settled. Returns that control."""
+    """One control left in scope and final as the register counts it; every request
+    settled. Returns that control.
+
+    Rewritten 19 November 2026 (FO-8, D&I sign-off integrity). Old: a SIGNED_OFF test sheet
+    and a SIGNED_OFF review row were inserted, and those rows alone completed the
+    engagement. New: completion reads finality (control_conclusions.concluded), so the one
+    control is made final: its D&I conclusion signed off (approve_evidence_plans signs it,
+    as support.sign_off_design does), the roll-forward decided not applicable, the interim
+    sheet signed under the approved plan revision, and the review signed after it with the
+    coverage a review records (that sheet version, the prepared design workpaper's version,
+    and the verdict the records propose: Effective). Why: Completed must mean every
+    in-scope control is final, as the register counts it; signed rows alone also completed
+    an engagement whose review no longer covered its testing."""
     with connect(migrated.url) as connection, connection.transaction():
         control = connection.execute(
             "SELECT id FROM engagement_controls WHERE project_id = %s AND included "
@@ -50,6 +62,11 @@ def _finish_the_work(migrated: Database, team: dict[str, Any]) -> UUID:
             (team["project"], control_id),
         )
         connection.execute(
+            "UPDATE evidence_plan_phases SET applicability = 'NOT_APPLICABLE' "
+            "WHERE engagement_control_id = %s AND phase = 'ROLLFORWARD'",
+            (control_id,),
+        )
+        sheet = connection.execute(
             """
             INSERT INTO test_sheets (
                 organization_id, project_id, engagement_control_id, method, attributes,
@@ -57,20 +74,33 @@ def _finish_the_work(migrated: Database, team: dict[str, Any]) -> UUID:
             )
             VALUES (%s, %s, %s, 'TEST_OF_ONE', %s, %s, 'SIGNED_OFF', 'IDLE', 'EFFECTIVE',
                     %s, clock_timestamp())
+            RETURNING version
             """,
             (team["org"], team["project"], control_id, Json(["Approved"]), team["owner_id"],
              team["owner_id"]),
-        )  # fmt: skip
+        ).fetchone()  # fmt: skip
+        assert sheet is not None
+        papers = [
+            {"stage": str(stage), "version": int(version)}
+            for stage, version in connection.execute(
+                "SELECT stage, prepared_version FROM workpapers "
+                "WHERE engagement_control_id = %s AND status = 'PREPARED'",
+                (control_id,),
+            ).fetchall()
+        ]
+        assert [paper["stage"] for paper in papers] == ["DESIGN"]
         connection.execute(
             """
             INSERT INTO control_reviews (
                 organization_id, project_id, engagement_control_id, opened_by, status,
-                reperform_status, signed_by, signed_at
+                reperform_status, signed_by, signed_at, coverage
             )
-            VALUES (%s, %s, %s, %s, 'SIGNED_OFF', 'IDLE', %s, clock_timestamp())
+            VALUES (%s, %s, %s, %s, 'SIGNED_OFF', 'IDLE', %s, clock_timestamp(), %s)
             """,
-            (team["org"], team["project"], control_id, team["owner_id"], team["owner_id"]),
-        )
+            (team["org"], team["project"], control_id, team["owner_id"], team["owner_id"],
+             Json({"sheet_version": sheet[0], "workpapers": papers, "conclusion": "EFFECTIVE",
+                   "verdict_recorded": True})),
+        )  # fmt: skip
         connection.execute(
             "UPDATE pbc_requests SET status = 'CANCELLED', cancellation_reason = 'Test' "
             "WHERE project_id = %s AND status NOT IN ('RECEIVED', 'CLOSED', 'CANCELLED')",
@@ -112,8 +142,14 @@ def test_an_engagement_completes_only_when_its_work_is_done(migrated: Database) 
             """,
             (team["org"], team["project"], control_id, team["owner_id"]),
         )
+    # Rewritten 19 November 2026 (FO-8). Old: the open deficiency was the only item. New: it
+    # is listed, and the control is held too, because an open deficiency moves the verdict
+    # the records propose to Not effective while the review signed Effective, so the review
+    # is outstanding (control_conclusions.concluded). Why: completion reads finality.
     held = owner.get(f"{project}/completion").json()
-    assert [item["kind"] for item in held["open_items"]] == ["DEFICIENCY"]
+    assert [item["kind"] for item in held["open_items"]] == ["REVIEW", "DEFICIENCY"]
+    assert held["open_items"][0]["control_id"] == str(control_id)
+    assert held["open_items"][0]["label"].endswith(CONCLUSION_CHANGED)
     with connect(migrated.url) as connection:
         connection.execute(
             "UPDATE deficiencies SET status = 'CLOSED', closed_at = clock_timestamp() "
@@ -201,9 +237,37 @@ def test_a_completed_engagement_is_read_only_until_an_owner_reopens_it(
     body = reopened.json()
     assert body["status"] == "ACTIVE" and body["completed_at"] is None
     assert [r["reason"] for r in body["reopenings"]] == ["Client sent a corrected listing"]
-    assert owner.post(f"{base}/applications", json={"name": "Workday"}).status_code == 200
+    added = owner.post(f"{base}/applications", json={"name": "Workday"})
+    assert added.status_code == 200
+    # Rewritten 19 November 2026 (FO-8, C3). Old: the engagement was completed again at once
+    # with Workday added, and the result was never checked (it was refused: Workday's new
+    # control instance was untested, so the archive below ran on a running engagement).
+    # New: Workday's control holds completion until a person marks the system out of scope
+    # with a reason; then it completes, and that is checked. Why: completion reads finality,
+    # and a refused completion must not pass unseen.
+    held = owner.get(f"{project}/completion").json()
+    assert held["can_complete"] is False
+    assert any("Workday" in item["label"] for item in held["open_items"])
+    workday = next(a for a in added.json()["applications"] if a["name"] == "Workday")
+    marked = owner.post(
+        f"{base}/applications/{workday['id']}/remove",
+        json={"reason": "Workday is not used for financial reporting."},
+    )
+    assert marked.status_code == 200, marked.text
+    # Workday's evidence request drafts are settled as _finish_the_work settles the others.
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE pbc_requests SET status = 'CANCELLED', cancellation_reason = 'Test' "
+            "WHERE project_id = %s AND status NOT IN ('RECEIVED', 'CLOSED', 'CANCELLED')",
+            (team["project"],),
+        )
     # Completed again, it can be archived; archived stays closed for good.
-    body = owner.post(f"{project}/complete", json={"version": body["version"]}).json()
+    ready = owner.get(f"{project}/completion").json()
+    assert ready["can_complete"] is True, ready["open_items"]
+    again = owner.post(f"{project}/complete", json={"version": ready["version"]})
+    assert again.status_code == 200, again.text
+    body = again.json()
+    assert body["status"] == "COMPLETED"
     detail = owner.get(project).json()
     archived = owner.patch(
         project, json={**_edit(detail), "status": "ARCHIVED", "version": detail["version"]}
@@ -346,3 +410,172 @@ def test_a_launched_engagement_is_not_deleted_and_an_archived_draft_is(
                       "name": archived["name"]})  # fmt: skip
     assert gone.status_code == 200, gone.text
     assert owner.get(project).status_code == 404
+
+
+# FO-8 and C3 (D&I sign-off integrity, 19 November 2026): completion reads finality, and an
+# engagement with nothing in scope, or with a system in scope that has no control in scope,
+# is not completed. Audit invariants I1 (nothing is final, and nothing completes, unless
+# its whole basis is current) and I16 (completion agrees with the register).
+
+NOTHING_SCOPED = (
+    "No control is in scope, so nothing has been tested. Archive the engagement instead of "
+    "completing it."
+)
+
+
+def _register_row(team: dict[str, Any], control_id: UUID) -> dict[str, Any]:
+    rows = team["owner"].get(f"{_project(team)}/workspace/controls").json()
+    row: dict[str, Any] = next(r for r in rows if r["id"] == str(control_id))
+    return row
+
+
+def test_an_engagement_is_not_completed_while_a_control_is_not_final(
+    migrated: Database,
+) -> None:
+    """Before, completion checked that a signed sheet and a signed review existed. A sheet
+    signed again after the review (every row still SIGNED_OFF) left the control not final
+    in the register, and the engagement still completed, cancelling its open tasks. Now
+    completion holds on the register's own reason, and the POST is refused."""
+    team = _launched(migrated, "not-final")
+    owner, project = team["owner"], _project(team)
+    control_id = _finish_the_work(migrated, team)
+    assert _register_row(team, control_id)["final"] is True
+    assert owner.get(f"{project}/completion").json()["can_complete"] is True
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE test_sheets SET signed_at = clock_timestamp() + interval '1 minute', "
+            "version = version + 1 WHERE engagement_control_id = %s",
+            (control_id,),
+        )
+        statuses = connection.execute(
+            "SELECT (SELECT status FROM test_sheets WHERE engagement_control_id = %s), "
+            "(SELECT status FROM control_reviews WHERE engagement_control_id = %s)",
+            (control_id, control_id),
+        ).fetchone()
+    assert statuses == ("SIGNED_OFF", "SIGNED_OFF")
+    row = _register_row(team, control_id)
+    assert row["final"] is False
+    state = owner.get(f"{project}/completion").json()
+    assert state["can_complete"] is False
+    [item] = state["open_items"]
+    assert (item["kind"], item["control_id"]) == ("REVIEW", str(control_id))
+    # The completion card says the register's leading reason, word for word.
+    assert item["label"].endswith(": " + row["not_final"][0]["text"])
+    assert "review outstanding" in item["label"]
+    refused = owner.post(f"{project}/complete", json={"version": state["version"]})
+    assert refused.status_code == 409
+    assert owner.get(project).json()["status"] == "ACTIVE"
+
+
+def test_an_engagement_with_nothing_in_scope_is_not_completed(migrated: Database) -> None:
+    """C3. Before, an engagement launched with no control in scope had nothing open, so it
+    completed with nothing tested. Now it is held with one item that says to archive it."""
+    team = _new_engagement(migrated, "empty-scope")
+    owner, project = team["owner"], _project(team)
+    base = _base(team["org"], team["project"])
+    scoped = owner.patch(
+        f"{base}/scope", json={"scope": "ITGCs FY2027", "period_end": "2027-12-31"}
+    )
+    assert scoped.status_code == 200
+    for user_id, role in ((team["owner_id"], "LEAD"), (team["reviewer_id"], "REVIEWER")):
+        added = owner.post(f"{base}/team", json={"user_id": str(user_id), "engagement_role": role})
+        assert added.status_code == 200, added.text
+    _choose_methodology(owner, base)
+    preview = owner.get(base).json()["plan_preview"]
+    assert preview is not None and preview["items"] == []
+    launched = owner.post(f"{base}/plan/launch", json={"fingerprint": preview["fingerprint"]})
+    assert launched.status_code == 200, launched.text
+    state = owner.get(f"{project}/completion").json()
+    assert state["status"] == "ACTIVE" and state["can_complete"] is False
+    assert state["open_items"] == [{"kind": "SCOPE", "label": NOTHING_SCOPED, "control_id": None}]
+    refused = owner.post(f"{project}/complete", json={"version": state["version"]})
+    assert refused.status_code == 409
+    assert owner.get(project).json()["status"] == "ACTIVE"
+
+
+def test_taking_every_control_out_holds_completion(migrated: Database) -> None:
+    """C3. Every control taken out of scope through the API, with a reason: nothing is in
+    scope and the system has no control in scope, so completion is held by both."""
+    team = _launched(migrated, "all-out")
+    owner, project = team["owner"], _project(team)
+    base = _base(team["org"], team["project"])
+    with connect(migrated.url) as connection:
+        controls = [
+            row[0]
+            for row in connection.execute(
+                "SELECT id FROM engagement_controls WHERE project_id = %s AND included",
+                (team["project"],),
+            ).fetchall()
+        ]
+    assert controls
+    for control in controls:
+        out = owner.post(
+            f"{base}/controls/{control}/scope",
+            json={"included": False, "reason": "Covered by the vendor's SOC 1 report."},
+        )
+        assert out.status_code == 200, out.text
+    state = owner.get(f"{project}/completion").json()
+    assert state["can_complete"] is False
+    scope = [item for item in state["open_items"] if item["kind"] == "SCOPE"]
+    assert [item["label"] for item in scope] == [
+        NOTHING_SCOPED,
+        "SAP ERP: no control in scope; mark the system out of scope with your reason",
+    ]
+    refused = owner.post(f"{project}/complete", json={"version": state["version"]})
+    assert refused.status_code == 409
+
+
+def test_a_system_with_no_control_in_scope_holds_completion_until_it_is_marked_out(
+    migrated: Database,
+) -> None:
+    """C3. A system added after launch whose control instances are all taken out of scope
+    holds completion, on its own item, until a person marks the system out of scope with a
+    reason; then it completes."""
+    team = _launched(migrated, "system-gap")
+    owner, project = team["owner"], _project(team)
+    base = _base(team["org"], team["project"])
+    _finish_the_work(migrated, team)
+    added = owner.post(f"{base}/applications", json={"name": "Workday"})
+    assert added.status_code == 200, added.text
+    workday = next(a for a in added.json()["applications"] if a["name"] == "Workday")
+    # Its control instances leave scope, each with a reason; the system stays in scope.
+    with connect(migrated.url) as connection:
+        instances = [
+            row[0]
+            for row in connection.execute(
+                "SELECT id FROM engagement_controls WHERE engagement_application_id = %s "
+                "AND included",
+                (workday["id"],),
+            ).fetchall()
+        ]
+    for instance in instances:
+        out = owner.post(
+            f"{base}/controls/{instance}/scope",
+            json={"included": False, "reason": "Workday access is tested next year."},
+        )
+        assert out.status_code == 200, out.text
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE pbc_requests SET status = 'CANCELLED', cancellation_reason = 'Test' "
+            "WHERE project_id = %s AND status NOT IN ('RECEIVED', 'CLOSED', 'CANCELLED')",
+            (team["project"],),
+        )
+    state = owner.get(f"{project}/completion").json()
+    assert state["can_complete"] is False
+    assert state["open_items"] == [
+        {
+            "kind": "SCOPE",
+            "label": "Workday: no control in scope; mark the system out of scope with your reason",
+            "control_id": None,
+        }
+    ]
+    assert owner.post(f"{project}/complete", json={"version": state["version"]}).status_code == 409
+    marked = owner.post(
+        f"{base}/applications/{workday['id']}/remove",
+        json={"reason": "Workday is not used for financial reporting."},
+    )
+    assert marked.status_code == 200, marked.text
+    ready = owner.get(f"{project}/completion").json()
+    assert ready["can_complete"] is True and ready["open_items"] == []
+    done = owner.post(f"{project}/complete", json={"version": ready["version"]})
+    assert done.status_code == 200, done.text

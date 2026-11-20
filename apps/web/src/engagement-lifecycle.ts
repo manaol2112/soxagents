@@ -252,7 +252,9 @@ export function canCloseOut(role: string): boolean {
 }
 
 export type OpenItem = {
-  kind: "TEST" | "REVIEW" | "DEFICIENCY" | "REQUEST" | "RUNNING";
+  // SCOPE (C3, 19 November 2026): nothing is in scope, or a system in scope has no control
+  // in scope. Its label stands alone (no control to link to).
+  kind: "TEST" | "REVIEW" | "DEFICIENCY" | "REQUEST" | "RUNNING" | "SCOPE";
   label: string;
   controlId: string | null;
 };
@@ -282,6 +284,7 @@ const OPEN_KINDS = new Set([
   "DEFICIENCY",
   "REQUEST",
   "RUNNING",
+  "SCOPE",
 ]);
 
 function record(value: unknown): Record<string, unknown> | null {

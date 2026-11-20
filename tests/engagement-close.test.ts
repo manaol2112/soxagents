@@ -206,3 +206,46 @@ describe("close-out actions", () => {
     );
   });
 });
+
+describe("scope items on completion (C3, 19 November 2026)", () => {
+  const body = (items: unknown[]) => ({
+    status: "ACTIVE",
+    version: 3,
+    can_complete: false,
+    open_count: items.length,
+    open_items: items,
+    completed_at: null,
+    completed_by: "",
+    reopenings: [],
+    deletable: false,
+  });
+
+  it("reads a SCOPE item, with no control to link to", () => {
+    const parsed = parseCompletion(
+      body([
+        {
+          kind: "SCOPE",
+          label: "Workday: no control in scope; mark the system out of scope",
+          control_id: null,
+        },
+      ]),
+    );
+    assert.ok(parsed !== null);
+    assert.equal(parsed.openItems[0]?.kind, "SCOPE");
+    assert.equal(parsed.openItems[0]?.controlId, null);
+  });
+
+  it("still refuses the whole body for one kind it does not know", () => {
+    // The API and the web ship together: an unknown kind nulls the body rather than
+    // showing a partial list of what is open.
+    assert.equal(
+      parseCompletion(
+        body([
+          { kind: "SCOPE", label: "Nothing is in scope", control_id: null },
+          { kind: "SOMETHING", label: "x", control_id: null },
+        ]),
+      ),
+      null,
+    );
+  });
+});
