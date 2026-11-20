@@ -11115,12 +11115,14 @@ button.chip-link:hover {
   margin: 2px 0 0;
 }
 
-/* Over a by-hand attestation the statement and its note take the full row, so the
-   note's rule (its placeholder) reads whole; the button wraps below. */
+/* Over a by-hand attestation the statement, its note and the note's rule each take the
+   full row; the button wraps below. */
 .review-signoff > .check-row,
-.review-signoff > .check-row + input {
+.review-signoff > .check-row + input,
+.review-signoff > .form-hint {
   flex: 1 1 100%;
   width: 100%;
+  margin: 0;
 }
 
 /* Independent review across the engagement (Milestone 9.2): the dashboard card. */

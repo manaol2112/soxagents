@@ -813,7 +813,7 @@ def test_partly_reperformed_names_at_most_three_items() -> None:
     assert partly_reperformed(2, ["u0003"]) == (
         "The reviewer agent re-performed 2 of 3 items. u0003 stands as the preparer left it."
     )
-    assert partly_reperformed(1, ["a", "b", "c", "d", "e"]).endswith(
+    assert partly_reperformed(1, ["e", "c", "a", "d", "b"]).endswith(
         "a, b, c and 2 more stand as the preparer left them."
     )
 

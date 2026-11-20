@@ -550,10 +550,23 @@ export function ReviewTab({
                   }
                   placeholder={
                     review.attestationNeeded === true
-                      ? `What you re-performed by hand (at least ${ATTESTATION_MIN} characters)`
+                      ? "What you re-performed by hand"
                       : "Sign-off note (optional)"
                   }
+                  aria-describedby={
+                    review.attestationNeeded === true
+                      ? `review-attest-${review.id}`
+                      : undefined
+                  }
                 />
+                {review.attestationNeeded === true ? (
+                  // The note's rule, visible before submit at every width (a placeholder
+                  // is cut on a phone); minLength enforces it.
+                  <p className="form-hint" id={`review-attest-${review.id}`}>
+                    At least {ATTESTATION_MIN} characters: the items and what
+                    you checked.
+                  </p>
+                ) : null}
                 <button
                   type="submit"
                   className="btn-sm"

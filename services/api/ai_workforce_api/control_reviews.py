@@ -305,8 +305,9 @@ def partly_reperformed(done: int, failed: Sequence[str]) -> str:
     which stand as the preparer left them. The agent is "the reviewer agent", never "the
     reviewer" (the person) or "the model"; the check's reason stays on the call's
     outcome. Before: "2 of 3 items could not be re-performed by the model. The reviewer
-    could not finish u0002: the answer broke a rule its work is checked against." """
-    shown = list(failed[:NAMED_ITEMS])
+    could not finish u0002: the answer broke a rule its work is checked against." The
+    items are named in label order, not in the order the run tried them (weakest first)."""
+    shown = sorted(failed)[:NAMED_ITEMS]
     more = len(failed) - len(shown)
     if more > 0:
         named = f"{', '.join(shown)} and {more} more"
