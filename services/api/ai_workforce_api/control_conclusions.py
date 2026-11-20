@@ -14,7 +14,7 @@ records.
 """
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
@@ -435,7 +435,12 @@ def signed_verdict(facts: FinalityFacts | None) -> tuple[bool, Verdict | None]:
     return True, (value if value in ("EFFECTIVE", "NOT_EFFECTIVE") else None)
 
 
-def concluded(fin: Finality, facts: FinalityFacts | None, proposed: Verdict | None) -> Concluded:
+def concluded(
+    fin: Finality,
+    facts: FinalityFacts | None,
+    proposed: Verdict | None,
+    interim: Verdict | None = None,
+) -> Concluded:
     """FINAL only when the control review is signed, finality holds, the records propose a
     verdict, and it is the verdict the latest signed review recorded; the final verdict is
     the proposal, never the deficiencies standing now (ST-2). A review that recorded no
@@ -471,7 +476,10 @@ def concluded(fin: Finality, facts: FinalityFacts | None, proposed: Verdict | No
     return Concluded(
         "PROPOSED" if proposed is not None else "NOT_READY",
         None,
-        verdict if recorded and verdict is not None else proposed,
+        # The opinion the review reached: the verdict it signed, else the proposal, else
+        # the interim's own (a roll-forward still owed holds the proposal, not the
+        # opinion on the period tested so far).
+        verdict if recorded and verdict is not None else proposed or interim,
         tuple(reasons),
         False,
     )
@@ -488,9 +496,19 @@ def engagement_conclusions(
 
     facts = engagement_facts(connection, project_id, fin_facts)
     return {
-        each: concluded(finality(fin), fin, propose(facts[each])[0])
+        each: concluded(
+            finality(fin), fin, propose(facts[each])[0], propose(interim_only(facts[each]))[0]
+        )
         for each, fin in fin_facts.items()
     }
+
+
+def interim_only(facts: Facts) -> Facts:
+    """The facts with the roll-forward left out and nothing undecided: what the opinion on
+    the period tested so far is proposed from, while a roll-forward is still owed."""
+    return replace(
+        facts, phases={**facts.phases, "ROLLFORWARD": (False, None, None, False)}, undecided=()
+    )
 
 
 def _deficiencies(
