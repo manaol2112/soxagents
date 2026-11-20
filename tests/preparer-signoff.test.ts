@@ -299,3 +299,33 @@ describe("the screen", () => {
     );
   });
 });
+
+describe("the conclusion in the preparer's own words (D4, 19 November 2026)", () => {
+  const facts: SignOffFacts = {
+    status: "DRAFT",
+    drafting: false,
+    latest: true,
+    choice: { kind: "EFFECTIVE" },
+    unsaved: false,
+    behind: false,
+  };
+
+  it("waits for the preparer's own words where the server says they are not there", () => {
+    assert.deepEqual(signOffProblems({ ...facts, ownWords: false }), [
+      "Write the conclusion section in your own words for the conclusion you recorded.",
+    ]);
+    assert.deepEqual(signOffProblems({ ...facts, ownWords: true }), []);
+    // Unknown adds nothing here: the server's prepare refuses all the same.
+    assert.deepEqual(signOffProblems(facts), []);
+    // Recording a conclusion comes first, and Not concluded is said on its own.
+    assert.deepEqual(
+      signOffProblems({ ...facts, choice: null, ownWords: false }),
+      ["Record a conclusion first."],
+    );
+    // A prepared workpaper asks for nothing.
+    assert.deepEqual(
+      signOffProblems({ ...facts, status: "PREPARED", ownWords: false }),
+      [],
+    );
+  });
+});

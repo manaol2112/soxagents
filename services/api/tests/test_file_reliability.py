@@ -270,7 +270,9 @@ def test_each_kind_is_recorded_read_back_replaced_and_reopened_and_the_check_sta
     # settled by a decision on the file (or a consideration).
     [resting] = [
         p for p in paper["points"]
-        if p["text"].startswith("Attribute A is shown only on a file not")
+        # Reworded 19 November 2026 (D3): old "is shown only on a file not relied on",
+        # new "rests on a file not relied on" (a showing that rests on it in any part).
+        if p["text"].startswith("Attribute A rests on a file not")
     ]  # fmt: skip
     assert (resting["kind"], resting["settle"]) == ("NOT_RELIED", ["RELIABILITY", "CONSIDER"])
     assert resting["place"]["at"] == "ATTRIBUTE"
@@ -673,3 +675,62 @@ def test_where_the_migration_is_not_applied_nothing_is_read_or_ended_and_nothing
         ("", None)
     }
     assert _record(bench, ticket, "NOT_RELIED_ON").status_code == 503
+
+
+def test_a_showing_that_rests_in_part_on_a_file_not_relied_on_is_not_counted() -> None:
+    """D3 (D&I sign-off integrity, product owner, 19 November 2026; audit invariant I3),
+    pure. The approval's condition is shown on F1 and its pass on F2, and F1 is decided not
+    relied on. Before, the showing was discounted only where every file it rests on was
+    excluded, so the attribute read Shown in the instance, with a mark, and no point. Now
+    the showing does not count: no mark, shown_by NOT_RELIED, open for the design and the
+    implementation, and a point naming only F1. A decision on another request, or of the
+    other kind, changes nothing."""
+    from test_design_workpaper_model import (
+        ATTRIBUTES,
+        F1,
+        F2,
+        R1,
+        R2,
+        REQUESTS,
+        A,
+        _check,
+        _index,
+        _item,
+        _review,
+    )
+    from test_file_reliability_model import _decided
+
+    from ai_workforce_api import design_conclusions
+    from ai_workforce_api.design_points import points_of
+    from ai_workforce_api.design_workpaper import StoredOutcome, attributes_of, readings_of
+
+    split = _item(A, files=(F1, F2)).model_dump(mode="json")
+    condition, passed = (dict(split["elements"][0]) for _ in range(2))
+    condition |= {"key": "condition", "passages": [{"quote": "approved", "file_id": str(F1)}]}
+    passed |= {"key": "pass", "passages": [{"quote": "granted", "file_id": str(F2)}]}
+    split["elements"] = [condition, passed]
+    checks = {R1: _check(StoredOutcome.model_validate(split), review=_review())}
+    excluded = [_decided("NOT_RELIED_ON", F1)]
+    assert readings_of(checks[R1], excluded)[A].not_relied is True
+    # Not counted on another request's decision, nor on one establishing the file.
+    assert readings_of(checks[R1], [_decided("NOT_RELIED_ON", F1, R2)])[A].not_relied is False
+    assert readings_of(checks[R1], [_decided("ESTABLISHED_ON_REVIEW", F1)])[A].not_relied is False
+    evidence = _index(checks=checks)
+    shown, left = attributes_of(ATTRIBUTES, REQUESTS, checks, [], evidence, None, (), excluded)
+    a = next(item for item in shown if item.id == A)
+    assert (a.state, a.tickmark, a.shown_by) == ("SHOWN", "NONE", "NOT_RELIED")
+    results = design_conclusions.results_of([view_standing(a)])
+    assert (results.design.result, results.implementation.result) == ("OPEN", "OPEN")
+    points = [
+        p for p in points_of(REQUESTS, checks, ATTRIBUTES, left, [], evidence, excluded)
+        if p.kind == "NOT_RELIED"
+    ]  # fmt: skip
+    assert [(p.place.attribute_id, p.refs) for p in points] == [(A, ["E1"])]
+    assert points[0].text.startswith("Attribute A rests on a file not relied on: ")
+
+
+def view_standing(attribute: Any) -> Any:
+    """The attribute as the D&I conclusion's results read it (design_workpaper.standing_of)."""
+    from ai_workforce_api.design_workpaper import standing_of
+
+    return standing_of(attribute)

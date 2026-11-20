@@ -31,7 +31,7 @@ from uuid import UUID, uuid4
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
-from support import Database, consider_design_points, sign_off_design
+from support import Database, conclude_in_own_words, consider_design_points, sign_off_design
 from test_attribute_dispositions import _ids
 from test_attribute_dispositions import _record as _tickmark
 from test_attribute_dispositions import _reopen as _reopen_tickmark
@@ -44,7 +44,7 @@ from test_design_conclusions import (
     _control,
 )
 from test_design_workpaper import _draft_design
-from test_evidence_assurance import LOG, _Bench, _reading
+from test_evidence_assurance import APPROVAL, GRANT, LOG, _Bench, _reading, _Readings
 from test_evidence_flow import _project
 from test_execution import _add_user
 from test_file_reliability import _check as _finish_check
@@ -174,8 +174,22 @@ class _Draft:
         Moves the workpaper's version on."""
         consider_design_points(self.bench.owner, self.bench.base, self.bench.control)
 
+    def own_words(self) -> None:
+        """The preparer saves the conclusion section in their own words, as preparing needs
+        (D4, 19 November 2026), where the workpaper is a draft that can be edited.
+
+        Added 19 November 2026. Old: prepare() and Sign and send prepared the agent's or
+        the records' conclusion text as it was. New: the server refuses that
+        (PREPARE_OWN_WORDS), so the setup writes the section as a person would; the rule
+        itself is tested by its own tests (test_the_design_workpaper_is_not_prepared_on_
+        the_agents_conclusion_text)."""
+        paper = self.paper()
+        if paper["status"] == "DRAFT" and not paper["drafting"] and paper["content"]:
+            conclude_in_own_words(self.bench.owner, self.bench.base, self.bench.control)
+
     def prepare(self) -> None:
         self.settle_points()
+        self.own_words()
         paper = self.paper()
         prepared = self.bench.owner.post(
             f"{self.bench.base}/workpapers/{paper['id']}/prepare",
@@ -875,6 +889,14 @@ def test_the_workpaper_view_carries_the_results_and_a_file_not_relied_on_shows_n
 ALL_ABSENT = {code: "ABSENT" for code in "ABCDE"}
 
 
+def _rechecked(case: _Draft) -> str:
+    """D5: why a sign-off is out of date once its D&I request was checked again after it."""
+    [(title,)] = case.rows(
+        "SELECT title FROM evidence_requirements WHERE id = %s", UUID(case.bench.item_id)
+    )
+    return f"the evidence of request {title} was checked again after the sign-off"
+
+
 def _exception_stands(code: str) -> str:
     return f"an exception stands on attribute {code}, so the conclusion cannot be “Effective”"
 
@@ -1006,14 +1028,22 @@ def test_a_sign_off_stops_clearing_oe_when_its_conclusions_rule_stops_holding(
     a later check changes what the records show, with nothing recorded by a person since.
     The sign-off is out of date, in the rule's own sentence, and none of the gate's
     readers (the verdict, the gate, the effective controls, the phase progress route)
-    reads it."""
+    reads it.
+
+    Rewritten 19 November 2026 (D5, product owner: a re-check after the sign-off puts the
+    sign-off out of date). Old: each out_of_date list was the rule's sentence alone. New:
+    the later check is named first ("the evidence of request ... was checked again after
+    the sign-off"), then the rule's sentence, kept as it was. Why: the reviewer never saw
+    the later check, whatever it found. OUT_OF_DATE and the shut gate are kept."""
     # Effective, then a later check finds an exception on B.
     effective = _Draft(migrated, "dcc-held-effective")
     effective.concluded_and_signed("EFFECTIVE")
     effective.cleared()
     effective.later_check(B="DEVIATION")
     body = effective.body()
-    assert (body["status"], body["out_of_date"]) == ("OUT_OF_DATE", [_exception_stands("B")])
+    assert (body["status"], body["out_of_date"]) == (
+        "OUT_OF_DATE", [_rechecked(effective), _exception_stands("B")],
+    )  # fmt: skip
     effective.shut()
 
     # Design effective, no instance, then a later check no longer shows B.
@@ -1022,7 +1052,9 @@ def test_a_sign_off_stops_clearing_oe_when_its_conclusions_rule_stops_holding(
     no_instance.cleared()
     no_instance.later_check(B="ABSENT")
     body = no_instance.body()
-    assert (body["status"], body["out_of_date"]) == ("OUT_OF_DATE", [DESIGN_NOT_SHOWN])
+    assert (body["status"], body["out_of_date"]) == (
+        "OUT_OF_DATE", [_rechecked(no_instance), DESIGN_NOT_SHOWN],
+    )  # fmt: skip
     no_instance.shut()
 
     # Exceptions noted, then a later check shows B: no exception is left.
@@ -1031,7 +1063,9 @@ def test_a_sign_off_stops_clearing_oe_when_its_conclusions_rule_stops_holding(
     noted.cleared()
     noted.later_check()
     body = noted.body()
-    assert (body["status"], body["out_of_date"]) == ("OUT_OF_DATE", [EXCEPTIONS_NEEDED])
+    assert (body["status"], body["out_of_date"]) == (
+        "OUT_OF_DATE", [_rechecked(noted), EXCEPTIONS_NEEDED],
+    )  # fmt: skip
     noted.shut()
 
 
@@ -1233,3 +1267,356 @@ def test_migration_0165_gives_each_sign_off_its_conclusion_and_keeps_the_oe_gate
     assert (body["signed"]["conclusion"], body["signed"]["basis"], body["signed"]["reason"]) == (
         "EFFECTIVE", None, None,
     )  # fmt: skip
+
+
+# D1 (D&I sign-off integrity, product owner, 19 November 2026): "Evidence not available"
+# settles the follow-up but never shows the attribute, and an all-not-applicable control
+# never proposes Effective (a person concludes). Audit invariants I3 (an accepted
+# limitation is not evidence) and I14 (a person concludes where nothing was shown).
+
+HOW_ALL_MET = {"A": "MET", "B": "MET", "C": "MET", "D": "MET", "E": "MET"}
+_LIMITED = (
+    "Attribute B is accepted as not available, which shows nothing: alternative evidence is "
+    "needed (reopen the tickmark), or the conclusion is Not effective."
+)
+
+
+def _standing_of(*states: tuple[str, str]) -> list[design_conclusions.AttributeStanding]:
+    return [
+        design_conclusions.AttributeStanding(
+            code, state, "IMPLEMENTATION" if state == "SHOWN" else None
+        )
+        for code, state in states
+    ]
+
+
+def test_an_accepted_limitation_is_not_evidence() -> None:
+    """Pure. Before, an attribute accepted as not available counted as shown in both the
+    design and the implementation, so Effective was proposed and recorded on it. Now it
+    stays open in both, the proposal is Not concluded, Effective, Design effective with no
+    instance and Exceptions noted are refused, and Not effective is not."""
+    results = design_conclusions.results_of(_standing_of(("A", "SHOWN"), ("B", "NOT_AVAILABLE")))
+    assert (results.design.result, results.implementation.result) == ("OPEN", "OPEN")
+    assert results.design.open == ["B"] and results.implementation.open == ["B"]
+    assert results.implementation.sentence.endswith(_LIMITED)
+    kind, reasons = design_conclusions.proposal_of(0, results)
+    assert kind == "NOT_CONCLUDED" and any(_LIMITED in reason for reason in reasons)
+    for refused in ("EFFECTIVE", "NO_INSTANCE", "EXCEPTIONS_NOTED"):
+        assert design_conclusions.choice_refusal(refused, 0, results) is not None, refused
+    assert design_conclusions.choice_refusal("NOT_EFFECTIVE", 0, results) is None
+    # Every attribute accepted as not available: the same, nothing is shown.
+    every = design_conclusions.results_of(
+        _standing_of(("A", "NOT_AVAILABLE"), ("B", "NOT_AVAILABLE"))
+    )
+    assert design_conclusions.proposal_of(0, every)[0] == "NOT_CONCLUDED"
+    assert design_conclusions.choice_refusal("EFFECTIVE", 0, every) is not None
+    # Not applicable and shown on review still settle the attribute.
+    settled = design_conclusions.results_of(
+        _standing_of(("A", "SHOWN"), ("B", "NOT_APPLICABLE"), ("C", "SHOWN_ON_REVIEW"))
+    )
+    assert design_conclusions.proposal_of(0, settled)[0] == "EFFECTIVE"
+
+
+def test_an_all_not_applicable_control_never_proposes_effective() -> None:
+    """Pure. Before, a control whose every attribute was marked not applicable was proposed
+    Effective with nothing shown. Now the records propose Not concluded and say the
+    preparer concludes; the preparer may still record Effective, with a reason."""
+    results = design_conclusions.results_of(
+        _standing_of(("A", "NOT_APPLICABLE"), ("B", "NOT_APPLICABLE"))
+    )
+    kind, reasons = design_conclusions.proposal_of(0, results)
+    assert (kind, reasons) == (
+        "NOT_CONCLUDED",
+        ["Every attribute is marked not applicable; the preparer concludes."],
+    )
+    assert design_conclusions.choice_refusal("EFFECTIVE", 0, results) is None
+    assert design_conclusions.reason_needed("EFFECTIVE", kind) is True
+    # One attribute shown among them: the records propose as before.
+    mixed = design_conclusions.results_of(_standing_of(("A", "NOT_APPLICABLE"), ("B", "SHOWN")))
+    assert design_conclusions.proposal_of(0, mixed)[0] == "EFFECTIVE"
+
+
+def test_every_attribute_not_available_is_refused_effective_and_oe_stays_shut(
+    migrated: Database,
+) -> None:
+    """Through the routes: B is not shown and a person accepts it as not available. Before,
+    Effective was proposed and recorded on it. Now the proposal is Not concluded, Effective,
+    Design effective with no instance and Exceptions noted are refused with their
+    sentences, Not effective can be recorded, and nothing clears OE."""
+    case = _Draft(migrated, "dcc-limited", A="MET", B="ABSENT", C="MET", D="MET", E="MET")
+    accepted = _tickmark(case.bench, case.ids["B"], "NOT_AVAILABLE")
+    assert accepted.status_code == 200, accepted.text
+    body = case.body()
+    assert body["proposed_conclusion"] == "NOT_CONCLUDED"
+    assert body["implementation"]["open"] == ["B"] and body["design"]["open"] == ["B"]
+    assert body["implementation"]["sentence"].endswith(_LIMITED)
+    refused = case.choose("EFFECTIVE", reason=REASONS["NOT_CONCLUDED"])
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == (
+        "attribute B is not yet shown in the records of an instance, so the conclusion cannot "
+        "be “Effective”"
+    )
+    _refused(case.choose("NO_INSTANCE", reason=REASONS["NO_INSTANCE"]), 409, DESIGN_NOT_SHOWN)
+    _refused(
+        case.choose("EXCEPTIONS_NOTED", reason=REASONS["EXCEPTIONS_NOTED"]), 409, EXCEPTIONS_NEEDED
+    )
+    assert case.choices() == []
+    case.chosen("NOT_EFFECTIVE")
+    case.shut()
+
+
+def test_a_later_file_that_shows_it_restores_in_place(migrated: Database) -> None:
+    """The way back from an accepted limitation is evidence: a later check that shows B
+    ends the tickmark (superseded by the check) and Effective can be recorded."""
+    case = _Draft(migrated, "dcc-limited-back", A="MET", B="ABSENT", C="MET", D="MET", E="MET")
+    assert _tickmark(case.bench, case.ids["B"], "NOT_AVAILABLE").status_code == 200
+    assert case.body()["implementation"]["result"] == "OPEN"
+    case.later_check(**HOW_ALL_MET)
+    body = case.body()
+    assert (body["design"]["result"], body["implementation"]["result"]) == (
+        "DESIGNED",
+        "IN_PLACE",
+    )
+    assert body["proposed_conclusion"] == "EFFECTIVE"
+    case.chosen("EFFECTIVE")
+
+
+def test_an_effective_sign_off_goes_out_of_date_when_its_attribute_becomes_not_available(
+    migrated: Database,
+) -> None:
+    """An Effective sign-off, then a person accepts B as not available. Before, the sign-off
+    was out of date only because a tickmark changed, so it could be signed again as
+    Effective as it was. Now the rule it was signed under no longer holds and says so, in
+    the rule's own sentence, and OE stays shut."""
+    case = _Draft(migrated, "dcc-limited-after", A="MET", B="MET", C="MET", D="MET", E="MET")
+    case.concluded_and_signed("EFFECTIVE")
+    case.cleared()
+    # A later check no longer shows B, and a person accepts it as not available.
+    case.later_check(B="ABSENT")
+    assert _tickmark(case.bench, case.ids["B"], "NOT_AVAILABLE").status_code == 200
+    body = case.body()
+    assert body["status"] == "OUT_OF_DATE"
+    assert body["out_of_date"] == [
+        "a tickmark on attribute B changed after the sign-off",
+        _rechecked(case),
+        "attribute B is not yet shown in the records of an instance, so the conclusion cannot "
+        "be “Effective”",
+    ]
+    case.shut()
+
+
+# D3 (D&I sign-off integrity, product owner, 19 November 2026): a showing that rests in any
+# part on a file not relied on does not count. Audit invariant I3.
+
+
+def _shown_on_both_files(code: str, facts: dict[str, Any]) -> dict[str, Any]:
+    """Every element shown by the ticket's approval line and the log's grant line together."""
+    del code
+    from test_assurance_engine2 import _cited
+
+    return {
+        "result": "MET",
+        "quotes": [
+            *_cited(facts, "ticket REQ-1041.txt", APPROVAL),
+            *_cited(facts, "sap change log.txt", GRANT),
+        ],
+        "absent": "",
+        "reason": "shown",
+    }
+
+
+def test_a_file_not_relied_on_under_a_combined_showing_blocks_effective(
+    migrated: Database,
+) -> None:
+    """Every attribute is shown by the ticket and the log together. Before, deciding the log
+    is not relied on left every attribute shown (the ticket still counted), so Effective
+    was recorded. Now the showing rests in part on a file not relied on, so nothing is
+    shown in the instance, no mark rises, the point names only the log, and Effective is
+    refused."""
+    from test_assurance_engine2 import _engine_2
+    from test_file_reliability import _files_said
+
+    case = _Draft(migrated, "dcc-combined", A="MET", B="MET", C="MET", D="MET", E="MET")
+    bench = case.bench
+    log = bench.add("sap change log.txt", LOG)
+    bench.read_next(_reading("change_history"))
+    # Both files read as reports that do not show their basis: the check raises a
+    # reliability question on each, so a person can decide either is not relied on.
+    reading = _engine_2(
+        _shown_on_both_files, _files_said("ticket REQ-1041.txt", "sap change log.txt")
+    )
+    assert bench.check(_Readings(reading, reading)) == ["READY"]
+    assert case.body()["implementation"]["result"] == "IN_PLACE"
+    decided = _decide_reliability(bench, log, "NOT_RELIED_ON")
+    assert decided.status_code == 200, decided.text
+    body = case.body()
+    assert (body["design"]["result"], body["implementation"]["result"]) == ("OPEN", "OPEN")
+    assert body["proposed_conclusion"] == "NOT_CONCLUDED"
+    view = case.view()
+    assert {a["shown_by"] for a in view["attributes"]} == {"NOT_RELIED"}
+    assert {a["tickmark"] for a in view["attributes"]} == {"NONE"}
+    resting = [p for p in view["points"] if p["kind"] == "NOT_RELIED"]
+    assert resting and all(
+        p["text"].endswith("rests on a file not relied on: “sap change log.txt”.") for p in resting
+    )
+    refused = case.choose("EFFECTIVE", reason=REASONS["NOT_CONCLUDED"])
+    assert refused.status_code == 409, refused.text
+    assert "so the conclusion cannot be “Effective”" in refused.json()["detail"]
+    assert case.choices() == []
+
+
+# D5 (D&I sign-off integrity, product owner, 19 November 2026): a re-check after the
+# sign-off puts the sign-off out of date (time-based, no migration). Audit invariants I2 (a
+# sign-off binds what it reviewed) and I1 (finality, through lapsed_reasons).
+
+
+def _run_again_with_the_same_result(case: _Draft) -> None:
+    """The request is checked again after the sign-off (another file reaches it: a check
+    again on an unchanged basis returns the run on record), and the check finds what the
+    first one found: every attribute shown. The latest run is READY."""
+    case.later_check(**HOW_ALL_MET)
+    [(status,)] = case.rows(
+        "SELECT status FROM evidence_assessments WHERE requirement_id = %s "
+        "ORDER BY created_at DESC, id DESC LIMIT 1",
+        UUID(case.bench.item_id),
+    )
+    assert status == "READY"
+
+
+def test_a_check_run_again_after_the_sign_off_puts_it_out_of_date_even_with_the_same_result(
+    migrated: Database,
+) -> None:
+    """Before, a check run again after an Effective sign-off with the same result left the
+    sign-off standing, so OE stayed open on an assessment no reviewer saw. Now it is out of
+    date, naming the request, every reader of the gate is shut, and the reviewer signing
+    again restores it."""
+    case = _Draft(migrated, "dcc-rechecked", A="MET", B="MET", C="MET", D="MET", E="MET")
+    case.concluded_and_signed("EFFECTIVE")
+    case.cleared()
+    _run_again_with_the_same_result(case)
+    body = case.body()
+    assert (body["status"], body["out_of_date"]) == ("OUT_OF_DATE", [_rechecked(case)])
+    assert body["proposed_conclusion"] == "EFFECTIVE"
+    case.shut()
+    signed = case.sign_as("EFFECTIVE")
+    assert signed.status_code == 200, signed.text
+    assert (signed.json()["status"], signed.json()["out_of_date"]) == ("SIGNED_OFF", [])
+    case.cleared()
+
+
+def test_a_check_run_again_puts_a_sign_off_made_before_choices_out_of_date(
+    migrated: Database,
+) -> None:
+    """A sign-off made before preparers recorded choices (support.sign_off_design writes
+    one) is put out of date the same way: it is time-based, not held to a rule."""
+    case = _Draft(migrated, "dcc-rechecked-legacy", A="MET", B="MET", C="MET", D="MET", E="MET")
+    sign_off_design(migrated, case.bench.team["project"], [UUID(case.bench.control)])
+    assert case.gate() is None
+    _run_again_with_the_same_result(case)
+    assert case.gate() == GATE_DESIGN
+    body = case.body()
+    assert body["status"] == "OUT_OF_DATE" and _rechecked(case) in body["out_of_date"]
+
+
+def test_what_was_checked_again_after_the_sign_off_is_named_and_bounded() -> None:
+    """Pure. The reason names the requests, cleaned, at most three and then how many more."""
+    checked_since = design_conclusions.checked_since
+    after = "was checked again after the sign-off"
+    assert (
+        checked_since(["Access approvals"]) == f"the evidence of request Access approvals {after}"
+    )
+    assert checked_since(["A", "B"]) == f"the evidence of requests A and B {after}"
+    assert checked_since(["A", "B", "C", "D", "E"]) == (
+        f"the evidence of requests A, B, C and 2 more {after}"
+    )
+    assert checked_since(["Line\nbreak", ""]) == (
+        f"the evidence of requests Line break and a request {after}"
+    )
+    long = checked_since(["x" * 500])
+    assert len(long) < 220
+
+
+# D4 (D&I sign-off integrity, product owner, 19 November 2026): before Prepare the preparer
+# saves the conclusion section in their own words, after recording the conclusion it
+# states; a walkthrough result the agent drafted with no citation found is emptied and
+# flagged, and the agent's draft of the steps is never written up as a procedure. Audit
+# invariants I12 (no uncited agent observation becomes a recorded result), I14 and I16.
+
+OWN_WORDS = (
+    "write the conclusion section in your own words for the conclusion you recorded, then prepare"
+)
+UNCITED = "No source was cited for this result, so it was emptied: read the walkthrough again."
+
+
+def test_the_design_workpaper_is_not_prepared_on_the_agents_conclusion_text(
+    migrated: Database,
+) -> None:
+    """Before, the drafted conclusion paragraph (the agent's, or the records') was prepared
+    and signed as it was, whatever conclusion the preparer recorded. Now Prepare is refused
+    until the preparer saves the section after recording the conclusion; words saved
+    before a later conclusion was recorded do not count; then it prepares and is signed."""
+    case = _Draft(migrated, "dcc-own-words", A="MET", B="MET", C="MET", D="MET", E="MET")
+    conclusion = next(
+        s for s in case.paper()["content"]["sections"] if s["key"] == "design-conclusion"
+    )
+    assert conclusion["source"] != "PERSON"
+    case.chosen("EFFECTIVE")
+    case.settle_points()
+    case.prepare_refused(OWN_WORDS)
+    # Saved by a person, then another conclusion recorded: the words were written for the
+    # earlier one.
+    conclude_in_own_words(case.bench.owner, case.bench.base, case.bench.control)
+    case.chosen("NO_INSTANCE")
+    case.prepare_refused(OWN_WORDS)
+    conclude_in_own_words(
+        case.bench.owner,
+        case.bench.base,
+        case.bench.control,
+        "The design is effective; no instance occurred in the period to walk through.",
+    )
+    case.settle_points()
+    paper = case.paper()
+    prepared = case.bench.owner.post(
+        f"{case.bench.base}/workpapers/{paper['id']}/prepare", json={"version": paper["version"]}
+    )
+    assert prepared.status_code == 200, prepared.text
+    case.version = int(prepared.json()["prepared_version"])
+    signed = case.sign_as("NO_INSTANCE")
+    assert signed.status_code == 200, signed.text
+    view = case.view()
+    assert view["conclusion"]["source"] == "PERSON"
+    assert view["conclusion"]["text"].startswith("The design is effective; no instance")
+
+
+def test_an_uncited_walkthrough_result_is_emptied_and_flagged(migrated: Database) -> None:
+    """Before, a walkthrough row the agent drafted with no passage of any file ("observed
+    the grant") was kept as a recorded result, and the walkthrough was listed as a
+    procedure performed. Now its result is emptied and the cell says why; a row that cites
+    a passage keeps its result; and the agent's steps are not a procedure."""
+    case = _Draft(
+        migrated, "dcc-walk-uncited", draft=False, A="MET", B="MET", C="MET", D="MET", E="MET"
+    )
+    ticket = case.ticket
+    draft = {
+        "sections": [],
+        "walkthrough": [
+            {"step": "Access requested and approved", "who": "Priya Shah",
+             "evidence": f'[cite:{ticket} "{APPROVAL}"]', "result": "Approved on 2026-03-03"},
+            {"step": "Access granted", "who": "SAP Security",
+             "evidence": "The change log", "result": "Observed the grant on 2026-03-04"},
+            {"step": "Access reviewed", "who": "IT",
+             "evidence": f'[cite:{ticket} "words nobody wrote"]', "result": "Reviewed"},
+        ],
+    }  # fmt: skip
+    paper = _draft_design(case.bench, draft)
+    walkthrough = next(
+        s for s in paper["content"]["sections"] if s["key"] == "walkthrough-of-one-instance"
+    )
+    rows = walkthrough["rows"]
+    assert rows[0][3] == "Approved on 2026-03-03" and rows[0][2].startswith("ticket REQ-1041")
+    assert rows[1][:3] == ["Access granted", "SAP Security", "The change log"]
+    assert rows[1][3] == UNCITED
+    # A citation whose words are not in the file is dropped, so the row cites nothing.
+    assert rows[2][3] == UNCITED
+    view = case.view()
+    assert not any(p.startswith("Walked one instance") for p in view["procedures"])

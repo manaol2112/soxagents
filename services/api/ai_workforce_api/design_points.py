@@ -349,13 +349,26 @@ def points_of(
             r for r in readings.get(attribute.id, []) if r.state in ("SHOWN", "SHOWN_IN_PART")
         ]
         if supporting and all(r.not_relied for r in supporting):
-            resting_on = list(dict.fromkeys(file_id for r in supporting for file_id in r.shows))
+            # D3 (19 November 2026): a showing rests on a file not relied on where any of
+            # its files is one; the point names those files only, never the relied ones
+            # beside them (before, every file of the showing was named as not relied on).
+            excluded = {
+                (d.requirement_id, d.file_id) for d in decisions if d.kind == "NOT_RELIED_ON"
+            }
+            resting_on = list(
+                dict.fromkeys(
+                    file_id
+                    for r in supporting
+                    for file_id in r.shows
+                    if (r.requirement_id, file_id) in excluded
+                )
+            )
             add(
                 PointBody(
                     key=point_key("NOT_RELIED", attribute.id),
                     kind="NOT_RELIED",
                     text=_sentence(
-                        f"Attribute {attribute.code} is shown only on "
+                        f"Attribute {attribute.code} rests on "
                         f"{'files' if len(resting_on) > 1 else 'a file'} not relied on: "
                         f"{view._listed_names([names.get(f, 'a file') for f in resting_on])}."
                     ),

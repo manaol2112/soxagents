@@ -358,6 +358,10 @@ class ConclusionBody(BaseModel):
     proposed_conclusion: design_conclusions.DesignConclusionKind = "NOT_CONCLUDED"
     proposed_reasons: list[str] = Field(default_factory=list)
     choice: design_conclusions.ChoiceRecord | None = None
+    # D4 (19 November 2026; added to the body): the conclusion section was last changed by
+    # a person's save after the standing conclusion was recorded, as preparing needs
+    # (workpaper_service.conclusion_in_own_words). False where no conclusion stands.
+    in_own_words: bool = False
 
 
 class TickmarkBody(BaseModel):
@@ -579,7 +583,9 @@ class Reading:
     implementation: bool = False
     # The check's review leaves a reliability question open on the files it rests on.
     unreliable: bool = False
-    # What is shown rests only on files a person decided are not relied on (section 10.14).
+    # What is shown rests, in any part, on a file a person decided is not relied on
+    # (section 10.14; D3, product owner, 19 November 2026: a showing that rests in any part
+    # on a file not relied on does not count; before, only one resting wholly on such files).
     not_relied: bool = False
     # When the check that gives this reading finished (`CheckRecord.finished_at`).
     found_at: datetime | None = None
@@ -649,7 +655,7 @@ def readings_of(check: CheckRecord, decisions: Sequence[FileDecision] = ()) -> d
     same, with no state, so that nothing is marked as agreed beside it. An engine 1 check
     has no comparisons. `decisions` are a person's on the files' reliability
     (`decisions_applying`): they bear on the reliability question and on whether what is
-    shown rests only on files not relied on, never on the state."""
+    shown rests, in any part, on a file not relied on (D3), never on the state."""
     if not check.current:
         return {}
     not_relied = {
@@ -710,7 +716,10 @@ def readings_of(check: CheckRecord, decisions: Sequence[FileDecision] = ()) -> d
             failed_checks=fell,
             implementation=item.shows == "IMPLEMENTATION",
             unreliable=reliability_open(check, shows, decisions),
-            not_relied=bool(shows) and all(file_id in not_relied for file_id in shows),
+            # D3: the readings judge an element on its files together, so a showing that
+            # needs a file not relied on (one element on it, another on a relied file)
+            # stands on nothing; only showings are discounted, never an exception.
+            not_relied=any(file_id in not_relied for file_id in shows),
             found_at=check.finished_at,
         )
     return found
@@ -1233,7 +1242,11 @@ def drafter_record_of(
                     "tickmark": EXCEPTION_RECORDED_WORDS
                     if disposition.kind == "EXCEPTION"
                     else DISPOSITION_WORDS[disposition.kind],
-                    "closes_the_attribute": disposition.kind in CLOSING,
+                    # D1 (19 November 2026): whether the tickmark settles the attribute
+                    # itself. Evidence not available settles only the follow-up, so it
+                    # is never given as closing the attribute (before, it was).
+                    "closes_the_attribute": disposition.kind
+                    in design_conclusions.SETTLES_THE_ATTRIBUTE,
                     "recorded_by": _quoted(disposition.recorded_by_name, DRAFTER_NAME),
                     "recorded_on": _day(disposition.recorded_at),
                     "reason": _quoted(disposition.reason, DRAFTER_REASON),
@@ -1714,11 +1727,11 @@ def procedures_of(
     """What was done and is on record, each a sentence written here from a count: the
     files the current checks read in full and for which requests, the files they read
     only in part (said so, never counted as inspected), the instance walked through where
-    a person or the agent recorded its steps (a template's starter rows are not a
-    walkthrough), the comparisons code made, and the reports whose source, run date and
-    parameters a check's review says are shown, and the reports whose reliability a person
-    established on review (`decisions`, of `decisions_applying`). Never a procedure the
-    records do not show."""
+    a person recorded its steps (the agent's draft of them and a template's starter rows
+    are not a walkthrough performed), the comparisons code made, and the reports whose
+    source, run date and parameters a check's review says are shown, and the reports
+    whose reliability a person established on review (`decisions`, of
+    `decisions_applying`). Never a procedure the records do not show."""
     found: list[str] = []
     current = _current(requests, checks)
     names = {file.file_id: file.file_name for request in requests for file in request.files}
@@ -1745,7 +1758,11 @@ def procedures_of(
             f"{_listed_names([names.get(file_id, 'a file') for file_id in partial])}."
         )
     steps = len(walkthrough.steps)
-    if steps > 0 and walkthrough.source != "RECORDS":
+    # D4 (19 November 2026): a walkthrough is a procedure performed only where a person
+    # recorded or saved its steps. Before, the agent's draft of the steps (source AGENT)
+    # was written up as an instance walked through, with no person having done it (audit
+    # invariant I12); the rows are plain text, so a citation cannot be told from wording.
+    if steps > 0 and walkthrough.source == "PERSON":
         found.append(
             f"Walked one instance of the control through {_count(steps, 'step')}, "
             "recorded in the walkthrough."
@@ -1801,6 +1818,12 @@ def _field(section: Section | None, label: str) -> str | None:
     return next((f.value for f in section.fields if f.label.strip().casefold() == label), None)
 
 
+def conclusion_section(content: Content | None) -> Section | None:
+    """The design workpaper's conclusion section: the one finder for the view, the export
+    and the preparer's sign-off (workpaper_service.conclusion_words_refusal)."""
+    return _text_section(content, ("design-conclusion",), "conclusion")
+
+
 def _text_section(content: Content | None, wanted: Iterable[str], word: str = "") -> Section | None:
     """The first text section of the workpaper with one of the keys, else, where `word`
     is given, the first whose key holds it (a firm's template may name it otherwise)."""
@@ -1831,6 +1854,21 @@ def can_edit_sections(
         and not drafting
         and current_version >= 1
     )
+
+
+def _in_own_words(
+    connection: psycopg.Connection[Any],
+    paper: Any,
+    conclusion: design_conclusions.DesignConclusionBody,
+) -> bool:
+    """Whether the preparer's own words stand in the conclusion section for the conclusion
+    recorded (D4): the same rule the prepare applies (workpaper_service imports this
+    module, so it is imported here)."""
+    from ai_workforce_api.workpaper_service import conclusion_in_own_words
+
+    if paper is None or conclusion.choice is None:
+        return False
+    return conclusion_in_own_words(connection, paper.id, conclusion.choice.recorded_at) is True
 
 
 def conclusion_of(
@@ -2448,8 +2486,8 @@ def read_design_workpaper(
         observations=observations_of(requests, checks, evidence),
         can_settle=editable,
         evidence_more=more,
-        conclusion=conclusion_of(
-            _text_section(content, ("design-conclusion",), "conclusion"), conclusion
+        conclusion=conclusion_of(conclusion_section(content), conclusion).model_copy(
+            update={"in_own_words": _in_own_words(connection, paper, conclusion)}
         ),
         design=conclusion.design,
         implementation=conclusion.implementation,

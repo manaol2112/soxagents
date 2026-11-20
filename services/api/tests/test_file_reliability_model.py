@@ -379,14 +379,21 @@ def test_a_file_not_relied_on_takes_the_mark_away_and_is_a_point() -> None:
     checks = {R1: _check(_item(A, files=(F2,)), _item(B, files=(F1, F2)), review=review)}
     decisions = [_decided("NOT_RELIED_ON", F2)]
     readings = readings_of(checks[R1], decisions)
-    assert readings[A].not_relied and not readings[B].not_relied
+    # Rewritten 19 November 2026 (D3, product owner: a showing that rests in any part on a
+    # file not relied on does not count). Old: B, shown on F1 and F2 with F2 not relied on,
+    # was not discounted: SHOWN with an AGREED mark, and no point. New: B is discounted
+    # like A: SHOWN, no mark, and a point naming only the file not relied on (F2, "sap
+    # change log.txt"), never F1. Why: the readings judge an element on its files
+    # together, so the showing cannot be split between a relied and an excluded file.
+    assert readings[A].not_relied and readings[B].not_relied
     evidence = _index(checks=checks)
     shown, left = attributes_of(ATTRIBUTES, REQUESTS, checks, [], evidence, None, (), decisions)
     by_code = {a.code: a for a in shown}
-    # It reads as the check found it, never more shown and never agreed. What rests also on
-    # a file relied on, with nothing open about it, earns its mark from that file.
+    # It reads as the check found it, never more shown and never agreed, also where the
+    # showing rests in part on a file relied on.
     assert (by_code["A"].state, by_code["A"].tickmark) == ("SHOWN", "NONE")
-    assert (by_code["B"].state, by_code["B"].tickmark) == ("SHOWN", "AGREED")
+    assert (by_code["B"].state, by_code["B"].tickmark) == ("SHOWN", "NONE")
+    assert (by_code["A"].shown_by, by_code["B"].shown_by) == ("NOT_RELIED", "NOT_RELIED")
     plain, _ = attributes_of(ATTRIBUTES, REQUESTS, checks, [], evidence, None)
     assert [(a.state, a.basis) for a in plain] == [(a.state, a.basis) for a in shown]
     # Before the decision, the question on the log keeps every mark away.
@@ -399,8 +406,10 @@ def test_a_file_not_relied_on_takes_the_mark_away_and_is_a_point() -> None:
     # removed the matters; each item is at its place.
     points = points_of(REQUESTS, checks, ATTRIBUTES, left, [], evidence, decisions)
     assert [(p.kind, p.text, p.refs, p.place.at, p.place.attribute_id) for p in points] == [
-        ("NOT_RELIED", "Attribute A is shown only on a file not relied on: "
+        ("NOT_RELIED", "Attribute A rests on a file not relied on: "
          "“sap change log.txt”.", ["E2"], "ATTRIBUTE", A),
+        ("NOT_RELIED", "Attribute B rests on a file not relied on: "
+         "“sap change log.txt”.", ["E2"], "ATTRIBUTE", B),
     ]  # fmt: skip
     assert points[0].settle == ["RELIABILITY", "CONSIDER"]
     # In the evidence index, said so with the reason; another file is not.
