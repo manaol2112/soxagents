@@ -1,12 +1,14 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 
 import {
   ACTIVITY_CATEGORY_LABELS,
   type ActivityCategory,
   type ActivityItem,
   type Approach,
+  type CriteriaChange,
+  type CriteriaText,
   filterActivity,
 } from "./control-workspace-model";
 import {
@@ -265,6 +267,72 @@ export function ActivityTimeline({
   );
 }
 
+/** An attribute's criteria at one point of a change, as the Attributes step words them. */
+function CriteriaRules({
+  title,
+  criteria,
+}: {
+  title: string;
+  criteria: CriteriaText;
+}) {
+  return (
+    <section>
+      <h5>{title}</h5>
+      <dl className="tc-rules">
+        {criteria.condition !== "" ? (
+          <div>
+            <dt>Tested</dt>
+            <dd>{criteria.condition}</dd>
+          </div>
+        ) : null}
+        <div className="is-pass">
+          <dt>Passed</dt>
+          <dd>{criteria.passCriteria || "Not stated"}</dd>
+        </div>
+        <div className="is-fail">
+          <dt>Failed</dt>
+          <dd>{criteria.failCriteria || "Not stated"}</dd>
+        </div>
+        {criteria.judgmentRequired === true ? (
+          <div>
+            <dt>Judgment</dt>
+            <dd>Professional judgment required</dd>
+          </div>
+        ) : null}
+      </dl>
+    </section>
+  );
+}
+
+/**
+ * A change of an attribute's criteria, opened on request to the earlier and the new criteria
+ * (product owner, 20 November 2026: the attribute row's "Previous criteria" moved here). The
+ * server reads both from the kept versions; this only shows them.
+ */
+function CriteriaChangeFold({ change }: { change: CriteriaChange }) {
+  const [open, setOpen] = useState(false);
+  const panel = useId();
+  return (
+    <>
+      <button
+        type="button"
+        className="tas-link ph-open"
+        aria-expanded={open}
+        aria-controls={panel}
+        onClick={() => setOpen((was) => !was)}
+      >
+        {open ? "Hide the criteria" : "Show the criteria"}
+      </button>
+      {open ? (
+        <div className="tas-history ph-change" id={panel}>
+          <CriteriaRules title="Earlier criteria" criteria={change.earlier} />
+          <CriteriaRules title="New criteria" criteria={change.new} />
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 const HISTORY_ICON: Record<ActivityCategory, IconName> = {
   design: "layers",
   planning: "file",
@@ -393,6 +461,9 @@ export function ControlHistory({
                       </span>
                     </p>
                     {item.detail !== "" ? <small>{item.detail}</small> : null}
+                    {item.criteria !== null ? (
+                      <CriteriaChangeFold change={item.criteria} />
+                    ) : null}
                   </div>
                   <time dateTime={item.at}>
                     {TIME.format(new Date(item.at))}

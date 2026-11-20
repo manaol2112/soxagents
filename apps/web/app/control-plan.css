@@ -1340,6 +1340,41 @@ button.pp-count:disabled {
   border-color: var(--accent-border);
 }
 
+/* A criteria change, opened on request: the earlier and the new criteria side by side. */
+.ph-open {
+  justify-self: start;
+  font-size: var(--fs-xs);
+}
+
+.ph-change {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.25rem;
+}
+
+.ph-change h5 {
+  margin: 0 0 0.3rem;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.ph-change .tc-rules > div {
+  grid-template-columns: 4.5rem minmax(0, 1fr);
+}
+
+@media (max-width: 640px) {
+  .ph-change,
+  .ph-change .tc-rules > div {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ph-change .tc-rules > div {
+    gap: 0.1rem;
+  }
+}
+
 .ph-day time {
   font-size: var(--fs-xs);
   color: var(--text-secondary);

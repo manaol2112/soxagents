@@ -189,7 +189,15 @@ describe("the assumption on the attribute", () => {
     );
     assert.match(panel, /items=\{item\.assumptions\}/);
     assert.match(panel, /updatedFrom=\{item\.criteriaUpdatedFrom\}/);
-    assert.match(panel, /versions=\{item\.criteriaVersions\}/);
+    // Rewritten 20 November 2026 (product owner: "remove the previous criteria link here and
+    // probably add that as part of the history that it was updated"). Old: the row passed
+    // `versions={item.criteriaVersions}` for its "Previous criteria (n)" fold. New: the row
+    // shows only where its criteria came from; the earlier criteria open from the History.
+    assert.match(
+      panel,
+      /<CriteriaTrail updatedFrom=\{item\.criteriaUpdatedFrom\} \/>/,
+    );
+    assert.doesNotMatch(panel, /criteriaVersions/);
   });
 
   it("offers That's right and Change…, with a counted box of 10 to 1,000 characters", () => {
@@ -248,19 +256,39 @@ describe("the assumption on the attribute", () => {
     );
   });
 
-  it("reads the earlier criteria only when opened, and never shows a stale answer", () => {
-    assert.match(assumptions, /if \(!open \|\| loaded\) \{\s*return;\s*\}/);
-    assert.match(
-      assumptions,
-      /if \(mine !== reads\.current\) \{\s*return;\s*\}/,
+  // Rewritten 20 November 2026 (product owner: "remove the previous criteria link here and
+  // probably add that as part of the history that it was updated"). Old: "reads the earlier
+  // criteria only when opened, and never shows a stale answer": the row's "Previous criteria"
+  // fold read GET .../criteria-history through this route (intent "criteria-history") and
+  // guarded against a stale read. New: the fold and its read are gone; each change is a "Test
+  // criteria updated" row in the control's History, opening to the earlier and the new
+  // criteria the server put on the row (no read of its own, so nothing can go stale).
+  it("has no Previous criteria fold on the row: the History holds each change", () => {
+    for (const source of [assumptions, panel, criteria]) {
+      assert.doesNotMatch(source, /Previous criteria|previousCriteriaLabel/);
+    }
+    assert.doesNotMatch(assumptions, /criteria-history|parseCriteriaHistory/);
+    assert.doesNotMatch(route, /criteria-history|criteriaHistory/);
+    assert.doesNotMatch(
+      read("src/understanding-once-model.ts"),
+      /previousCriteriaLabel|versionLine/,
     );
-    assert.match(assumptions, /intent: "criteria-history"/);
+    const history = read("src/control-workspace.tsx");
     assert.match(
-      route,
-      /if \(query\.get\("intent"\) === "criteria-history"\) \{\s*return criteriaHistory\(query\);/,
+      history,
+      /\{item\.criteria !== null \? \(\s*<CriteriaChangeFold change=\{item\.criteria\} \/>/,
     );
-    assert.match(route, /const path = criteriaHistoryPath\(\{/);
-    assert.match(route, /history: response\.status === 200 \? body : null/);
+    // Opened on request, announced as a disclosure, with both criteria.
+    assert.match(history, /aria-expanded=\{open\}\s*aria-controls=\{panel\}/);
+    assert.match(
+      history,
+      /\{open \? "Hide the criteria" : "Show the criteria"\}/,
+    );
+    assert.match(
+      history,
+      /title="Earlier criteria" criteria=\{change\.earlier\}/,
+    );
+    assert.match(history, /title="New criteria" criteria=\{change\.new\}/);
   });
 
   it("keeps its motion short and off under reduced motion", () => {

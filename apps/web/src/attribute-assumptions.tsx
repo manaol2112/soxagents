@@ -15,9 +15,7 @@ import {
   assumptionProblem,
   assumptionTextProblem,
   type ControlContext,
-  type CriteriaVersion,
   parseContext,
-  parseCriteriaHistory,
 } from "./control-context-model";
 import {
   ACCEPTED_UNCONFIRMED,
@@ -25,10 +23,8 @@ import {
   characterCount,
   decidableAssumptions,
   decidedLine,
-  previousCriteriaLabel,
   settledAssumptions,
   updatedFromLine,
-  versionLine,
 } from "./understanding-once-model";
 import {
   assumptionLead,
@@ -343,149 +339,24 @@ function OpenAssumption({
 }
 
 /**
- * Where an attribute's criteria last changed from an answer or an assumption, and its earlier
- * criteria (B1j: every change keeps the previous criteria), read only when opened. An answer
- * that lands after a newer one, or after the fold closed, is not shown.
+ * Where an attribute's criteria last changed from an answer or an assumption. Its earlier
+ * criteria are kept on every change (B1j) and shown in the control's History, each change
+ * opening to the earlier and the new criteria (product owner, 20 November 2026: "remove the
+ * previous criteria link here and probably add that as part of the history that it was
+ * updated").
  */
 export function CriteriaTrail({
-  ids,
-  attributeId,
   updatedFrom,
-  versions,
 }: {
-  ids: Ids;
-  attributeId: string;
   updatedFrom: string | undefined;
-  versions: number | undefined;
 }) {
   const from = updatedFromLine(updatedFrom);
-  const fold = previousCriteriaLabel(versions);
-  const listId = useId();
-  const [open, setOpen] = useState(false);
-  const [history, setHistory] = useState<
-    | { count: number; versions: CriteriaVersion[] }
-    | { count: number; failed: true }
-    | null
-  >(null);
-  const reads = useRef(0);
-  const count = versions ?? 0;
-  const loaded = history !== null && history.count === count;
-  useEffect(() => {
-    if (!open || loaded) {
-      return;
-    }
-    reads.current += 1;
-    const mine = reads.current;
-    const params = new URLSearchParams({
-      intent: "criteria-history",
-      organization_id: ids.organizationId,
-      project_id: ids.projectId,
-      control_id: ids.controlId,
-      attribute_id: attributeId,
-      v: String(count),
-    });
-    void fetch(`/workspace/control-context?${params.toString()}`, {
-      cache: "no-store",
-    })
-      .then((response) => response.json())
-      .then((body: { status?: unknown; history?: unknown }) => {
-        if (mine !== reads.current) {
-          return;
-        }
-        const read =
-          body.status === 200 ? parseCriteriaHistory(body.history) : null;
-        setHistory(
-          read === null ? { count, failed: true } : { count, versions: read },
-        );
-      })
-      .catch(() => {
-        if (mine === reads.current) {
-          setHistory({ count, failed: true });
-        }
-      });
-  }, [open, loaded, ids, attributeId, count]);
-  // A read still on its way when the fold closes is not shown.
-  useEffect(() => {
-    if (!open) {
-      reads.current += 1;
-    }
-  }, [open]);
-  if (from === null && fold === null) {
+  if (from === null) {
     return null;
   }
   return (
     <div className="tas-trail">
-      <p className="tas-meta">
-        {from !== null ? <span>{from}</span> : null}
-        {from !== null && fold !== null ? (
-          <span aria-hidden="true"> · </span>
-        ) : null}
-        {fold !== null ? (
-          <button
-            type="button"
-            className="tas-link"
-            aria-expanded={open}
-            aria-controls={listId}
-            onClick={() => setOpen((was) => !was)}
-          >
-            {fold}
-          </button>
-        ) : null}
-      </p>
-      {open ? (
-        <div className="tas-history" id={listId}>
-          {!loaded ? (
-            <p className="tas-reading" role="status">
-              Reading the earlier criteria…
-            </p>
-          ) : "failed" in history ? (
-            <p className="tc-problem" role="alert">
-              The earlier criteria could not be read.{" "}
-              <button
-                type="button"
-                className="tas-link"
-                onClick={() => setHistory(null)}
-              >
-                Try again
-              </button>
-            </p>
-          ) : history.versions.length === 0 ? (
-            <p className="tas-reading">No earlier criteria are kept.</p>
-          ) : (
-            <ol className="tas-versions">
-              {history.versions.map((each) => (
-                <li key={each.version}>
-                  <dl className="tc-rules">
-                    {each.condition !== "" ? (
-                      <div>
-                        <dt>Tested</dt>
-                        <dd>{each.condition}</dd>
-                      </div>
-                    ) : null}
-                    <div className="is-pass">
-                      <dt>Passed</dt>
-                      <dd>{each.passCriteria || "Not stated"}</dd>
-                    </div>
-                    <div className="is-fail">
-                      <dt>Failed</dt>
-                      <dd>{each.failCriteria || "Not stated"}</dd>
-                    </div>
-                    {each.judgmentRequired ? (
-                      <div>
-                        <dt>Judgment</dt>
-                        <dd>Professional judgment required</dd>
-                      </div>
-                    ) : null}
-                  </dl>
-                  <p className="tas-by" suppressHydrationWarning>
-                    {versionLine(each)}
-                  </p>
-                </li>
-              ))}
-            </ol>
-          )}
-        </div>
-      ) : null}
+      <p className="tas-meta">{from}</p>
     </div>
   );
 }

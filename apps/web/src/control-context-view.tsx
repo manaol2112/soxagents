@@ -1282,12 +1282,7 @@ export function AttributesPanel({
                 onContext={onContext}
                 label={`The agent's assumptions on ${name}`}
               />
-              <CriteriaTrail
-                ids={ids}
-                attributeId={item.id}
-                updatedFrom={item.criteriaUpdatedFrom}
-                versions={item.criteriaVersions}
-              />
+              <CriteriaTrail updatedFrom={item.criteriaUpdatedFrom} />
             </>
           ) : null}
           {open && item.definition !== null ? (
@@ -2080,12 +2075,7 @@ function EmbeddedAttributes({
             label={`The agent's assumptions on ${name}`}
             layout="row"
           />
-          <CriteriaTrail
-            ids={ids}
-            attributeId={item.id}
-            updatedFrom={item.criteriaUpdatedFrom}
-            versions={item.criteriaVersions}
-          />
+          <CriteriaTrail updatedFrom={item.criteriaUpdatedFrom} />
         </>
       );
     const criteria = item.criteria;

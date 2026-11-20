@@ -1475,7 +1475,8 @@ button.tar-head:focus-visible:not(:disabled) {
   color: var(--text-tertiary);
 }
 
-/* Where the criteria came from, and their earlier versions on request. */
+/* Where the criteria came from. The box a History row's criteria change opens into
+   (control-plan.css, .ph-change) is .tas-history. */
 .tas-trail {
   display: grid;
   gap: 0.4rem;
@@ -1519,40 +1520,6 @@ button.tar-head:focus-visible:not(:disabled) {
   animation: tas-open 200ms ease;
 }
 
-.tas-reading {
-  margin: 0;
-  color: var(--text-tertiary);
-  font-size: var(--fs-sm);
-}
-
-.tas-versions {
-  display: grid;
-  gap: 0.6rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.tas-versions li + li {
-  padding-top: 0.6rem;
-  border-top: 1px solid var(--border-subtle);
-}
-
-.tas-versions .tc-rules > div {
-  grid-template-columns: 4.5rem minmax(0, 1fr);
-  color: var(--text-secondary);
-}
-
-.tas-versions .tc-rules dd {
-  color: var(--text-secondary);
-}
-
-.tas-by {
-  margin: 0.25rem 0 0;
-  color: var(--text-tertiary);
-  font-size: var(--fs-xs);
-}
-
 @keyframes tas-open {
   from {
     opacity: 0;
@@ -1561,13 +1528,6 @@ button.tar-head:focus-visible:not(:disabled) {
   to {
     opacity: 1;
     transform: none;
-  }
-}
-
-@media (max-width: 640px) {
-  .tas-versions .tc-rules > div {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 0.1rem;
   }
 }
 
