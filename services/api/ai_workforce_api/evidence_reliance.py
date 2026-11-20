@@ -69,6 +69,9 @@ of a sheet (test_sheets.change_sheet), a review's lock (control_reviews._locked,
 review note reopens the testing) and an impact assessment's reperformance
 (plan_impact.decide) take the plan first. Before, a sign-off or a reopening locked the
 sheet and then the plan (refresh_decisions), and could wait on an approval waiting on it.
+A client value's fill (control_design.refresh_statement) takes the plan before it puts the
+control's runs out of date and brings its sheets in step; a fill of several controls
+(set_values everywhere, set_values_many) takes every plan, by control id, before any.
 
 Known exceptions, left for the lock work of P1 I4a (18 November 2026). A foreign key check
 takes a key-share lock on the row it references, which waits on FOR UPDATE (lock_served

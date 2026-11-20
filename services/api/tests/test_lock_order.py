@@ -368,7 +368,7 @@ def test_a_run_tests_each_item_on_the_attributes_it_reads_with_the_item(
             other.commit()
 
     class _Changing(_Citing):
-        def __init__(self, answers: list[dict[str, Any]]) -> None:
+        def __init__(self, answers: list[dict[str, Any] | None]) -> None:
             super().__init__(answers)
             self.changed = False
 
@@ -394,3 +394,299 @@ def test_a_run_tests_each_item_on_the_attributes_it_reads_with_the_item(
     assert rows, "the items reached after the change are tested"
     assert {row[0] for row in rows} == {held}
     assert _sheet(client, team)["attributes"] == longer
+
+
+def _bracketed_tested(
+    database: Database, slug: str, marker: str
+) -> tuple[dict[str, Any], Any, dict[str, Any], UUID]:
+    """ITGC-AC-01 (library v3) tested on an approved plan whose first attribute carries a
+    client value's bracketed wording (marker), with finished D&I checks on its
+    description: the state a client value's fill (control_design.set_values) then fills."""
+    from test_master_plans import _approve
+    from test_testing_engine import _open_tested
+
+    from ai_workforce_api.control_attributes import _write_list
+
+    team, client, sheet = _open_tested(database, slug)
+    control = UUID(sheet["control_id"])
+    with connect(database.url) as connection:
+        row = connection.execute(
+            "SELECT id, text FROM control_attributes WHERE engagement_control_id = %s "
+            "AND status = 'APPROVED' ORDER BY position LIMIT 1",
+            (control,),
+        ).fetchone()
+        assert row is not None
+        with transaction(connection) as cursor:
+            cursor.execute(
+                "UPDATE control_attributes SET text = %s WHERE id = %s",
+                (f"{row[1]} by {marker}", row[0]),
+            )
+            _write_list(cursor, control)
+    _approve(team, str(control))
+    with connect(database.url) as connection:
+        # Tested on the bracketed wording (as the ST-1 fill test sets it).
+        connection.execute(
+            "UPDATE test_items SET needs_test = false WHERE test_sheet_id = %s", (sheet["id"],)
+        )
+        # A finished D&I check that read the current description (a held run: it needs no
+        # model answers), which the fill's new description puts out of date.
+        connection.execute(
+            """
+            INSERT INTO evidence_assessments (
+                organization_id, project_id, engagement_control_id, requirement_id,
+                requested_by, files, control_sha256, attributes_sha256, lens,
+                assessor_prompt_version, reviewer_prompt_version, basis_sha256, status,
+                held_code, held_reason, finished_at
+            )
+            SELECT r.organization_id, r.project_id, r.engagement_control_id, r.id, %s,
+                   '[{"file_id": null}]'::jsonb, repeat('a', 64), repeat('b', 64),
+                   'DESIGN_DOCUMENT', 'v1', 'v1', repeat('c', 64), 'HELD', 'UNREADABLE',
+                   'The file could not be read.', clock_timestamp()
+            FROM evidence_requirements r WHERE r.engagement_control_id = %s
+            ORDER BY r.id LIMIT 1
+            """,
+            (team["owner_id"], control),
+        )
+        connection.commit()
+        runs = connection.execute(
+            "SELECT count(*) FROM evidence_assessments WHERE engagement_control_id = %s "
+            "AND stale_at IS NULL AND control_sha256 IS NOT NULL",
+            (control,),
+        ).fetchone()
+    assert runs is not None and int(runs[0]) > 0, "the control has finished D&I checks"
+    return team, client, sheet, control
+
+
+def _free(url: str, sql: str, *params: Any) -> bool:
+    """Whether a third connection can lock the rows without waiting. The callers assert on
+    the answer alone, so a failure never prints the database URL."""
+    with psycopg.connect(url) as third:
+        try:
+            third.execute(f"{sql} FOR UPDATE NOWAIT", params)
+        except psycopg.errors.LockNotAvailable:
+            return False
+        third.rollback()
+        return True
+
+
+def _holding_plan(url: str, control: UUID) -> psycopg.Connection[Any]:
+    holder = psycopg.connect(url)
+    assert holder.execute(
+        "SELECT id FROM evidence_plans WHERE engagement_control_id = %s FOR UPDATE", (control,)
+    ).fetchall(), "the control has a plan"
+    return holder
+
+
+def _filling(
+    url: str, team: dict[str, Any], control: UUID, slot: str, value: str, everywhere: bool
+) -> Callable[[], list[UUID]]:
+    from ai_workforce_api.control_design import ValuesBody, set_values
+
+    def fill() -> list[UUID]:
+        with psycopg.connect(url, connect_timeout=3) as connection:
+            return set_values(
+                connection, UUID(str(team["org"])), UUID(str(team["project"])), control,
+                UUID(str(team["owner_id"])),
+                ValuesBody(values={slot: value}, everywhere=everywhere),
+            )  # fmt: skip
+
+    return fill
+
+
+def test_a_client_value_fill_takes_the_plan_before_the_runs_and_sheets(
+    migrated: Database,
+) -> None:
+    """N1 and the lock order (19 November 2026, review round 4 B1): a fill of a client value
+    on a library control rewrites its description, which marks its D&I checks out of date
+    (step 3), and fills an approved attribute's brackets, which brings its open sheets in
+    step (step 4). Before, refresh_statement locked the runs and only then the plan (step
+    1), so a withdrawal or a reading of the control (the plan, then the runs) could
+    deadlock with it. Now, waiting for the plan, it holds no run and no sheet; and once it
+    runs, the items tested on the bracket are tested again (N1), through the real fill."""
+    from test_testing_engine import _sheet_of
+
+    team, client, sheet, control = _bracketed_tested(
+        migrated, "lock-fill", "[the access request tool]"
+    )
+    holder = _holding_plan(migrated.url, control)
+    thread, outcome = _in_thread(
+        _filling(migrated.url, team, control, "access-tool", "ServiceNow", False)
+    )
+    try:
+        _blocked_by(migrated.url, holder.info.backend_pid)
+        runs_free = _free(
+            migrated.url,
+            "SELECT 1 FROM evidence_assessments WHERE engagement_control_id = %s",
+            control,
+        )
+        assert runs_free, "waiting for the plan, the fill holds the control's runs"
+        sheets_free = _free(
+            migrated.url, "SELECT 1 FROM test_sheets WHERE engagement_control_id = %s", control
+        )
+        assert sheets_free, "waiting for the plan, the fill holds the control's sheets"
+    finally:
+        holder.rollback()
+        thread.join(60)
+        holder.close()
+    assert outcome == {"result": [control]}
+    filled = _sheet_of(client, team, sheet["id"])
+    assert filled["attributes"][0].endswith("by ServiceNow")
+    assert [i["state"] for i in filled["items"]] == ["WAITING"] * len(filled["items"])
+    assert filled["running"] is True
+
+
+def test_a_value_filled_everywhere_takes_every_plan_in_id_order_first(
+    migrated: Database,
+) -> None:
+    """The lock order (review round 4 B1): a value filled everywhere refreshes each control
+    that takes it. Before, it went control by control, the one named first and then in the
+    order it found them: it held the named control's plan, runs and sheets and then asked
+    for another control's plan, and not in control-id order (lock_served's). Now it takes
+    every plan, in id order, before any run or sheet. The holder takes the tested
+    control's plan and the fill is named on a control that sorts after it: waiting, the
+    fill holds no run or sheet of the tested control and no plan that sorts after its
+    (the named control's included, which the order it found them in takes first)."""
+    from ai_workforce_api.statement_registry import statement_for
+    from ai_workforce_api.testing_definitions import DEFINED_SINCE
+
+    team, _client, _sheet_body, control = _bracketed_tested(
+        migrated, "lock-fill-all", "[the role that administers user access]"
+    )
+    with connect(migrated.url) as connection:
+        # The controls set_values fills too: the same units, a statement with the value,
+        # and no value recorded yet.
+        rows = connection.execute(
+            """
+            SELECT c.id, c.library_key,
+                   EXISTS (SELECT 1 FROM evidence_plans p WHERE p.engagement_control_id = c.id)
+            FROM engagement_controls c
+            WHERE c.project_id = %s AND c.id <> %s AND c.library_key IS NOT NULL
+              AND c.library_version >= %s
+              AND split_part(c.implementation_key, ':', 2) = (
+                  SELECT split_part(implementation_key, ':', 2)
+                  FROM engagement_controls WHERE id = %s)
+              AND NOT EXISTS (
+                  SELECT 1 FROM control_parameters v
+                  WHERE v.engagement_control_id = c.id AND v.slot_key = 'admin-role'
+                    AND v.value <> '')
+            """,
+            (team["project"], control, DEFINED_SINCE, control),
+        ).fetchall()
+    takers = [
+        (UUID(str(row[0])), bool(row[2]))
+        for row in rows
+        if (found := statement_for(str(row[1]))) is not None
+        and found.slot("admin-role") is not None
+    ]
+    planned = sorted((taker for taker, has_plan in takers if has_plan), key=str)
+    assert planned, "another control takes the role and has a plan"
+    named = planned[-1]
+    assert str(named) > str(control), "a control with a plan sorts after the tested one"
+    targets = sorted([control, *(taker for taker, _plan in takers)], key=str)
+    holder = _holding_plan(migrated.url, control)
+    thread, outcome = _in_thread(
+        _filling(migrated.url, team, named, "admin-role", "IT service desk", True)
+    )
+    try:
+        _blocked_by(migrated.url, holder.info.backend_pid)
+        for target in targets:
+            if str(target) > str(control):
+                plan_free = _free(
+                    migrated.url,
+                    "SELECT 1 FROM evidence_plans WHERE engagement_control_id = %s",
+                    target,
+                )
+                assert plan_free, f"a plan after the one waited for is held: {target}"
+        runs_free = _free(
+            migrated.url,
+            "SELECT 1 FROM evidence_assessments WHERE engagement_control_id = %s",
+            control,
+        )
+        assert runs_free, "waiting for a plan, the fill holds the control's runs"
+        sheets_free = _free(
+            migrated.url, "SELECT 1 FROM test_sheets WHERE engagement_control_id = %s", control
+        )
+        assert sheets_free, "waiting for a plan, the fill holds the control's sheets"
+    finally:
+        holder.rollback()
+        thread.join(60)
+        holder.close()
+    assert "error" not in outcome, outcome
+    assert sorted(outcome["result"], key=str) == targets
+
+
+def test_values_for_many_controls_take_every_plan_in_id_order_first(
+    migrated: Database,
+) -> None:
+    """The lock order (review round 4 B1): the plan queue's answers for several controls
+    (set_values_many) fill them one by one in one transaction. Before, each control took
+    its own plan when its turn came, in the order the answers were given: it held the
+    first control's plan and sheets and then asked for the next one's plan. Now every
+    answered control's plan is taken, in id order, first. The answers are given for a
+    control that sorts after the tested one, then for the tested one, whose plan the
+    holder takes: waiting, the fill holds no other plan and none of the tested control's
+    runs or sheets."""
+    from ai_workforce_api.control_design import ManyValuesBody, ManyValuesItem, set_values_many
+    from ai_workforce_api.statement_registry import statement_for
+
+    team, _client, _sheet_body, control = _bracketed_tested(
+        migrated, "lock-fill-many", "[the role that administers user access]"
+    )
+    with connect(migrated.url) as connection:
+        rows = connection.execute(
+            """
+            SELECT c.id, c.library_key FROM engagement_controls c
+            WHERE c.project_id = %s AND c.id::text > %s::text AND c.library_key IS NOT NULL
+              AND EXISTS (SELECT 1 FROM evidence_plans p WHERE p.engagement_control_id = c.id)
+            ORDER BY c.id
+            """,
+            (team["project"], control),
+        ).fetchall()
+    later = next(
+        (
+            UUID(str(row[0]))
+            for row in rows
+            if (found := statement_for(str(row[1]))) is not None
+            and found.slot("admin-role") is not None
+        ),
+        None,
+    )
+    assert later is not None, "a control with a plan and the role sorts after the tested one"
+    body = ManyValuesBody(
+        items=[
+            ManyValuesItem(control_id=later, values={"admin-role": "IT service desk"}),
+            ManyValuesItem(control_id=control, values={"admin-role": "IT service desk"}),
+        ]
+    )
+
+    def fill() -> list[UUID]:
+        with psycopg.connect(migrated.url, connect_timeout=3) as connection:
+            return set_values_many(
+                connection, UUID(str(team["org"])), UUID(str(team["project"])),
+                UUID(str(team["owner_id"])), body,
+            )  # fmt: skip
+
+    holder = _holding_plan(migrated.url, control)
+    thread, outcome = _in_thread(fill)
+    try:
+        _blocked_by(migrated.url, holder.info.backend_pid)
+        plan_free = _free(
+            migrated.url, "SELECT 1 FROM evidence_plans WHERE engagement_control_id = %s", later
+        )
+        assert plan_free, "waiting for the tested control's plan, the fill holds a later one"
+        runs_free = _free(
+            migrated.url,
+            "SELECT 1 FROM evidence_assessments WHERE engagement_control_id = %s",
+            control,
+        )
+        assert runs_free, "waiting for the plan, the fill holds the control's runs"
+        sheets_free = _free(
+            migrated.url, "SELECT 1 FROM test_sheets WHERE engagement_control_id = %s", control
+        )
+        assert sheets_free, "waiting for the plan, the fill holds the control's sheets"
+    finally:
+        holder.rollback()
+        thread.join(60)
+        holder.close()
+    assert "error" not in outcome, outcome
+    assert sorted(outcome["result"], key=str) == sorted([later, control], key=str)
