@@ -50,6 +50,44 @@ def _text(node: ast.AST) -> str | None:
     return None
 
 
+def _without_subqueries(sql: str) -> str:
+    """The statement with each parenthesised SELECT removed: a subquery's `status` belongs
+    to the rows it reads (an evidence requirement, say), not to the request being updated."""
+    out: list[str] = []
+    depth = 0
+    i = 0
+    while i < len(sql):
+        if depth == 0 and re.match(r"\(\s*SELECT\b", sql[i:], re.IGNORECASE):
+            depth = 1
+            i += 1
+            continue
+        if depth:
+            depth += {"(": 1, ")": -1}.get(sql[i], 0)
+        else:
+            out.append(sql[i])
+        i += 1
+    return "".join(out)
+
+
+def _status_write(flat: str) -> tuple[str, list[str]] | None:
+    """The to-status an `UPDATE pbc_requests` sets, and the from-states its WHERE names, or
+    None when the statement sets no status. The to-status is read from the SET clause only,
+    so a WHERE that checks `status = 'DRAFT'` is not mistaken for a write of DRAFT."""
+    match = re.search(r"UPDATE pbc_requests\b(.*)", flat, re.IGNORECASE)
+    if match is None:
+        return None
+    body = _without_subqueries(match.group(1))
+    parts = re.split(r"\bWHERE\b", body, maxsplit=1, flags=re.IGNORECASE)
+    to = _TO.search(parts[0])
+    if to is None:
+        return None
+    where = parts[1] if len(parts) == 2 else ""
+    froms = _FROM.findall(where)
+    for group in _FROM_IN.findall(where):
+        froms += re.findall(r"'([A-Z_]+)'", group)
+    return to.group(1), froms
+
+
 def _writes() -> list[tuple[str, int, str, list[str]]]:
     """Each status write: module, line, to-status, the from-states its WHERE names."""
     found: list[tuple[str, int, str, list[str]]] = []
@@ -58,20 +96,36 @@ def _writes() -> list[tuple[str, int, str, list[str]]]:
             text = _text(node)
             if text is None:
                 continue
-            flat = " ".join(text.split())
-            match = re.search(r"UPDATE pbc_requests\b(.*)", flat, re.IGNORECASE)
-            if match is None:
+            write = _status_write(" ".join(text.split()))
+            if write is None:
                 continue
-            to = _TO.search(match.group(1))
-            if to is None:
-                continue
-            parts = re.split(r"\bWHERE\b", match.group(1), maxsplit=1, flags=re.IGNORECASE)
-            where = parts[1] if len(parts) == 2 else ""
-            froms = _FROM.findall(where)
-            for group in _FROM_IN.findall(where):
-                froms += re.findall(r"'([A-Z_]+)'", group)
-            found.append((path.name, getattr(node, "lineno", 0), to.group(1), froms))
+            found.append((path.name, getattr(node, "lineno", 0), write[0], write[1]))
     return found
+
+
+def test_a_where_clause_or_a_subquery_is_not_read_as_a_status_write() -> None:
+    # pbc_drafting's wording update (FO-28) checks status = 'DRAFT' and reads REQUESTED
+    # requirements in a subquery; it sets no status. The old parser read it as
+    # REQUESTED -> DRAFT.
+    wording = (
+        "UPDATE pbc_requests SET evidence_description = %s, version = version + 1 "
+        "WHERE id = %s AND status = 'DRAFT' AND ARRAY( SELECT e.id FROM "
+        "evidence_requirements e WHERE e.pbc_request_id = pbc_requests.id "
+        "AND e.status = 'REQUESTED' ) = %s::uuid[] RETURNING id"
+    )
+    assert _status_write(wording) is None
+    # A real write is still read, from-states and all, with a subquery beside it.
+    sent = (
+        "UPDATE pbc_requests r SET status = 'SENT', sent_at = now() "
+        "WHERE r.id = %s AND r.status = 'APPROVAL_PENDING' AND EXISTS ( SELECT 1 FROM "
+        "approvals a WHERE a.status = 'APPROVED' )"
+    )
+    assert _status_write(sent) == ("SENT", ["APPROVAL_PENDING"])
+    # A write with no from-state is still reported with none.
+    assert _status_write("UPDATE pbc_requests SET status = 'CANCELLED' WHERE id = %s") == (
+        "CANCELLED",
+        [],
+    )
 
 
 def test_every_status_write_follows_the_table_or_a_named_service_move() -> None:
