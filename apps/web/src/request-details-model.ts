@@ -116,6 +116,9 @@ export type RequestDetails = {
     assumptions: string[];
     draftedBy: "MODEL" | "RULES" | "PERSON";
     drafting: boolean;
+    /** The evidence coordinator's last draft was not written and the wording was written
+     * for other planned items: what to do; "" otherwise (pbc_drafting.not_drafted_note). */
+    notDrafted: string;
   };
   attachments: Attachment[];
   contacts: Contact[];
@@ -131,6 +134,9 @@ export type RequestDetails = {
   client: ClientRecord | null;
   /** The test plan's approved attributes its items evidence (internal, never sent). */
   supports: Array<{ code: string; text: string; items: string[] }>;
+  /** Why a Redraft of this request is always refused, shown in its place; null when one
+   * may be asked for (pbc_drafting.redraft_refusal). */
+  redraftRefusal: string | null;
 };
 
 export type ClientMessage = {
@@ -291,6 +297,7 @@ export function parseRequestDetails(value: unknown): RequestDetails | null {
       draftedBy:
         drafted === "MODEL" || drafted === "RULES" ? drafted : "PERSON",
       drafting: planning?.drafting === true,
+      notDrafted: str(planning?.not_drafted),
     },
     attachments: records(value.attachments)
       .map(parseAttachment)
@@ -317,6 +324,7 @@ export function parseRequestDetails(value: unknown): RequestDetails | null {
       text: str(item.text),
       items: strings(item.items),
     })),
+    redraftRefusal: str(value.redraft_refusal) || null,
   };
 }
 

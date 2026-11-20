@@ -1026,6 +1026,22 @@
   margin-top: 2px;
 }
 
+/* The plan changed: the reason and its Redraft on one line; the button wraps under the
+   reason when the line is narrow. */
+.rr-replanned {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.rr-replanned > span {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
+.rr-replanned > .btn {
+  flex: 0 0 auto;
+}
+
 .rr-hold > div {
   display: grid;
   gap: 0.55rem;
@@ -1335,7 +1351,9 @@
 
 .rr-ready-all ul {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  /* One column at every width: the checks sit in the narrow side column, where two
+     columns wrapped each check to six or seven lines (design review, 20 November 2026). */
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.25rem 1rem;
   margin: 0.4rem 0 0;
   padding: 0;
@@ -1971,8 +1989,7 @@
   }
 
   .rr-classify-row,
-  .rr-contact-row,
-  .rr-ready-all ul {
+  .rr-contact-row {
     grid-template-columns: minmax(0, 1fr);
   }
 

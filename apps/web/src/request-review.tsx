@@ -60,6 +60,7 @@ import {
 import {
   MAX_DESCRIPTION,
   type RequestDetail,
+  redraftOffer,
   reviewProblem,
 } from "./request-review-model";
 import { UiIcon } from "./ui-icon";
@@ -258,6 +259,9 @@ export function RequestReview({
   const unsent =
     (status === "DRAFT" || status === "APPROVAL_PENDING") && delivery == null;
   const failing = details?.checks.filter((check) => !check.ok) ?? [];
+  // The agent's last draft was not written: the wording was written for other planned items.
+  const notDrafted = draft ? (details?.planning.notDrafted ?? "") : "";
+  const redraft = redraftOffer(details?.redraftRefusal ?? null, notDrafted);
   const submitBlocked = failing.some((check) => check.key !== "type");
   const typeLabels = Object.fromEntries(
     (details?.types ?? []).map((item) => [item.key, item.label]),
@@ -354,6 +358,31 @@ export function RequestReview({
       {lean ? null : <LifecycleTrack stage={life} />}
     </>
   );
+  // The plan changed after the wording was written: said once, full width, above both
+  // columns, so a narrow screen shows it before the approval actions, with its Redraft
+  // beside it (design review, 20 November 2026: "Not drafted." sat on a written request,
+  // and at 390 it came after Approve and send). The Redraft shows where the status card
+  // would have offered one: a draft its viewer may edit or approve, not one a person wrote.
+  const planChangedPart =
+    notDrafted !== "" ? (
+      <div className="rr-callout is-warn rr-replanned" role="status">
+        <UiIcon name="risk" size={14} />
+        <span>
+          <strong>Plan changed.</strong> {notDrafted}
+        </span>
+        {redraft.banner && editable && (approver || !written) && !editing ? (
+          <button
+            type="button"
+            // Secondary: Approve and send stays the one primary action on the panel.
+            className="btn btn-secondary btn-sm"
+            disabled={busy}
+            onClick={() => review.run("redraft", { intent: "redraft" })}
+          >
+            {review.busy === "redraft" ? "Requesting…" : "Redraft"}
+          </button>
+        ) : null}
+      </div>
+    ) : null;
   const calloutPart = (
     <>
       {stage === "RETURNED" && request.approvalReason ? (
@@ -645,17 +674,21 @@ export function RequestReview({
                     Add approval note
                   </button>
                 ) : null}
-                <button
-                  type="button"
-                  className="btn btn-ghost"
-                  disabled={busy}
-                  onClick={() => review.run("redraft", { intent: "redraft" })}
-                >
-                  <UiIcon name="sparkles" size={13} />
-                  {review.busy === "redraft"
-                    ? "Requesting…"
-                    : "Request a redraft"}
-                </button>
+                {redraft.button ? (
+                  <button
+                    type="button"
+                    className="btn btn-ghost"
+                    disabled={busy}
+                    onClick={() => review.run("redraft", { intent: "redraft" })}
+                  >
+                    <UiIcon name="sparkles" size={13} />
+                    {review.busy === "redraft"
+                      ? "Requesting…"
+                      : "Request a redraft"}
+                  </button>
+                ) : redraft.note !== "" ? (
+                  <p className="rr-note">{redraft.note}</p>
+                ) : null}
               </div>
               {noting ? (
                 <div className="rr-reason">
@@ -710,17 +743,21 @@ export function RequestReview({
                   ? "Submitting…"
                   : "Submit for approval"}
               </button>
-              <button
-                type="button"
-                className="btn btn-ghost"
-                disabled={busy}
-                onClick={() => review.run("redraft", { intent: "redraft" })}
-              >
-                <UiIcon name="sparkles" size={13} />
-                {review.busy === "redraft"
-                  ? "Requesting…"
-                  : "Request a redraft"}
-              </button>
+              {redraft.button ? (
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  disabled={busy}
+                  onClick={() => review.run("redraft", { intent: "redraft" })}
+                >
+                  <UiIcon name="sparkles" size={13} />
+                  {review.busy === "redraft"
+                    ? "Requesting…"
+                    : "Request a redraft"}
+                </button>
+              ) : redraft.note !== "" ? (
+                <p className="rr-note">{redraft.note}</p>
+              ) : null}
             </div>
           ) : stage === "AWAITING_APPROVAL" && request.viewerCanDecide ? (
             <div className="rr-decide">
@@ -968,6 +1005,7 @@ export function RequestReview({
         id={`request-${request.id}`}
       >
         <div className="rr-top">{headPart}</div>
+        {planChangedPart}
         <div className="rr-layout">
           <div className="rr-main">
             {calloutPart}
@@ -985,6 +1023,7 @@ export function RequestReview({
       id={`request-${request.id}`}
     >
       {headPart}
+      {planChangedPart}
       <div className="rr-layout">
         <div className="rr-main">
           {calloutPart}

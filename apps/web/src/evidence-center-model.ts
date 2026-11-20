@@ -145,6 +145,7 @@ export type CenterRow = {
   priority: "NORMAL" | "HIGH" | "URGENT";
   agent:
     | "DRAFTING"
+    | "NOT_DRAFTED"
     | "TYPE_TO_CONFIRM"
     | "READY_FOR_REVIEW"
     | "READING"
@@ -268,6 +269,7 @@ function parseRow(value: Record<string, unknown>): CenterRow | null {
       priority === "HIGH" || priority === "URGENT" ? priority : "NORMAL",
     agent:
       agent === "DRAFTING" ||
+      agent === "NOT_DRAFTED" ||
       agent === "TYPE_TO_CONFIRM" ||
       agent === "READY_FOR_REVIEW" ||
       agent === "READING"

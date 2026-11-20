@@ -632,6 +632,7 @@ def _launch(
         SET status = 'SKIPPED', note = %s, lease_until = NULL, updated_at = clock_timestamp()
         WHERE project_id = %s AND status = 'PENDING'
         """,
-        ("Prepared with the demo; drafted in a later step", project_id),
+        # The reason's token (pbc_drafting.SKIP_REASONS holds what is shown for it).
+        ("DEMO", project_id),
     )
     return True

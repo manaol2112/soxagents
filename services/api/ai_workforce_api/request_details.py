@@ -253,6 +253,10 @@ class PlanningBody(BaseModel):
     # Who wrote the wording: the evidence coordinator's model, its rules, or a person.
     drafted_by: Literal["MODEL", "RULES", "PERSON"]
     drafting: bool
+    # The evidence coordinator's last draft was not written and the wording was written for
+    # other planned items: what to do (pbc_drafting.not_drafted_note); "" otherwise, and
+    # once sent.
+    not_drafted: str = ""
 
 
 class ContactBody(BaseModel):
@@ -330,6 +334,10 @@ class DetailsBody(BaseModel):
     # What the owner gave through the portal: answers, messages, and their submission.
     client: ClientBody | None = None
     supports: list[SupportBody] = []
+    # Why a Redraft of this request is always refused (a sample request, one with planned
+    # evidence but no testing phase, or more planned items than a draft holds), shown in
+    # place of the Redraft; None when one may be asked for (pbc_drafting.redraft_refusal).
+    redraft_refusal: str | None = None
 
 
 class SentMessage(BaseModel):
@@ -695,6 +703,7 @@ def details(
         connection, principal, Action.PROJECT_UPDATE, organization_id, project_id
     )
     from ai_workforce_api.mailbox import mailbox_available
+    from ai_workforce_api.pbc_drafting import redraft_refusal
 
     return DetailsBody(
         # With whether a message can be sent now, as the request's own routes say it.
@@ -722,6 +731,11 @@ def details(
             SupportBody(code=code, text=text, items=items)
             for code, text, items in supports_of(connection, request_id)
         ],
+        redraft_refusal=(
+            redraft_refusal(connection, request_id)
+            if pbc.status == "DRAFT" and pbc.engagement_control_id is not None
+            else None
+        ),
     )
 
 
@@ -892,7 +906,7 @@ def _planning(
     ).fetchall()
     draft = connection.execute(
         """
-        SELECT status, source, content
+        SELECT status, source, content, note
         FROM pbc_drafts
         WHERE pbc_request_id = %s
         ORDER BY created_at DESC, id DESC
@@ -933,12 +947,20 @@ def _planning_from(
         "MODEL" if source == "MODEL" else "RULES" if source == "RULES" else "PERSON"
     )
     drafting = draft is not None and str(draft[0]) in {"PENDING", "DRAFTING"}
+    from ai_workforce_api.pbc_drafting import not_drafted_note
+
+    not_drafted = (
+        not_drafted_note(str(draft[0]), str(draft[3] or ""))
+        if draft is not None and len(draft) > 3 and pbc.status == "DRAFT"
+        else ""
+    )
     return (
         PlanningBody(
             requirements=requirements,
             assumptions=assumptions,
             drafted_by=drafted_by,
             drafting=drafting,
+            not_drafted=not_drafted,
         ),
         kinds,
         by_title,

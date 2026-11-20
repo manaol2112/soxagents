@@ -46,6 +46,7 @@ from ai_workforce_api.mailbox import MailboxProvider, open_mailbox
 from ai_workforce_api.pbc import _COLUMNS as _PBC_COLUMNS
 from ai_workforce_api.pbc import PbcBody, PbcState
 from ai_workforce_api.pbc import _body as _pbc_body
+from ai_workforce_api.pbc_drafting import not_drafted_note
 from ai_workforce_api.request_details import (
     AssignmentBody,
     DetailsState,
@@ -113,9 +114,14 @@ STAGE_LABELS: dict[str, str] = {
     "REJECTED": "Rejected",
     "CANCELLED": "Cancelled",
 }
-Agent = Literal["DRAFTING", "TYPE_TO_CONFIRM", "READY_FOR_REVIEW", "READING", "NONE"]
+Agent = Literal["DRAFTING", "NOT_DRAFTED", "TYPE_TO_CONFIRM", "READY_FOR_REVIEW", "READING", "NONE"]
 AGENT_LABELS: dict[str, str] = {
     "DRAFTING": "Drafting",
+    # The last draft was not written and the wording was written for other planned items
+    # (pbc_drafting.not_drafted_note): the request panel says what to do. "Needs redraft",
+    # not "Not drafted": the request has wording, written for other planned items (design
+    # review, 20 November 2026: "Not drafted" sat beside "Ready for review").
+    "NOT_DRAFTED": "Needs redraft",
     "TYPE_TO_CONFIRM": "Type to confirm",
     "READY_FOR_REVIEW": "Drafted",
     "READING": "Reading files",
@@ -529,7 +535,8 @@ class _Facts:
     controls: dict[UUID, tuple[str, str, str, list[str]]] = field(default_factory=dict)
     # Each requirement a request carries: status, sufficiency, categories, title.
     requirements: dict[UUID, list[tuple[str, str, list[str], str]]] = field(default_factory=dict)
-    drafts: dict[UUID, tuple[str, str, list[str]]] = field(default_factory=dict)
+    # Each request's latest draft: its status, source, item kinds, and note.
+    drafts: dict[UUID, tuple[str, str, list[str], str]] = field(default_factory=dict)
     clarifications: set[UUID] = field(default_factory=set)
     files: Counter[UUID] = field(default_factory=Counter)
     reading: set[UUID] = field(default_factory=set)
@@ -581,14 +588,14 @@ def _facts(connection: psycopg.Connection[Any], project_id: UUID) -> _Facts:
     for row in connection.execute(
         """
         SELECT DISTINCT ON (pbc_request_id) pbc_request_id, status, coalesce(source, ''),
-               coalesce(jsonb_path_query_array(content, '$.items[*].kind'), '[]'::jsonb)
+               coalesce(jsonb_path_query_array(content, '$.items[*].kind'), '[]'::jsonb), note
         FROM pbc_drafts WHERE project_id = %s
         ORDER BY pbc_request_id, created_at DESC, id DESC
         """,
         (project_id,),
     ).fetchall():
         kinds = [str(item) for item in row[3]] if isinstance(row[3], list) else []
-        facts.drafts[row[0]] = (str(row[1]), str(row[2]), kinds)
+        facts.drafts[row[0]] = (str(row[1]), str(row[2]), kinds, str(row[4] or ""))
     facts.clarifications = {
         row[0]
         for row in connection.execute(
@@ -745,6 +752,10 @@ def _row(
     agent: Agent = "NONE"
     if drafting:
         agent = "DRAFTING"
+    elif draft is not None and pbc.status == "DRAFT" and not_drafted_note(draft[0], draft[3]) != "":
+        # Before "Drafted": the agent's last draft was not written (design review, 19
+        # November 2026: the row said nothing, so the wording looked current).
+        agent = "NOT_DRAFTED"
     elif unsent and kind.uncertain:
         agent = "TYPE_TO_CONFIRM"
     elif stage == "READY_FOR_REVIEW" and pbc.drafted_by == "AGENT":
