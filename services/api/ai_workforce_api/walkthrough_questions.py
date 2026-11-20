@@ -729,8 +729,10 @@ UNIVERSAL: tuple[Question, ...] = (
          "Rely on another assurance report (for example SOC 2 or ISAE 3402)",
          "Test the user entity's own controls over the outsourced work",
          "For the audit team to decide"),
-        "Without a SOC 1 report, the approach to evidence over the service organization's part "
-        "is as follows: {answer}.",
+        # The parent's sentence ("...provides no SOC 1 report.") always comes directly before,
+        # so this one does not repeat it, and the colon reads every option, a phrase, as one
+        # sentence (design review, 19 November 2026).
+        "Evidence over the service organization's part: {answer}.",
         when=("wt-service-org-report", "No SOC 1 report"),
         since=SOC1_NO_REPORT_ADDED,
     ),

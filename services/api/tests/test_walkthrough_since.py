@@ -338,8 +338,14 @@ def test_the_no_report_answer_reads_as_the_teams_evidence_decision() -> None:
             "wt-service-org", "wt-service-org-report", NO_REPORT,
         ]  # fmt: skip
         told.append("".join(text for text, key in service if key == NO_REPORT))
+        # Rewritten 19 November 2026 (design review). Old: "Without a SOC 1 report, the
+        # approach to evidence over the service organization's part is as follows: {answer}."
+        # New: "Evidence over the service organization's part: {answer}." Why: the parent's
+        # sentence directly before already says there is no SOC 1 report, and "is as
+        # follows: for the audit team to decide" was not a sentence.
         sentence = "".join(text for text, _key in service).split(". ")[-1]
-        assert sentence.startswith("Without a SOC 1 report, ") and sentence.endswith("."), sentence
+        assert sentence.startswith("Evidence over the service organization's part: "), sentence
+        assert sentence.endswith(".") and sentence.count("SOC 1") == 0, sentence
         assert "complementary user entity controls relied on" not in sentence
     assert told == [
         "test the service organization's controls directly",
@@ -351,9 +357,8 @@ def test_the_no_report_answer_reads_as_the_teams_evidence_decision() -> None:
     answers = {**_service("No SOC 1 report"), NO_REPORT: NO_REPORT_OPTIONS[0]}
     [service] = _service_parts(bank, asked, answers)
     assert "".join(text for text, _key in service).endswith(
-        "The service organization provides no SOC 1 report. Without a SOC 1 report, the "
-        "approach to evidence over the service organization's part is as follows: test the "
-        "service organization's controls directly."
+        "The service organization provides no SOC 1 report. Evidence over the service "
+        "organization's part: test the service organization's controls directly."
     )
     # A report chosen later: the no-report answer is no longer told.
     answers["wt-service-org-report"] = REPORTS[0]

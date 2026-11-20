@@ -10,6 +10,7 @@ Pure unit tests: no database. They check the bank's shape, not whether its conte
 right walkthrough for a client's control, which is a matter for professional review.
 """
 
+import re
 from dataclasses import replace
 
 import pytest
@@ -657,6 +658,17 @@ def test_every_rendered_sentence_reads_as_a_sentence_without_placeholders() -> N
                 sentence = _text(parts[gaps[-1] + 1 if gaps else 0 :])
                 assert sentence.endswith(".") and sentence[:1].isupper(), (item.key, sentence)
                 assert ".." not in sentence and "  " not in sentence, (item.key, sentence)
+                # Added 19 November 2026 (design review of question integrity part A): a
+                # follow-up's sentence does not restate the answer that opens it, as the
+                # parent's sentence directly before it already says it ("...provides no SOC 1
+                # report. Without a SOC 1 report, ..."); and a single answer, a phrase, is not
+                # introduced with "as follows:", which read "is as follows: for the audit team
+                # to decide".
+                if item.when is not None and item.when[1] not in ("Yes", "No"):
+                    opened = re.sub(r"^(no|a|an|the) ", "", item.when[1].lower())
+                    assert opened not in sentence.lower(), (item.key, sentence)
+                if item.kind == "CHOICE":
+                    assert "as follows:" not in item.narrative, (item.key, item.narrative)
 
 
 # Several answers and "Other" (product owner, 11 November 2026: "The questions in control
