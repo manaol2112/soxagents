@@ -655,8 +655,9 @@ def check_report(output: dict[str, Any], text: str, candidates: list[Any]) -> Re
                      "SOC 1 report: it is not a substitute for one in testing controls over "
                      "financial reporting.")  # fmt: skip
     if dropped:
-        notes.append(f"{dropped} CUEC{'s' if dropped != 1 else ''} the agent listed could not "
-                     "be found in the report's text and were left out.")  # fmt: skip
+        one = dropped == 1
+        notes.append(f"{dropped} CUEC{'' if one else 's'} the agent listed could not be found "
+                     f"in the report's text and {'was' if one else 'were'} left out.")  # fmt: skip
     return ReportRead(
         kind=answer.report_kind,
         service_organization=clean_line(answer.service_organization, 200),
@@ -1211,7 +1212,8 @@ class DetailsBody(BaseModel):
 class Selection(BaseModel):
     control_ref: str = Field(min_length=1, max_length=60)
     selected: bool
-    # Why a person does not select a control the agent recommended.
+    # Why a person does not select the control (reason_needed says when one is needed),
+    # and, after launch, why one with work on record leaves scope (onboarding._reason_for).
     note: str = Field(default="", max_length=500)
 
 
@@ -1258,6 +1260,41 @@ def update_details(
                {"fields": sorted(k for k, v in values.items() if v)})  # fmt: skip
 
 
+# Leaving a control out of a system (owner decision, 19 November 2026)
+
+# The shortest reason taken: three characters once spacing is collapsed, as on every route
+# that takes a control out of scope (onboarding._reason_for).
+MIN_REASON = 3
+
+
+def _is_reason(text: str) -> bool:
+    return len(" ".join(text.split())) >= MIN_REASON
+
+
+def soc_waived(
+    hosting: str | None, soc_expected: bool | None, confirmed: bool, reports: int
+) -> bool:
+    """No SOC report can be relied on for the system: the team itself confirmed it runs on
+    premises with none expected, and none is on file (in any status). An assumed hosting
+    or SOC expectation, the agent's or the rules', never waives a reason."""
+    return confirmed and hosting == "ON_PREMISES" and soc_expected is False and reports == 0
+
+
+def reason_needed(status: str | None, reviewed: bool, waived: bool) -> bool:
+    """Whether leaving out a control needs a person's reason. Leaving one out because of a
+    SOC report needs one; the assessment does not record which exclusions rest on a
+    report, so every control the agent assessed, and every candidate once the system has a
+    review, is asked, unless no report can be relied on (soc_waived). A Recommended control
+    always is. A malformed or partial answer (filled in as Needs judgment) therefore asks
+    more, never less (fail closed). The web asks the same (onboarding-model.reasonNeeded;
+    both read tests/fixtures/scope-reasons/cases.json)."""
+    if status == "RECOMMENDED":
+        return True
+    if waived:
+        return False
+    return status is not None or reviewed
+
+
 def save_selection(
     connection: psycopg.Connection[Any],
     organization_id: UUID,
@@ -1268,20 +1305,42 @@ def save_selection(
 ) -> None:
     """The person's selection for the system: each control chosen joins its scope, each
     not chosen leaves it, and the decision is kept beside the agent's recommendation."""
+    from ai_workforce_api.onboarding import _reason_for
     from ai_workforce_api.system_scoping import adapt_control, gather, include_control
 
     facts = gather(connection, application_id)
     if facts is None or facts.project_id != project_id:
         raise ApplicabilityState("system changed")
     by_ref = {item.control_ref.upper(): item for item in facts.candidates}
-    recommended = {
-        str(row[0]): str(row[1])
+    # The agent's recommendation and the team's last decision on each control.
+    stored: dict[str, tuple[str | None, str | None, str]] = {
+        str(row[0]): (
+            None if row[1] is None else str(row[1]),
+            None if row[2] is None else str(row[2]),
+            str(row[3]),
+        )
         for row in connection.execute(
-            "SELECT control_ref, status FROM system_control_assessments "
-            "WHERE application_id = %s AND status IS NOT NULL",
+            "SELECT control_ref, status, decision, decision_note FROM system_control_assessments "
+            "WHERE application_id = %s",
             (application_id,),
         ).fetchall()
     }
+    recommended = {ref: status for ref, (status, _d, _n) in stored.items() if status is not None}
+    context = connection.execute(
+        """
+        SELECT EXISTS (SELECT 1 FROM system_reviews
+                       WHERE application_id = %(a)s AND reviewed_at IS NOT NULL),
+               (SELECT count(*) FROM soc_reports WHERE application_id = %(a)s)
+        """,
+        {"a": application_id},
+    ).fetchone()
+    reviewed = context is not None and bool(context[0])
+    waived = soc_waived(
+        facts.hosting,
+        facts.soc_expected,
+        facts.confirmed,
+        0 if context is None else int(context[1]),
+    )
     chosen: list[tuple[Any, Selection]] = []
     for selection in body.selections:
         candidate = by_ref.get(selection.control_ref.upper())
@@ -1290,13 +1349,34 @@ def save_selection(
         note = clean_line(selection.note, 500)
         if contains_secret({"note": note}):
             raise ApplicabilityState("a note cannot hold a credential")
-        if (
-            not selection.selected
-            and recommended.get(candidate.control_ref) == "RECOMMENDED"
-            and not note
-        ):
-            raise ApplicabilityState("say why a recommended control is not selected")
+        if not selection.selected:
+            status, decision, recorded = stored.get(candidate.control_ref, (None, None, ""))
+            in_scope = (
+                candidate.control_id is not None and not candidate.elsewhere and candidate.included
+            )
+            # A reason on record for a control still left out stands when a save sends
+            # none; a control back in scope since leaves again only with a new one.
+            if not note and decision == "NOT_SELECTED" and not in_scope:
+                note = recorded
+            if reason_needed(status, reviewed, waived) and not _is_reason(note):
+                raise ApplicabilityState(
+                    "say why a recommended control is not selected"
+                    if status == "RECOMMENDED"
+                    else "say why a control left out is not selected"
+                )
         chosen.append((candidate, selection.model_copy(update={"note": note})))
+    # After launch, taking out a control with work on record needs the reason every other
+    # route asks (onboarding._reason_for: scope button, editor, system list, removing a
+    # system), and its impact goes in the audit trail. It only reads, before any lock.
+    removed: dict[str, Any] = {}
+    for candidate, selection in chosen:
+        own = candidate.control_id is not None and not candidate.elsewhere
+        if not selection.selected and own and candidate.included:
+            recorded_why = _reason_for(
+                connection, project_id, [candidate.control_id], selection.note
+            )
+            if recorded_why:
+                removed[candidate.control_ref] = recorded_why
     with transaction(connection) as cursor:
         for candidate, selection in chosen:
             own = candidate.control_id is not None and not candidate.elsewhere
@@ -1345,6 +1425,10 @@ def save_selection(
                     if (recommended.get(c.control_ref) == "RECOMMENDED") != s.selected
                     and c.control_ref in recommended
                 ],
+                # Why each control left out is not selected, and, after launch, the reason
+                # and impact for each taken out with work on record (as _reason_for gives).
+                "reasons": {c.control_ref: s.note for c, s in chosen if not s.selected and s.note},
+                "removed": removed,
             },
         )  # fmt: skip
 

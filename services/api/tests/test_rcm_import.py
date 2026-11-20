@@ -117,10 +117,20 @@ def test_rows_become_controls_and_unusable_rows_are_listed() -> None:
         for key, items in choices.items()
     }
     result = build(rows, 2, fields, maps)
-    assert result.problems == []
+    # Rewritten 19 November 2026 (owner decision, scope integrity part A). Old: row 7, which
+    # repeats AC 1.01 with other content, was skipped ("Control ID repeats row 3.") and the
+    # import went ahead with no problem. New: rows that share an ID but differ hold the
+    # import until the file is reconciled, and the preview says which fields differ. Why: a
+    # silent skip loses that row's system and its instance of the control (AS 2201
+    # completeness of the controls tested; AS 1215 documentation). Identical rows merge
+    # into one control per system (test_engagement_integrity).
+    assert result.problems == [
+        "Rows 3 and 7 share control ID AC 1.01 but differ in control description, risk, "
+        "frequency, test procedures and evidence: make the rows the same or give each its "
+        "own ID."
+    ]
     assert [control.control_ref for control in result.controls] == ["AC 1.01", "CM 2.01", "OP 3.01"]
     assert [(item.row, item.reason) for item in result.skipped] == [
-        (7, "Control ID repeats row 3."),
         (8, "No control ID."),
         (9, "The row looks like it holds a secret."),
     ]

@@ -11,9 +11,11 @@ A question in the bank from the start holds every control as before.
 Database tests: walkthrough_answers.unanswered_required, the engagement-wide read and the
 one control's, and the waits of Control Understanding it feeds."""
 
+from datetime import date
 from typing import Any
 from uuid import UUID
 
+import pytest
 from support import Database, settle_attributes, walkthrough_value
 from test_outbound import _session, migrated
 from test_planning_gate import _control, _launched, _project, _rows
@@ -256,3 +258,217 @@ def test_a_control_waiting_only_on_questions_from_the_start_is_counted_as_before
 
 def _keys(items: list[Any]) -> list[str]:
     return [str(item.key) for item in items]
+
+
+# SOC 1, no report (owner decision, 19 November 2026, the interim fix of SOL's defect 5):
+# after "No SOC 1 report" nothing asks about the report, and one required question records
+# how the team will obtain evidence over the service organization's part. Added later
+# (since), so a completed understanding is not reopened. Invariants: I3 and I7 in part (no
+# reliance is narrated from a report that does not exist; the evidence approach is a
+# person's answer). The new names are read inside the tests, so this file still loads
+# without the change.
+
+NO_REPORT = "wt-service-org-no-report"
+NO_REPORT_OPTIONS = (
+    "Test the service organization's controls directly",
+    "Rely on another assurance report (for example SOC 2 or ISAE 3402)",
+    "Test the user entity's own controls over the outsourced work",
+    "For the audit team to decide",
+)
+REPORTS = (
+    "A SOC 1 Type 2 report covering the period",
+    "A SOC 1 Type 2 report covering part of the period (bridge letter needed)",
+    "A SOC 1 Type 1 report only",
+)
+
+
+def _service(report: str) -> dict[str, str]:
+    return {"wt-service-org": "Yes", "wt-service-org-report": report}
+
+
+def test_no_soc_1_report_asks_how_the_provider_is_evidenced_not_about_its_report() -> None:
+    from ai_workforce_api import walkthrough_questions as bank
+
+    for scope in bank._scopes():
+        asked = bank.applicable(bank.questions_for(scope), _service("No SOC 1 report"))
+        keys = [item.key for item in asked]
+        assert NO_REPORT in keys, scope
+        assert keys.index(NO_REPORT) == keys.index("wt-service-org-report") + 1, scope
+        assert not [item.key for item in asked if "in its report" in item.text], scope
+        for report in REPORTS:
+            opened = bank.applicable(bank.questions_for(scope), _service(report))
+            assert NO_REPORT not in [item.key for item in opened], (scope, report)
+        # Not opened either when no service organization takes part.
+        closed = bank.applicable(
+            bank.questions_for(scope), {**_service("No SOC 1 report"), "wt-service-org": "No"}
+        )
+        assert NO_REPORT not in [item.key for item in closed], scope
+    added = bank.question(NO_REPORT)
+    assert added is not None
+    assert (added.kind, added.topic, added.required, added.allows_other) == (
+        "CHOICE", "SERVICE_ORG", True, True,
+    )  # fmt: skip
+    assert added.when == ("wt-service-org-report", "No SOC 1 report")
+    assert added.options == NO_REPORT_OPTIONS
+    assert added.since == bank.SOC1_NO_REPORT_ADDED == date(2026, 11, 19)
+    # It reaches the team's evidence decision: what is requested and what is tested.
+    assert set(added.informs) == {"RELIANCE", "EVIDENCE"}
+    assert set(added.drives) >= {"EVIDENCE", "SCOPE"}
+    # The details question no longer presumes a report.
+    detail = bank.question("wt-service-org-detail")
+    assert detail is not None and "report" not in detail.text and "report" not in detail.why
+    assert bank.problems() == []
+
+
+def _service_parts(bank: Any, asked: Any, answers: dict[str, str]) -> list[Any]:
+    return [parts for topic, parts in bank.narrate(asked, answers) if topic == "SERVICE_ORG"]
+
+
+def test_the_no_report_answer_reads_as_the_teams_evidence_decision() -> None:
+    from ai_workforce_api import walkthrough_questions as bank
+
+    asked = bank.questions_for("change-approval")
+    told = []
+    for answer in (*NO_REPORT_OPTIONS, f"{bank.OTHER}A bridge letter and a site visit"):
+        answers = {**_service("No SOC 1 report"), NO_REPORT: answer}
+        [service] = [
+            parts for topic, parts in bank.narrate(asked, answers) if topic == "SERVICE_ORG"
+        ]
+        assert [key for _text, key in service if key] == [
+            "wt-service-org", "wt-service-org-report", NO_REPORT,
+        ]  # fmt: skip
+        told.append("".join(text for text, key in service if key == NO_REPORT))
+        # Rewritten 19 November 2026 (design review). Old: "Without a SOC 1 report, the
+        # approach to evidence over the service organization's part is as follows: {answer}."
+        # New: "Evidence over the service organization's part: {answer}." Why: the parent's
+        # sentence directly before already says there is no SOC 1 report, and "is as
+        # follows: for the audit team to decide" was not a sentence.
+        sentence = "".join(text for text, _key in service).split(". ")[-1]
+        assert sentence.startswith("Evidence over the service organization's part: "), sentence
+        assert sentence.endswith(".") and sentence.count("SOC 1") == 0, sentence
+        assert "complementary user entity controls relied on" not in sentence
+    assert told == [
+        "test the service organization's controls directly",
+        "rely on another assurance report (for example SOC 2 or ISAE 3402)",
+        "test the user entity's own controls over the outsourced work",
+        "for the audit team to decide",
+        "a bridge letter and a site visit",
+    ]
+    answers = {**_service("No SOC 1 report"), NO_REPORT: NO_REPORT_OPTIONS[0]}
+    [service] = _service_parts(bank, asked, answers)
+    assert "".join(text for text, _key in service).endswith(
+        "The service organization provides no SOC 1 report. Evidence over the service "
+        "organization's part: test the service organization's controls directly."
+    )
+    # A report chosen later: the no-report answer is no longer told.
+    answers["wt-service-org-report"] = REPORTS[0]
+    [service] = _service_parts(bank, asked, answers)
+    assert NO_REPORT not in [key for _text, key in service]
+
+
+def test_the_no_report_question_holds_only_a_control_in_progress() -> None:
+    from ai_workforce_api.walkthrough_answers import holds
+
+    added = question(NO_REPORT)
+    assert added is not None
+    assert holds(added, None, False) is True
+    assert holds(added, date(2026, 11, 19), False) is False
+    assert holds(added, date(2026, 11, 1), False) is False
+    assert holds(added, None, True) is False
+
+
+def test_a_follow_up_is_still_reported_away_from_its_parent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The order check takes a follow-up after its parent or anything under its parent
+    # (the bank's first follow-up of a follow-up, 19 November 2026), and still reports one
+    # that something else separates from its parent.
+    from ai_workforce_api import walkthrough_questions as bank
+
+    real = bank.questions_for
+    assert bank._order("change-approval", "", "") == []
+    assert question(NO_REPORT) is not None
+
+    def moved(key: str) -> Any:
+        def ordered(scope: str, nature: str = "", frequency: str = "") -> tuple[Any, ...]:
+            asked = list(real(scope, nature, frequency))
+            item = next(each for each in asked if each.key == key)
+            asked.remove(item)
+            after = next(at for at, each in enumerate(asked) if each.key == "wt-service-org-detail")
+            asked.insert(after + 1, item)
+            return tuple(asked)
+
+        return ordered
+
+    # The no-report question after the details question, which is not under the report.
+    monkeypatch.setattr(bank, "questions_for", moved(NO_REPORT))
+    assert f"{NO_REPORT}: not directly after its parent for change-approval" in bank._order(
+        "change-approval", "", ""
+    )
+    # A direct follow-up after a question of another topic is reported too.
+    monkeypatch.setattr(bank, "questions_for", real)
+    asked = list(real("change-approval"))
+    vendor = next(each for each in asked if each.key == "wt-cm-vendor-changes")
+    asked.remove(vendor)
+    asked.append(vendor)
+    monkeypatch.setattr(bank, "questions_for", lambda *_args: tuple(asked))
+    assert "wt-cm-vendor-changes: not directly after its parent for change-approval" in bank._order(
+        "change-approval", "", ""
+    )
+
+
+def test_one_save_closes_or_opens_the_no_report_question_with_its_parents(
+    migrated: Database,
+) -> None:
+    team = _launched(migrated, "wt-soc1-none")
+    control = str(_control(team, CM06)["id"])
+    path = f"{_project(team)}/controls/{control}/walkthrough-answers"
+
+    def save(answers: dict[str, str]) -> Any:
+        return team["owner"].put(
+            path,
+            json={
+                "answers": {
+                    key: {"value": value, "not_applicable": False} for key, value in answers.items()
+                }
+            },
+        )
+
+    def stored() -> dict[str, str]:
+        with connect(migrated.url) as connection:
+            rows = answers_of(connection, UUID(control))
+        return {key: row.value for key, row in rows.items() if key.startswith("wt-service-org")}
+
+    # No service organization: the report and the no-report answer under it are both closed
+    # by the same save (the parent of the no-report question is itself closed), so neither
+    # is stored.
+    closed = save(
+        {"wt-service-org": "No", "wt-service-org-report": "No SOC 1 report",
+         NO_REPORT: NO_REPORT_OPTIONS[3]}
+    )  # fmt: skip
+    assert closed.status_code == 200, closed.text
+    assert closed.json() == {"saved": 1, "ignored": 2}
+    assert stored() == {"wt-service-org": "No"}
+    # A service organization with no report: the report and its follow-up in one save.
+    assert save({"wt-service-org": "Yes"}).status_code == 200
+    with connect(migrated.url) as connection:
+        rows = answers_of(connection, UUID(control))
+        asked = {item.key: item for item in questions_asked(connection, UUID(control), rows)}
+    assert NO_REPORT not in asked
+    opened = save({"wt-service-org-report": "No SOC 1 report", NO_REPORT: NO_REPORT_OPTIONS[0]})
+    assert opened.status_code == 200, opened.text
+    assert opened.json() == {"saved": 2, "ignored": 0}
+    with connect(migrated.url) as connection:
+        rows = answers_of(connection, UUID(control))
+        asked = {item.key: item for item in questions_asked(connection, UUID(control), rows)}
+    assert asked[NO_REPORT].required and stands(rows.get(NO_REPORT), asked[NO_REPORT])
+    # A report chosen later: no longer asked, and its answer stays on record as given.
+    assert save({"wt-service-org-report": REPORTS[0]}).status_code == 200
+    with connect(migrated.url) as connection:
+        rows = answers_of(connection, UUID(control))
+        asked = {item.key: item for item in questions_asked(connection, UUID(control), rows)}
+    assert NO_REPORT not in asked
+    assert stored()[NO_REPORT] == NO_REPORT_OPTIONS[0]
+    # The no-report answer alone, with a report on record, is refused: it is not asked.
+    refused = save({NO_REPORT: NO_REPORT_OPTIONS[1]})
+    assert refused.status_code == 409, refused.text

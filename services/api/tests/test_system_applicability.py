@@ -277,6 +277,15 @@ def test_report_wording_is_kept_only_where_it_is_found_and_placed_on_its_page() 
     assert [c.ref for c in read.cuecs] == ["CUEC-1"]
     assert read.cuecs[0].page == 14 and read.cuecs[0].status == "ADDRESSED"
     assert read.dropped == 1 and "could not be found" in read.note
+    # One CUEC is one: "1 CUEC ... was left out", never "were".
+    assert read.note.endswith(
+        "1 CUEC the agent listed could not be found in the report's text and was left out."
+    )
+    two = _read(["ITGC-AC-01"])
+    two["cuecs"] = [*two["cuecs"], {**two["cuecs"][1], "ref": "CUEC-3"}]
+    assert check_report(two, REPORT, [_C("ITGC-AC-01")]).note.endswith(
+        "2 CUECs the agent listed could not be found in the report's text and were left out."
+    )
     # A quote that is not in the report sinks the opinion too.
     wrong = _read(["ITGC-AC-01"]) | {"opinion_quote": "a clean opinion with no exceptions"}
     assert check_report(wrong, REPORT, [_C("ITGC-AC-01")]).opinion == "UNKNOWN"
