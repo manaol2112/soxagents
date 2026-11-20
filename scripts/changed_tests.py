@@ -62,6 +62,11 @@ GUARDS: dict[str, tuple[str, ...]] = {
     ),
     "scripts/reset.sh": ("tests/test_smoke.py",),
     ".github/workflows/ci.yml": ("services/api/tests/test_ci_gate.py", "tests/test_smoke.py"),
+    # The risk-class check, its mapping and the template it parses (docs/test-strategy.md).
+    ".github/risk-paths.toml": ("services/api/tests/test_risk_class.py",),
+    "scripts/risk_class.py": ("services/api/tests/test_risk_class.py",),
+    ".github/workflows/risk.yml": ("services/api/tests/test_risk_class.py", "tests/test_smoke.py"),
+    ".github/pull_request_template.md": ("services/api/tests/test_risk_class.py",),
 }
 
 
