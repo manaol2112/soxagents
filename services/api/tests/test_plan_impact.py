@@ -516,3 +516,53 @@ def test_a_sheet_whose_tested_revision_is_not_recorded_signs_off_unknown(
         a for a in client.get(f"{_base(team)}/impact").json() if a["status"] == "PENDING"
     ]
     assert assessment["from_revision"] is None
+
+
+def test_a_decision_takes_the_plan_before_the_assessment(migrated: Database) -> None:
+    """ST-1 review note N4 (19 November 2026). Plan approval holds the plan and then
+    supersedes the assessments it made stale; a reviewer's decision locked the assessment
+    and then the plan (to reperform), so the two could deadlock. Now the decision takes the
+    plan first: waiting for a transaction that holds the plan, it holds no assessment."""
+    from test_lock_order import _blocked_by, _in_thread
+
+    from ai_workforce_api.authorization import Principal, PrincipalKind
+    from ai_workforce_api.plan_impact import DecisionBody, decide
+
+    team, client, _sheet, control = _revised_and_approved(migrated, "impact-lock-order")
+    [assessment] = client.get(f"{_base(team)}/impact").json()
+    holder = psycopg.connect(migrated.url)
+    holder.execute(
+        "SELECT id FROM evidence_plans WHERE engagement_control_id = %s FOR UPDATE", (control,)
+    )
+
+    def decided() -> Any:
+        with psycopg.connect(migrated.url, connect_timeout=3) as connection:
+            return decide(
+                connection,
+                Principal(kind=PrincipalKind.USER, id=team["reviewer_id"]),
+                team["org"],
+                team["project"],
+                UUID(assessment["id"]),
+                DecisionBody(
+                    version=assessment["version"],
+                    decision="REPERFORM",
+                    rationale="The approval attribute changed; retest the sample.",
+                ),
+            )
+
+    thread, outcome = _in_thread(decided)
+    try:
+        _blocked_by(migrated.url, holder.info.backend_pid)
+        with psycopg.connect(migrated.url) as other:
+            free = other.execute(
+                "SELECT id FROM plan_impact_assessments WHERE id = %s FOR UPDATE NOWAIT",
+                (assessment["id"],),
+            ).fetchone()
+            other.rollback()
+        assert free is not None
+    finally:
+        holder.rollback()
+        thread.join(60)
+        holder.close()
+    assert "error" not in outcome, outcome
+    assert outcome["result"].status == "REPERFORM"
