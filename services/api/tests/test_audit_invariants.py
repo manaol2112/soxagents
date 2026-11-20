@@ -36,6 +36,7 @@ _NODE = re.compile(r"`(services/api/tests/[a-z0-9_]+\.py::[a-z0-9_]+)`")
 _DEFECT = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*")
 _UNASSIGNED = re.compile(r"unassigned: \S.{3,}")
 _SKIPPING = frozenset({"skip", "skipif", "xfail"})
+_STOPPING = frozenset({"skip", "xfail", "importorskip"})
 
 
 # --- The document's tables ---------------------------------------------------------------
@@ -113,34 +114,76 @@ def node_problem(node: str) -> str | None:
         return f"{node}: no such file"
     if path not in CRITICAL and node not in PICKED:
         return f"{node}: neither its file is in CRITICAL_PY nor the test in CRITICAL_PICKED"
-    tree = ast.parse(file.read_text(encoding="utf-8"))
-    for statement in tree.body:
+    problem = source_problem(file.read_text(encoding="utf-8"), name)
+    return None if problem is None else f"{node}: {problem}"
+
+
+def _skipping_mark(body: list[ast.stmt]) -> bool:
+    """A `pytestmark = ...` among these statements that skips or xfails."""
+    return any(
+        isinstance(statement, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "pytestmark"
+            for target in statement.targets
+        )
+        and bool(_marks(statement.value) & _SKIPPING)
+        for statement in body
+    )
+
+
+def _pytest_calls(node: ast.AST, skip_bodies: bool = False) -> set[str]:
+    """The `pytest.<name>(...)` calls under `node`; with skip_bodies, those of the module's
+    own statements only, not inside a function or class body (which run only when called)."""
+    found: set[str] = set()
+    pending: list[ast.AST] = [node]
+    while pending:
+        current = pending.pop()
         if (
-            isinstance(statement, ast.Assign)
-            and any(
-                isinstance(target, ast.Name) and target.id == "pytestmark"
-                for target in statement.targets
-            )
-            and _marks(statement.value) & _SKIPPING
+            isinstance(current, ast.Call)
+            and isinstance(current.func, ast.Attribute)
+            and isinstance(current.func.value, ast.Name)
+            and current.func.value.id == "pytest"
         ):
-            return f"{node}: its module's pytestmark skips or xfails it"  # fmt: skip
-    functions = [s for s in tree.body if isinstance(s, ast.FunctionDef)]
+            found.add(current.func.attr)
+        for child in ast.iter_child_nodes(current):
+            if skip_bodies and isinstance(
+                child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+            ):
+                pending += [*child.decorator_list]
+                continue
+            pending.append(child)
+    return found
+
+
+def source_problem(source: str, name: str) -> str | None:
+    """Why the test `name` of this module's source would not run, or None: missing, or
+    skipped or xfailed by the module (its pytestmark, a module-level pytest.skip or
+    importorskip), by its class (a decorator or the class body's pytestmark) or by itself
+    (a decorator, or a pytest.skip, xfail or importorskip call)."""
+    tree = ast.parse(source)
+    if _skipping_mark(tree.body):
+        return "its module's pytestmark skips or xfails it"
+    if _pytest_calls(tree, skip_bodies=True) & _STOPPING:
+        return "its module calls pytest.skip, xfail or importorskip"
+    functions: list[tuple[ast.FunctionDef, ast.ClassDef | None]] = [
+        (s, None) for s in tree.body if isinstance(s, ast.FunctionDef)
+    ]
     for statement in tree.body:
         if isinstance(statement, ast.ClassDef):
-            functions += [s for s in statement.body if isinstance(s, ast.FunctionDef)]
-    found = [function for function in functions if function.name == name]
+            functions += [(s, statement) for s in statement.body if isinstance(s, ast.FunctionDef)]
+    found = [(function, owner) for function, owner in functions if function.name == name]
     if not found:
-        return f"{node}: no such test"
-    if any(_marks(decorator) & _SKIPPING for decorator in found[0].decorator_list):
-        return f"{node}: marked skip, skipif or xfail"
-    called = {
-        call.func.attr
-        for call in ast.walk(found[0])
-        if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
-        and isinstance(call.func.value, ast.Name) and call.func.value.id == "pytest"
-    }  # fmt: skip
-    if called & _SKIPPING:
-        return f"{node}: calls pytest.skip or pytest.xfail"
+        return "no such test"
+    function, owner = found[0]
+    if owner is not None and (
+        any(_marks(decorator) & _SKIPPING for decorator in owner.decorator_list)
+        or _skipping_mark(owner.body)
+    ):
+        return "its class is marked skip, skipif or xfail"
+    if any(_marks(decorator) & _SKIPPING for decorator in function.decorator_list):
+        return "marked skip, skipif or xfail"
+    if _pytest_calls(function) & _STOPPING:
+        return "calls pytest.skip, xfail or importorskip"
     return None
 
 
@@ -192,6 +235,25 @@ def test_the_registry_reads_its_tables_and_rejects_a_test_that_does_not_run() ->
     function = skipped.body[1]
     assert isinstance(function, ast.FunctionDef)
     assert _marks(function.decorator_list[0]) & _SKIPPING
+    # Each way pytest skips a test is a problem, and the same test unskipped is not (review
+    # of the audit-invariants increment, 19 November 2026: a class-level mark, a class
+    # body's pytestmark and importorskip were missed).
+    plain = "import pytest\nclass TestA:\n    def test_a(self): ...\ndef test_b(): ...\n"
+    assert source_problem(plain, "test_a") is None and source_problem(plain, "test_b") is None
+    test_a = "def test_a(): ...\n"
+    skipping = {
+        "class": "import pytest\n@pytest.mark.skip\nclass TestA:\n    def test_a(self): ...\n",
+        "class pytestmark": (
+            "import pytest\nclass TestA:\n    pytestmark = pytest.mark.xfail\n"
+            "    def test_a(self): ...\n"
+        ),
+        "module importorskip": "import pytest\npytest.importorskip('nothing')\n" + test_a,
+        "test importorskip": "import pytest\ndef test_a():\n    pytest.importorskip('x')\n",
+        "module pytestmark": "import pytest\npytestmark = [pytest.mark.skip]\n" + test_a,
+        "test skip": "import pytest\ndef test_a():\n    pytest.skip('x')\n",
+    }
+    for way, source in skipping.items():
+        assert source_problem(source, "test_a") is not None, way
 
 
 # --- I9: one closed vocabulary -----------------------------------------------------------

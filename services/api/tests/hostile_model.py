@@ -50,7 +50,16 @@ from ai_workforce_api.models import (
 
 class Behaviour(StrEnum):
     """What a hostile model does with a request. The first twelve shape an answer; the last
-    four are failures of the call itself, which the model layer classifies (row 15)."""
+    four are failures of the call itself, which the model layer classifies (row 15).
+
+    MALFORMED and MALFORMED_TWICE classify one question each, the same way in every
+    increment. MALFORMED: is an answer that does not fit the schema ever taken as given?
+    Its cell holds when the malformed answer is refused, whether the call then fails closed
+    or the product asks once more and uses only a corrected answer. MALFORMED_TWICE: when
+    the correction turn is malformed too, does the call end failed and closed? An entry
+    point with no correction turn answers both alike. HostileModel answers malformed on
+    every turn for both, so a test showing "malformed, then corrected" holds MALFORMED
+    only, and MALFORMED_TWICE needs a test whose correction turn is malformed as well."""
 
     EMPTY = "EMPTY"  # every list empty; a required enum at its favourable value
     PARTIAL = "PARTIAL"  # favourable, cited answers for the first half of the keys only
