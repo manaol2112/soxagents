@@ -27,6 +27,9 @@ of this database only).
 - oe-review-signed-failed  the failed review (a later re-performance gave up after the
                       partial one) signed off over the reviewer's record by hand: no
                       failure banner, no "Re-perform", and the reviewer lane not stopped
+- oe-review-failed-full  a re-performance that gave up after an earlier full one (3 of 3):
+                      the header, the round's reviews and the review queue hold
+                      "Re-performance did not finish", never "Ready to sign off"
 """
 
 from typing import Any
@@ -191,6 +194,7 @@ def _reviewed(
         "partial": [passing, REJECTED, REJECTED],
         "none": [REJECTED, REJECTED, REJECTED],
         "differs": [differs, passing, passing],
+        "full": [passing, passing, passing],
     }[answers]
     with connect(seed.url) as connection:
         assert run_reperformance(connection, _Provider(scripted), UUID(review["id"])) == "DONE"
@@ -202,9 +206,10 @@ def _reviewed(
         "partial": ("MODEL", 3, 1),
         "none": ("FALLBACK", 3, 0),
         "differs": ("MODEL", 3, 3),
+        "full": ("MODEL", 3, 3),
     }[answers]
     assert (record["source"], record["due"], record["done"]) == expected, record
-    assert review["attestation_needed"] is (answers != "differs"), review
+    assert review["attestation_needed"] is (answers not in ("differs", "full")), review
     return team, client, control, review
 
 
@@ -298,6 +303,19 @@ def _more_review_states(seed: Any) -> None:
     review = client.get(f"{seed.base(team)}/reviews").json()[0]
     assert review["status"] == "SIGNED_OFF" and review["failure_note"] == "", review
     _add_review(seed, "oe-review-signed-failed", team, control, review)
+
+    team, client, control, review = _reviewed(seed, "oe-failed-full", "full")
+    asked = _reviewer(seed, team).post(
+        f"{seed.base(team)}/reviews/{review['id']}/reperform", json={"version": review["version"]}
+    )
+    assert asked.status_code == 200, asked.text
+    with connect(seed.url) as connection:
+        fail_reperformance(connection, UUID(review["id"]))
+        connection.commit()
+    review = client.get(f"{seed.base(team)}/reviews").json()[0]
+    assert review["reperformance"]["failed"] is True, review["reperformance"]
+    assert review["attestation_needed"] is False, review
+    _add_review(seed, "oe-review-failed-full", team, control, review)
 
 
 def build(seed: Any) -> None:
