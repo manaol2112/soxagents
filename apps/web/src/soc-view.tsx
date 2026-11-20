@@ -10,19 +10,13 @@ import {
   type SetupSystem,
   SOC_STATUS_LABELS,
   type SocReport,
+  socAvailabilityLine,
   runFailureLine as socFailureLine,
   wizardProblem,
 } from "./onboarding-model";
 import { UiIcon } from "./ui-icon";
 
 type Ids = { organizationId: string; projectId: string };
-
-const AVAILABILITY: Record<string, string> = {
-  STATED_AVAILABLE: "The vendor states it issues a SOC 1 report.",
-  NOT_FOUND: "No statement that the vendor issues a SOC 1 report was found.",
-  NOT_RESEARCHED:
-    "Whether the vendor issues a SOC 1 report was not researched.",
-};
 
 const OPINIONS: Record<string, string> = {
   UNQUALIFIED: "Unqualified opinion",
@@ -43,6 +37,11 @@ export function SocAssessment({ system }: { system: SetupSystem }) {
       </p>
     );
   }
+  // Once a SOC 1 report has been read, its card says what the vendor issues.
+  const availability = socAvailabilityLine(
+    assessment.socAvailability,
+    system.socReports,
+  );
   return (
     <div className="soc-assess">
       <p className="soc-assess-head">
@@ -67,17 +66,19 @@ export function SocAssessment({ system }: { system: SetupSystem }) {
         ) : null}
       </p>
       <p>{assessment.socBasis}</p>
-      <p className="soc-meta">
-        {AVAILABILITY[assessment.socAvailability]}
-        {assessment.socSources.map((source) => (
-          <span key={source.url}>
-            {" "}
-            <a href={source.url} target="_blank" rel="noreferrer noopener">
-              {source.title || source.url}
-            </a>
-          </span>
-        ))}
-      </p>
+      {availability !== null || assessment.socSources.length > 0 ? (
+        <p className="soc-meta">
+          {availability}
+          {assessment.socSources.map((source, index) => (
+            <span key={source.url}>
+              {availability !== null || index > 0 ? " " : null}
+              <a href={source.url} target="_blank" rel="noreferrer noopener">
+                {source.title || source.url}
+              </a>
+            </span>
+          ))}
+        </p>
+      ) : null}
     </div>
   );
 }

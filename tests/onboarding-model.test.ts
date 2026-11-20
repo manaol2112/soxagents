@@ -613,6 +613,8 @@ describe("client RCM upload model", () => {
     assert.equal(parsed.values.frequency[0]?.mapped, null);
     assert.deepEqual(parsed.values.domain, []);
     assert.equal(parsed.preview.skipped[0]?.row, 9);
+    // A mapping gap is no row to fix in the file: the page asks to save the mapping.
+    assert.equal(parsed.preview.fixInFile, false);
     assert.equal(parsed.replaces, 16);
     assert.equal(parseImport({ id: importId }), null);
   });

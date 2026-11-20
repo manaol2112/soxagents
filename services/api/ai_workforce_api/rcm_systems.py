@@ -250,14 +250,23 @@ class _Found:
     evidence: str = ""
 
 
+# How scan_rows reads the sheet. 2 (19 November 2026): every row of a repeated control ID
+# is read, not only its first. A scan made under another reading is made again before an
+# import (rcm_uploads), since its proposals miss the systems of the rows it did not read.
+SCAN_ROWS_VERSION = 2
+
+
 def basis(sheet_index: int, header_row: int, column_fields: list[str]) -> str:
-    """What a scan depends on. A different mapping needs a new scan."""
-    text = json.dumps([sheet_index, header_row, column_fields])
+    """What a scan depends on. A different mapping, or a different reading of the rows,
+    needs a new scan."""
+    text = json.dumps([SCAN_ROWS_VERSION, sheet_index, header_row, column_fields])
     return hashlib.sha256(text.encode()).hexdigest()
 
 
 def scan_rows(rows: list[list[str]], header_row: int, column_fields: list[str]) -> list[ScanRow]:
-    """Rows with a control ID, with the systems cell and the text the control describes."""
+    """Rows with a control ID, with the systems cell and the text the control describes.
+    Every row is read: an RCM kept one row per system repeats the control ID on each, and
+    each row names its own system (19 November 2026)."""
     names = headers(rows, header_row)
     if "control_ref" not in column_fields or len(column_fields) != len(names):
         return []
@@ -269,12 +278,10 @@ def scan_rows(rows: list[list[str]], header_row: int, column_fields: list[str]) 
         if choice in ("title", "activity", "risk", "test_attributes", "pbc_items", "custom")
     ]
     found: list[ScanRow] = []
-    seen: set[str] = set()
     for _number, row in data_rows(rows, header_row):
         control = " ".join((row[ref] if ref < len(row) else "").split())
-        if control == "" or control.lower() in seen:
+        if control == "":
             continue
-        seen.add(control.lower())
         text = " | ".join(row[index] for index in readable if index < len(row) and row[index])
         cell = row[systems] if systems is not None and systems < len(row) else ""
         found.append(ScanRow(control_ref=control, systems_cell=cell, text=text))
@@ -288,6 +295,12 @@ def _norm(text: str) -> str:
 def _plain(text: str) -> str:
     """Letters and digits only, for spotting values that are not a system."""
     return " ".join(re.sub(r"[^a-z0-9]+", " ", text.lower()).split())
+
+
+def names_a_system(values: list[str]) -> bool:
+    """Whether the values of a systems cell name a system: "N/A", "All systems" and the
+    like do not, and neither does a blank cell."""
+    return any(_plain(value) not in NOT_A_SYSTEM for value in values)
 
 
 def _key(name: str) -> str:
