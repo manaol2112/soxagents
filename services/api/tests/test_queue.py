@@ -717,3 +717,40 @@ def test_an_item_names_its_control_instance_with_its_application(migrated: Datab
 
 def _ref_of(items: list[dict[str, Any]], control_id: str) -> str:
     return str(next(item["control_ref"] for item in items if item["control_id"] == control_id))
+
+
+def test_a_finality_step_is_routed_by_its_typed_fields_never_its_wording() -> None:
+    """E3 design review (19 November 2026). The queue read a step's obligation from the
+    finality reason's wording ("D&I conclusion", "since the review covered it", "whether
+    it applies is undecided"), so rewording a reason moved its item. Now a step that is a
+    finality reason is routed by the reason's typed fields."""
+    from ai_workforce_api.control_journey import NotFinal
+    from ai_workforce_api.queue import _step_obligation
+
+    def routed(reason: NotFinal) -> str:
+        return _step_obligation(reason.text, reason)
+
+    lapsed = NotFinal(
+        kind="DESIGN", text="D&I conclusion out of date: the records changed after the sign-off",
+        step="REVIEW", phase="DESIGN",
+    )  # fmt: skip
+    assert routed(lapsed) == "CONTROL_REVIEW"
+    # Any wording: the typed fields decide.
+    assert routed(lapsed.model_copy(update={"text": "Reworded"})) == "CONTROL_REVIEW"
+    gap = NotFinal(
+        kind="REVIEW", text="Interim testing signed off after the review: review outstanding",
+        step="REVIEW", phase="INTERIM", coverage=True,
+    )  # fmt: skip
+    assert routed(gap) == "COVERAGE_ASSESSMENT"
+    changed = NotFinal(
+        kind="REVIEW", text="Conclusion differs from the one the review signed: review outstanding",
+        step="REVIEW",
+    )  # fmt: skip
+    assert routed(changed) == "CONTROL_REVIEW"
+    undecided = NotFinal(
+        kind="PLAN", text="Roll-forward operating effectiveness: whether it applies is undecided",
+        step="PLAN", phase="ROLLFORWARD",
+    )  # fmt: skip
+    assert routed(undecided.model_copy(update={"text": "Reworded"})) == "EVIDENCE_PLAN"
+    # A step that is not the reason is read as a step, as before.
+    assert _step_obligation("Approve the samples", lapsed) == "SAMPLES_APPROVAL"
