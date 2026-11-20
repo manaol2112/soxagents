@@ -644,6 +644,7 @@ def test_an_approved_plan_keeps_its_attributes_and_gets_the_tailoring_as_a_propo
     assert stored["verdict"] == "CONCERN" and "Name the system." in stored["note"]
     body = team["owner"].get(f"{_path(team, control)}/context").json()["attributes"]
     mark = next(item for item in body["approved"] if item["id"] == str(first[0]))["review"]
+    assert mark is not None, "the row shows no verdict while its pending criteria wait"
     assert mark["verdict"] == "CONCERN" and "Name the system." in mark["note"]
     assert body["review_summary"]["concerns"] == 1
     shown = [

@@ -1370,6 +1370,7 @@ def test_the_set_reviewer_is_given_the_pending_criteria_and_its_verdict_holds_af
     # was counted while no row showed it until after the Accept).
     assert summary["status"] == "REVIEWED" and summary["concerns"] == 1
     before = {item["id"]: item for item in context["attributes"]["approved"]}
+    assert before[with_pending[0]["id"]]["review"] is not None, "no verdict on the row"
     assert before[with_pending[0]["id"]]["review"]["verdict"] == "CONCERN"
     assert "no system" in before[with_pending[0]["id"]]["review"]["note"]
     version = team["owner"].get(f"{_path(team, control)}/evidence-plan").json()["version"]
