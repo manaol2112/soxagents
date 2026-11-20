@@ -615,24 +615,12 @@ def test_a_value_filled_everywhere_takes_every_plan_in_id_order_first(
     assert sorted(outcome["result"], key=str) == targets
 
 
-def test_values_for_many_controls_take_every_plan_in_id_order_first(
-    migrated: Database,
-) -> None:
-    """The lock order (review round 4 B1): the plan queue's answers for several controls
-    (set_values_many) fill them one by one in one transaction. Before, each control took
-    its own plan when its turn came, in the order the answers were given: it held the
-    first control's plan and sheets and then asked for the next one's plan. Now every
-    answered control's plan is taken, in id order, first. The answers are given for a
-    control that sorts after the tested one, then for the tested one, whose plan the
-    holder takes: waiting, the fill holds no other plan and none of the tested control's
-    runs or sheets."""
-    from ai_workforce_api.control_design import ManyValuesBody, ManyValuesItem, set_values_many
+def _planned_after(database: Database, team: dict[str, Any], control: UUID, slot: str) -> UUID:
+    """The first control, by id, after the tested one that has a plan and a statement with
+    the value (slot): a fill of both takes its plan after the tested control's."""
     from ai_workforce_api.statement_registry import statement_for
 
-    team, _client, _sheet_body, control = _bracketed_tested(
-        migrated, "lock-fill-many", "[the role that administers user access]"
-    )
-    with connect(migrated.url) as connection:
+    with connect(database.url) as connection:
         rows = connection.execute(
             """
             SELECT c.id, c.library_key FROM engagement_controls c
@@ -646,12 +634,31 @@ def test_values_for_many_controls_take_every_plan_in_id_order_first(
         (
             UUID(str(row[0]))
             for row in rows
-            if (found := statement_for(str(row[1]))) is not None
-            and found.slot("admin-role") is not None
+            if (found := statement_for(str(row[1]))) is not None and found.slot(slot) is not None
         ),
         None,
     )
     assert later is not None, "a control with a plan and the role sorts after the tested one"
+    return later
+
+
+def test_values_for_many_controls_take_every_plan_in_id_order_first(
+    migrated: Database,
+) -> None:
+    """The lock order (review round 4 B1): the plan queue's answers for several controls
+    (set_values_many) fill them one by one in one transaction. Before, each control took
+    its own plan when its turn came, in the order the answers were given: it held the
+    first control's plan and sheets and then asked for the next one's plan. Now every
+    answered control's plan is taken, in id order, first. The answers are given for a
+    control that sorts after the tested one, then for the tested one, whose plan the
+    holder takes: waiting, the fill holds no other plan and none of the tested control's
+    runs or sheets."""
+    from ai_workforce_api.control_design import ManyValuesBody, ManyValuesItem, set_values_many
+
+    team, _client, _sheet_body, control = _bracketed_tested(
+        migrated, "lock-fill-many", "[the role that administers user access]"
+    )
+    later = _planned_after(migrated, team, control, "admin-role")
     body = ManyValuesBody(
         items=[
             ManyValuesItem(control_id=later, values={"admin-role": "IT service desk"}),
@@ -684,6 +691,180 @@ def test_values_for_many_controls_take_every_plan_in_id_order_first(
             migrated.url, "SELECT 1 FROM test_sheets WHERE engagement_control_id = %s", control
         )
         assert sheets_free, "waiting for the plan, the fill holds the control's sheets"
+    finally:
+        holder.rollback()
+        thread.join(60)
+        holder.close()
+    assert "error" not in outcome, outcome
+    assert sorted(outcome["result"], key=str) == sorted([later, control], key=str)
+
+
+def _row_free(url: str, control: UUID) -> bool:
+    return _free(url, "SELECT 1 FROM engagement_controls WHERE id = %s", control)
+
+
+def test_a_library_link_takes_the_plan_before_the_control_row(migrated: Database) -> None:
+    """The lock order (19 November 2026, review round 5 B2): a fill takes the plan and then
+    rewrites the control's description (control_design.refresh_statement). Before, a
+    library link or adoption (library_definitions._control: link_definitions, adopt) locked
+    the control's row and then asked for the plan in the statement's refresh, so it could
+    wait on a fill waiting on it (a deploy's link pass, a person's adoption, a scope
+    change). Now it takes the plan first: waiting for it, the link holds no control row."""
+    from test_testing_engine import _open_tested
+
+    from ai_workforce_api.library_definitions import link_definitions
+
+    _team, _client, sheet = _open_tested(migrated, "lock-link")
+    control = UUID(sheet["control_id"])
+
+    def link() -> int:
+        with (
+            psycopg.connect(migrated.url, connect_timeout=3) as connection,
+            transaction(connection) as cursor,
+        ):
+            return link_definitions(cursor, control, None)
+
+    holder = _holding_plan(migrated.url, control)
+    thread, outcome = _in_thread(link)
+    try:
+        _blocked_by(migrated.url, holder.info.backend_pid)
+        assert _row_free(migrated.url, control), "waiting for the plan, the link holds the row"
+    finally:
+        holder.rollback()
+        thread.join(60)
+        holder.close()
+    assert "error" not in outcome, outcome
+
+
+def test_adopting_a_standard_takes_the_plan_before_the_control_row(migrated: Database) -> None:
+    """The lock order (review round 5 B2): following a standard the control does not have
+    yet (library_matching.decide_basis) rewrites the control's row with the standard's key
+    and then links its definitions, whose refresh takes the plan. Before, it held the row
+    while it asked for the plan, as a link did. Now the plan is taken before the row:
+    waiting for it, the adoption holds no control row."""
+    from test_testing_engine import _open_tested
+
+    from ai_workforce_api.controls import BY_KEY
+    from ai_workforce_api.library_matching import BasisWrite, decide_basis, load_control
+
+    team, _client, sheet = _open_tested(migrated, "lock-adopt")
+    control = UUID(sheet["control_id"])
+    with connect(migrated.url) as connection:
+        facts = load_control(connection, control)
+        used = {
+            str(row[0])
+            for row in connection.execute(
+                "SELECT library_key FROM engagement_controls WHERE project_id = %s "
+                "AND library_key IS NOT NULL",
+                (team["project"],),
+            ).fetchall()
+        }
+    assert facts is not None
+    # A standard no control of the engagement follows yet (one key per system).
+    key = next(k for k in sorted(BY_KEY) if k not in used)
+    write = BasisWrite(basis="STANDARD", library_key=key, note="Fits")
+
+    def adopt() -> str:
+        with psycopg.connect(migrated.url, connect_timeout=3) as connection:
+            return decide_basis(connection, facts, UUID(str(team["owner_id"])), write, False)
+
+    holder = _holding_plan(migrated.url, control)
+    thread, outcome = _in_thread(adopt)
+    try:
+        _blocked_by(migrated.url, holder.info.backend_pid)
+        row_free = _row_free(migrated.url, control)
+        assert row_free, "waiting for the plan, the adoption holds the row"
+    finally:
+        holder.rollback()
+        thread.join(60)
+        holder.close()
+    assert "error" not in outcome, outcome
+    with connect(migrated.url) as connection:
+        row = connection.execute(
+            "SELECT library_key, test_basis FROM engagement_controls WHERE id = %s", (control,)
+        ).fetchone()
+    assert row is not None and tuple(row) == (key, "STANDARD")
+
+
+def test_prior_year_answers_for_many_controls_take_every_plan_in_id_order_first(
+    migrated: Database,
+) -> None:
+    """The lock order (review round 5 B3): a prior-year reference's accepted answers
+    (prior_year.decide_proposals) fill each answered control in one transaction. Before,
+    each fill took its control's plan when its proposal's turn came: it held one control's
+    plan, runs and sheets and then asked for the next control's plan, as set_values_many
+    did before round 4. Now every answered control's plan is taken, in id order, first.
+    The answer for a control that sorts after the tested one is proposed first, then the
+    tested one's, whose plan the holder takes: waiting, the decision holds no other plan
+    and none of the tested control's runs or sheets."""
+    from test_prior_year import _upload
+
+    from ai_workforce_api.prior_year import ProposalDecision, decide_proposals
+
+    team, _client, _sheet_body, control = _bracketed_tested(
+        migrated, "lock-fill-py", "[the role that administers user access]"
+    )
+    later = _planned_after(migrated, team, control, "admin-role")
+    document = UUID(str(_upload(team)["id"]))
+    proposals: list[UUID] = []
+    with connect(migrated.url) as connection, transaction(connection) as cursor:
+        # Confirmed matches for both controls, the later control's answer proposed first.
+        for target in (later, control):
+            match = cursor.execute(
+                """
+                INSERT INTO prior_year_matches (
+                    organization_id, project_id, document_id, prior_ref, engagement_control_id,
+                    basis, status, analysis_status
+                )
+                VALUES (%s, %s, %s, 'PY-1', %s, 'PERSON', 'CONFIRMED', 'DONE')
+                ON CONFLICT (document_id, engagement_control_id)
+                    WHERE engagement_control_id IS NOT NULL
+                DO UPDATE SET status = 'CONFIRMED'
+                RETURNING id
+                """,
+                (team["org"], team["project"], document, target),
+            ).fetchone()
+            assert match is not None
+            proposal = cursor.execute(
+                """
+                INSERT INTO prior_year_proposals (
+                    organization_id, project_id, match_id, engagement_control_id, kind,
+                    slot_key, value, title, quote
+                )
+                VALUES (%s, %s, %s, %s, 'ANSWER', 'admin-role', 'IT service desk',
+                        'Who administers user access', 'IT Security Manager')
+                RETURNING id
+                """,
+                (team["org"], team["project"], match[0], target),
+            ).fetchone()
+            assert proposal is not None
+            proposals.append(UUID(str(proposal[0])))
+
+    def decide() -> list[UUID]:
+        with psycopg.connect(migrated.url, connect_timeout=3) as connection:
+            return decide_proposals(
+                connection, UUID(str(team["org"])), UUID(str(team["project"])),
+                UUID(str(team["owner_id"])), ProposalDecision(accept=proposals),
+            )  # fmt: skip
+
+    holder = _holding_plan(migrated.url, control)
+    thread, outcome = _in_thread(decide)
+    try:
+        _blocked_by(migrated.url, holder.info.backend_pid)
+        plan_free = _free(
+            migrated.url, "SELECT 1 FROM evidence_plans WHERE engagement_control_id = %s", later
+        )
+        assert plan_free, "waiting for the tested control's plan, the decision holds a later one"
+        runs_free = _free(
+            migrated.url,
+            "SELECT 1 FROM evidence_assessments WHERE engagement_control_id = %s",
+            control,
+        )
+        assert runs_free, "waiting for the plan, the decision holds the control's runs"
+        sheets_free = _free(
+            migrated.url, "SELECT 1 FROM test_sheets WHERE engagement_control_id = %s", control
+        )
+        assert sheets_free, "waiting for the plan, the decision holds the control's sheets"
     finally:
         holder.rollback()
         thread.join(60)

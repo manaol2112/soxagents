@@ -1025,6 +1025,12 @@ def decide_basis(
             ).fetchone()
             if entry is not None and effective_status(str(entry[0]), entry[1], key) == "RETIRED":
                 raise MatchState("that standard is retired")
+            # The plan before the control's row (lock order: evidence_reliance): the link
+            # below refreshes the statement, which takes the plan; a fill takes the plan and
+            # then rewrites the row.
+            from ai_workforce_api.testing_engine import lock_plan
+
+            lock_plan(cursor, facts.control_id)
             cursor.execute(
                 """
                 UPDATE engagement_controls
