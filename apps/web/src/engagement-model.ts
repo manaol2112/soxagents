@@ -440,6 +440,13 @@ export type ControlRow = {
    * (control_journey.finality). Only then does the control count as complete. */
   final?: boolean;
   notFinalBecause?: string[];
+  /** The reasons that are a gap in what the signed review recorded it covered, the ones
+   * a reviewer's coverage assessment clears, from the API's typed `coverage` field
+   * (control_journey.NotFinal), never from the wording. */
+  coverageGaps?: CoverageGap[];
+  /** A reason that holds the control's own signed review which a coverage assessment does
+   * not clear (a conclusion that moved since the review signed it): "" when none. */
+  reviewHeldBy?: string;
   /** Why a signed-off sheet was opened again, while it is open; "" otherwise. */
   reopenReason?: string;
   /** Where the control is in Plan → Request → Test → Conclude → Review, each phase's
@@ -935,6 +942,8 @@ export function parseControls(value: unknown): ControlRow[] | null {
       notFinalBecause: (Array.isArray(item.not_final) ? item.not_final : [])
         .map((reason) => (isRecord(reason) ? str(reason.text) : ""))
         .filter((text) => text !== ""),
+      coverageGaps: parseCoverageGaps(item.not_final),
+      reviewHeldBy: parseReviewHeld(item.not_final),
       reopenReason: str(item.reopen_reason),
       journey: parseJourney(item.journey),
       readinessBlocker: str(item.readiness_blocker),
@@ -1121,6 +1130,54 @@ export function agentActive(control: ControlRow): boolean {
     agents.reviewing !== "IDLE" ||
     control.testingRunning
   );
+}
+
+/** One reason the API marks as a coverage gap (`coverage: true`): its words and the
+ * phase whose signed review it is about. */
+export type CoverageGap = { text: string; phase: string | null };
+
+/** The coverage gaps among a control's not-final reasons. Only a reason the API marks
+ * `coverage: true` is one; a reason without the field, or with any other value, is not
+ * (E3 design review, 19 November 2026: the page matched the wording, and offered COVERS
+ * on a conclusion that moved since the review signed it, which only a new review
+ * clears). */
+export function parseCoverageGaps(value: unknown): CoverageGap[] {
+  return records(value)
+    .filter((reason) => reason.coverage === true && str(reason.text) !== "")
+    .map((reason) => ({ text: str(reason.text), phase: maybe(reason.phase) }));
+}
+
+/** The first reason at the control's own review (not a round's) that is no coverage gap:
+ * what holds a signed review that only a review signed again clears, from the typed
+ * fields (`kind`, `coverage`, `phase`); "" when none. */
+export function parseReviewHeld(value: unknown): string {
+  const found = records(value).find(
+    (reason) =>
+      reason.kind === "REVIEW" &&
+      reason.coverage !== true &&
+      reason.phase !== "ROLLFORWARD" &&
+      reason.phase !== "RETEST" &&
+      str(reason.text) !== "",
+  );
+  return found === undefined ? "" : str(found.text);
+}
+
+/** The coverage gap each signed review answers, by where its review sits: the
+ * control's own (D&I and interim), the roll-forward round's, the retest round's; ""
+ * where there is none, so no coverage decision is offered there. */
+export function coverageGapsOf(control: Pick<ControlRow, "coverageGaps">): {
+  control: string;
+  "roll-forward": string;
+  retest: string;
+} {
+  const gaps = control.coverageGaps ?? [];
+  const first = (match: (phase: string | null) => boolean) =>
+    gaps.find((gap) => match(gap.phase))?.text ?? "";
+  return {
+    control: first((phase) => phase !== "ROLLFORWARD" && phase !== "RETEST"),
+    "roll-forward": first((phase) => phase === "ROLLFORWARD"),
+    retest: first((phase) => phase === "RETEST"),
+  };
 }
 
 /** What stops the control, in words; empty when nothing does. */

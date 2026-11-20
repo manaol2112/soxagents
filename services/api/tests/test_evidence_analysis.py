@@ -11,6 +11,7 @@ import psycopg
 import pytest
 from evidence_store import store_attachment
 from fastapi.testclient import TestClient
+from hostile_model import Repeat, Replay
 from PIL import Image, ImageDraw
 from support import Database
 from test_execution import _add_project_member, _add_user, _ready, _seed_org, _seed_project
@@ -22,7 +23,7 @@ from ai_workforce_api.evidence_analysis import open_analyses, run_analysis
 from ai_workforce_api.evidence_ocr import CallRecorder, Engine, OcrEngine, OcrResult
 from ai_workforce_api.main import create_app
 from ai_workforce_api.migrate import apply_migrations, migrations_dir
-from ai_workforce_api.models import ModelConfig, ModelProvider, ModelRaw, ModelRequest
+from ai_workforce_api.models import ModelProvider
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.storage import ObjectStore
 
@@ -443,16 +444,14 @@ class _Scheduler:
         self.analyses.extend(analysis_ids)
 
 
-class _Provider:
-    def __init__(self, outputs: list[dict[str, Any] | None]) -> None:
-        self.outputs = outputs
-        self.requests: list[ModelRequest] = []
+class _Provider(Replay):
+    """The shared replay fake (hostile_model.Replay) under the name the importing files use.
+    It answers its last output again after the script ends, as this file's copy did: stated
+    here (then=Repeat()), not assumed. Step 2b of the audit-invariants increment hands it over
+    to the hostile EMPTY answer once each test that relies on the repetition says so."""
 
-    def complete(self, request: ModelRequest, config: ModelConfig) -> ModelRaw:
-        del config
-        self.requests.append(request)
-        output = self.outputs[min(len(self.requests), len(self.outputs)) - 1]
-        return ModelRaw(output, (), 800, 200)
+    def __init__(self, outputs: list[dict[str, Any] | None]) -> None:
+        super().__init__(outputs, then=Repeat())
 
 
 class _Engine:

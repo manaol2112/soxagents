@@ -102,7 +102,7 @@ def test_only_a_signed_off_review_concludes_a_control(migrated: Database) -> Non
     row = _controls(client, team)[str(control[0])]
     assert row["conclusion"] == "NOT_CONCLUDED"
     assert row["progress"] != "CONCLUDED"
-    # Signed off by the independent reviewer: now it is concluded.
+    # Signed off by the independent reviewer: the review is signed, but nothing is tested.
     with connect(migrated.url) as connection:
         connection.execute(
             """
@@ -116,10 +116,16 @@ def test_only_a_signed_off_review_concludes_a_control(migrated: Database) -> Non
         )
         connection.commit()
     row = _controls(client, team)[str(control[0])]
-    assert row["conclusion"] == "EFFECTIVE"
-    # The opinion follows the review; the conclusion is final only once the testing
-    # behind it is complete (workflow integrity W1). Here nothing was tested: the
-    # register says what is outstanding instead of reading the control as concluded.
+    # Rewritten 19 November 2026 (ST-2, one screen one story, product owner decision 19 Nov
+    # 2026). Old expectation: EFFECTIVE, the opinion following the signed review alone.
+    # New: NOT_CONCLUDED, because nothing is tested or proposed, so no verdict holds and
+    # the register never reads Effective unless the records and the signed verdict both
+    # are.
+    assert row["conclusion"] == "NOT_CONCLUDED"
+    # The conclusion is final only once the testing behind it is complete (workflow
+    # integrity W1). Here nothing was tested: the register says what is outstanding
+    # instead of reading the control as concluded, and the signed review is not asked for
+    # again.
     assert row["final"] is False and row["progress"] != "CONCLUDED"
     # Rewritten 9 November 2026: the shared setup records each control's D&I conclusion
     # (support.sign_off_design, B0), which prepares the design workpaper, so design is no
@@ -256,3 +262,23 @@ def test_tickmarks_and_reliability_decisions_read_in_plain_words(migrated: Datab
         assert "disposition" not in words.lower() and "_" not in words
         assert not any(code in words for code in ("NOT_", "SHOWN_ON", "EXCEPTION", "FILE_GONE"))
         assert not any(value in words for value in ids.values()) and ticket not in words
+
+
+def test_a_resynced_test_sheet_reads_in_plain_words() -> None:
+    """E3 design review (19 November 2026): a sheet brought to the approved attributes and
+    criteria (testing_engine.resync, `testing.sheet_resynced`) read as its raw action,
+    "Testing: sheet resynced". Now it has a title, and how many items are to be tested
+    again when the change marked any."""
+    from ai_workforce_api.control_activity import _detail, _title
+
+    assert _title("testing.sheet_resynced") == (
+        "testing",
+        "Test sheet updated to the approved attributes and criteria",
+    )
+    marked = {"items_marked": [str(uuid4()), str(uuid4())], "attributes": ["A"]}
+    assert _detail("testing.sheet_resynced", marked) == "2 items to test again"
+    one = {"items_marked": [str(uuid4())]}
+    assert _detail("testing.sheet_resynced", one) == "1 item to test again"
+    # None marked (a new order or a removal only): the title says it all.
+    assert _detail("testing.sheet_resynced", {"items_marked": []}) == ""
+    assert _detail("testing.sheet_resynced", {}) == ""

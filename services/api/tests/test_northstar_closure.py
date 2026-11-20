@@ -416,7 +416,12 @@ def test_reporting_reads_the_current_result_and_keeps_the_original_outcome(
         row = rows[ref]
         assert row["test_result"] == "NOT_EFFECTIVE", ref  # the original outcome stands
         assert row["current_result"] == "EFFECTIVE" and row["current_result_basis"] == "Retest 1"
-        assert row["retested"] and not row["failed"] and row["testing_status"] == "complete"
+        # Rewritten 19 November 2026 (FP-7, decision D5, product owner). Old: "complete",
+        # with the roll-forward the rules left PENDING after the interim exceptions. New:
+        # the undecided roll-forward keeps the conclusion open, so the control waits for a
+        # person's decision and its review ("awaiting_review"). Reason: the rest of the
+        # period is tested or scoped out by a person, never assumed.
+        assert row["retested"] and not row["failed"] and row["testing_status"] == "awaiting_review"
         assert row["open_deficiencies"] == 0 and row["closed_deficiencies"] == 1
         assert row["deficiencies_logged"] == 1
     # A failed control whose deficiency is still open stays failed, with the interim basis.
@@ -433,8 +438,11 @@ def test_reporting_reads_the_current_result_and_keeps_the_original_outcome(
     assert status["controls"]["interim_failed"] == 6
     assert status["controls"]["retested_effective"] == 2
     by_status = status["controls"]["by_testing_status"]
-    assert by_status["complete"] == 5
-    assert by_status["awaiting_rollforward"] == 5 and by_status["awaiting_review"] == 3
+    # Rewritten 19 November 2026 (FP-7, decision D5): old 5 complete and 3 awaiting review;
+    # the four controls whose roll-forward the rules left undecided after interim
+    # exceptions (NS-AC-02, NS-CM-01, NS-IP-01, NS-MR-01) now wait for that decision.
+    assert by_status["complete"] == 1
+    assert by_status["awaiting_rollforward"] == 5 and by_status["awaiting_review"] == 7
     assert by_status["in_testing"] == 1 and sum(by_status.values()) == 14
     assert status["review"]["controls_awaiting_rollforward"] == 5
     # Closed deficiencies are counted and listed, never dropped.

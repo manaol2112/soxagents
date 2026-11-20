@@ -24,6 +24,7 @@ import {
 } from "./design-evidence-model.ts";
 import { requestsFallback } from "./design-requests-model.ts";
 import type { RequirementState } from "./evidence-plan-model.ts";
+import { REVIEW_OUTSTANDING, type ReviewHold } from "./review-model.ts";
 import {
   inReviewStatus,
   STEP_DRAFT,
@@ -312,6 +313,9 @@ export type WorkflowInput = {
   /** Findings, with their type: DESIGN for a design deficiency. */
   findings: ReadonlyArray<{ reference: string; status: string; type: string }>;
   reviewStatus: string;
+  /** What holds the control's own signed review (review-model.reviewHoldOf): the Review
+   * step is outstanding, never done, while it stands. Absent or null where nothing does. */
+  reviewHold?: ReviewHold | null;
   conclusion: "NOT_CONCLUDED" | "EFFECTIVE" | "EXCEPTION";
   /** The verdict the server proposes for the control (control-conclusion-model; migration
    * 0144): null when it is not loaded or still waits on something. */
@@ -364,6 +368,8 @@ export type WorkflowStep = (typeof STEPS)[number] & {
   note?: string;
   /** The action for the review's choice while the step's note is that choice. */
   choiceAction?: string;
+  /** The Review step only: what holds its signed review, while it is outstanding. */
+  hold?: ReviewHold;
   /** What the step needs from the person, where its own list words it (the D&I evidence
    * list once its requests are drafted): one line, with no action of its own. */
   need?: EvidenceWorkflowHeader["need"];
@@ -916,7 +922,11 @@ function conclusionState(
 
 function reviewState(input: WorkflowInput): State {
   if (input.reviewStatus === "SIGNED_OFF") {
-    return { tone: "done", status: "Signed off" };
+    // A signed review a typed reason holds is outstanding, never done (design review, 19
+    // November 2026).
+    return (input.reviewHold ?? null) !== null
+      ? { tone: "attention", status: REVIEW_OUTSTANDING }
+      : { tone: "done", status: "Signed off" };
   }
   return input.reviewStatus === "OPEN"
     ? { tone: "attention", status: "In review" }
@@ -1052,6 +1062,11 @@ export function workflowOf(input: WorkflowInput): WorkflowStep[] {
     ...(step.key === "understanding" &&
     (input.understanding?.completedAt ?? null) !== null
       ? { since: whenWords(input.understanding?.completedAt ?? "") }
+      : {}),
+    ...(step.key === "review" &&
+    input.reviewStatus === "SIGNED_OFF" &&
+    input.reviewHold
+      ? { hold: input.reviewHold }
       : {}),
     // The evidence list's own decision line goes with its state, and only with it.
     ...(step.key === "designevidence" &&

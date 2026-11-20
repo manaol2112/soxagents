@@ -9,13 +9,16 @@ from uuid import UUID
 
 from support import Database
 from test_control_progress import _controls
+from test_control_reviews import _prepared_control, _rollforward_decided
 from test_engagement_data import _engagement
 from test_outbound import migrated
+from test_round_reviews import _sign_review
 from test_testing_engine import _base, _sheet
 from test_workpapers import _tested_control
 from test_workspace import _request, _row
 
 from ai_workforce_api.control_journey import (
+    DESIGN_NOT_SIGNED,
     PHASES,
     STEP_OF_PROGRESS,
     FinalityFacts,
@@ -465,6 +468,47 @@ def test_the_journey_agrees_with_the_register_wherever_it_does_not_report_a_conf
             ),
             _phases(rollforward="NOT_APPLICABLE", complete=(True, True, False)),
         ),
+        # Review note R4, 19 November 2026: a signed review whose verdict is held by its
+        # reasons. Before, the journey read the verdict alone and put these at Conclude
+        # while the register read them at the reason's step (one screen, one story).
+        (
+            _settled(
+                REVIEWED,
+                sheet_status="SIGNED_OFF",
+                review_status="SIGNED_OFF",
+                review_left="SIGNED",
+                conclusion="NOT_CONCLUDED",
+                not_final=[
+                    NotFinal(
+                        kind="DESIGN",
+                        # Reworded 19 November 2026 (E3 design review): "no longer holds"
+                        # became "out of date"; the step follows the typed fields.
+                        text="D&I conclusion out of date: a design deficiency was logged "
+                        "after the sign-off",
+                        step="REVIEW",
+                        phase="DESIGN",
+                    )
+                ],
+            ),
+            _phases(rollforward="NOT_APPLICABLE", complete=(True, True, False)),
+        ),
+        (
+            _settled(
+                REVIEWED,
+                review_status="SIGNED_OFF",
+                review_left="SIGNED",
+                conclusion="NOT_CONCLUDED",
+                not_final=[
+                    NotFinal(
+                        kind="TESTING",
+                        text="Interim testing outstanding",
+                        step="REQUEST",
+                        phase="INTERIM",
+                    )
+                ],
+            ),
+            _phases(rollforward="NOT_APPLICABLE", complete=(True, False, False)),
+        ),
     ]
     for row, phases in cases:
         journey = journey_of(row, phases)
@@ -814,4 +858,98 @@ def test_a_signed_review_covers_only_the_versions_it_recorded() -> None:
     assert _texts(_facts(review_coverage={"sheet_version": None, "workpapers": []}, **base)) == [
         "The review did not record the testing version it covered: review outstanding",
         "The effectiveness workpaper changed since the review covered it: review outstanding",
+    ]
+
+
+def test_an_undecided_phase_keeps_the_conclusion_open() -> None:
+    """FP-7 (decision D5, product owner, 19 November 2026): a phase the plan leaves PENDING
+    keeps the conclusion open until a person decides it, in the plan's own words; never
+    read as not applicable. A design signed off as not effective owes no OE, so an
+    undecided OE phase does not hold it."""
+    pending = {"DESIGN": "APPLICABLE", "INTERIM": "APPLICABLE", "ROLLFORWARD": "PENDING"}
+    reasons = finality(_facts(applicability=pending)).reasons
+    assert [(r.kind, r.text, r.step, r.phase) for r in reasons] == [
+        (
+            "PLAN",
+            "Roll-forward operating effectiveness: whether it applies is undecided",
+            "PLAN",
+            "ROLLFORWARD",
+        )
+    ]
+    interim = {"DESIGN": "APPLICABLE", "INTERIM": "PENDING", "ROLLFORWARD": "NOT_APPLICABLE"}
+    assert _texts(_facts(applicability=interim, sheet_status=None)) == [
+        "Interim operating effectiveness: whether it applies is undecided"
+    ]
+    design = {"DESIGN": "PENDING", "INTERIM": "APPLICABLE", "ROLLFORWARD": "NOT_APPLICABLE"}
+    assert _texts(_facts(applicability=design)) == [
+        "Design effectiveness: whether it applies is undecided"
+    ]
+    # The failed-design exemption: OE is not owed, so its undecided phase holds nothing.
+    assert (
+        finality(
+            _facts(applicability=pending, design_verdict="NOT_EFFECTIVE", sheet_status=None)
+        ).final
+        is True
+    )
+
+
+def test_roll_forward_left_undecided_after_interim_exceptions_is_not_final_until_a_person_decides(
+    migrated: Database,
+) -> None:
+    """FP-7 (decision D5, product owner, 19 November 2026). Interim exceptions dismissed
+    with a reason leave the roll-forward PENDING (the rules). Before, the control read
+    final Effective with the rest of the period never tested or scoped out. Now the
+    conclusion and finality wait for a person to decide the phase, the plan to be approved
+    again and the interim results' impact assessment to be decided, then the review."""
+    team, client, sheet, _file = _prepared_control(migrated, "journey-undecided", "DISMISS")
+    control = sheet["control_id"]
+    base = _base(team)
+    with connect(migrated.url) as connection:
+        decided = connection.execute(
+            "SELECT applicability FROM evidence_plan_phases WHERE engagement_control_id = %s "
+            "AND phase = 'ROLLFORWARD'",
+            (control,),
+        ).fetchone()
+    assert decided == ("PENDING",)
+    undecided = "Roll-forward operating effectiveness: whether it applies is undecided"
+    row = _controls(client, team)[control]
+    assert row["final"] is False and undecided in [r["text"] for r in row["not_final"]]
+    body = client.get(f"{base}/control-conclusions/{control}").json()
+    assert body["proposed"] is None and body["status"] == "NOT_READY"
+    assert "it is decided whether roll-forward testing applies" in body["waiting"]
+    assert [p["state"] for p in body["phases"]] == ["SIGNED_OFF", "NOT_STARTED"]
+    # A person decides; the plan is approved again and the impact decided; then the review.
+    _rollforward_decided(migrated, team, client, control)
+    body = client.get(f"{base}/control-conclusions/{control}").json()
+    assert body["proposed"] == "EFFECTIVE" and body["waiting"] == []
+    assert [p["state"] for p in body["phases"]] == ["SIGNED_OFF", "NOT_APPLICABLE"]
+    review = client.get(f"{base}/reviews").json()[0]
+    _sign_review(migrated, client, team, review["id"])
+    row = _controls(client, team)[control]
+    assert row["final"] is True, [r["text"] for r in row["not_final"]]
+    assert client.get(f"{base}/control-conclusions/{control}").json()["status"] == "FINAL"
+
+
+def test_an_effective_d_and_i_sign_off_out_of_date_keeps_the_conclusion_open() -> None:
+    """ST-2 (product owner, 19 November 2026). Before, finality read the D&I sign-off only
+    when it was not effective, so an effective one that no longer held (a deficiency or an
+    exception recorded since) left the control final. Now the reasons it lapsed keep the
+    conclusion open, at the review, until the D&I conclusion is signed off again."""
+    lapsed = _facts(design_out_of_date=("a design deficiency was logged after the sign-off",))
+    assert [(r.kind, r.text, r.step, r.phase) for r in finality(lapsed).reasons] == [
+        (
+            "DESIGN",
+            # Reworded 19 November 2026 (E3 design review): old "D&I conclusion no longer
+            # holds: ..."; new "D&I conclusion out of date: ...", the same reason.
+            "D&I conclusion out of date: a design deficiency was logged after the sign-off",
+            "REVIEW",
+            "DESIGN",
+        )
+    ]
+    assert _texts(_facts(design_out_of_date=(DESIGN_NOT_SIGNED,))) == [
+        "D&I conclusion not signed off"
+    ]
+    # Nothing to say until the design workpaper is prepared: the testing is what is owed.
+    assert _texts(_facts(design_out_of_date=(DESIGN_NOT_SIGNED,), design_prepared_at=None)) == [
+        "Design and implementation testing outstanding"
     ]

@@ -62,6 +62,21 @@ and a restoration queues its checks before testing again (evidence_versions.rest
 A transaction that waits on a lock earlier in the order then holds nothing later in it, so
 the two cannot wait on each other. Each site says "(lock order: evidence_reliance)".
 
+The plan before the sheets holds for the sheet's own changes too (ST-1, 19 November 2026):
+plan approval and accepted criteria hold the plan and then bring the control's open sheets
+in step (testing_engine.resync_open_sheets, after testing_engine.lock_plan), so every change
+of a sheet (test_sheets.change_sheet), a review's lock (control_reviews._locked, before a
+review note reopens the testing) and an impact assessment's reperformance
+(plan_impact.decide) take the plan first. Before, a sign-off or a reopening locked the
+sheet and then the plan (refresh_decisions), and could wait on an approval waiting on it.
+A client value's fill (control_design.refresh_statement) takes the plan before it puts the
+control's runs out of date and brings its sheets in step; a fill of several controls
+(set_values everywhere, set_values_many, a prior-year reference's accepted answers,
+prior_year.decide_proposals) takes every plan, by control id, before any. A control's
+engagement_controls row is taken after its plan: a fill rewrites the description after the
+plan, so a library link or adoption (library_definitions._control) and a standard's
+adoption (library_matching.decide_basis) take the plan before the row.
+
 Known exceptions, left for the lock work of P1 I4a (18 November 2026). A foreign key check
 takes a key-share lock on the row it references, which waits on FOR UPDATE (lock_served
 takes it on the items):
@@ -72,6 +87,9 @@ takes it on the items):
 - recording a tickmark's disposition (attribute_dispositions.record) or a reliability
   decision (file_reliability.record) locks the request's current run and then inserts a row
   that references the item: step 3, then step 2;
+- a plan's approval with client values filled everywhere (master_plans.approve) holds
+  the approved control's plan (master_plans._locked) before set_values takes the other
+  targets' plans: a target that sorts before it is taken out of control-id order;
 - a withdrawal queues its checks (step 3) before its request follows the evidence left on
   it (evidence_receipts.follow_evidence locks the request, step 2), while a reading takes
   its request's receipt before it queues its checks: the two can wait on each other.

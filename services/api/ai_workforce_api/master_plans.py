@@ -57,6 +57,7 @@ from ai_workforce_api.authorization import (
 )
 from ai_workforce_api.control_design import (
     OpenValueBody,
+    fills_placeholders,
     open_values,
     open_values_by_control,
 )
@@ -834,7 +835,7 @@ def _names_attribute(
     an attribute had before a person reworded it (its replaces chain, 28 October 2026)."""
     wanted = _normal(name)
     texts = [str(item["text"]) for item in attributes] + list(former or [])
-    return any(_normal(text) == wanted or _filled_only(name, text) for text in texts)
+    return any(_normal(text) == wanted or fills_placeholders(name, text) for text in texts)
 
 
 def findings_of(plan: _Plan, procedure_links: bool = False) -> list[Finding]:
@@ -1571,16 +1572,6 @@ def state_facts(
         )  # fmt: skip
 
 
-def _filled_only(old: Any, new: Any) -> bool:
-    """Whether new is old with its bracketed client values filled in (migration 0086's
-    fills_placeholders): reported as values filled, not as a change."""
-    if not isinstance(old, str) or not isinstance(new, str) or "[" not in old or old == new:
-        return False
-    parts = re.split(r"\s*\[[^\]]+\]\s*", " ".join(old.split()))
-    pattern = r"\s*(.+?)\s*".join(re.escape(part) for part in parts)
-    return re.fullmatch(pattern, " ".join(new.split())) is not None
-
-
 _CONTROL_FIELDS = {
     "title": "Title", "description": "Description", "risk": "Risk", "frequency": "Frequency",
     "nature": "Nature", "area": "Area", "key_control": "Key control",
@@ -1595,7 +1586,7 @@ def changes_since(approved: dict[str, Any], current: dict[str, Any]) -> list[Cha
     found: list[ChangeItem] = []
 
     def differs(old: Any, new: Any) -> bool:
-        return old != new and not _filled_only(old, new)
+        return old != new and not fills_placeholders(old, new)
 
     before, after = approved.get("control", {}), current.get("control", {})
     for key, label in _CONTROL_FIELDS.items():
@@ -2074,6 +2065,12 @@ def approve(
         from ai_workforce_api.plan_impact import detect as detect_impacts
 
         detect_impacts(cursor, organization_id, project_id, control_id)
+        # Open sheets follow the attributes and criteria now approved (ST-1): their items
+        # tested on an earlier basis are tested again; the caller's resume_testing hands
+        # their runs to the worker. The plan is held (_locked) before their rows.
+        from ai_workforce_api.testing_engine import resync_open_sheets
+
+        resync_open_sheets(cursor, organization_id, project_id, control_id, actor)
     return [item for item in filled if item != control_id]
 
 
@@ -2799,6 +2796,12 @@ def accept_criteria(
         from ai_workforce_api.control_attributes import close_questions_once_accepted
 
         close_questions_once_accepted(cursor, organization_id, project_id, control_id, actor)
+        # Accepted criteria change what the tester is given without revising the plan, so
+        # approval never runs for them (ST-1): the open sheets follow them here, once for
+        # the set. The plan is held (_plan_id) before the sheets.
+        from ai_workforce_api.testing_engine import resync_open_sheets
+
+        resync_open_sheets(cursor, organization_id, project_id, control_id, actor)
 
 
 def _not_held_by_conflict(cursor: psycopg.Cursor[Any], control_id: UUID, code: str | None) -> None:
@@ -3332,6 +3335,11 @@ def register_master_plans(app: FastAPI, settings: Settings, scheduler: Any = Non
                 # The criteria are about to change: accepted once the agents finish.
                 raise PlanState(ATTRIBUTES_UPDATING)
             accept_criteria(c, organization_id, project_id, control_id, p.id, body)
+            from ai_workforce_api.readiness import resume_testing
+            from ai_workforce_api.testing_engine import TestScheduler, schedule_runs
+
+            tests = scheduler if isinstance(scheduler, TestScheduler) else None
+            after_commit(partial(schedule_runs, tests, resume_testing(c, project_id, control_id)))
             settled(c, p, organization_id, project_id, control_id)
             return read(c, p, organization_id, project_id, control_id)
 

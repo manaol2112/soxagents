@@ -130,6 +130,10 @@ _TITLES: dict[str, tuple[Category, str]] = {
     "testing.retest": ("testing", "Testing run again"),
     "testing.run_failed": ("error", "Testing run stopped"),
     "testing.sheet_replaced": ("testing", "Test sheet replaced"),
+    "testing.sheet_resynced": (
+        "testing",
+        "Test sheet updated to the approved attributes and criteria",
+    ),
     "testing.round_started": ("testing", "Roll-forward or retest round started"),
     "testing.round_signed_off": ("testing", "Round signed off"),
     "testing.round_cancelled": ("testing", "Round cancelled"),
@@ -248,6 +252,13 @@ def _detail(action: str, payload: dict[str, Any]) -> str:
         tested = payload.get("tested") or payload.get("items")
         if isinstance(tested, int):
             return f"{tested} item{'s' if tested != 1 else ''}"
+    if action == "testing.sheet_resynced":
+        # The items tested before the change, marked to be tested again (testing_engine
+        # .resync_sheets); none marked says nothing more than the title.
+        marked = payload.get("items_marked")
+        if isinstance(marked, list) and marked:
+            return f"{len(marked)} item{'s' if len(marked) != 1 else ''} to test again"
+        return ""
     if action == "evidence_plan.generated":
         source = payload.get("source")
         added = payload.get("added")
