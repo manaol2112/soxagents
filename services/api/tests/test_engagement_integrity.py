@@ -6,6 +6,7 @@ control out of scope asks the same reason, leaving a control out where a SOC rep
 relied on needs a person's reason, and an RCM's repeated control IDs and left-out systems
 are imported as the file says, or held until the file is reconciled."""
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -18,16 +19,29 @@ from support import Database
 from test_manual_controls import _body
 from test_onboarding import (
     _base,
+    _choose_methodology,
     _complete_setup,
     _control_fields,
     _new_engagement,
+    _pbc,
 )
 from test_outbound import migrated
 from test_projects import _edit
+from test_rcm_systems import FakeProvider, RecordingScheduler, _client
+from test_rcm_uploads import _upload
 from test_system_applicability import REPORT, _wand
 from test_system_applicability import _setup as _wizard_setup
 
 from ai_workforce_api.db import connect
+from ai_workforce_api.rcm_import import (
+    build,
+    headers,
+    parse_file,
+    suggest_fields,
+    value_choices,
+    value_key,
+)
+from ai_workforce_api.rcm_systems import rules_scan, run_scan, scan_rows
 
 __all__ = ["migrated"]
 
@@ -420,6 +434,277 @@ def test_relying_on_a_soc_report_instead_of_testing_needs_a_reason(migrated: Dat
     assert _find(kept.json(), relied["id"])["included"] is True
 
 
+# Scope integrity part A: repeated control IDs and the systems a control is imported for
+
+RCM_HEAD = (
+    "Ctrl #,Control Activity,How Often,Manual / Automated,Process,Control Owner,Systems,Region\n"
+)
+# One row per system for AC 1.01, with the same content (spacing and case aside).
+REPEATED_RCM = RCM_HEAD + (
+    "AC 1.01,Managers approve new access.,As needed,Manual,User Access,Dana Ruiz,Ledger One,"
+    "EMEA\n"
+    "CM 2.01,Changes are tested before release.,Quarterly,Manual,Program Change,Lee Park,"
+    "Ledger One,Global\n"
+    "AC 1.01,Managers  approve new access.,As needed,Manual,User Access,Dana Ruiz,Workday,"
+    "EMEA\n"
+    "AC 1.01,Managers approve new access.,As needed,Manual,User Access,Dana Ruiz,ledger one,"
+    "EMEA\n"
+)
+CONFLICTING_RCM = RCM_HEAD + (
+    "AC 1.01,Managers approve new access.,As needed,Manual,User Access,Dana Ruiz,Ledger One,"
+    "EMEA\n"
+    "AC 1.01,HR approves new access.,As needed,Manual,User Access,Lee Park,Workday,EMEA\n"
+    "AC 1.02,Access is reviewed.,Quarterly,Manual,User Access,Dana Ruiz,Ledger One,EMEA\n"
+    "AC 1.02,Access is reviewed.,Quarterly,Manual,User Access,Dana Ruiz,,EMEA\n"
+    "AC 1.03,Leavers are removed.,As needed,Manual,User Access,Dana Ruiz,Ledger One,EMEA\n"
+    "AC 1.03,Leavers are removed.,As needed,Manual,User Access,Dana Ruiz,All systems,EMEA\n"
+    "AC 1.04,Admins are restricted.,Quarterly,Manual,User Access,Dana Ruiz,Ledger One,EMEA\n"
+    "AC 1.04,Admins are restricted.,Quarterly,Manual,User Access,Dana Ruiz,Workday,"
+    "password = Winter2027x\n"
+)
+LEFT_OUT_RCM = RCM_HEAD + (
+    "AC 1.01,Managers approve new access.,As needed,Manual,User Access,Dana Ruiz,Ledger One,"
+    "EMEA\n"
+    "OR 1.01,Treasury users are reviewed.,Quarterly,Manual,User Access,Dana Ruiz,"
+    "Treasury Box,EMEA\n"
+    "OP 3.01,Job failures are resolved.,Daily,Manual,Computer Ops,Sam Ops,,Global\n"
+)
+
+
+def test_repeated_rows_with_the_same_content_are_one_control_on_each_system() -> None:
+    result = _built(REPEATED_RCM)
+    assert result.problems == [] and result.skipped == []
+    assert [c.control_ref for c in result.controls] == ["AC 1.01", "CM 2.01"]
+    access = result.controls[0]
+    # Merged ignoring case: Ledger One is named twice and imported once.
+    assert access.applications == ["Ledger One", "Workday"]
+    assert access.rows == [2, 4, 5]
+    assert result.controls[1].rows == [3]
+    (merged,) = [w for w in result.warnings if w.startswith("AC 1.01 is on rows")]
+    assert merged.startswith("AC 1.01 is on rows 2, 4 and 5 with the same content")
+    assert "Ledger One and Workday" in merged and "more than once" in merged
+
+
+def test_repeated_rows_that_differ_block_the_import_until_reconciled(migrated: Database) -> None:
+    result = _built(CONFLICTING_RCM)
+    assert result.problems == [
+        "Rows 2 and 3 share control ID AC 1.01 but differ in control description and control "
+        "owner: make the rows the same or give each its own ID.",
+        "Rows 4 and 5 share control ID AC 1.02 but row 5 names no system: name the system on "
+        "each row or give each its own ID.",
+        "Rows 6 and 7 share control ID AC 1.03 but row 7 names no system: name the system on "
+        "each row or give each its own ID.",
+    ]
+    # A repeated row that looks like it holds a secret is skipped, never merged.
+    assert [(s.row, s.reason) for s in result.skipped] == [
+        (9, "The row looks like it holds a secret.")
+    ]
+    admins = next(c for c in result.controls if c.control_ref == "AC 1.04")
+    assert admins.applications == ["Ledger One"] and admins.rows == [8]
+    # Many conflicts are listed in part, with a count of the rest.
+    many = RCM_HEAD + "".join(
+        f"AC 2.0{n},Control {n}.,Daily,Manual,User Access,Dana Ruiz,Ledger One,EMEA\n"
+        f"AC 2.0{n},Other control {n}.,Daily,Manual,User Access,Dana Ruiz,Workday,EMEA\n"
+        for n in range(1, 8)
+    )
+    listed = _built(many).problems
+    assert len(listed) == 6 and listed[-1].startswith("And 2 more control IDs")
+    # Through the API: the preview says so, Import is not offered, and nothing is written.
+    team = _new_engagement(migrated, "conflicting-ids")
+    owner, base = team["owner"], _base(team["org"], team["project"])
+    uploaded = _upload(owner, base, CONFLICTING_RCM)
+    assert uploaded["ready"] is False
+    assert uploaded["preview"]["problems"][:3] == result.problems
+    imported = owner.post(
+        f"{base}/rcm/uploads/{uploaded['id']}/import", json={"version": uploaded["version"]}
+    )
+    assert imported.status_code == 409
+    assert imported.json()["detail"] == "mapping is incomplete"
+    assert owner.get(base).json()["controls"] == []
+
+
+def test_the_system_scan_reads_every_row_of_a_repeated_control() -> None:
+    _kind, sheets = parse_file("rcm.csv", REPEATED_RCM.encode())
+    rows = sheets[0].rows
+    scanned = scan_rows(rows, 1, suggest_fields(headers(rows, 1)))
+    assert [(row.control_ref, row.systems_cell) for row in scanned] == [
+        ("AC 1.01", "Ledger One"),
+        ("CM 2.01", "Ledger One"),
+        ("AC 1.01", "Workday"),
+        ("AC 1.01", "ledger one"),
+    ]
+    workday = next(p for p in rules_scan(scanned) if p.name == "Workday")
+    assert workday.control_refs == ["AC 1.01"]
+
+
+def test_a_repeated_control_is_imported_on_each_of_its_systems(migrated: Database) -> None:
+    team = _new_engagement(migrated, "repeated-ids")
+    owner = _client(migrated, team["owner_id"], RecordingScheduler())
+    base = _base(team["org"], team["project"])
+    uploaded = _upload(owner, base, REPEATED_RCM)
+    upload = f"{base}/rcm/uploads/{uploaded['id']}"
+    # A model answer that leaves Workday out: the preview says what would be lost.
+    partial = FakeProvider(
+        {"systems": [{"name": "Ledger One", "layer": "APPLICATION", "aliases": [],
+                      "control_ids": ["AC 1.01", "CM 2.01"]}]}
+    )  # fmt: skip
+    with connect(migrated.url) as connection:
+        assert run_scan(connection, partial, UUID(uploaded["id"])) == "READY"
+    read = owner.get(upload).json()
+    (uncovered,) = [w for w in read["preview"]["warnings"] if "no identified system" in w]
+    assert "AC 1.01 (Workday)" in uncovered
+    assert owner.post(f"{upload}/systems/rescan").status_code == 200
+    with connect(migrated.url) as connection:
+        assert run_scan(connection, None, UUID(uploaded["id"])) == "READY"
+        # A scan made before every row was read is identified again before import.
+        stored = connection.execute(
+            "SELECT sheet_index, header_row, column_fields, systems_basis FROM rcm_imports "
+            "WHERE id = %s",
+            (uploaded["id"],),
+        ).fetchone()
+        assert stored is not None
+        earlier = hashlib.sha256(json.dumps(list(stored[:3])).encode()).hexdigest()
+        assert earlier != stored[3]
+        connection.execute(
+            "UPDATE rcm_imports SET systems_basis = %s WHERE id = %s", (earlier, uploaded["id"])
+        )
+    stale = owner.get(upload).json()
+    assert stale["ready"] is False
+    assert any("Rescan" in problem for problem in stale["preview"]["problems"])
+    refused = owner.post(f"{upload}/import", json={"version": stale["version"]})
+    assert refused.status_code == 409
+    assert owner.post(f"{upload}/systems/rescan").status_code == 200
+    with connect(migrated.url) as connection:
+        assert run_scan(connection, None, UUID(uploaded["id"])) == "READY"
+    read = owner.get(upload).json()
+    proposals = {p["name"]: p for p in read["systems"]["proposals"]}
+    assert "AC 1.01" in proposals["Workday"]["control_refs"]
+    assert read["ready"] is True, read["preview"]["problems"]
+    assert read["preview"]["skipped"] == []
+    imported = owner.post(f"{upload}/import", json={"version": read["version"]})
+    assert imported.status_code == 200, imported.text
+    access = [c for c in imported.json()["controls"] if c["control_ref"] == "AC 1.01"]
+    assert sorted(c["application_name"] for c in access) == ["Ledger One", "Workday"]
+    with connect(migrated.url) as connection:
+        rows = dict(
+            connection.execute(
+                "SELECT a.name, c.source_row FROM engagement_controls c "
+                "JOIN engagement_applications a ON a.id = c.engagement_application_id "
+                "WHERE c.project_id = %s AND c.control_ref = 'AC 1.01'",
+                (team["project"],),
+            ).fetchall()
+        )
+    # Each instance points at the row that named its system.
+    assert rows == {"Ledger One": 2, "Workday": 4}
+    audit = _audits(migrated, team["project"], "onboarding.rcm_imported")[-1]
+    assert audit["merged_rows"] == {"AC 1.01": [2, 4, 5]}
+    # A second sheet added to these replaces a control of the same ID on every system:
+    # the preview names what it replaces.
+    second = _upload(owner, base, RCM_HEAD + REPEATED_RCM.splitlines(keepends=True)[3])
+    (replacing,) = [w for w in second["preview"]["warnings"] if w.startswith("If added")]
+    assert "AC 1.01 (Ledger One and Workday)" in replacing
+    added = owner.post(
+        f"{base}/rcm/uploads/{second['id']}/import",
+        json={"version": second["version"], "mode": "ADD"},
+    )
+    assert added.status_code == 200, added.text
+    replaced = _audits(migrated, team["project"], "onboarding.rcm_imported")[-1]["replaced"]
+    assert replaced == ["AC 1.01"]
+
+
+def test_a_control_whose_systems_were_all_left_out_does_not_spread(migrated: Database) -> None:
+    team = _new_engagement(migrated, "left-out")
+    owner = _client(migrated, team["owner_id"], RecordingScheduler())
+    base = _base(team["org"], team["project"])
+    uploaded = _left_out_scan(migrated, owner, base)
+    warnings = uploaded["preview"]["warnings"]
+    (spread,) = [w for w in warnings if "for every in-scope system" in w]
+    (no_system,) = [w for w in warnings if "left out or not identified" in w]
+    assert "OP 3.01" in spread and "Ledger One" in spread and "OR 1.01" not in spread
+    assert "OR 1.01" in no_system and "Treasury Box" in no_system and "OP 3.01" not in no_system
+    assert "launch waits" in no_system
+    imported = owner.post(
+        f"{base}/rcm/uploads/{uploaded['id']}/import", json={"version": uploaded["version"]}
+    )
+    assert imported.status_code == 200, imported.text
+    body = imported.json()
+    systems: dict[str, list[str]] = {}
+    for control in body["controls"]:
+        systems.setdefault(control["control_ref"], []).append(control["application_name"])
+    assert systems["OP 3.01"] == ["Ledger One"]
+    (treasury,) = [c for c in body["controls"] if c["control_ref"] == "OR 1.01"]
+    assert treasury["application_id"] is None and treasury["included"] is True
+    issues = [issue for item in body["readiness"] for issue in item["issues"]]
+    assert "Choose the systems OR 1.01 covers." in issues
+    # The preview and the import tell one story (invariant I16).
+    audit = _audits(migrated, team["project"], "onboarding.rcm_imported")[-1]
+    assert (audit["spread"], audit["no_system"]) == (["OP 3.01"], ["OR 1.01"])
+
+
+def test_after_launch_a_control_with_no_system_gets_no_work(migrated: Database) -> None:
+    team = _new_engagement(migrated, "left-out-launched")
+    owner = _client(migrated, team["owner_id"], RecordingScheduler())
+    base = _base(team["org"], team["project"])
+    for name in ("Ledger One", "Old Ledger"):
+        assert owner.post(f"{base}/applications", json={"name": name}).status_code == 200
+    _ready_without_controls(owner, team)
+    fingerprint = owner.get(base).json()["plan_preview"]["fingerprint"]
+    assert owner.post(f"{base}/plan/launch", json={"fingerprint": fingerprint}).status_code == 200
+    old = next(a for a in owner.get(base).json()["applications"] if a["name"] == "Old Ledger")
+    removed = owner.post(f"{base}/applications/{old['id']}/remove", json={"reason": "Retired."})
+    assert removed.status_code == 200, removed.text
+    uploaded = _left_out_scan(migrated, owner, base)
+    (no_system,) = [w for w in uploaded["preview"]["warnings"] if "left out or not identified" in w]
+    assert "out of scope" in no_system
+    imported = owner.post(
+        f"{base}/rcm/uploads/{uploaded['id']}/import", json={"version": uploaded["version"]}
+    )
+    assert imported.status_code == 200, imported.text
+    body = imported.json()
+    (treasury,) = [c for c in body["controls"] if c["control_ref"] == "OR 1.01"]
+    assert treasury["application_id"] is None and treasury["included"] is False
+    # A blank cell covers the systems in scope, not one taken out of it.
+    spread = [c["application_name"] for c in body["controls"] if c["control_ref"] == "OP 3.01"]
+    assert spread == ["Ledger One"]
+    access = next(c for c in body["controls"] if c["control_ref"] == "AC 1.01")
+    with connect(migrated.url) as connection:
+        work = {
+            control_id: connection.execute(
+                "SELECT (SELECT count(*) FROM tasks WHERE engagement_control_id = %s), "
+                "(SELECT count(*) FROM pbc_requests WHERE engagement_control_id = %s)",
+                (control_id, control_id),
+            ).fetchone()
+            for control_id in (treasury["id"], access["id"])
+        }
+    assert work[treasury["id"]] == (0, 0)
+    given = work[access["id"]]
+    assert given is not None and given[0] > 0
+
+
+def test_a_control_naming_no_system_still_covers_every_in_scope_system(
+    migrated: Database,
+) -> None:
+    """Milestone 8.5 kept: a blank systems cell is every in-scope system, and the preview
+    now says so."""
+    team = _new_engagement(migrated, "blank-cell")
+    owner, base = team["owner"], _base(team["org"], team["project"])
+    for name in ("Ledger One", "Workday"):
+        assert owner.post(f"{base}/applications", json={"name": name}).status_code == 200
+    uploaded = _upload(owner, base, LEFT_OUT_RCM)
+    (spread,) = [w for w in uploaded["preview"]["warnings"] if "for every in-scope system" in w]
+    # With no scan, the systems column names the systems: Treasury Box, which this import
+    # adds, is in scope too, and the preview counts it before it exists.
+    assert "OP 3.01" in spread and "(Ledger One, Workday and Treasury Box)" in spread
+    imported = owner.post(
+        f"{base}/rcm/uploads/{uploaded['id']}/import", json={"version": uploaded["version"]}
+    )
+    assert imported.status_code == 200, imported.text
+    covered = sorted(
+        c["application_name"] for c in imported.json()["controls"] if c["control_ref"] == "OP 3.01"
+    )
+    assert covered == ["Ledger One", "Treasury Box", "Workday"]
+
+
 # Helpers
 
 
@@ -431,6 +716,19 @@ def _launched(database: Database, slug: str) -> tuple[dict[str, Any], Any, str]:
     launched = owner.post(f"{base}/plan/launch", json={"fingerprint": fingerprint})
     assert launched.status_code == 200, launched.text
     return team, owner, base
+
+
+def _ready_without_controls(owner: Any, team: dict[str, Any]) -> None:
+    """Setup complete with no controls: an engagement launches without them (25 October
+    2026) and its controls are set up in Controls afterwards."""
+    base = _base(team["org"], team["project"])
+    owner.patch(f"{base}/scope", json={"scope": "ITGCs FY2027", "period_end": "2027-12-31"})
+    for user_id, role in ((team["owner_id"], "LEAD"), (team["reviewer_id"], "REVIEWER")):
+        owner.post(f"{base}/team", json={"user_id": str(user_id), "engagement_role": role})
+    assert owner.patch(f"{base}/pbc", json=_pbc()).status_code == 200
+    _choose_methodology(owner, base)
+    state = owner.get(base).json()
+    assert state["ready"] is True, state["readiness"]
 
 
 def _audits(database: Database, project_id: UUID, action: str) -> list[dict[str, Any]]:
@@ -462,3 +760,35 @@ def _system_row(owner: Any, base: str, system_id: str) -> dict[str, Any]:
 def _system_of(owner: Any, base: str, system_id: str) -> dict[str, Any]:
     assessment: dict[str, Any] = _system_row(owner, base, system_id)["assessment"]
     return assessment
+
+
+def _built(text: str) -> Any:
+    _kind, sheets = parse_file("rcm.csv", text.encode())
+    rows = sheets[0].rows
+    fields = suggest_fields(headers(rows, 1))
+    maps = {
+        key: {value_key(item.value): item.suggested or "MANUAL" for item in items}
+        for key, items in value_choices(rows, 1, fields).items()
+    }
+    return build(rows, 1, fields, maps)
+
+
+def _left_out_scan(database: Database, owner: Any, base: str) -> dict[str, Any]:
+    """LEFT_OUT_RCM uploaded and scanned, with Treasury Box left out."""
+    uploaded = _upload(owner, base, LEFT_OUT_RCM)
+    with connect(database.url) as connection:
+        assert run_scan(connection, None, UUID(uploaded["id"])) == "READY"
+    upload = f"{base}/rcm/uploads/{uploaded['id']}"
+    systems = owner.get(upload).json()["systems"]
+    assert {p["name"] for p in systems["proposals"]} == {"Ledger One", "Treasury Box"}
+    choices = [
+        {"key": p["key"], "name": p["name"], "layer": p["layer"],
+         "included": p["name"] != "Treasury Box"}
+        for p in systems["proposals"]
+    ]  # fmt: skip
+    saved = owner.patch(
+        f"{upload}/systems", json={"systems_version": systems["version"], "choices": choices}
+    )
+    assert saved.status_code == 200, saved.text
+    body: dict[str, Any] = saved.json()
+    return body
