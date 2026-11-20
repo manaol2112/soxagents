@@ -904,7 +904,7 @@ describe("the agents on a control", () => {
         reperformSource: "FALLBACK",
         reperformance: record(3, 0, "FALLBACK"),
       }),
-      "The reviewer agent did not re-perform the testing",
+      "The reviewer agent did not re-perform the items",
     );
     assert.equal(
       lane({ reperformance: record(3, 1) }),

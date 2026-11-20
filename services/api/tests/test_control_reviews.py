@@ -13,6 +13,7 @@ from test_workpapers import _tested_control
 
 from ai_workforce_api.control_reviews import (
     disagreements,
+    not_reperformed,
     partly_reperformed,
     run_reperformance,
 )
@@ -755,9 +756,14 @@ def _row(client: Any, team: dict[str, Any], control_id: str) -> dict[str, Any]:
 
 def test_a_rejected_reviewer_answer_is_said_in_plain_words(migrated: Database) -> None:
     """B1i review (13 November 2026): when the reviewer's re-performance is rejected by its
-    check, the review's note and failure_note say so in fixed plain words; the check's own
-    words are only on the call's outcome."""
-    team, client, _sheet_body, _file = _prepared_control(migrated, "review-plain", "LOG")
+    check, the check's own words are only on the call's outcome. Rewritten (design review,
+    20 November 2026). Old expectation: the note and failure_note carried the rejection's
+    plain words ("The reviewer agent could not finish u0002: the answer broke a rule its
+    work is checked against. ... the rules' checks stand on their own."), naming one item
+    when none was re-performed. New: the note says, like the partial note, that the
+    reviewer agent re-performed none of the items and names every one; the reason stays on
+    each call's outcome only (the audit trail keeps it; the person's line does not)."""
+    team, client, sheet, _file = _prepared_control(migrated, "review-plain", "LOG")
     review = client.get(f"{_base(team)}/reviews").json()[0]
     provider = _Provider([{"results": [{"index": 99, "result": "PASS", "note": "x"}]}])
     with connect(migrated.url) as connection:
@@ -772,13 +778,38 @@ def test_a_rejected_reviewer_answer_is_said_in_plain_words(migrated: Database) -
             ).fetchall()
         ]
     review = client.get(f"{_base(team)}/reviews").json()[0]
-    plain = "the answer broke a rule its work is checked against."
-    # Rewritten (design review, 20 November 2026): the agent is "the reviewer agent",
-    # never "the reviewer" (the person). Old: "The reviewer could not finish ".
-    assert review["reperform_note"].startswith("The reviewer agent could not finish ")
-    assert "the model" not in review["reperform_note"] + review["failure_note"]
-    assert plain in review["reperform_note"] and plain in review["failure_note"]
-    assert reasons and all(reason not in review["failure_note"] for reason in reasons)
+    labels = sorted(item["label"] for item in sheet["items"])
+    assert review["reperformance"]["source"] == "FALLBACK"
+    assert len(reasons) == len(labels) == 3, (reasons, labels)
+    said = review["reperform_note"]
+    assert said == (
+        "The reviewer agent did not re-perform any of the 3 items. "
+        f"{labels[0]}, {labels[1]} and {labels[2]} stand as the preparer left them."
+    ), said
+    assert review["failure_note"] == f"{said} Re-perform to try again, or re-perform them by hand."
+    shown = review["reperform_note"] + review["failure_note"]
+    for words in (
+        "broke a rule",
+        "stand on their own",
+        "checked against",
+        "the model",
+        "could not finish",
+    ):
+        assert words not in shown, words
+    assert all(reason not in shown for reason in reasons)
+
+
+def test_not_reperformed_names_every_item_it_tried() -> None:
+    assert not_reperformed(["u0002"]) == (
+        "The reviewer agent did not re-perform the item. u0002 stands as the preparer left it."
+    )
+    assert not_reperformed(["u0003", "u0001", "u0002"]) == (
+        "The reviewer agent did not re-perform any of the 3 items. "
+        "u0001, u0002 and u0003 stand as the preparer left them."
+    )
+    assert not_reperformed(["e", "c", "a", "d", "b"]).endswith(
+        "any of the 5 items. a, b, c and 2 more stand as the preparer left them."
+    )
 
 
 def test_a_partial_reperformance_names_the_items_that_stand(migrated: Database) -> None:

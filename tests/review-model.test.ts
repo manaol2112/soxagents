@@ -456,7 +456,7 @@ describe("a sign-off over a re-performance by hand (FO-1, 19 November 2026)", ()
     );
     assert.equal(
       reperformedWords({ ...partial, done: 0 }, "MODEL", 0),
-      "The reviewer agent did not re-perform the testing",
+      "The reviewer agent did not re-perform the items",
     );
   });
 });

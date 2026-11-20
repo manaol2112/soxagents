@@ -150,7 +150,9 @@ export function reperformedWords(
     return "No tested item with evidence to re-perform";
   }
   if (record.done === 0) {
-    return "The reviewer agent did not re-perform the testing";
+    // The banner's words (control_reviews.not_reperformed): "the items", one word for
+    // one meaning (design review, 20 November 2026; before, "the testing").
+    return "The reviewer agent did not re-perform the items";
   }
   if (record.done < record.due) {
     return `Re-performed ${record.done} of ${record.due} items: ${found}`;
@@ -241,7 +243,7 @@ export type ControlReview = {
   reperforming: boolean;
   reperformState: RunState;
   reperformedAt: string | null;
-  /** FALLBACK: the rules' checks stand; the model did not re-perform the items. */
+  /** FALLBACK: the rules' checks stand; the reviewer agent did not re-perform the items. */
   reperformSource: "MODEL" | "RULES" | "FALLBACK" | "SEEDED" | null;
   reperformNote: string;
   /** The server's failure sentence for a re-performance that ended without a usable

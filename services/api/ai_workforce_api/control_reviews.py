@@ -36,7 +36,6 @@ from psycopg.types.json import Json
 from pydantic import BaseModel, Field
 
 from ai_workforce_api import independence
-from ai_workforce_api.agent_answers import plain_problem
 from ai_workforce_api.agent_runs import (
     CancelState,
     RunState,
@@ -299,26 +298,47 @@ REPERFORM_FAILED = "The re-performance did not finish. Re-perform to try again."
 NAMED_ITEMS = 3
 
 
+def _named(failed: Sequence[str]) -> str:
+    """The items named for a person, in label order (not the order the run tried them,
+    weakest first): at most NAMED_ITEMS, then "and N more"."""
+    shown = sorted(failed)[:NAMED_ITEMS]
+    more = len(failed) - len(shown)
+    if more > 0:
+        return f"{', '.join(shown)} and {more} more"
+    if len(shown) == 1:
+        return shown[0]
+    return f"{', '.join(shown[:-1])} and {shown[-1]}"
+
+
 def partly_reperformed(done: int, failed: Sequence[str]) -> str:
     """How a re-performance the reviewer agent did only in part says so, for a person
     (design review, 20 November 2026): how many of the items it tried it re-performed and
     which stand as the preparer left them. The agent is "the reviewer agent", never "the
     reviewer" (the person) or "the model"; the check's reason stays on the call's
     outcome. Before: "2 of 3 items could not be re-performed by the model. The reviewer
-    could not finish u0002: the answer broke a rule its work is checked against." The
-    items are named in label order, not in the order the run tried them (weakest first)."""
-    shown = sorted(failed)[:NAMED_ITEMS]
-    more = len(failed) - len(shown)
-    if more > 0:
-        named = f"{', '.join(shown)} and {more} more"
-    elif len(shown) == 1:
-        named = shown[0]
-    else:
-        named = f"{', '.join(shown[:-1])} and {shown[-1]}"
+    could not finish u0002: the answer broke a rule its work is checked against." """
     verb = "stands" if len(failed) == 1 else "stand"
     return (
         f"The reviewer agent re-performed {done} of {done + len(failed)} items. "
-        f"{named} {verb} as the preparer left {'it' if len(failed) == 1 else 'them'}."
+        f"{_named(failed)} {verb} as the preparer left {'it' if len(failed) == 1 else 'them'}."
+    )
+
+
+def not_reperformed(failed: Sequence[str]) -> str:
+    """How a re-performance whose every model call failed (FALLBACK) says so, for a person
+    (design review, 20 November 2026), worded like partly_reperformed: every item it tried
+    stands as the preparer left it. The check's reason stays on the call's outcome. Before:
+    "The reviewer agent could not finish u0002: the answer broke a rule its work is checked
+    against. The reviewer agent did not re-perform the items; the rules' checks stand on
+    their own." It named one item when none was re-performed, in a check's internal words."""
+    if len(failed) == 1:
+        return (
+            f"The reviewer agent did not re-perform the item. "
+            f"{failed[0]} stands as the preparer left it."
+        )
+    return (
+        f"The reviewer agent did not re-perform any of the {len(failed)} items. "
+        f"{_named(failed)} stand as the preparer left them."
     )
 
 
@@ -484,8 +504,10 @@ def reperform_failure_note(
             f"{note} The review's notes stay as they were; you can also re-perform the "
             "testing by hand."
         )
+    # Both notes name the items that stand (not_reperformed, partly_reperformed), so the
+    # next actions say "them" (design review, 20 November 2026; before, "the items").
     if source == "FALLBACK":
-        return f"{note} Re-perform to try again, or re-perform the items by hand."
+        return f"{note} Re-perform to try again, or re-perform them by hand."
     # A capped run re-performed the first MAX_REVIEWED_ITEMS by design; its note says so.
     if source == "MODEL" and record.known and record.done < min(record.due, MAX_REVIEWED_ITEMS):
         return f"{note} Re-perform to try again, or re-perform them by hand."
@@ -967,7 +989,6 @@ def run_reperformance(
         )
     model_items = 0
     failed_items: list[str] = []
-    last_failure = ""
     # Every TESTED item with files is due (FO-1): the record says how many were
     # re-performed of them, never only of the capped part.
     ordered = reperform_order(sheet.items)
@@ -1083,11 +1104,7 @@ def run_reperformance(
                     )
                 except ValueError as error:
                     failed_items.append(item.label)
-                    # Plain words for the person; the check's words stay on the outcome.
-                    last_failure = (
-                        f"The reviewer agent could not finish {item.label}: "
-                        f"{plain_problem(str(error))}."
-                    )
+                    # The check's words stay on the outcome, never in the person's note.
                     record_outcome(
                         connection, call_id, {"validation": "REJECTED", "reason": str(error)}
                     )
@@ -1115,7 +1132,6 @@ def run_reperformance(
                 )  # fmt: skip
             else:
                 failed_items.append(item.label)
-                last_failure = call.note
                 record_outcome(
                     connection, call_id, {"validation": "NOT_USED", "reason": call.status}
                 )
@@ -1131,7 +1147,9 @@ def run_reperformance(
                 note = partly_reperformed(model_items, failed_items)
         elif failed_items:
             source = "FALLBACK"
-            note = f"{last_failure} The reviewer agent did not re-perform the items; the rules' checks stand on their own."  # noqa: E501
+            # Said for the person like the partial note (design review, 20 November
+            # 2026): every item it tried, by name; each call's reason is on its outcome.
+            note = not_reperformed(failed_items)
     _finish(
         connection,
         review_id,
