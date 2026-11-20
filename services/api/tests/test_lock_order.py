@@ -275,3 +275,122 @@ def test_a_move_lands_the_wizard_batch_before_it_leaves_the_sheets(migrated: Dat
         "SELECT engagement_control_id FROM evidence_matches WHERE evidence_file_id = %s",
         UUID(wizard_file),
     ) == [(elsewhere,)]
+
+
+def test_a_sheet_change_takes_the_plan_before_the_sheet(migrated: Database) -> None:
+    """ST-1 (19 November 2026): plan approval holds the control's plan and then brings its
+    open sheets in step, while a sheet's reopening (and its sign-off) takes the plan after
+    the sheet (refresh_decisions). change_sheet now takes the plan first: waiting for an
+    approval that holds the plan, it holds no sheet, so the two cannot wait on each other."""
+    from ai_workforce_api.authorization import Principal, PrincipalKind
+    from ai_workforce_api.test_sheets import ReopenBody, change_sheet, reopen_work
+
+    case = _Setup(migrated, "lock-plan-sheet")
+    with connect(case.url) as connection:
+        connection.execute(
+            "UPDATE test_sheets SET status = 'SIGNED_OFF', conclusion = 'EFFECTIVE', "
+            "signed_by = %s, signed_at = clock_timestamp() WHERE id = %s",
+            (case.actor, case.sheet),
+        )
+        version = connection.execute(
+            "SELECT version FROM test_sheets WHERE id = %s", (case.sheet,)
+        ).fetchone()
+        organization = connection.execute(
+            "SELECT organization_id FROM test_sheets WHERE id = %s", (case.sheet,)
+        ).fetchone()
+        connection.commit()
+    assert version is not None and organization is not None
+    holder = psycopg.connect(case.url)
+    holder.execute(
+        "SELECT id FROM evidence_plans WHERE engagement_control_id = %s FOR UPDATE",
+        (case.control,),
+    )
+
+    def reopen() -> Any:
+        with psycopg.connect(case.url, connect_timeout=3) as connection:
+            return change_sheet(
+                connection,
+                Principal(kind=PrincipalKind.USER, id=case.actor),
+                UUID(str(organization[0])),
+                case.project,
+                case.sheet,
+                reopen_work(ReopenBody(version=int(version[0]), reason="The plan changed.")),
+            )
+
+    thread, outcome = _in_thread(reopen)
+    try:
+        _blocked_by(case.url, holder.info.backend_pid)
+        assert case.sheet_free()
+    finally:
+        holder.rollback()
+        thread.join(60)
+        holder.close()
+    assert "error" not in outcome, outcome
+
+
+def test_a_run_tests_each_item_on_the_attributes_it_reads_with_the_item(
+    migrated: Database,
+) -> None:
+    """ST-1 (19 November 2026): the attributes change while the tester runs (approval
+    brings the open sheet in step and bumps its items). Before, the run tested every item
+    on the attributes it read when it claimed the sheet, so an item it reached after the
+    change was written as tested on the old list. Now each item is tested on the
+    attributes read with its version: no item stands tested on a list the sheet no longer
+    holds."""
+    import hashlib
+    import json
+
+    from test_testing_engine import _answer, _base, _Citing, _sheet
+    from test_workpapers import _tested_control
+
+    from ai_workforce_api.testing_engine import run_sheet
+
+    team, client, sheet, _file = _tested_control(migrated, "lock-run-basis", sign=False)
+    retest = client.post(
+        f"{_base(team)}/test-sheets/{sheet['id']}/retest", json={"version": sheet["version"]}
+    )
+    assert retest.status_code == 200, retest.text
+    longer = [*sheet["attributes"], "The approver is independent of the requester"]
+
+    def change_attributes() -> None:
+        # What bringing the sheet in step does to it, from another connection, while the
+        # first item is with the tester: the attributes rewritten, every item bumped.
+        with connect(migrated.url) as other:
+            other.execute(
+                "UPDATE test_sheets SET attributes = %s::jsonb, version = version + 1 "
+                "WHERE id = %s",
+                (json.dumps(longer), sheet["id"]),
+            )
+            other.execute(
+                "UPDATE test_items SET version = version + 1 WHERE test_sheet_id = %s",
+                (sheet["id"],),
+            )
+            other.commit()
+
+    class _Changing(_Citing):
+        def __init__(self, answers: list[dict[str, Any]]) -> None:
+            super().__init__(answers)
+            self.changed = False
+
+        def complete(self, request: Any, config: Any) -> Any:
+            if not self.changed:
+                self.changed = True
+                change_attributes()
+            return super().complete(request, config)
+
+    count = len(sheet["attributes"])
+    provider = _Changing([_answer(["PASS"] * count) for _ in sheet["items"]])
+    with connect(migrated.url) as connection:
+        run_sheet(connection, provider, UUID(sheet["id"]))
+        rows = connection.execute(
+            """
+            SELECT m.inputs ->> 'attributes_sha256' FROM test_items i
+            JOIN model_calls m ON m.id = i.model_call_id
+            WHERE i.test_sheet_id = %s AND NOT i.needs_test
+            """,
+            (sheet["id"],),
+        ).fetchall()
+    held = hashlib.sha256(json.dumps(longer, ensure_ascii=False).encode()).hexdigest()
+    assert rows, "the items reached after the change are tested"
+    assert {row[0] for row in rows} == {held}
+    assert _sheet(client, team)["attributes"] == longer

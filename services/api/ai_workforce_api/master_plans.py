@@ -2074,6 +2074,12 @@ def approve(
         from ai_workforce_api.plan_impact import detect as detect_impacts
 
         detect_impacts(cursor, organization_id, project_id, control_id)
+        # Open sheets follow the attributes and criteria now approved (ST-1): their items
+        # tested on an earlier basis are tested again; the caller's resume_testing hands
+        # their runs to the worker. The plan is held (_locked) before their rows.
+        from ai_workforce_api.testing_engine import resync_open_sheets
+
+        resync_open_sheets(cursor, organization_id, project_id, control_id, actor)
     return [item for item in filled if item != control_id]
 
 
@@ -2799,6 +2805,12 @@ def accept_criteria(
         from ai_workforce_api.control_attributes import close_questions_once_accepted
 
         close_questions_once_accepted(cursor, organization_id, project_id, control_id, actor)
+        # Accepted criteria change what the tester is given without revising the plan, so
+        # approval never runs for them (ST-1): the open sheets follow them here, once for
+        # the set. The plan is held (_plan_id) before the sheets.
+        from ai_workforce_api.testing_engine import resync_open_sheets
+
+        resync_open_sheets(cursor, organization_id, project_id, control_id, actor)
 
 
 def _not_held_by_conflict(cursor: psycopg.Cursor[Any], control_id: UUID, code: str | None) -> None:
@@ -3332,6 +3344,11 @@ def register_master_plans(app: FastAPI, settings: Settings, scheduler: Any = Non
                 # The criteria are about to change: accepted once the agents finish.
                 raise PlanState(ATTRIBUTES_UPDATING)
             accept_criteria(c, organization_id, project_id, control_id, p.id, body)
+            from ai_workforce_api.readiness import resume_testing
+            from ai_workforce_api.testing_engine import TestScheduler, schedule_runs
+
+            tests = scheduler if isinstance(scheduler, TestScheduler) else None
+            after_commit(partial(schedule_runs, tests, resume_testing(c, project_id, control_id)))
             settled(c, p, organization_id, project_id, control_id)
             return read(c, p, organization_id, project_id, control_id)
 

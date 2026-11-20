@@ -338,3 +338,181 @@ def _reprepare_design(client: Any, team: dict[str, Any], control: str) -> None:
     )
     prepared = client.post(f"{base}/{current['id']}/prepare", json={"version": current["version"]})
     assert prepared.status_code == 200, prepared.text
+
+
+def _basis_control(migrated: Database, slug: str) -> tuple[dict[str, Any], Any, dict[str, Any]]:
+    """A sampled control tested (one exception) and not signed off."""
+    team, client, sheet, _file = _tested_control(migrated, slug, sign=False)
+    return team, client, sheet
+
+
+def _sign(client: Any, team: dict[str, Any], sheet_id: str) -> Any:
+    current = next(
+        s for s in client.get(f"{_base(team)}/test-sheets").json() if s["id"] == sheet_id
+    )
+    return client.post(
+        f"{_base(team)}/test-sheets/{sheet_id}/sign-off", json={"version": current["version"]}
+    )
+
+
+def _stamp(migrated: Database, sheet_id: str) -> tuple[Any, Any]:
+    with connect(migrated.url) as connection:
+        row = connection.execute(
+            "SELECT s.plan_revision, p.approved_revision FROM test_sheets s "
+            "JOIN evidence_plans p ON p.engagement_control_id = s.engagement_control_id "
+            "WHERE s.id = %s",
+            (sheet_id,),
+        ).fetchone()
+    assert row is not None
+    return row[0], row[1]
+
+
+def test_an_open_sheet_follows_reapproved_attributes_and_signs_off_only_after_retest(
+    migrated: Database,
+) -> None:
+    """ST-1 (product owner, 19 November 2026; assessment scenario 14). Before, an open sheet
+    kept the attributes it opened with: one added after the samples were tested ("the
+    approver is not the requester") was never tested, and the sheet signed off under the
+    new revision. Now approval brings the sheet in step, each result follows its attribute,
+    the items are tested again, and sign-off waits for that."""
+    from test_testing_engine import _answer, _Citing
+
+    from ai_workforce_api.control_attributes import (
+        AttributeAdd,
+        AttributeEdit,
+        add_attribute,
+        edit_attribute,
+    )
+    from ai_workforce_api.testing_engine import run_sheet
+
+    team, client, sheet = _basis_control(migrated, "basis-follow")
+    control = sheet["control_id"]
+    tested = {item["id"]: item for item in sheet["items"]}
+    with connect(migrated.url) as connection:
+        first = connection.execute(
+            "SELECT id, version, text FROM control_attributes WHERE engagement_control_id = %s "
+            "AND status = 'APPROVED' ORDER BY position LIMIT 1",
+            (control,),
+        ).fetchone()
+        assert first is not None
+        edit_attribute(
+            connection, team["org"], team["project"], UUID(control), first[0], team["owner_id"],
+            AttributeEdit(text=f"{first[2]} by a named approver", version=int(first[1])),
+        )  # fmt: skip
+        add_attribute(
+            connection, team["org"], team["project"], UUID(control), team["owner_id"],
+            AttributeAdd(text="The approver is not the person who requested the access"),
+        )  # fmt: skip
+        connection.commit()
+        approved = connection.execute(
+            "SELECT test_attributes FROM engagement_controls WHERE id = %s", (control,)
+        ).fetchone()
+    assert approved is not None
+    _approve(team, control)
+    current = next(
+        s for s in client.get(f"{_base(team)}/test-sheets").json() if s["id"] == sheet["id"]
+    )
+    # The sheet holds the approved attributes, in their order.
+    assert current["attributes"] == list(approved[0])
+    assert len(current["attributes"]) == len(sheet["attributes"]) + 1
+    # Each result follows its attribute: the reworded one's is dropped, the others keep
+    # theirs at their position; every tested item is tested again.
+    for item in current["items"]:
+        before = tested[item["id"]]["cells"]
+        assert item["state"] == "WAITING"
+        assert item["cells"][0]["proposed"] is None
+        assert [c["proposed"] for c in item["cells"][1 : len(before)]] == [
+            c["proposed"] for c in before[1:]
+        ]
+        assert item["cells"][-1]["proposed"] is None
+    # The tester is asked to test them again, and the sign-off waits for it.
+    assert current["running"] is True
+    refused = _sign(client, team, sheet["id"])
+    assert refused.status_code == 409 and refused.json()["detail"] == "the tester is still testing"
+    # Had a run cleared the items while testing on the old attributes, the sheet would say
+    # so, and its sign-off waits for the test again.
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE test_items SET needs_test = false WHERE test_sheet_id = %s", (sheet["id"],)
+        )
+        connection.execute(
+            "UPDATE test_sheets SET run_status = 'IDLE' WHERE id = %s", (sheet["id"],)
+        )
+        connection.commit()
+    current = next(
+        s for s in client.get(f"{_base(team)}/test-sheets").json() if s["id"] == sheet["id"]
+    )
+    line = (
+        f"{len(current['items'])} items were tested against attributes or criteria that "
+        "changed since: test them again"
+    )
+    assert line in current["blocking"] and current["counts"]["out_of_date"] == len(current["items"])
+    assert current["proposed_conclusion"] == "INCOMPLETE"
+    refused = _sign(client, team, sheet["id"])
+    assert refused.status_code == 409 and line in refused.json()["detail"]
+    # Test again: the items are tested on the approved attributes, then the sheet signs off
+    # under the revision they were tested under, the approved one.
+    retest = client.post(
+        f"{_base(team)}/test-sheets/{sheet['id']}/retest", json={"version": current["version"]}
+    )
+    assert retest.status_code == 200, retest.text
+    count = len(current["attributes"])
+    provider = _Citing([_answer(["PASS"] * count) for _ in current["items"]])
+    with connect(migrated.url) as connection:
+        run_sheet(connection, provider, UUID(sheet["id"]))
+    current = next(
+        s for s in client.get(f"{_base(team)}/test-sheets").json() if s["id"] == sheet["id"]
+    )
+    assert current["counts"]["out_of_date"] == 0, current["blocking"]
+    signed = _sign(client, team, sheet["id"])
+    assert signed.status_code == 200, signed.text
+    stamp, revision = _stamp(migrated, sheet["id"])
+    assert stamp == revision
+
+
+def test_a_sheet_signed_after_an_unrelated_revision_keeps_its_tested_revision_and_is_assessed(
+    migrated: Database,
+) -> None:
+    """ST-1 (product owner, 19 November 2026). Before, sign-off stamped the plan's current
+    approved revision, so results tested before a later revision were never assessed. Now
+    the stamp is the revision the results were tested under, and a reviewer's impact
+    assessment is raised at once for the difference (the agent recommends VALID)."""
+    team, client, sheet = _basis_control(migrated, "basis-unrelated")
+    control = sheet["control_id"]
+    tested_under, _ = _stamp(migrated, sheet["id"])
+    _revise(migrated, control)
+    _approve(team, control)
+    signed = _sign(client, team, sheet["id"])
+    assert signed.status_code == 200, signed.text
+    stamp, revision = _stamp(migrated, sheet["id"])
+    assert stamp == tested_under and revision == tested_under + 1
+    [assessment] = [
+        a for a in client.get(f"{_base(team)}/impact").json() if a["status"] == "PENDING"
+    ]
+    assert (assessment["from_revision"], assessment["to_revision"]) == (stamp, revision)
+    assert assessment["recommendation"]["decision"] == "VALID"
+
+
+def test_a_sheet_whose_tested_revision_is_not_recorded_signs_off_unknown(
+    migrated: Database,
+) -> None:
+    """ST-1 (product owner, 19 November 2026): an item tested without a call, on a sheet
+    whose own revision is not recorded, makes the tested revision unknown; the stamp is
+    empty and the "not recorded" impact assessment is raised, never the current one."""
+    team, client, sheet = _basis_control(migrated, "basis-unknown")
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE test_items SET model_call_id = NULL WHERE id = %s", (sheet["items"][0]["id"],)
+        )
+        connection.execute(
+            "UPDATE test_sheets SET plan_revision = NULL WHERE id = %s", (sheet["id"],)
+        )
+        connection.commit()
+    signed = _sign(client, team, sheet["id"])
+    assert signed.status_code == 200, signed.text
+    stamp, _revision = _stamp(migrated, sheet["id"])
+    assert stamp is None
+    [assessment] = [
+        a for a in client.get(f"{_base(team)}/impact").json() if a["status"] == "PENDING"
+    ]
+    assert assessment["from_revision"] is None

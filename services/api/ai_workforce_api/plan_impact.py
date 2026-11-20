@@ -463,6 +463,11 @@ def decide(
             {"decision": body.decision, "to_revision": to_revision, "sheet": str(sheet_id)},
         )  # fmt: skip
         if body.decision == "REPERFORM":
+            # The plan before the sheet (the lock order: plan approval holds the plan and
+            # then brings the open sheets in step, ST-1).
+            from ai_workforce_api.testing_engine import lock_plan
+
+            lock_plan(cursor, control_id)
             sheet = cursor.execute(
                 """
                 SELECT id, status, version, engagement_control_id, method, attributes,

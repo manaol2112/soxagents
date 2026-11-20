@@ -840,6 +840,13 @@ def accept_many(
             (organization_id, project_id, actor, control_id, Json({"items": recorded})),
         )
         close_questions_once_accepted(cursor, organization_id, project_id, control_id, actor)
+        # Criteria accepted under an approved plan change what the tester is given without
+        # revising it (ST-1): the open sheets follow them, once for the set, the plan held
+        # before their rows (an approved change revised the plan, and they wait for it).
+        from ai_workforce_api.testing_engine import lock_plan, resync_open_sheets
+
+        lock_plan(cursor, control_id)
+        resync_open_sheets(cursor, organization_id, project_id, control_id, actor)
 
 
 # The agent

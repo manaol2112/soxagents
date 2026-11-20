@@ -98,18 +98,35 @@ def test_the_testers_answer_is_checked() -> None:
 def test_a_control_tested_once_reuses_its_screenshot_reviews() -> None:
     review = {
         "attributes": [
-            {"index": 0, "result": "PASS", "observed": "Minimum length 12"},
-            {"index": 1, "result": "NOT_DETERMINABLE", "observed": "Lockout not shown"},
+            {
+                "index": 0,
+                "attribute": "Minimum length is 12",
+                "result": "PASS",
+                "observed": "Minimum length 12",
+            },
+            {
+                "index": 1,
+                "attribute": "Lockout after 5 attempts",
+                "result": "NOT_DETERMINABLE",
+                "observed": "Lockout not shown",
+            },
         ]
     }
+    # Rewritten 19 November 2026 (ST-1, product owner). Old: the review's answers were
+    # reused by their position, from a count of attributes. New: each is matched by the
+    # wording it was reviewed against (evidence_review records it, AttributeTest.attribute).
+    # Reason: after a removal, a new order or a rewording, a position names another
+    # attribute, and a pass would be given to a test never made.
     files = (ItemFile("settings.png", "configuration", "", review),)
-    results = from_reviews(files, 2)
+    attributes = ("Minimum length is 12", "Lockout after 5 attempts")
+    results = from_reviews(files, attributes)
     assert results is not None
     assert [item["result"] for item in results] == ["PASS", "UNABLE"]
     assert results[0]["note"] == "settings.png: Minimum length 12"
     # Without a review for every file, or for every attribute, the tester tests it.
-    assert from_reviews((*files, ItemFile("policy.pdf", "policy", "text", None)), 2) is None
-    assert from_reviews(files, 3) is None
+    no_review = (*files, ItemFile("policy.pdf", "policy", "text", None))
+    assert from_reviews(no_review, attributes) is None
+    assert from_reviews(files, (*attributes, "Passwords expire")) is None
 
 
 def test_the_prompt_gives_the_attributes_the_item_and_its_evidence() -> None:
@@ -1090,3 +1107,198 @@ def test_a_confirmed_plan_carries_its_own_changes_and_stops_at_anyone_elses(
     ran = client.post(f"{console}/messages/{second}/confirm").json()["messages"][-1]["actions"]
     assert [step["status"] for step in ran] == ["DONE"] * (attributes + 1), ran
     assert ran[-1]["result"]["conclusion"] == "EFFECTIVE"
+
+
+def test_a_screenshot_review_is_reused_by_the_attribute_it_answered() -> None:
+    """ST-1 (product owner, 19 November 2026). Before, a test of one reused the screenshot
+    review's answers by position, so after a new order a pass went to another attribute;
+    now each answer goes to the attribute it was reviewed against, and an answer to a
+    wording no longer approved leaves the item to the tester or a person."""
+    review = {
+        "attributes": [
+            {"index": 0, "attribute": "Minimum length is 12", "result": "PASS", "observed": "12"},
+            {"index": 1, "attribute": "Lockout after 5 attempts", "result": "EXCEPTION",
+             "observed": "Lockout after 10"},
+        ]
+    }  # fmt: skip
+    files = (ItemFile("settings.png", "configuration", "", review),)
+    reordered = from_reviews(files, ("Lockout after 5 attempts", "Minimum length is 12"))
+    assert reordered is not None
+    assert [item["result"] for item in reordered] == ["EXCEPTION", "PASS"]
+    assert [item["index"] for item in reordered] == [0, 1]
+    assert from_reviews(files, ("Lockout after 3 attempts", "Minimum length is 12")) is None
+
+
+def test_results_and_overrides_follow_their_attribute_not_their_position() -> None:
+    """ST-1 (product owner, 19 November 2026; decision D2): each result and override moves
+    with its attribute's identity; one whose attribute was removed or reworded is dropped."""
+    from ai_workforce_api.testing_engine import remap_results
+
+    results = [
+        {"index": 0, "result": "PASS", "note": "a"},
+        {"index": 1, "result": "EXCEPTION", "note": "b"},
+        {"index": 2, "result": "PASS", "note": "c"},
+    ]
+    overrides = [{"index": 1, "result": "PASS", "reason": "Seen.", "by": "x", "at": "t"}]
+    moved, kept = remap_results(["a", "b", "c"], ["c", "a", "d"], results, overrides)
+    assert sorted((item["index"], item["note"]) for item in moved) == [(0, "c"), (1, "a")]
+    assert kept == []
+    # A removal keeps the rest, at their new places, with a person's override.
+    moved, kept = remap_results(["a", "b", "c"], ["b", "c"], results, overrides)
+    assert sorted((item["index"], item["note"]) for item in moved) == [(0, "b"), (1, "c")]
+    assert [item["index"] for item in kept] == [0]
+
+
+def _open_tested(migrated: Database, slug: str) -> tuple[dict[str, Any], Any, dict[str, Any]]:
+    from test_workpapers import _tested_control
+
+    team, client, sheet, _file = _tested_control(migrated, slug, sign=False)
+    return team, client, sheet
+
+
+def _sheet_of(client: TestClient, team: dict[str, Any], sheet_id: str) -> dict[str, Any]:
+    found: dict[str, Any] = next(
+        s for s in client.get(f"{_base(team)}/test-sheets").json() if s["id"] == sheet_id
+    )
+    return found
+
+
+def test_accepted_criteria_on_an_open_sheet_hold_sign_off_until_retested(
+    migrated: Database,
+) -> None:
+    """ST-1 (product owner, 19 November 2026). Accepting the agent's criteria changes what
+    the tester is given without revising the plan, so approval never brings the open sheet
+    in step. Before, the items tested against the standard's definition signed off; now
+    they are tested again against the criteria a person owns."""
+    team, client, sheet = _open_tested(migrated, "basis-criteria")
+    control = sheet["control_id"]
+    with connect(migrated.url) as connection:
+        row = connection.execute(
+            "SELECT id FROM control_attributes WHERE engagement_control_id = %s "
+            "AND status = 'APPROVED' ORDER BY position LIMIT 1",
+            (control,),
+        ).fetchone()
+        assert row is not None
+        # The planner agent's criteria, not accepted yet (the plan revised and approved).
+        connection.execute(
+            "UPDATE control_attributes SET criteria_origin = 'AGENT', criteria_accepted_at = NULL, "
+            "condition = 'An access request is approved', "
+            "pass_criteria = 'A named approver approved it before access was granted', "
+            "fail_criteria = 'No approval, or one after access was granted' WHERE id = %s",
+            (row[0],),
+        )
+        connection.commit()
+    from test_master_plans import _approve
+
+    _approve(team, control)
+    assert _sheet_of(client, team, sheet["id"])["counts"]["out_of_date"] == 0
+    with connect(migrated.url) as connection:
+        version = connection.execute(
+            "SELECT version FROM control_attributes WHERE id = %s", (row[0],)
+        ).fetchone()
+    assert version is not None
+    accepted = team["owner"].post(
+        f"{_base(team)}/controls/{control}/master-plan/criteria/accept",
+        json={"attributes": [{"id": str(row[0]), "version": int(version[0])}]},
+    )
+    assert accepted.status_code == 200, accepted.text
+    current = _sheet_of(client, team, sheet["id"])
+    assert all(item["state"] == "WAITING" for item in current["items"])
+    assert current["running"] is True
+    refused = client.post(
+        f"{_base(team)}/test-sheets/{sheet['id']}/sign-off", json={"version": current["version"]}
+    )
+    assert refused.status_code == 409 and refused.json()["detail"] == "the tester is still testing"
+
+
+def test_more_attributes_than_a_sheet_holds_leave_the_sheet_and_hold_its_sign_off(
+    migrated: Database,
+) -> None:
+    """ST-1 (product owner, 19 November 2026): a control approved with more attributes than
+    a sheet holds never aborts the approval; the open sheet is left as it is, and its
+    sign-off waits with the reason."""
+    import json
+
+    from test_master_plans import _approve
+
+    from ai_workforce_api.db import transaction
+    from ai_workforce_api.testing_engine import MAX_ATTRIBUTES, resync_open_sheets
+
+    team, client, sheet = _open_tested(migrated, "basis-many")
+    control = UUID(sheet["control_id"])
+    many = [f"Attribute {n} holds" for n in range(MAX_ATTRIBUTES + 1)]
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE engagement_controls SET test_attributes = %s::jsonb WHERE id = %s",
+            (json.dumps(many), control),
+        )
+        connection.commit()
+    # Approving them brings the open sheet in step: refused to it, never to the approval.
+    _approve(team, str(control))
+    with connect(migrated.url) as connection:
+        with transaction(connection) as cursor:
+            assert resync_open_sheets(cursor, team["org"], team["project"], control, None) == []
+    current = _sheet_of(client, team, sheet["id"])
+    assert current["attributes"] == sheet["attributes"]
+    assert any("a test sheet holds at most" in line for line in current["blocking"])
+    assert current["proposed_conclusion"] == "INCOMPLETE"
+
+
+def test_a_filled_in_client_value_is_the_same_attribute_and_tests_nothing_again(
+    migrated: Database,
+) -> None:
+    """ST-1 (product owner, 19 November 2026; milestone L3e). A client value filled into an
+    approved attribute's brackets is the same attribute and revises no plan: the open
+    sheet takes the new wording by the attribute's identity, keeps its results, and tests
+    nothing again."""
+    from test_master_plans import _approve
+
+    from ai_workforce_api.control_attributes import _write_list
+    from ai_workforce_api.db import transaction
+    from ai_workforce_api.testing_engine import lock_plan, resync_open_sheets
+
+    team, client, sheet = _open_tested(migrated, "basis-fill")
+    control = sheet["control_id"]
+    with connect(migrated.url) as connection:
+        row = connection.execute(
+            "SELECT id, text FROM control_attributes WHERE engagement_control_id = %s "
+            "AND status = 'APPROVED' ORDER BY position LIMIT 1",
+            (control,),
+        ).fetchone()
+        assert row is not None
+        with transaction(connection) as cursor:
+            cursor.execute(
+                "UPDATE control_attributes SET text = %s WHERE id = %s",
+                (f"{row[1]} within [the agreed days]", row[0]),
+            )
+            _write_list(cursor, UUID(control))
+    # The bracketed wording is a change of wording (the plan revised): approved, the sheet
+    # is in step and tested on it.
+    _approve(team, control)
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE test_items SET needs_test = false WHERE test_sheet_id = %s", (sheet["id"],)
+        )
+        connection.commit()
+    bracketed = _sheet_of(client, team, sheet["id"])
+    with connect(migrated.url) as connection:
+        with transaction(connection) as cursor:
+            cursor.execute(
+                "UPDATE control_attributes SET text = %s WHERE id = %s",
+                (f"{row[1]} within 5 days", row[0]),
+            )
+            _write_list(cursor, UUID(control))
+            lock_plan(cursor, UUID(control))
+            assert (
+                resync_open_sheets(cursor, team["org"], team["project"], UUID(control), None) == []
+            )
+        plan = connection.execute(
+            "SELECT status FROM evidence_plans WHERE engagement_control_id = %s", (control,)
+        ).fetchone()
+    assert plan == ("APPROVED",)
+    filled = _sheet_of(client, team, sheet["id"])
+    assert filled["attributes"][0].endswith("within 5 days")
+    assert [i["state"] for i in filled["items"]] == [i["state"] for i in bracketed["items"]]
+    assert [[c["proposed"] for c in i["cells"]] for i in filled["items"]] == [
+        [c["proposed"] for c in i["cells"]] for i in bracketed["items"]
+    ]

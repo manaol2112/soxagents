@@ -553,6 +553,19 @@ def refresh_statement(cursor: psycopg.Cursor[Any], control_id: UUID) -> None:
             changed = changed or status == "APPROVED"
     if changed:
         _write_list(cursor, control_id)
+        # A client value filled into an approved attribute is the same attribute (L3e: no
+        # plan revision), so approval does not run for it: the open sheets take its wording
+        # here, by the attribute's identity, testing nothing again (ST-1). The plan is held
+        # before their rows.
+        from ai_workforce_api.testing_engine import lock_plan, resync_open_sheets
+
+        owner = cursor.execute(
+            "SELECT organization_id, project_id FROM engagement_controls WHERE id = %s",
+            (control_id,),
+        ).fetchone()
+        if owner is not None:
+            lock_plan(cursor, control_id)
+            resync_open_sheets(cursor, owner[0], owner[1], control_id, None)
 
 
 def set_values(
