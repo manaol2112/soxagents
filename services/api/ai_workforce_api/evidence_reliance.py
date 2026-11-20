@@ -62,6 +62,14 @@ and a restoration queues its checks before testing again (evidence_versions.rest
 A transaction that waits on a lock earlier in the order then holds nothing later in it, so
 the two cannot wait on each other. Each site says "(lock order: evidence_reliance)".
 
+The plan before the sheets holds for the sheet's own changes too (ST-1, 19 November 2026):
+plan approval and accepted criteria hold the plan and then bring the control's open sheets
+in step (testing_engine.resync_open_sheets, after testing_engine.lock_plan), so every change
+of a sheet (test_sheets.change_sheet), a review's lock (control_reviews._locked, before a
+review note reopens the testing) and an impact assessment's reperformance
+(plan_impact.decide) take the plan first. Before, a sign-off or a reopening locked the
+sheet and then the plan (refresh_decisions), and could wait on an approval waiting on it.
+
 Known exceptions, left for the lock work of P1 I4a (18 November 2026). A foreign key check
 takes a key-share lock on the row it references, which waits on FOR UPDATE (lock_served
 takes it on the items):
