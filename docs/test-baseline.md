@@ -52,7 +52,7 @@ operation. That connection churn is also what exhausts Windows' ephemeral ports 
 | Node tests, all 180 files | Windows checkout, 19 Nov 2026 | 3,669 pass, 10 fail in `tests/evidence-wizard-contract.test.ts` (row B4) |
 | `biome check` | Windows checkout, 19 Nov 2026 | Pass (`.gitattributes` keeps every checkout LF) |
 | `ruff`, `mypy`, `tsc` | Windows | Pass |
-| `test_assurance_eval_set.py` (full-only) | Windows, no database, 19 Nov 2026 | 59 of 59 pass (B9 lifted) |
+| `test_assurance_eval_set.py` (full-only then; critical tier since 19 Nov 2026) | Windows, no database, 19 Nov 2026 | 59 of 59 pass (B9 lifted) |
 | `tests/test_smoke.py` (critical tier since 19 Nov 2026) | Windows, 19 Nov 2026 | 5 of 5 pass (B10 lifted) |
 
 ## Known failures
@@ -108,14 +108,26 @@ critical file does not run in exactly one CI part.
 
 | Tier | Files | Runs |
 | --- | --- | --- |
-| Fast (`make test-fast`) | 61 (35 of them also critical) | The 26 not critical in CI's fast-only part, every push and pull request; locally on request only |
-| Critical (`make test-critical`) | 118 files and 9 single tests (`CRITICAL_PICKED`), counting the two gate guards and `tests/test_smoke.py` added 19 Nov 2026 | In CI on every push and pull request, in four parts |
+| Fast (`make test-fast`) | 64 (35 of them also critical) | The 29 not critical in CI's fast-only part, every push and pull request; locally on request only |
+| Critical (`make test-critical`) | 139 files and 7 single tests (`CRITICAL_PICKED`), counting the two gate guards and `tests/test_smoke.py` added 19 Nov 2026, and the 11 files moved up from full-only and the split-off half of `test_design_evidence.py` the same day (below) | In CI on every push and pull request, in four parts |
 | Demo (`make test-demo`) | 7 | Before a demonstration |
-| Full only (`FULL_ONLY_PY`) | 72 | `make test-full`: at a major milestone, before a release, or on request |
+| Full only (`FULL_ONLY_PY`) | 61 | `make test-full`: at a major milestone, before a release, or on request |
 | Node, all files | 180 | In CI on every push and pull request |
 
-The 72 full-only files were in no tier before 17 November 2026. They are listed as found,
+The full-only files were in no tier before 17 November 2026. They were listed as found,
 not as judged: moving the important ones up a tier is open work, one area at a time.
+
+On 19 November 2026 (evidence evaluation assessment, item 3; branch `ci-audit-tiers`) 11
+moved to the critical tier, so they run on CI on every pull request: engine 2's false-pass
+rules and its evaluation set (`test_assurance_engine2`, `_facts`, `_review`, `_followups`,
+`_scenarios`, `_eval_set`; all pure but three database tests of `_engine2`) and the files E1
+touched (`test_evidence_intake`, `test_evidence_plans`, `test_evidence_analysis`,
+`test_portal_workspace`, `test_request_details`). The single tests `CRITICAL_PICKED` held
+from `test_evidence_plans` and `test_evidence_analysis` now run with their whole files. The
+same day `test_design_evidence.py`, about 700 s on one CI worker and so the floor of the
+slowest CI part, was split by whole tests into itself (18 tests, 19 cases) and
+`test_design_evidence_handover.py` (15), about 360 s and 345 s on CI.
+`test_assurance_forward_only.py` (engine 2 is forward only; database) stays full-only.
 
 ## Not established
 
