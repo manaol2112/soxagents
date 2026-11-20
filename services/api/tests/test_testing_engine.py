@@ -1327,13 +1327,19 @@ def test_the_deploy_pass_brings_open_sheets_in_step_one_control_at_a_time(
     assert row is not None and row[0] == list(reversed(stored[0]))
 
 
-def test_a_filled_in_client_value_is_the_same_attribute_and_tests_nothing_again(
+def test_a_filled_in_client_value_is_the_same_attribute_and_its_items_are_tested_again(
     migrated: Database,
 ) -> None:
     """ST-1 (product owner, 19 November 2026; milestone L3e). A client value filled into an
     approved attribute's brackets is the same attribute and revises no plan: the open
-    sheet takes the new wording by the attribute's identity, keeps its results, and tests
-    nothing again."""
+    sheet takes the new wording by the attribute's identity and keeps its results there.
+
+    Rewritten 19 November 2026 (N1, product owner: "Yes, retest them"). Old expectation:
+    the items kept their state and no run was asked (the fill tested nothing again). New
+    expectation: every item tested on the bracket is tested again, and the run is asked.
+    Why: the items were tested without the value the attribute now holds them to, so the
+    sheet could sign off on results that never read it. The identity, the approval kept
+    and the results following their attribute are asserted as before."""
     from test_master_plans import _approve
 
     from ai_workforce_api.control_attributes import _write_list
@@ -1372,16 +1378,131 @@ def test_a_filled_in_client_value_is_the_same_attribute_and_tests_nothing_again(
             )
             _write_list(cursor, UUID(control))
             lock_plan(cursor, UUID(control))
-            assert (
-                resync_open_sheets(cursor, team["org"], team["project"], UUID(control), None) == []
-            )
+            assert resync_open_sheets(
+                cursor, team["org"], team["project"], UUID(control), None
+            ) == [UUID(sheet["id"])]
         plan = connection.execute(
             "SELECT status FROM evidence_plans WHERE engagement_control_id = %s", (control,)
         ).fetchone()
     assert plan == ("APPROVED",)
     filled = _sheet_of(client, team, sheet["id"])
     assert filled["attributes"][0].endswith("within 5 days")
-    assert [i["state"] for i in filled["items"]] == [i["state"] for i in bracketed["items"]]
+    assert all(i["state"] != "WAITING" for i in bracketed["items"])
+    assert [i["state"] for i in filled["items"]] == ["WAITING"] * len(bracketed["items"])
+    assert filled["running"] is True
     assert [[c["proposed"] for c in i["cells"]] for i in filled["items"]] == [
         [c["proposed"] for c in i["cells"]] for i in bracketed["items"]
     ]
+
+
+def test_a_value_filled_into_the_wording_tested_is_a_retest_and_nothing_else_is() -> None:
+    """N1 (product owner, 19 November 2026: "Yes, retest them"): the rule. Items tested on
+    an attribute whose bracketed client value was unfilled are tested again once it is
+    filled; the attribute is the same (its key), so nothing else would mark them."""
+    from ai_workforce_api.testing_engine import Basis, filled_since
+
+    def basis(*texts: str, keys: tuple[str, ...] = ("a1", "a2")) -> Basis:
+        return Basis(tuple(texts), keys, (None,) * len(texts), 1)
+
+    tested_on = ["Access is removed within [N] days", "The removal is approved"]
+    keys = ["a1", "a2"]
+    assert filled_since(tested_on, keys, basis("Access is removed within 5 days", tested_on[1]))
+    # In a new order: the value follows the attribute, not the position.
+    assert filled_since(
+        tested_on,
+        keys,
+        basis("The removal is approved", "Access is removed within 5 days", keys=("a2", "a1")),
+    )
+    # One of two values filled is a value filled.
+    assert filled_since(
+        ["Removed within [N] days by [the role]"],
+        ["a1"],
+        Basis(("Removed within 5 days by [the role]",), ("a1",), (None,), 1),
+    )
+    # Nothing filled, a new order, a value changed once filled, another attribute's
+    # wording: not a fill (the other rules decide those).
+    assert not filled_since(tested_on, keys, basis(*tested_on))
+    assert not filled_since(tested_on, keys, basis(*reversed(tested_on), keys=("a2", "a1")))
+    assert not filled_since(
+        ["Access is removed within 5 days"],
+        ["a1"],
+        Basis(("Access is removed within 3 days",), ("a1",), (None,), 1),
+    )
+    assert not filled_since(
+        tested_on, keys, basis("Access is removed within 5 days", tested_on[1], keys=("a3", "a2"))
+    )
+
+
+def test_items_tested_on_an_unfilled_value_hold_sign_off_until_tested_again_with_it(
+    migrated: Database,
+) -> None:
+    """N1 (product owner, 19 November 2026: "Yes, retest them"). The items are tested on
+    "removed within [N] days"; N is filled in as 5 (as control_design.refresh_statement
+    saves a fill: the wording, the list, the plan held, the open sheets brought in step).
+    The plan keeps its approval, the sheet's sign-off is refused, and once the items are
+    tested again with the value, it signs off. Before, the sheet signed off on results
+    tested without the value."""
+    from test_master_plans import _approve
+
+    from ai_workforce_api.control_attributes import _write_list
+    from ai_workforce_api.db import transaction
+    from ai_workforce_api.testing_engine import lock_plan, resync_open_sheets
+
+    team, client, sheet = _open_tested(migrated, "basis-fill-signoff")
+    control = sheet["control_id"]
+    with connect(migrated.url) as connection:
+        row = connection.execute(
+            "SELECT id FROM control_attributes WHERE engagement_control_id = %s "
+            "AND status = 'APPROVED' ORDER BY position LIMIT 1",
+            (control,),
+        ).fetchone()
+        assert row is not None
+        with transaction(connection) as cursor:
+            cursor.execute(
+                "UPDATE control_attributes SET text = %s WHERE id = %s",
+                ("Access is removed within [N] days", row[0]),
+            )
+            _write_list(cursor, UUID(control))
+    _approve(team, control)
+    attributes = len(_sheet_of(client, team, sheet["id"])["attributes"])
+    with connect(migrated.url) as connection:
+        assert (
+            run_sheet(connection, _Citing([_answer(["PASS"] * attributes)]), UUID(sheet["id"]))
+            == "DONE"
+        )
+    bracketed = _sheet_of(client, team, sheet["id"])
+    assert bracketed["attributes"][0] == "Access is removed within [N] days"
+    assert bracketed["running"] is False
+    assert bracketed["proposed_conclusion"] != "INCOMPLETE", bracketed["blocking"]
+    with connect(migrated.url) as connection:
+        with transaction(connection) as cursor:
+            cursor.execute(
+                "UPDATE control_attributes SET text = %s WHERE id = %s",
+                ("Access is removed within 5 days", row[0]),
+            )
+            _write_list(cursor, UUID(control))
+            lock_plan(cursor, UUID(control))
+            resync_open_sheets(cursor, team["org"], team["project"], UUID(control), None)
+        plan = connection.execute(
+            "SELECT status FROM evidence_plans WHERE engagement_control_id = %s", (control,)
+        ).fetchone()
+    assert plan == ("APPROVED",)
+    filled = _sheet_of(client, team, sheet["id"])
+    assert filled["attributes"][0] == "Access is removed within 5 days"
+    assert [i["state"] for i in filled["items"]] == ["WAITING"] * len(filled["items"])
+    refused = client.post(
+        f"{_base(team)}/test-sheets/{sheet['id']}/sign-off", json={"version": filled["version"]}
+    )
+    assert refused.status_code == 409, refused.text
+    # Tested again with the value: the sheet signs off.
+    with connect(migrated.url) as connection:
+        assert (
+            run_sheet(connection, _Citing([_answer(["PASS"] * attributes)]), UUID(sheet["id"]))
+            == "DONE"
+        )
+    retested = _sheet_of(client, team, sheet["id"])
+    assert all(i["state"] != "WAITING" for i in retested["items"])
+    signed = client.post(
+        f"{_base(team)}/test-sheets/{sheet['id']}/sign-off", json={"version": retested["version"]}
+    )
+    assert signed.status_code == 200, signed.text

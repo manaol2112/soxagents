@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field, ValidationError
 from ai_workforce_api.after_commit import after_commit
 from ai_workforce_api.agent_answers import plain_problem
 from ai_workforce_api.agent_runs import cancel_requested, finish_cancelled
-from ai_workforce_api.control_design import design_for
+from ai_workforce_api.control_design import design_for, fills_placeholders
 from ai_workforce_api.control_instances import FAMILY_FILES, family_ids, shared_with_family
 from ai_workforce_api.db import (
     connect,
@@ -1223,6 +1223,22 @@ def stale_basis(inputs: Any, basis: Basis) -> bool:
     return False
 
 
+def filled_since(
+    tested_on: list[str] | tuple[str, ...], tested_keys: list[str] | tuple[str, ...], basis: Basis
+) -> bool:
+    """Whether an attribute the items were tested on with a bracketed client value still
+    unfilled ("removed within [N] days") reads now with the value filled in ("removed
+    within 5 days"): the same attribute (attribute_keys, L3e), but the items were tested
+    without the value the attribute now holds them to, so they are tested again. Decided
+    by the product owner, 19 November 2026 (N1: "Yes, retest them"); before, a filled-in
+    value tested nothing again and the sheet signed off on results that never read it."""
+    was = dict(zip(tested_keys, tested_on, strict=True))
+    return any(
+        fills_placeholders(was.get(key), text)
+        for key, text in zip(basis.keys, basis.texts, strict=True)
+    )
+
+
 def remap_results(
     old: list[str] | tuple[str, ...],
     new: list[str] | tuple[str, ...],
@@ -1265,11 +1281,12 @@ def resync_open_sheets(
     """Bring the control's open sheets (the interim's and the rounds', or the one named) in
     step with the approved attributes and owned criteria, under an approved plan only. The
     attributes are rewritten; each result and override follows its attribute; a tested item
-    is marked to be tested again when an approved attribute was added or reworded, or its
-    call's basis is superseded (stale_basis); a removal, a new order or a filled-in client
-    value tests nothing again. The sheet is re-based on the approved revision once nothing
-    tested without a call keeps the old one. Recorded as testing.sheet_resynced. Returns
-    the sheets asked to run, for the caller to schedule. The caller holds the plan row."""
+    is marked to be tested again when an approved attribute was added or reworded, a client
+    value it was tested without is filled in (filled_since), or its call's basis is
+    superseded (stale_basis); a removal or a new order tests nothing again. The sheet is
+    re-based on the approved revision once nothing tested without a call keeps the old one.
+    Recorded as testing.sheet_resynced. Returns the sheets asked to run, for the caller to
+    schedule. The caller holds the plan row."""
     basis = approved_basis(cursor.connection, control_id)
     if basis is None or basis.too_many is not None:
         # Not approved: nothing changes. Too many attributes: the sheet is left as it is,
@@ -1287,6 +1304,7 @@ def resync_open_sheets(
         same = old == new
         old_keys = attribute_keys(cursor.connection, control_id, old)
         gained = [key for key in basis.keys if key not in old_keys]
+        filled = filled_since(old, old_keys, basis)
         marked: list[str] = []
         moved = False
         kept_old = False
@@ -1299,7 +1317,7 @@ def resync_open_sheets(
             (sid,),
         ).fetchall():
             tested = tested_at is not None and not needs_test
-            stale = tested and (bool(gained) or stale_basis(inputs, basis))
+            stale = tested and (bool(gained) or filled or stale_basis(inputs, basis))
             current = (list(results or []), list(overrides or []))
             remapped = current if same else remap_results(old_keys, basis.keys, *current)
             if tested and not stale and inputs is None:

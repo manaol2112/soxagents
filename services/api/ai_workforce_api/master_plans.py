@@ -57,6 +57,7 @@ from ai_workforce_api.authorization import (
 )
 from ai_workforce_api.control_design import (
     OpenValueBody,
+    fills_placeholders,
     open_values,
     open_values_by_control,
 )
@@ -834,7 +835,7 @@ def _names_attribute(
     an attribute had before a person reworded it (its replaces chain, 28 October 2026)."""
     wanted = _normal(name)
     texts = [str(item["text"]) for item in attributes] + list(former or [])
-    return any(_normal(text) == wanted or _filled_only(name, text) for text in texts)
+    return any(_normal(text) == wanted or fills_placeholders(name, text) for text in texts)
 
 
 def findings_of(plan: _Plan, procedure_links: bool = False) -> list[Finding]:
@@ -1571,16 +1572,6 @@ def state_facts(
         )  # fmt: skip
 
 
-def _filled_only(old: Any, new: Any) -> bool:
-    """Whether new is old with its bracketed client values filled in (migration 0086's
-    fills_placeholders): reported as values filled, not as a change."""
-    if not isinstance(old, str) or not isinstance(new, str) or "[" not in old or old == new:
-        return False
-    parts = re.split(r"\s*\[[^\]]+\]\s*", " ".join(old.split()))
-    pattern = r"\s*(.+?)\s*".join(re.escape(part) for part in parts)
-    return re.fullmatch(pattern, " ".join(new.split())) is not None
-
-
 _CONTROL_FIELDS = {
     "title": "Title", "description": "Description", "risk": "Risk", "frequency": "Frequency",
     "nature": "Nature", "area": "Area", "key_control": "Key control",
@@ -1595,7 +1586,7 @@ def changes_since(approved: dict[str, Any], current: dict[str, Any]) -> list[Cha
     found: list[ChangeItem] = []
 
     def differs(old: Any, new: Any) -> bool:
-        return old != new and not _filled_only(old, new)
+        return old != new and not fills_placeholders(old, new)
 
     before, after = approved.get("control", {}), current.get("control", {})
     for key, label in _CONTROL_FIELDS.items():

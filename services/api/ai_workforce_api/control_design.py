@@ -11,6 +11,7 @@ client's values, and the values themselves.
 Only library controls on version 3 have a statement; a client's own control has none.
 """
 
+import re
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
@@ -117,6 +118,18 @@ class ValuesBody(BaseModel):
     # Also fill this slot on every other control in the engagement that uses it and has no
     # value yet.
     everywhere: bool = False
+
+
+def fills_placeholders(old: Any, new: Any) -> bool:
+    """Whether new is old with one or more of its bracketed client values filled in and
+    nothing else changed (migration 0086's fills_placeholders, in Python): the plan reports
+    it as values filled, not as a change; the open sheets test again what was tested on
+    the bracket (testing_engine.filled_since, N1)."""
+    if not isinstance(old, str) or not isinstance(new, str) or "[" not in old or old == new:
+        return False
+    parts = re.split(r"\s*\[[^\]]+\]\s*", " ".join(old.split()))
+    pattern = r"\s*(.+?)\s*".join(re.escape(part) for part in parts)
+    return re.fullmatch(pattern, " ".join(new.split())) is not None
 
 
 def _statement(
