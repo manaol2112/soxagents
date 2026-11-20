@@ -531,10 +531,16 @@ def engagement_conclusions(
 
 
 def interim_only(facts: Facts) -> Facts:
-    """The facts with the roll-forward left out and nothing undecided: what the opinion on
-    the period tested so far is proposed from, while a roll-forward is still owed."""
+    """The facts with the roll-forward left out: what the opinion on the period tested so
+    far is proposed from, while a roll-forward is still owed. Only the roll-forward's own
+    undecided applicability is left out; an undecided D&I or interim phase still holds the
+    opinion (FP-7, decision D5, product owner, 19 November 2026). Before, every undecided
+    phase was dropped, so the register read Effective while the panel waited for the
+    decision."""
     return replace(
-        facts, phases={**facts.phases, "ROLLFORWARD": (False, None, None, False)}, undecided=()
+        facts,
+        phases={**facts.phases, "ROLLFORWARD": (False, None, None, False)},
+        undecided=tuple(phase for phase in facts.undecided if phase != "ROLLFORWARD"),
     )
 
 

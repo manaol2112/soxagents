@@ -24,7 +24,13 @@ from test_phase_release import _launched
 from test_round_reviews import _sign_review
 from test_testing_engine import _base
 
-from ai_workforce_api.control_conclusions import Facts, concluded, propose, suggestion
+from ai_workforce_api.control_conclusions import (
+    Facts,
+    concluded,
+    interim_only,
+    propose,
+    suggestion,
+)
 from ai_workforce_api.control_journey import FinalityFacts, RoundFacts, finality
 from ai_workforce_api.db import connect
 from ai_workforce_api.design_conclusions import (
@@ -540,6 +546,37 @@ def test_a_signed_review_is_final_only_with_finality_and_the_verdict_it_signed()
         deficiency_statuses=("CLOSED",),
     )
     assert _signed_conclusion(reviewed, "EFFECTIVE").status == "FINAL"
+
+
+def test_the_interim_opinion_is_held_while_the_d_and_i_or_interim_phase_is_undecided() -> None:
+    """FP-7 through the interim fallback (review note R3, 19 November 2026; decision D5,
+    product owner, 19 November 2026). The register falls back to the opinion on the period
+    tested so far while a roll-forward is owed; an undecided D&I or interim phase still
+    holds it, so the register never reads Effective while the panel waits for the
+    decision. Only the roll-forward's own undecided applicability is left out."""
+    # An undecided phase does not apply as the facts read it (facts_of: PENDING is not
+    # APPLICABLE); here the interim was signed off effective before it was set to PENDING.
+    interim_undecided = _facts(
+        phases={"INTERIM": (False, "SIGNED_OFF", "EFFECTIVE", False), "ROLLFORWARD": NOT_APPLIES},
+        undecided=("INTERIM",),
+    )
+    for facts in (interim_undecided, _facts(undecided=("DESIGN",))):
+        assert propose(facts)[0] is None
+        assert propose(interim_only(facts))[0] is None
+    # The roll-forward undecided: the interim opinion stands for the period tested so far.
+    rollforward = _facts(undecided=("ROLLFORWARD",))
+    assert propose(rollforward)[0] is None
+    assert propose(interim_only(rollforward))[0] == "EFFECTIVE"
+    # Through the register's verdict: a signed control with the interim undecided shows none.
+    signed = _final_facts(review_coverage={"sheet_version": 3, "workpapers": []})
+    held = interim_undecided
+    found = concluded(finality(signed), signed, propose(held)[0], propose(interim_only(held))[0])
+    assert found.status == "NOT_READY" and found.final is None and found.verdict is None
+    # The roll-forward undecided keeps the interim opinion on the register (D5 fallback).
+    found = concluded(
+        finality(signed), signed, propose(rollforward)[0], propose(interim_only(rollforward))[0]
+    )
+    assert found.verdict == "EFFECTIVE" and found.final is None
 
 
 def test_a_review_signed_before_verdicts_were_marked_rests_on_finality() -> None:
