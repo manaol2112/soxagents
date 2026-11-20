@@ -17,10 +17,11 @@ token (8 hours; synthetic users of this database only).
                          decided not relied on (D3: nothing is shown)
 - dni-rechecked          D&I Assessment: an Effective sign-off, then the request checked
                          again with the same result (D5: the sign-off is out of date)
+- dni-rechecked-reviewer  the same, as the reviewer who signed reads it
 - dni-completion-not-final  the engagement's status and close-out: its one control not
                          final (the sheet signed again after the review), with its reason
 - dni-completion-scope   the engagement's status and close-out: every control taken out of
-                         scope (C3: nothing in scope; the system has no control in scope)
+                         scope (C3: nothing in scope, so the card says only to archive it)
 """
 
 from typing import Any
@@ -121,6 +122,16 @@ def _rechecked(seed: Any) -> None:
         token=_owner_token(seed, case.bench.team),
         out_of_date=body["out_of_date"],
     )
+    # The same state as the reviewer who signed reads it: with no request standing, a
+    # reviewer who may sign signs again.
+    reviewer = case.reviewer.get(case.path).json()
+    seed.add(
+        "dni-rechecked-reviewer",
+        _draft_href(seed, case, "designassessment"),
+        token=_token(seed.url, case.reviewer_id),
+        can_sign=reviewer["can_sign"],
+        blocking=reviewer["blocking"],
+    )
 
 
 def _completion_not_final(seed: Any) -> None:
@@ -164,7 +175,9 @@ def _completion_scope(seed: Any) -> None:
         assert out.status_code == 200, out.text
     project = f"/organizations/{team['org']}/projects/{team['project']}"
     state = owner.get(f"{project}/completion").json()
-    assert [i["kind"] for i in state["open_items"] if i["kind"] == "SCOPE"] == ["SCOPE"] * 2
+    # Nothing in scope: one SCOPE item only, never a system to mark out of scope.
+    assert [i["kind"] for i in state["open_items"] if i["kind"] == "SCOPE"] == ["SCOPE"]
+    assert state["nothing_in_scope"] is True
     seed.add(
         "dni-completion-scope",
         seed.href(team, section="projects", manage="engagement"),
