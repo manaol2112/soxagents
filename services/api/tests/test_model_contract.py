@@ -178,8 +178,9 @@ ENTRY_POINTS: dict[str, Entry] = {
     )),
     "evidence_analysis:run_analysis": Entry(5, "Evidence reader", cells(
         (Checked(HERE), (B.EMPTY, B.UNKNOWN_IDS)),
-        (Checked(f"{T}test_evidence_analysis.py::test_a_rejected_model_answer_falls_back_to_"
-                 "the_rules"), (B.MALFORMED,)),
+        # A rejected answer falls back to the rules, which read headers alone as COVERED
+        # (evidence_classify._rules_items), so the cell is open until E3 readings fixes FO-23.
+        (Open("FO-23"), (B.MALFORMED,)),
         (Open("UC-3"), (B.INVENT_FIGURE,)), (Open("ST-6"), (B.PARTIAL,)),
         (NO_BOX, (B.BOX_ONLY,)), (LAYER_CUT, (B.CUT_OFF,)),
         (NotApplicable("the reader makes no comparison"), (B.OMIT_COMPARISONS,)),

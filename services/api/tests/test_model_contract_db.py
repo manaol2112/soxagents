@@ -3,11 +3,11 @@ services/api/tests/test_model_contract.py holds the registry). Each runs on its 
 
 Most stored cells are already held by a critical-tier test, which the registry names instead
 of a second copy here (test_evidence_corpus for the mapping's failed calls,
-test_evidence_analysis for the reader's rejected answer, test_agent_execution for the
-tester's provider error, test_evidence_plans and test_agent_answers for the planner,
-test_console for the console's unregistered and CONFIRM tools). The cells of the attribute
-agent, the drafts reviewer and the set reviewer are open (FO-4, FO-3, SOL-4) and land with
-SOL attributes.
+test_agent_execution for the tester's provider error, test_evidence_plans and
+test_agent_answers for the planner, test_console for the console's unregistered and CONFIRM
+tools). The cells of the attribute agent, the drafts reviewer and the set reviewer are open
+(FO-4, FO-3, SOL-4) and land with SOL attributes; the reader's rejected answer is open too
+(FO-23, E3 readings).
 """
 
 from typing import Any
