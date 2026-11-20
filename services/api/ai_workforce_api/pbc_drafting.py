@@ -412,6 +412,16 @@ def _kind_of(categories: tuple[str, ...]) -> str:
     return PRIMARY_KIND.get(categories[0], "other") if categories else "other"
 
 
+def _planned_title(item: PlannedItem) -> str:
+    """A planned item's title as the request names it: the plan's own, on one line without
+    a closing full stop, marked when the item is optional or conditional. The plan's own
+    wording uses it, and a model's draft must keep it (check_draft)."""
+    return " ".join(item.title.split()).rstrip(".") + {
+        "OPTIONAL": " (if available)",
+        "CONDITIONAL": " (if it applies)",
+    }.get(item.necessity, "")
+
+
 def planned_draft(context: DraftContext) -> DraftContent:
     """The request for one phase, item by item from its planned evidence."""
     from ai_workforce_api.evidence_planning import suite_wording
@@ -419,10 +429,7 @@ def planned_draft(context: DraftContext) -> DraftContent:
     items: list[DraftItem] = []
     for item in context.planned:
         # The plan's own wording, whole: a requirement's title and description fit.
-        title = " ".join(item.title.split()).rstrip(".") + {
-            "OPTIONAL": " (if available)",
-            "CONDITIONAL": " (if it applies)",
-        }.get(item.necessity, "")
+        title = _planned_title(item)
         kind = _kind_of(item.categories)
         wording = suite_wording(item.description)
         if wording is None:
@@ -752,12 +759,25 @@ TOO_MANY_ITEMS = "the plan has more items than one draft can hold"
 
 
 def _title_key(title: str) -> str:
-    """A title as the request and the portal compare it: case and spacing aside, without a
-    closing full stop or the "(if available)" an optional item carries (planned_draft)."""
+    """A planned title as two items of one plan are told apart: case and spacing aside,
+    without a closing full stop or the "(if available)" an optional item carries. Used only
+    to refuse a plan whose items share a title; a draft's titles are held to
+    _planned_title."""
     from ai_workforce_api.request_details import plain_title
 
     text = plain_title(" ".join(title.split()).rstrip("."))
     return " ".join(text.lower().split()).rstrip(".")
+
+
+def _portal_title(title: str) -> str:
+    """A title as the portal compares it (evidence_portal._item_requirement): case and runs
+    of spaces aside, and nothing else."""
+    return " ".join(title.lower().split())
+
+
+# Whitespace other than a plain space: a line break moves the rest of a title off the line
+# the portal reads it from (request_details.parse_wording).
+_NOT_A_SPACE = re.compile(r"[^\S ]")
 
 
 def _period_key(text: str) -> str:
@@ -827,10 +847,16 @@ def _check_paired(content: DraftContent, context: DraftContext) -> None:
             f"draft has {_plural(len(content.items), 'item')} for "
             f"{_plural(len(planned), 'planned item')}"
         )
-    for number, (item, plan, key) in enumerate(
-        zip(content.items, planned, keys, strict=True), start=1
-    ):
-        if _title_key(item.title) != key:
+    for number, (item, plan) in enumerate(zip(content.items, planned, strict=True), start=1):
+        # The title the plan's own wording gives the item, as the portal reads it: a closing
+        # full stop, a line break, or "(if available)" on a required item is another title
+        # (FO-28 review, 19 November 2026: they were read as the planned one before, and an
+        # upload against them was linked to no requirement).
+        if (
+            _NOT_A_SPACE.search(item.title)
+            or item.title.startswith(" ")
+            or _portal_title(item.title) != _portal_title(_planned_title(plan))
+        ):
             raise ValueError(f"draft item {number} is not planned item {number}")
         allowed = frozenset().union(
             *(CATEGORY_KINDS.get(category, frozenset()) for category in plan.categories)
@@ -847,6 +873,17 @@ def _check_paired(content: DraftContent, context: DraftContext) -> None:
                 _names(system, text) for text in asked
             ):
                 raise ValueError(f"draft item {number} leaves out its planned system")
+    # And as the request is read back: the portal files an upload by the item's number and
+    # the title on its line, so the rendered request must read as exactly the planned items,
+    # in order. Text elsewhere in the draft that reads as an item of its own (a summary or a
+    # period carrying "2. ...") would take a planned item's number.
+    from ai_workforce_api.request_details import parse_wording
+
+    read = parse_wording(render(content)).items
+    if [(entry.number, _portal_title(entry.title)) for entry in read] != [
+        (number, _portal_title(_planned_title(plan))) for number, plan in enumerate(planned, 1)
+    ]:
+        raise ValueError("draft does not read back as its planned items")
 
 
 _DETAIL_ENTRY = re.compile(r"^(?:\d{1,2}[.)]|[-•*])\s+(\S.*)$")
@@ -934,8 +971,16 @@ def draft_runner(settings: Settings, provider: ModelProvider | None = None) -> D
 # made inert (prompt_data.neutral); the wording is as /2.
 PROMPT_VERSION = "evidence-coordinator/3"
 
-# What a draft that was not written says (pbc_drafts.note), and why it was not.
+# What a draft that was not written says (pbc_drafts.note), and why it was not; for the
+# requests whose wording no draft replaces, also what a Redraft answers (409).
+SAMPLE_REQUEST = "A sample request lists the selected samples; its wording stays."
+SAMPLE_REDRAFT = (
+    "A sample request lists the selected samples, so it is not redrafted. Edit its wording instead."
+)
 UNPHASED = "The request carries planned evidence without a testing phase; its wording stays."
+UNPHASED_REDRAFT = (
+    "request carries planned evidence without a testing phase and cannot be redrafted"
+)
 TOO_MANY = (
     "The plan has more items than one drafted request can hold; the request keeps its "
     "current wording."
@@ -946,22 +991,41 @@ PROMPT_TOO_SHORT = (
 )
 
 
-def _unphased(connection: psycopg.Connection[Any] | psycopg.Cursor[Any], request_id: UUID) -> bool:
-    """Whether a request carries REQUESTED requirements but no testing phase: a sample
-    request (control_tests._draft_sample_request), whose wording names the selected samples.
-    A draft reads it as a request from before planning and would ask for a population
-    instead, so it is never drafted. A plain read: no lock is taken on the requirements."""
+def _kept_wording(
+    connection: psycopg.Connection[Any] | psycopg.Cursor[Any], request_id: UUID
+) -> tuple[str, str] | None:
+    """Why a request's wording is never drafted, as (the draft's note, a Redraft's answer),
+    or None when it may be.
+
+    A sample request (control_tests._draft_sample_request) lists the samples the audit team
+    selected, which no draft holds. It is known by its own link (control_tests.
+    sample_request_id, or the operation key that request is made under), not by its state:
+    approving the samples gives it its phase and links the sample requirements in the same
+    transaction (evidence_plans.on_samples_approved), so a draft of it would replace the
+    list with the plan's items, and a retest or remediation round's, which carries none,
+    with a population (FO-28 review, 19 November 2026). Fail closed besides: a request
+    carrying REQUESTED requirements without a testing phase is read as one from before
+    planning, so it is not drafted either. Plain reads: no lock is taken."""
     row = connection.execute(
         """
-        SELECT r.testing_phase IS NULL AND EXISTS (
-            SELECT 1 FROM evidence_requirements e
-            WHERE e.pbc_request_id = r.id AND e.status = 'REQUESTED'
-        )
+        SELECT r.operation_key LIKE 'samples-%%' OR EXISTS (
+                   SELECT 1 FROM control_tests t WHERE t.sample_request_id = r.id
+               ),
+               r.testing_phase IS NULL AND EXISTS (
+                   SELECT 1 FROM evidence_requirements e
+                   WHERE e.pbc_request_id = r.id AND e.status = 'REQUESTED'
+               )
         FROM pbc_requests r WHERE r.id = %s
         """,
         (request_id,),
     ).fetchone()
-    return row is not None and bool(row[0])
+    if row is None:
+        return None
+    if row[0]:
+        return SAMPLE_REQUEST, SAMPLE_REDRAFT
+    if row[1]:
+        return UNPHASED, UNPHASED_REDRAFT
+    return None
 
 
 def _held(connection: psycopg.Connection[Any], draft_id: UUID, note: str) -> str:
@@ -1018,9 +1082,10 @@ def run_draft(
         return "SKIPPED"
     organization_id, project_id, request_id, control_id, requester = claimed
     started_wording = None if started is None else str(started[0])
-    if _unphased(connection, request_id):
+    held = _kept_wording(connection, request_id)
+    if held is not None:
         # A sample request: its wording names the selected samples, which no draft holds.
-        return _held(connection, draft_id, UNPHASED)
+        return _held(connection, draft_id, held[0])
     context = with_understanding(
         connection,
         with_plan(connection, load_context(connection, project_id, control_id), request_id),
@@ -2264,12 +2329,11 @@ def _redraft(
             raise DraftState("request is no longer a draft")
         if found[1] is None:
             raise DraftState("request has no control to draft from")
-        if _unphased(cursor, request_id):
-            # A sample request: a redraft would replace its selected samples with a
-            # population (FO-28).
-            raise DraftState(
-                "request carries planned evidence without a testing phase and cannot be redrafted"
-            )
+        held = _kept_wording(cursor, request_id)
+        if held is not None:
+            # A sample request: a redraft would replace the list of its selected samples
+            # with the plan's items, or with a population (FO-28).
+            raise DraftState(held[1])
         row = cursor.execute(
             f"""
             INSERT INTO pbc_drafts (
