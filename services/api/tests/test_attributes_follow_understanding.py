@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from hostile_model import cooperative, no_answer, unscripted
 from support import (
     Database,
     approve_control_plan,
@@ -213,8 +214,16 @@ class _Agents:
         # comes before the attributes. Its answer, from what it was given (by default every
         # attribute established, nothing asked), and what it was given. Its calls are kept
         # apart from `calls`, which name the run's attribute agents in their order.
-        self.specialist: Any = understanding_review.established
+        # A known cooperative default (docs/audit-invariants.md, harness table): 54 of the
+        # constructions rely on it; SOL attributes owns making it explicit per test.
+        self.specialist: Any = cooperative(understanding_review.established)
         self.specialist_given: list[dict[str, Any]] = []
+        # Any other agent (these runs reach only the question review's interview writer,
+        # question_review._ask_agent): its answer from the request, named by the test that
+        # reaches it (hostile_model.no_answer for its failure path). Unnamed, the call is
+        # unscripted and fails the test (audit-invariants increment, 19 November 2026; before,
+        # every such call got {} silently, a MALFORMED answer no test had chosen).
+        self.other: Any = None
 
     def _note(self, who: str) -> None:
         self.calls.append(who)
@@ -255,7 +264,9 @@ class _Agents:
             self.reviewed.append(given)
             return ModelRaw(self.review(given), (), 100, 100)
         self.calls.append("other")
-        return ModelRaw({}, (), 10, 10)
+        if self.other is None:
+            raise unscripted(f"_Agents: no answer for the system prompt {request.system[:60]!r}")
+        return ModelRaw(self.other(request), (), 10, 10)
 
 
 def _ready(
@@ -1836,6 +1847,7 @@ def test_accepting_the_attributes_closes_the_questions_still_open(migrated: Data
         return answer
 
     agents.specialist = asking
+    agents.other = no_answer  # the interview writer's failure path: questions kept
     with connect(migrated.url) as connection:
         assert run_plan_through(connection, agents, plan_id) == "DONE"
     # Asked while the attributes wait on a person.

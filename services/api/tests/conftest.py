@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import psycopg
 import pytest
+from hostile_model import take_unscripted
 from psycopg import sql
 from support import Database
 from temporalio.testing import WorkflowEnvironment
@@ -102,6 +103,18 @@ def workflow_address_unset(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     evidence_assurance._process_settings.cache_clear()
     yield
     evidence_assurance._process_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def nothing_unscripted_was_asked() -> Iterator[None]:
+    """A fake asked something it was not scripted for fails the test (hostile_model.py;
+    audit-invariants increment, 19 November 2026). The fake also raises, but the model layer
+    turns any exception a provider raises into a failed call (models._attempt), so a product
+    that fails closed would let the test pass without anyone having decided the answer."""
+    take_unscripted()
+    yield
+    asked = take_unscripted()
+    assert asked == [], f"a scripted model was asked what it was not scripted for: {asked}"
 
 
 def _fresh_database(

@@ -28,6 +28,7 @@ from typing import Any
 from uuid import UUID
 
 import pytest
+from hostile_model import cooperative, unscripted
 from support import Database, approve_control_plan, run_plan_through
 from test_attributes_follow_understanding import (
     ADDED,
@@ -396,12 +397,15 @@ class _Script:
             # before the attributes; here it finds every attribute established, so the run
             # goes on to the agents these tests are about, whose calls are listed alone.
             given = understanding_review.inputs_of(request.prompt)
-            return ModelRaw(understanding_review.established(given), (), 100, 100)
+            return ModelRaw(cooperative(understanding_review.established)(given), (), 100, 100)
         who = self.WHO.get(request.system, "other")
         self.calls.append(who)
         self.prompts.setdefault(who, []).append(request.prompt)
         if who == "other":
-            return ModelRaw({}, (), 10, 10)
+            # An agent this script does not name is unscripted and fails the test
+            # (audit-invariants increment, 19 November 2026; before: {} silently). None of
+            # this file's runs reaches one.
+            raise unscripted(f"_Script: no answer for the system prompt {request.system[:60]!r}")
         queue = self.answers.get(who)
         if queue:
             answer = queue[min(len(self.prompts[who]), len(queue)) - 1]
