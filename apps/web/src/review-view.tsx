@@ -2,6 +2,8 @@ import { AutoRefresh } from "./auto-refresh";
 import { type Automation, executionOf } from "./execution-model";
 import { formatDate } from "./format";
 import {
+  ATTESTATION_MIN,
+  attestationWords,
   type ControlReview,
   NOTE_STATUS_LABEL,
   type NoteSeverity,
@@ -534,10 +536,31 @@ export function ReviewTab({
                 className="review-signoff"
               >
                 <Hidden ids={ids} review={review} intent="sign-off" />
+                {review.attestationNeeded === true ? (
+                  <label className="form-hint">
+                    <input
+                      type="checkbox"
+                      name="reperformed_by_hand"
+                      required
+                    />{" "}
+                    {attestationWords(review.reperformance)} I re-performed the
+                    testing by hand, and the note says what.
+                  </label>
+                ) : null}
                 <input
                   name="text"
                   maxLength={1000}
-                  placeholder="Sign-off note (optional)"
+                  required={review.attestationNeeded === true}
+                  minLength={
+                    review.attestationNeeded === true
+                      ? ATTESTATION_MIN
+                      : undefined
+                  }
+                  placeholder={
+                    review.attestationNeeded === true
+                      ? "What you re-performed by hand"
+                      : "Sign-off note (optional)"
+                  }
                 />
                 <button
                   type="submit"

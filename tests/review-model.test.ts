@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  attestationWords,
   type ControlReview,
   openNotes,
   parseReviewNotice,
@@ -324,5 +325,62 @@ describe("a reviewer's coverage assessment (W3 follow-up)", () => {
     });
     assert.equal(reviewNoticeFor("coverage", 200), "review-covered");
     assert.equal(reviewNoticeFor("coverage", 409), "review-blocked");
+  });
+});
+
+describe("a sign-off over a re-performance by hand (FO-1, 19 November 2026)", () => {
+  const ids = {
+    organization_id: org,
+    project_id: project,
+    review_id: review,
+    version: "3",
+    intent: "sign-off",
+  };
+
+  it("posts the reviewer's record with a note that says what, and reads the typed record", () => {
+    const attested = reviewWrite({
+      ...ids,
+      text: "Re-performed T-0 to T-2 by hand.",
+      reperformed_by_hand: "on",
+    });
+    assert.ok(!("error" in attested));
+    assert.deepEqual(attested.body, {
+      version: 3,
+      note: "Re-performed T-0 to T-2 by hand.",
+      reperformed_by_hand: true,
+    });
+    // A note shorter than the server's minimum is refused before it posts.
+    assert.deepEqual(
+      reviewWrite({ ...ids, text: "Done.", reperformed_by_hand: "on" }),
+      { error: "invalid" },
+    );
+    const parsed = parseReviews([
+      {
+        id: review,
+        control_id: control,
+        control_ref: "ITGC-AC-01",
+        status: "OPEN",
+        reperformance: { known: true, source: "MODEL", due: 3, done: 1 },
+        attestation_needed: true,
+      },
+    ])?.[0];
+    assert.deepEqual(parsed?.reperformance, {
+      known: true,
+      source: "MODEL",
+      due: 3,
+      done: 1,
+      capped: false,
+      dropped: 0,
+      failed: false,
+    });
+    assert.equal(parsed?.attestationNeeded, true);
+    assert.equal(
+      attestationWords(parsed?.reperformance),
+      "The reviewer agent re-performed 1 of 3 items.",
+    );
+    assert.equal(
+      attestationWords(null),
+      "The reviewer agent's re-performance has no record of the items it re-performed.",
+    );
   });
 });

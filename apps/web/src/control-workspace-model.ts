@@ -25,6 +25,7 @@ import type { EvidencePlan, Phase, PlanPhase } from "./evidence-plan-model.ts";
 import type { Automation } from "./execution-model.ts";
 import {
   type ControlReview,
+  reperformedWords,
   runFailureLine as reperformFailureLine,
 } from "./review-model.ts";
 import type { TestRound } from "./round-model.ts";
@@ -1469,9 +1470,13 @@ export function agentLanes(input: WorkspaceInput): AgentLane[] {
       review === null || review.reperformedAt === null
         ? ""
         : join([
-            differences === 0
-              ? "Re-performed the testing: no differences from the preparer's results"
-              : `Re-performed the testing: ${plural(differences, "difference")} from the preparer's results`,
+            // From the run's typed record (FO-26): "no differences" only over a full
+            // re-performance by the model, never over a run that re-performed nothing.
+            reperformedWords(
+              review.reperformance,
+              review.reperformSource,
+              differences,
+            ),
             count("PROPOSED") > 0
               ? `${plural(count("PROPOSED"), "note")} proposed`
               : "",

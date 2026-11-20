@@ -9,10 +9,6 @@ import {
   type RunState,
 } from "./run-state.ts";
 
-// The server's note on a re-performance that gave up (control_reviews.REPERFORM_FAILED),
-// read where it sends no failure sentence of its own.
-const REPERFORM_GAVE_UP = /\bdid not finish\b/i;
-
 /** The review's one sentence when the agent's re-performance ended without a usable
  * answer, or null while it works or when it finished: why (the server's failure sentence,
  * else its note), that the testing stands as the preparer left it, and "Re-perform", the
@@ -20,7 +16,11 @@ const REPERFORM_GAVE_UP = /\bdid not finish\b/i;
 export function runFailureLine(
   review: Pick<
     ControlReview,
-    "reperforming" | "reperformState" | "reperformNote" | "failureNote"
+    | "reperforming"
+    | "reperformState"
+    | "reperformNote"
+    | "failureNote"
+    | "reperformance"
   >,
   failureNote: string = review.failureNote ?? "",
 ): string | null {
@@ -31,7 +31,9 @@ export function runFailureLine(
   if (said !== "") {
     return said;
   }
-  if (!REPERFORM_GAVE_UP.test(review.reperformNote)) {
+  // The typed record says a re-performance gave up (control_reviews.fail_reperformance,
+  // FO-1, 19 November 2026); before, the note's wording was matched.
+  if (review.reperformance?.failed !== true) {
     return null;
   }
   return (
@@ -92,6 +94,87 @@ export type ReviewNote = {
   version: number;
 };
 
+/** The reviewer agent's last re-performance as its run recorded it (FO-1, UH-9): the
+ * items due on the sheet it read, those it re-performed, whether it stopped at its cap,
+ * notes past the note limit, and whether a later attempt gave up. `known` is false for a
+ * review re-performed before the record was kept. */
+export type Reperformance = {
+  known: boolean;
+  source: string | null;
+  due: number;
+  done: number;
+  capped: boolean;
+  dropped: number;
+  failed: boolean;
+};
+
+export function parseReperformance(value: unknown): Reperformance | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const count = (entry: unknown) =>
+    typeof entry === "number" && Number.isInteger(entry) && entry >= 0
+      ? entry
+      : 0;
+  return {
+    known: value.known === true,
+    source: typeof value.source === "string" ? value.source : null,
+    due: count(value.due),
+    done: count(value.done),
+    capped: value.capped === true,
+    dropped: count(value.dropped),
+    failed: value.failed === true,
+  };
+}
+
+/** What the reviewer agent's re-performance did, said once from its typed record
+ * (FO-26, 19 November 2026): nothing, part of the items, or all of them with or without
+ * differences. Before, "no differences" was said whenever a re-performance had run, also
+ * when the model re-performed nothing. */
+export function reperformedWords(
+  record: Reperformance | null | undefined,
+  source: ControlReview["reperformSource"],
+  differences: number,
+): string {
+  const found =
+    differences === 0
+      ? "no differences from the preparer's results"
+      : `${differences} difference${differences === 1 ? "" : "s"} from the preparer's results`;
+  if (source === "SEEDED") {
+    return `Re-performed the testing: ${found}`;
+  }
+  if (record === null || record === undefined || !record.known) {
+    return "The reviewer agent's re-performance has no record of the items it re-performed";
+  }
+  if (record.due === 0) {
+    return "No tested item with evidence to re-perform";
+  }
+  if (record.done === 0) {
+    return "The reviewer agent did not re-perform the testing";
+  }
+  if (record.done < record.due) {
+    return `Re-performed ${record.done} of ${record.due} items: ${found}`;
+  }
+  return `Re-performed the testing: ${found}`;
+}
+
+/** Why a sign-off needs the reviewer's record of a re-performance by hand, said from
+ * the run's typed record (FO-1). */
+export function attestationWords(
+  record: Reperformance | null | undefined,
+): string {
+  if (record === null || record === undefined || !record.known) {
+    return "The reviewer agent's re-performance has no record of the items it re-performed.";
+  }
+  if (record.done === 0) {
+    return "The reviewer agent did not re-perform the testing.";
+  }
+  return `The reviewer agent re-performed ${record.done} of ${record.due} items.`;
+}
+
+/** The shortest sign-off note over a re-performance by hand (control_reviews.MIN_ATTESTATION). */
+export const ATTESTATION_MIN = 10;
+
 export type ControlReview = {
   id: string;
   controlId: string;
@@ -114,6 +197,10 @@ export type ControlReview = {
   /** The server's failure sentence for a re-performance that ended without a usable
    * answer (run-failure.ts); absent otherwise. */
   failureNote?: string;
+  /** The last re-performance's typed record, or null when the server sent none. */
+  reperformance?: Reperformance | null;
+  /** Signing needs the reviewer's record of a re-performance by hand (FO-1). */
+  attestationNeeded?: boolean;
   cancelState?: CancelState;
   sheetStatus: string | null;
   sheetSignedBy: string | null;
@@ -267,6 +354,8 @@ export function parseReviews(value: unknown): ControlReview[] | null {
       ...(failureNoteOf(item) !== ""
         ? { failureNote: failureNoteOf(item) }
         : {}),
+      reperformance: parseReperformance(item.reperformance),
+      attestationNeeded: item.attestation_needed === true,
       cancelState: parseCancelState(item.cancel_state),
       sheetStatus: maybe(item.sheet_status),
       sheetSignedBy: maybe(item.sheet_signed_by),
@@ -548,10 +637,18 @@ export function reviewWrite(fields: Record<string, string>): ReviewWrite {
     if (!plain(text, 1000)) {
       return { error: "invalid" };
     }
+    // A sign-off over a re-performance by hand says what was re-performed (FO-1): at
+    // least ATTESTATION_MIN characters, as the server's sign-off checks.
+    const byHand = fields.reperformed_by_hand === "on";
+    if (byHand && text.length < ATTESTATION_MIN) {
+      return { error: "invalid" };
+    }
     return {
       intent,
       path: `${base}/sign-off`,
-      body: { version, note: text },
+      body: byHand
+        ? { version, note: text, reperformed_by_hand: true }
+        : { version, note: text },
       controlId,
     };
   }
