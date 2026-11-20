@@ -36,7 +36,9 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from ai_workforce_api.authorization import Action, Principal, _call, _session_principal
+from ai_workforce_api.control_conclusions import undecided_clause
 from ai_workforce_api.control_instances import control_label, operating_units
+from ai_workforce_api.control_journey import NotFinal, leading_reason
 from ai_workforce_api.settings import Settings
 
 Bucket = Literal["MINE", "WAITING", "BLOCKED", "UPCOMING"]
@@ -268,12 +270,6 @@ _STEP_TO_KIND: tuple[tuple[str, str], ...] = (
     ("Chase the overdue", "reminder"),
     ("Prepare the workpapers", "draft-stopped"),
 )
-# Finality reasons that are a coverage assessment (control_journey.coverage_gaps).
-_COVERAGE_TEXTS = (
-    "since the review covered it",
-    "since its review covered it",
-    "did not record the testing version",
-)
 
 # The obligation a control's next step represents, by its wording (workspace.step_of,
 # control_reviews.REVIEW_STEPS, control_journey.finality).
@@ -330,9 +326,33 @@ _OBLIGATION_KINDS: dict[str, str] = {
 }
 
 
-def _step_obligation(text: str) -> str:
-    if any(mark in text for mark in _COVERAGE_TEXTS):
+def _undecided(reason: NotFinal) -> bool:
+    """A phase the plan leaves PENDING (FP-7): the plan's reasons that name a phase."""
+    return reason.kind == "PLAN" and reason.phase is not None
+
+
+def _reason_obligation(reason: NotFinal) -> str | None:
+    """The obligation of a finality reason that is the control's step, from its typed
+    fields (control_journey.NotFinal), never its wording: a gap in the signed review's
+    coverage is assessed by a reviewer; a D&I sign-off that lapsed or was never made is
+    signed off again at the review (ST-2); an undecided phase is decided in the plan
+    (FP-7). Before (E3 design review, 19 November 2026), these were read from the
+    prose, so rewording a reason moved its item."""
+    if reason.coverage:
         return "COVERAGE_ASSESSMENT"
+    if reason.kind == "DESIGN" and reason.step == "REVIEW":
+        return "CONTROL_REVIEW"
+    if _undecided(reason):
+        return "EVIDENCE_PLAN"
+    return None
+
+
+def _step_obligation(text: str, reason: NotFinal | None = None) -> str:
+    """The obligation a control's next step represents: a finality reason's from its
+    typed fields when the step is that reason, else the step's wording."""
+    typed = None if reason is None or reason.text != text else _reason_obligation(reason)
+    if typed is not None:
+        return typed
     for mark, code in _STEP_OBLIGATIONS:
         if text.startswith(mark) or (mark[0].islower() and mark in text):
             return code
@@ -451,9 +471,11 @@ def queue(
             (kind for prefix, kind in _STEP_TO_KIND if control.next_step.startswith(prefix)),
             None,
         )
-        if same is None and any(mark in control.next_step for mark in _COVERAGE_TEXTS):
+        # The finality reason the step is, when it is one (workspace.step_of).
+        lead = leading_reason(control.not_final) if control.not_final else None
+        obligation = _step_obligation(control.next_step, lead)
+        if same is None and obligation == "COVERAGE_ASSESSMENT":
             same = "coverage"
-        obligation = _step_obligation(control.next_step)
         if same is None:
             # The step's obligation class names a record kind (an impact assessment
             # pending, a stale basis, a stopped run): the record's item stands.
@@ -536,7 +558,12 @@ def _finality(control: Any, step: str, specific: dict[tuple[UUID, str], bool]) -
         return []
     if any(key[0] == control.id for key in specific):
         return []
-    text = journey.not_final_because[0]
+    first = control.not_final[0]
+    text = first.text
+    # A phase left undecided (FP-7) is a decision due now, the preparer's in the test plan,
+    # not work that waits for its time: said as the action (E3 design review, 19 November
+    # 2026), read from the reason's typed fields.
+    undecided = _undecided(first)
     return [
         QueueItem(
             id=f"finality:{control.id}",
@@ -547,13 +574,17 @@ def _finality(control: Any, step: str, specific: dict[tuple[UUID, str], bool]) -
             control_id=control.id,
             control_ref=control.control_ref,
             phase=journey.step_phase,
-            title=text,
-            reason="Keeps the conclusion open; no action is due on it today.",
-            owner=QueueOwner(role="NONE"),
-            authorized=False,
-            ready=False,
-            blockers=[text],
-            bucket="UPCOMING",
+            title=f"Decide whether {undecided_clause((str(first.phase),))}" if undecided else text,
+            reason="Keeps the conclusion open; decide in the test plan whether the phase applies."
+            if undecided
+            else "Keeps the conclusion open; no action is due on it today.",
+            owner=QueueOwner(role="PREPARER", names=list(control.assignees))
+            if undecided
+            else QueueOwner(role="NONE"),
+            authorized=undecided and bool(control.yours),
+            ready=undecided,
+            blockers=[] if undecided else [text],
+            bucket=_bucket(bool(control.yours), True, "PREPARER") if undecided else "UPCOMING",
             link=_control_link(control.id, step),
         )
     ]
@@ -852,7 +883,7 @@ def _coverage(
         if control.journey is None or control.final:
             continue
         for reason in control.not_final:
-            if reason.kind == "REVIEW" and any(mark in reason.text for mark in _COVERAGE_TEXTS):
+            if reason.coverage:
                 gaps.setdefault(control.id, []).append(reason)
     if not gaps:
         return []

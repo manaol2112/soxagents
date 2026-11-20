@@ -8,6 +8,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
+from hostile_model import Repeat, Replay
 from PIL import Image, ImageDraw
 
 from ai_workforce_api.evidence_classify import (
@@ -25,7 +26,7 @@ from ai_workforce_api.evidence_ocr import (
     TesseractOcr,
     engines_for,
 )
-from ai_workforce_api.models import ModelConfig, ModelRaw, ModelRequest
+from ai_workforce_api.models import ModelRaw, ModelRequest
 from ai_workforce_api.settings import Settings
 
 # Files
@@ -476,16 +477,13 @@ def test_the_period_comes_from_dates_written_in_the_file() -> None:
 # Helpers
 
 
-class _Provider:
-    def __init__(self, outputs: list[dict[str, Any]]) -> None:
-        self.outputs = outputs
-        self.requests: list[ModelRequest] = []
+class _Provider(Replay):
+    """The shared replay fake (hostile_model.Replay), with this file's token counts. It
+    answers its last output again after the script ends, as this file's copy did: stated here
+    (then=Repeat()), not assumed; an empty script still raises IndexError."""
 
-    def complete(self, request: ModelRequest, config: ModelConfig) -> ModelRaw:
-        del config
-        self.requests.append(request)
-        output = self.outputs[min(len(self.requests), len(self.outputs)) - 1]
-        return ModelRaw(output, (), 900, 300)
+    def __init__(self, outputs: list[dict[str, Any]]) -> None:
+        super().__init__(outputs, then=Repeat(), tokens=(900, 300))
 
 
 def _recorder(calls: list[str]) -> Any:

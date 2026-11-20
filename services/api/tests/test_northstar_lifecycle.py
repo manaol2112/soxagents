@@ -762,8 +762,13 @@ def test_the_dashboard_figures_derive_from_the_records(demo: dict[str, Any]) -> 
         "WHERE r.project_id = %s AND r.status = 'SIGNED_OFF' AND r.test_round_id IS NULL AND t.conclusion = 'EFFECTIVE'",
         project_id,
     )[0][0]
-    # Effective counts the remediated controls too, once their retests are reviewed.
-    assert effective_signed <= controls["effective"] <= signed_reviews
+    # Rewritten 19 November 2026 (ST-2, product owner). Old: effective counted every
+    # control whose review was signed with no deficiency standing, at least the signed
+    # effective sheets, beside a smaller "concluded". New: effective counts the final
+    # effective conclusions, so it is always within the concluded (one screen, one story);
+    # the reviewed but not final ones are told apart by their stage.
+    assert controls["effective"] <= controls["concluded"] <= signed_reviews
+    assert effective_signed >= controls["effective"]
     assert (
         controls["exceptions"]
         == _rows(

@@ -78,9 +78,11 @@ function actionOf(
   // The review waits on a person's choice (held or failed): the card's one action is the
   // step need's own, Run again or proceed, opening that choice (re-shoot r9, 19 November
   // 2026: the card offered "Start: Control Understanding").
+  // So does a signed review a typed reason holds, where the viewer is its reviewer: Reopen
+  // the review, or Record coverage, opening that form (design review, 19 November 2026).
   const choice =
-    step.key === "understanding" &&
-    step.note !== undefined &&
+    ((step.key === "understanding" && step.note !== undefined) ||
+      (step.key === "review" && step.hold !== undefined)) &&
     need.action !== undefined;
   // An agent is at work on the step, or the step only waits on one (a settled D&I
   // requests list the server releases itself): nothing is asked of the person.

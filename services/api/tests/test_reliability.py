@@ -302,7 +302,17 @@ def test_a_failed_reviewer_call_raises_no_finding_and_says_the_rules_stood_in(
 # --- E. Reproducibility ----------------------------------------------------------------
 
 REQUIRED_CONFIG = ("model", "tier", "config_ref", "output_schema_sha256", "timeout_seconds")
-REQUIRED_INPUTS = ("plan_revision", "attributes_sha256", "sample", "population", "files")
+# criteria_sha256 and attribute_basis: the owned criteria and the attributes each call was
+# tested against (ST-1, 19 November 2026), so a superseded basis is found from the record.
+REQUIRED_INPUTS = (
+    "plan_revision",
+    "attributes_sha256",
+    "criteria_sha256",
+    "attribute_basis",
+    "sample",
+    "population",
+    "files",
+)
 
 
 def record_gaps(record: dict[str, Any], stored: list[dict[str, Any]] | None = None) -> list[str]:

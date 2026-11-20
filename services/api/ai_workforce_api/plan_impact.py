@@ -427,7 +427,21 @@ def decide(
     if not _is_reviewer(connection, project_id, principal.id):
         raise ImpactState("only the engagement's reviewer decides an impact assessment")
     rationale = clean_text(body.rationale, 2000).text
+    from ai_workforce_api.testing_engine import lock_plan
+
     with transaction(connection) as cursor:
+        # The plan before the assessment (the lock order: plan approval holds the plan and
+        # then supersedes the assessments it made stale, and brings the open sheets in
+        # step, ST-1). Before, the assessment was locked first, so a decision beside a
+        # re-approval could deadlock.
+        owner = cursor.execute(
+            "SELECT engagement_control_id FROM plan_impact_assessments "
+            "WHERE id = %s AND project_id = %s",
+            (assessment_id, project_id),
+        ).fetchone()
+        if owner is None:
+            raise NotVisible()
+        lock_plan(cursor, UUID(str(owner[0])))
         row = cursor.execute(
             """
             SELECT a.status, a.version, a.test_sheet_id, a.engagement_control_id,
@@ -463,6 +477,7 @@ def decide(
             {"decision": body.decision, "to_revision": to_revision, "sheet": str(sheet_id)},
         )  # fmt: skip
         if body.decision == "REPERFORM":
+            # The plan is held (above) before the sheet.
             sheet = cursor.execute(
                 """
                 SELECT id, status, version, engagement_control_id, method, attributes,
