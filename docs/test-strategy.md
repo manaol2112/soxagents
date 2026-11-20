@@ -23,10 +23,10 @@ defect. Targeted tests, the fail-without-fix proof and independent review found 
 |---|---|---|---|
 | G0 | Every change, every step | ruff, mypy, tsc and biome on the changed files; the tests selected for them | `make check-changed` |
 | G1 | A change is ready for review | G0; the safeguard tests of the touched area; for each **new** safeguard test only, proof that it fails without its fix; `test_migrations` and `test_schema` when a migration changed | `make test-files`, `make prove` |
-| G2 | High-risk changes only | One independent code review, given the diff and the G1 summary | An agent or a person |
+| G2 | High-risk changes only | One independent code review, given the diff and the G1 summary; and, before any code, the design note's answers to the "what happens later" challenge | An agent or a person |
 | G3 | A change to what a person sees | The committed browser checks; snapshots of the changed states; one design review of the changed states | Browser checks and the `ui-reviewer` agent, once |
 | G4 | Every push and pull request | Lint, types, the critical tier in four parallel parts, the fast tier's files not in it, every Node test, the web build, the secret scan and the dependency audit | GitHub Actions; required checks `baseline`, `secrets`, `dependencies` |
-| G5 | A milestone | G4 and `make test-full` on CI; coverage of the audit-critical modules and mutation testing are planned, not yet approved | CI, on demand |
+| G5 | A milestone | G4 and `make test-full` on CI; coverage of the audit-critical modules and mutation testing are planned, not yet approved; and one independent adversarial audit of the milestone against `docs/audit-invariants.md`, by an agent or person that built none of it | CI, on demand |
 | G6 | A release | G5, a Windows CI job (planned), a migration rehearsal on a copy of the schema, a security review | CI, one review, the owner's approval |
 
 A gate's commands run through `scripts/run_tests.py`, so no agent supervises a test run: one
@@ -89,6 +89,13 @@ evidence reliance, migrations and stored data, the background workers, model pro
 tools, outbound email (and the rest of AGENTS.md's High class). One code reviewer, given the
 diff and the G1 summary; it is never asked to rerun what G1 recorded. These reviews found a
 blocking defect every time in November 2026 and are not reduced.
+
+Before a High-risk change is coded, someone other than its author challenges the design
+note with "what happens later": what if a basis it relies on changes after sign-off, while
+a run is in progress, or when a file is withdrawn, replaced or read again, an attribute or
+criterion is reworded, the plan is revised, or a phase is decided later? Each answer names
+the invariant in `docs/audit-invariants.md` and the test that holds it, or the increment
+that will (owner, 19 November 2026).
 
 ### G3: a visible change
 
@@ -453,8 +460,9 @@ Every milestone report states:
 
 1. The tests executed, with the commands actually run and their results.
 2. The tests intentionally not executed, and why.
-3. The risk-based justification for the selected coverage: what changed, which invariants
-   it could affect, and which tests cover them.
+3. The risk-based justification for the selected coverage: what changed, which audit
+   invariants (`docs/audit-invariants.md`, by id) it could affect, and which tests cover
+   them.
 4. Any outstanding failures or regression risks.
 5. The date and commit of the most recent successful full-suite execution, and whether it
    still applies to the code being closed.
@@ -478,6 +486,11 @@ Closure checklist (a milestone: the gates of §1 its changes passed, and G5):
       covers them or why G5 ran.
 - [ ] Every rewritten expectation recorded with the old one, the new one and the
       justification (§3); any test missed by the routine sets added to them (§6).
+- [ ] The "what happens later" challenge answered in the design note of every High-risk
+      change, each answer naming an invariant and its test.
+- [ ] G5: the milestone's independent adversarial audit run against
+      `docs/audit-invariants.md`; each finding that survives verification fixed, or added to
+      that file's open table with an increment.
 - [ ] The diff reviewed for unrelated changes, secrets, unsafe defaults and data exposure.
 - [ ] The report's five items above.
 

@@ -19,6 +19,7 @@ from uuid import UUID
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
+from hostile_model import no_answer
 from support import Database, run_plan_through
 from test_attributes_follow_understanding import (
     _GRANT_RECORD,
@@ -268,6 +269,7 @@ def test_the_question_pass_asks_in_one_go_and_the_understanding_then_stays_compl
     agents = _Agents(migrated, team, control)
     agents.issues = [_GRANT_RECORD]
     agents.specialist = lambda given: _asking(given, _GRANT_RECORD["topic"])
+    agents.other = no_answer  # the interview writer's failure path: questions kept
     with connect(migrated.url) as connection:
         assert run_plan_through(connection, agents, plan_id) == "DONE"
     assert [who for who in agents.calls if who != "other"] == []
@@ -712,6 +714,7 @@ def test_a_matter_is_asked_once_superseded_closed_by_acceptance_or_reworded(
                 "AGENT",
             ) == 1  # fmt: skip
     asking = _Agents(migrated, team, control)
+    asking.other = no_answer  # the interview writer's failure path: questions kept
     asking.issues = [{**_GRANT_RECORD}]
     with connect(migrated.url) as connection:
         generate_reviewed(connection, asking, org, project, UUID(control), team["owner_id"])
@@ -719,6 +722,7 @@ def test_a_matter_is_asked_once_superseded_closed_by_acceptance_or_reworded(
     [kept] = [row for row in _open_issues(migrated, control) if row[1] == _GRANT_RECORD["topic"]]
     assert _GRANT_RECORD["topic"] not in {row[0] for row in _assumptions(migrated, control)}
     silent = _Agents(migrated, team, control)
+    silent.other = no_answer  # the interview writer's failure path: questions kept
     with connect(migrated.url) as connection:
         generate_reviewed(connection, silent, org, project, UUID(control), team["owner_id"])
         connection.commit()
