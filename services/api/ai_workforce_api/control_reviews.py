@@ -295,8 +295,32 @@ def open_reperformances(connection: psycopg.Connection[Any]) -> list[UUID]:
 
 # What a re-performance that gave up says; the register reads it as a stopped agent.
 REPERFORM_FAILED = "The re-performance did not finish. Re-perform to try again."
-# How a re-performance the model did only in part says so, after "<failed> of <total>".
-PARTLY_REPERFORMED = "items could not be re-performed by the model."
+# The most item labels a partial re-performance's note names before "and N more".
+NAMED_ITEMS = 3
+
+
+def partly_reperformed(done: int, failed: Sequence[str]) -> str:
+    """How a re-performance the reviewer agent did only in part says so, for a person
+    (design review, 20 November 2026): how many of the items it tried it re-performed and
+    which stand as the preparer left them. The agent is "the reviewer agent", never "the
+    reviewer" (the person) or "the model"; the check's reason stays on the call's
+    outcome. Before: "2 of 3 items could not be re-performed by the model. The reviewer
+    could not finish u0002: the answer broke a rule its work is checked against." """
+    shown = list(failed[:NAMED_ITEMS])
+    more = len(failed) - len(shown)
+    if more > 0:
+        named = f"{', '.join(shown)} and {more} more"
+    elif len(shown) == 1:
+        named = shown[0]
+    else:
+        named = f"{', '.join(shown[:-1])} and {shown[-1]}"
+    verb = "stands" if len(failed) == 1 else "stand"
+    return (
+        f"The reviewer agent re-performed {done} of {done + len(failed)} items. "
+        f"{named} {verb} as the preparer left {'it' if len(failed) == 1 else 'them'}."
+    )
+
+
 # The reviewer's prompt version, recorded on every call (Milestone 3a).
 # /7 (19 November 2026, item 8): the re-performer reads the tester's definitions, owned
 # criteria, design and walkthrough, and is asked to re-perform by a typed role.
@@ -444,7 +468,8 @@ def reperform_failure_note(
     answer: one that gave up changed nothing; one whose every model call failed (FALLBACK)
     left the rules' checks; one the model did only in part (MODEL, fewer re-performed than
     due) kept the items it did. Read from the typed record (FO-1, 19 November 2026); before,
-    from the note's wording (REPERFORM_FAILED, PARTLY_REPERFORMED)."""
+    from the note's wording (REPERFORM_FAILED, the partial note). The agent is "the reviewer
+    agent", never "the model" (design review, 20 November 2026)."""
     if status in ("PENDING", "WORKING") or not note:
         return ""
     if record.failed:
@@ -453,13 +478,10 @@ def reperform_failure_note(
             "testing by hand."
         )
     if source == "FALLBACK":
-        return f"{note} Re-perform to try the model again, or re-perform the items by hand."
+        return f"{note} Re-perform to try again, or re-perform the items by hand."
     # A capped run re-performed the first MAX_REVIEWED_ITEMS by design; its note says so.
     if source == "MODEL" and record.known and record.done < min(record.due, MAX_REVIEWED_ITEMS):
-        return (
-            f"{note} The items it re-performed stand; re-perform to try the rest again, or "
-            "re-perform them by hand."
-        )
+        return f"{note} Re-perform to try again, or re-perform them by hand."
     return ""
 
 
@@ -937,7 +959,7 @@ def run_reperformance(
             cancelled=lambda: cancel_requested(connection, "review", review_id),
         )
     model_items = 0
-    failed_items = 0
+    failed_items: list[str] = []
     last_failure = ""
     # Every TESTED item with files is due (FO-1): the record says how many were
     # re-performed of them, never only of the capped part.
@@ -1053,10 +1075,11 @@ def run_reperformance(
                         item_files,
                     )
                 except ValueError as error:
-                    failed_items += 1
+                    failed_items.append(item.label)
                     # Plain words for the person; the check's words stay on the outcome.
                     last_failure = (
-                        f"The reviewer could not finish {item.label}: {plain_problem(str(error))}."
+                        f"The reviewer agent could not finish {item.label}: "
+                        f"{plain_problem(str(error))}."
                     )
                     record_outcome(
                         connection, call_id, {"validation": "REJECTED", "reason": str(error)}
@@ -1084,7 +1107,7 @@ def run_reperformance(
                     ]},
                 )  # fmt: skip
             else:
-                failed_items += 1
+                failed_items.append(item.label)
                 last_failure = call.note
                 record_outcome(
                     connection, call_id, {"validation": "NOT_USED", "reason": call.status}
@@ -1095,10 +1118,13 @@ def run_reperformance(
         if model_items:
             source = "MODEL"
             if failed_items:
-                note = f"{failed_items} of {model_items + failed_items} {PARTLY_REPERFORMED} {last_failure}"  # noqa: E501
+                # Said for the person (design review, 20 November 2026): what the
+                # reviewer agent did and which items stand as the preparer left them;
+                # the check's reason stays on the call's outcome, not in this line.
+                note = partly_reperformed(model_items, failed_items)
         elif failed_items:
             source = "FALLBACK"
-            note = f"{last_failure} The model did not re-perform the items; the rules' checks stand on their own."  # noqa: E501
+            note = f"{last_failure} The reviewer agent did not re-perform the items; the rules' checks stand on their own."  # noqa: E501
     _finish(
         connection,
         review_id,

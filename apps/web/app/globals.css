@@ -11096,6 +11096,33 @@ button.chip-link:hover {
   min-width: 0;
 }
 
+/* A checkbox with its statement: the box on the first line of the text, the text
+   wrapping beside it, never under it. */
+.check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  cursor: pointer;
+}
+
+.check-row input {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+}
+
+/* Over a by-hand attestation the statement and its note take the full row, so the
+   note's rule (its placeholder) reads whole; the button wraps below. */
+.review-signoff > .check-row,
+.review-signoff > .check-row + input {
+  flex: 1 1 100%;
+  width: 100%;
+}
+
 /* Independent review across the engagement (Milestone 9.2): the dashboard card. */
 
 .review-progress .card-body {

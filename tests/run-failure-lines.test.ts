@@ -795,16 +795,39 @@ describe("workpaper drafting and the review's re-performance", () => {
     );
   });
   it("says a re-performance that did not finish", () => {
+    // Rewritten 20 November 2026 (FO-1): a re-performance that gave up is read from
+    // its typed record (`reperformance.failed`), no longer from the note's wording.
+    // Old: the note "The re-performance did not finish…" alone made a failure line.
+    // New: the same note with the record's `failed` makes it; the note is its words.
+    const record = {
+      known: true,
+      source: "MODEL",
+      due: 3,
+      done: 1,
+      capped: false,
+      dropped: 0,
+      failed: true,
+    };
     const review = {
       reperforming: false,
       reperformState: "IDLE" as const,
       reperformNote:
         "The re-performance did not finish. Re-perform to try again.",
+      reperformance: record,
     };
     assert.equal(reperformLine(review), review.reperformNote);
     assert.equal(reperformLine({ ...review, reperformState: "RUNNING" }), null);
+    // The note's wording alone no longer reads as a failure.
     assert.equal(
-      reperformLine({ ...review, reperformNote: "Re-performed 5 items." }),
+      reperformLine({ ...review, reperformance: { ...record, failed: false } }),
+      null,
+    );
+    assert.equal(
+      reperformLine({
+        ...review,
+        reperformNote: "Re-performed 5 items.",
+        reperformance: { ...record, failed: false },
+      }),
       null,
     );
     assert.equal(

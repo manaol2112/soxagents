@@ -2,13 +2,15 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
-  attestationWords,
   type ControlReview,
   openNotes,
   parseReviewNotice,
   parseReviews,
+  reperformedWords,
+  reperformHold,
   reviewFor,
   reviewNoticeFor,
+  reviewPill,
   reviewWrite,
   roundReviewsFor,
 } from "../apps/web/src/review-model.ts";
@@ -374,13 +376,87 @@ describe("a sign-off over a re-performance by hand (FO-1, 19 November 2026)", ()
       failed: false,
     });
     assert.equal(parsed?.attestationNeeded, true);
+    // Rewritten (design review, 20 November 2026). Old: attestationWords put the run's
+    // fact ("The reviewer agent re-performed 1 of 3 items.") inside the person's
+    // checkbox label. New: the fact is the header's and the banner's (reperformedWords,
+    // one source with the reviewer lane), and the checkbox holds only the attestation;
+    // the run-fact assertion moves to reperformedWords below.
     assert.equal(
-      attestationWords(parsed?.reperformance),
-      "The reviewer agent re-performed 1 of 3 items.",
+      reperformedWords(parsed?.reperformance, "MODEL", 0),
+      "Re-performed 1 of 3 items: no differences from the preparer's results",
+    );
+  });
+
+  it("never reads a partial or failed re-performance as ready to sign off or as each result", () => {
+    // Design review, 20 November 2026: the header said "the reviewer agent
+    // re-performed each result" and the pill "Ready to sign off" whenever the source
+    // was MODEL and no note was open, beside a banner that said 2 of 3 items were not
+    // re-performed.
+    const base = {
+      status: "OPEN" as const,
+      reperforming: false,
+      attestationNeeded: true,
+    };
+    const partial = {
+      known: true,
+      source: "MODEL",
+      due: 3,
+      done: 1,
+      capped: false,
+      dropped: 0,
+      failed: false,
+    };
+    const failed = { ...partial, failed: true };
+    const idle = { waiting: 0, outstanding: false, unavailable: false };
+    for (const [record, words] of [
+      [partial, "Re-perform needed"],
+      [failed, "Re-performance did not finish"],
+      [{ ...partial, done: 0 }, "Re-perform needed"],
+      [null, "Re-perform needed"],
+    ] as const) {
+      const pill = reviewPill({ ...base, reperformance: record }, idle);
+      assert.deepEqual(pill, { words, tone: "tone-warning" });
+      assert.equal(reperformHold({ ...base, reperformance: record }), words);
+      const said = reperformedWords(record, "MODEL", 0);
+      assert.doesNotMatch(said, /each result/);
+      assert.doesNotMatch(said, /^Re-performed the testing/);
+    }
+    // Only a re-performance that holds nothing reads as ready.
+    assert.deepEqual(
+      reviewPill(
+        {
+          ...base,
+          attestationNeeded: false,
+          reperformance: { ...partial, done: 3 },
+        },
+        idle,
+      ),
+      { words: "Ready to sign off", tone: "" },
     );
     assert.equal(
-      attestationWords(null),
-      "The reviewer agent's re-performance has no record of the items it re-performed.",
+      reperformHold({ attestationNeeded: false, reperformance: failed }),
+      null,
+    );
+    // Open notes and a signed review keep their own words.
+    assert.equal(
+      reviewPill({ ...base, reperformance: partial }, { ...idle, waiting: 2 })
+        .words,
+      "Notes open",
+    );
+    assert.deepEqual(
+      reviewPill(
+        { ...base, status: "SIGNED_OFF", reperformance: partial },
+        { ...idle, outstanding: true },
+      ),
+      { words: "Review outstanding", tone: "tone-warning" },
+    );
+    assert.equal(
+      reperformedWords(failed, "MODEL", 0),
+      "Re-performed 1 of 3 items: no differences from the preparer's results",
+    );
+    assert.equal(
+      reperformedWords({ ...partial, done: 0 }, "MODEL", 0),
+      "The reviewer agent did not re-perform the testing",
     );
   });
 });

@@ -11,7 +11,11 @@ from test_planning_gate import _plan, _project
 from test_testing_engine import _base, _controls, _sheet
 from test_workpapers import _tested_control
 
-from ai_workforce_api.control_reviews import disagreements, run_reperformance
+from ai_workforce_api.control_reviews import (
+    disagreements,
+    partly_reperformed,
+    run_reperformance,
+)
 from ai_workforce_api.db import connect
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.workpaper_service import run_draft
@@ -769,9 +773,49 @@ def test_a_rejected_reviewer_answer_is_said_in_plain_words(migrated: Database) -
         ]
     review = client.get(f"{_base(team)}/reviews").json()[0]
     plain = "the answer broke a rule its work is checked against."
-    assert review["reperform_note"].startswith("The reviewer could not finish ")
+    # Rewritten (design review, 20 November 2026): the agent is "the reviewer agent",
+    # never "the reviewer" (the person). Old: "The reviewer could not finish ".
+    assert review["reperform_note"].startswith("The reviewer agent could not finish ")
+    assert "the model" not in review["reperform_note"] + review["failure_note"]
     assert plain in review["reperform_note"] and plain in review["failure_note"]
     assert reasons and all(reason not in review["failure_note"] for reason in reasons)
+
+
+def test_a_partial_reperformance_names_the_items_that_stand(migrated: Database) -> None:
+    """Design review (20 November 2026). Before, a re-performance the reviewer agent did
+    for 1 of 3 items said "2 of 3 items could not be re-performed by the model. The
+    reviewer could not finish u0002: the answer broke a rule its work is checked against."
+    beside "Reviewer · You": "the reviewer" and "the model" for the agent, and a check's
+    internal words in a person's line. Now it says what the reviewer agent did and which
+    items stand as the preparer left them, and the next actions."""
+    team, client, sheet, _file = _prepared_control(migrated, "review-partial", "DISMISS")
+    _rollforward_decided(migrated, team, client, sheet["control_id"])
+    review = client.get(f"{_base(team)}/reviews").json()[0]
+    rejected = {"results": [{"index": 99, "result": "PASS", "note": "x"}]}
+    provider = _Provider([_all_pass(len(sheet["attributes"])), rejected, rejected])
+    with connect(migrated.url) as connection:
+        assert run_reperformance(connection, provider, UUID(review["id"])) == "DONE"
+    review = client.get(f"{_base(team)}/reviews").json()[0]
+    record = review["reperformance"]
+    assert (record["source"], record["due"], record["done"]) == ("MODEL", 3, 1), record
+    labels = [item["label"] for item in sheet["items"]]
+    said = review["reperform_note"]
+    assert said.startswith("The reviewer agent re-performed 1 of 3 items. "), said
+    assert said.endswith(" stand as the preparer left them."), said
+    assert sum(label in said for label in labels) == 2, (said, labels)
+    assert review["failure_note"] == f"{said} Re-perform to try again, or re-perform them by hand."
+    for words in ("the model", "The reviewer could", "broke a rule", "checked against"):
+        assert words not in review["failure_note"], words
+    assert review["attestation_needed"] is True
+
+
+def test_partly_reperformed_names_at_most_three_items() -> None:
+    assert partly_reperformed(2, ["u0003"]) == (
+        "The reviewer agent re-performed 2 of 3 items. u0003 stands as the preparer left it."
+    )
+    assert partly_reperformed(1, ["a", "b", "c", "d", "e"]).endswith(
+        "a, b, c and 2 more stand as the preparer left them."
+    )
 
 
 def test_an_undecided_deficiency_proposal_holds_the_review(migrated: Database) -> None:

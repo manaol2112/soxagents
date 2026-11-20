@@ -27,6 +27,7 @@ import {
   type ControlReview,
   reperformedWords,
   runFailureLine as reperformFailureLine,
+  reviewDifferences,
 } from "./review-model.ts";
 import type { TestRound } from "./round-model.ts";
 import type { RunState } from "./run-state.ts";
@@ -1433,13 +1434,7 @@ export function agentLanes(input: WorkspaceInput): AgentLane[] {
 
   // The reviewer agent: re-performs the testing for the independent reviewer.
   const notes = review?.notes ?? [];
-  const differences = notes.filter(
-    (note) =>
-      note.targetKind === "RESULT" &&
-      note.reviewerResult !== null &&
-      note.status !== "DISMISSED" &&
-      note.status !== "WITHDRAWN",
-  ).length;
+  const differences = reviewDifferences(notes);
   const count = (status: string) =>
     notes.filter((note) => note.status === status).length;
   // The re-performance ended without a usable answer, in the review's own sentence.

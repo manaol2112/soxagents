@@ -3,17 +3,18 @@ import { type Automation, executionOf } from "./execution-model";
 import { formatDate } from "./format";
 import {
   ATTESTATION_MIN,
-  attestationWords,
   type ControlReview,
   NOTE_STATUS_LABEL,
   type NoteSeverity,
   openNotes,
   REVIEW_NOTICES,
-  REVIEW_OUTSTANDING,
   REVIEW_REOPEN_ANCHOR,
   type ReviewNote,
   type ReviewNotice,
+  reperformedWords,
   runFailureLine as reperformFailureLine,
+  reviewDifferences,
+  reviewPill,
   SEVERITY_LABEL,
   TARGET_LABEL,
 } from "./review-model";
@@ -95,6 +96,14 @@ export function ReviewTab({
     );
   }
   const waiting = openNotes(review);
+  const pill = reviewPill(review, {
+    waiting: waiting.length,
+    outstanding,
+    unavailable:
+      review.reperforming &&
+      executionOf({ agent: "reviewer", run: review.reperformState, automation })
+        .state === "UNAVAILABLE",
+  });
   const relaxed = !review.independenceRequired;
   const decides = canAct && review.viewerIsReviewer && review.status === "OPEN";
   // The preparer of this work adds notes and answers them; another reviewer decides them.
@@ -130,11 +139,14 @@ export function ReviewTab({
                 ? "The reviewer agent is re-performing the testing"
                 : review.reperformedAt === null
                   ? "Not re-performed yet"
-                  : `Re-performed ${formatDate(review.reperformedAt)} · ${
-                      review.reperformSource === "MODEL"
-                        ? "the reviewer agent re-performed each result"
-                        : "standard checks only"
-                    }`}
+                  : // The run's typed record says what was re-performed, in the
+                    // reviewer lane's words (one source), never "each result" over a
+                    // run that re-performed part of the items or none.
+                    `${reperformedWords(
+                      review.reperformance,
+                      review.reperformSource,
+                      reviewDifferences(review.notes),
+                    )} · ${formatDate(review.reperformedAt)}`}
             {waiting.length > 0
               ? ` · ${waiting.length} note${waiting.length === 1 ? "" : "s"} open`
               : review.notes.length > 0
@@ -142,35 +154,11 @@ export function ReviewTab({
                 : ""}
           </p>
         </div>
-        <span
-          className={`pill pill-dot ${
-            review.status === "SIGNED_OFF"
-              ? outstanding
-                ? "tone-warning"
-                : "tone-success"
-              : waiting.length > 0
-                ? "tone-warning"
-                : ""
-          }`}
-        >
+        <span className={`pill pill-dot ${pill.tone}`}>
           {review.reperforming ? (
             <span className="spinner small" aria-hidden="true" />
           ) : null}
-          {review.status === "SIGNED_OFF"
-            ? outstanding
-              ? REVIEW_OUTSTANDING
-              : "Reviewed"
-            : review.reperforming
-              ? executionOf({
-                  agent: "reviewer",
-                  run: review.reperformState,
-                  automation,
-                }).state === "UNAVAILABLE"
-                ? "Re-performance queued · automation unavailable"
-                : "Re-performing"
-              : waiting.length > 0
-                ? "Notes open"
-                : "Ready to sign off"}
+          {pill.words}
         </span>
       </header>
       {notice !== null ? (
@@ -537,14 +525,18 @@ export function ReviewTab({
               >
                 <Hidden ids={ids} review={review} intent="sign-off" />
                 {review.attestationNeeded === true ? (
-                  <label className="form-hint">
+                  // The person's own attestation, in a check row of its own: the run's
+                  // facts are the banner's and the header's, never mixed in here.
+                  <label className="check-row">
                     <input
                       type="checkbox"
                       name="reperformed_by_hand"
                       required
-                    />{" "}
-                    {attestationWords(review.reperformance)} I re-performed the
-                    testing by hand, and the note says what.
+                    />
+                    <span>
+                      I re-performed the remaining items by hand; the note says
+                      what.
+                    </span>
                   </label>
                 ) : null}
                 <input
@@ -558,7 +550,7 @@ export function ReviewTab({
                   }
                   placeholder={
                     review.attestationNeeded === true
-                      ? "What you re-performed by hand"
+                      ? `What you re-performed by hand (at least ${ATTESTATION_MIN} characters)`
                       : "Sign-off note (optional)"
                   }
                 />

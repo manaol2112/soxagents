@@ -1,7 +1,7 @@
 import { CoverageForm } from "./coverage-form";
 import type { Automation } from "./execution-model";
 import type { ControlReview, ReviewNotice } from "./review-model";
-import { openNotes } from "./review-model";
+import { openNotes, reperformHold } from "./review-model";
 import { ReviewTab } from "./review-view";
 import type { TestRound } from "./round-model";
 import type { TestSheet } from "./sheet-model";
@@ -87,7 +87,7 @@ export function RoundReviews({
                     ? `Before sign-off: ${review.blocking[0]}`
                     : open > 0
                       ? `${open} open note${open === 1 ? "" : "s"}`
-                      : "Ready to sign off"}
+                      : (reperformHold(review) ?? "Ready to sign off")}
               </span>
             </summary>
             <div className="cw-round-review-body">

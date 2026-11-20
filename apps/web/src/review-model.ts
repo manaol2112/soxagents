@@ -158,18 +158,68 @@ export function reperformedWords(
   return `Re-performed the testing: ${found}`;
 }
 
-/** Why a sign-off needs the reviewer's record of a re-performance by hand, said from
- * the run's typed record (FO-1). */
-export function attestationWords(
-  record: Reperformance | null | undefined,
-): string {
-  if (record === null || record === undefined || !record.known) {
-    return "The reviewer agent's re-performance has no record of the items it re-performed.";
+/** The result notes where the reviewer agent's result differs from the preparer's and
+ * still stands: the differences `reperformedWords` counts. One count for the review's
+ * header and the reviewer lane. */
+export function reviewDifferences(notes: readonly ReviewNote[]): number {
+  return notes.filter(
+    (note) =>
+      note.targetKind === "RESULT" &&
+      note.reviewerResult !== null &&
+      note.status !== "DISMISSED" &&
+      note.status !== "WITHDRAWN",
+  ).length;
+}
+
+/** What an open review's sign-off still waits for from the re-performance, from the
+ * server's typed `attestationNeeded` and the run record (design review, 20 November
+ * 2026): before, the pill said "Ready to sign off" over a partial or failed
+ * re-performance whose sign-off needs the reviewer's record by hand. Null when the
+ * re-performance holds nothing. The run's own words are the banner's and the header's
+ * (`reperformedWords`), so the sign-off form does not repeat them. */
+export function reperformHold(
+  review: Pick<ControlReview, "attestationNeeded" | "reperformance">,
+): string | null {
+  if (review.attestationNeeded !== true) {
+    return null;
   }
-  if (record.done === 0) {
-    return "The reviewer agent did not re-perform the testing.";
+  return review.reperformance?.failed === true
+    ? "Re-performance did not finish"
+    : "Re-perform needed";
+}
+
+/** The review header's pill: its words and tone, from the review's typed state. */
+export function reviewPill(
+  review: Pick<
+    ControlReview,
+    "status" | "reperforming" | "attestationNeeded" | "reperformance"
+  >,
+  {
+    waiting,
+    outstanding,
+    unavailable,
+  }: { waiting: number; outstanding: boolean; unavailable: boolean },
+): { words: string; tone: "" | "tone-warning" | "tone-success" } {
+  if (review.status === "SIGNED_OFF") {
+    return outstanding
+      ? { words: REVIEW_OUTSTANDING, tone: "tone-warning" }
+      : { words: "Reviewed", tone: "tone-success" };
   }
-  return `The reviewer agent re-performed ${record.done} of ${record.due} items.`;
+  if (review.reperforming) {
+    return {
+      words: unavailable
+        ? "Re-performance queued · automation unavailable"
+        : "Re-performing",
+      tone: waiting > 0 ? "tone-warning" : "",
+    };
+  }
+  if (waiting > 0) {
+    return { words: "Notes open", tone: "tone-warning" };
+  }
+  const hold = reperformHold(review);
+  return hold === null
+    ? { words: "Ready to sign off", tone: "" }
+    : { words: hold, tone: "tone-warning" };
 }
 
 /** The shortest sign-off note over a re-performance by hand (control_reviews.MIN_ATTESTATION). */
