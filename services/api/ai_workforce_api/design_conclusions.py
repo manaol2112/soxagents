@@ -1107,6 +1107,28 @@ def _held(
     return facts.rule_broken(facts.results()) is None
 
 
+# Why a standing sign-off that no longer holds lapsed, where its records name nothing more.
+LAPSED = "the records changed after the sign-off"
+
+
+def lapsed_reasons(
+    connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
+) -> list[str]:
+    """Why the standing D&I sign-off no longer holds, by the rule `_held` applies (what
+    `stale` says, then the rule of its own conclusion, `out_of_date`); empty where it
+    holds or none stands. Read for finality (control_journey.finality_facts, ST-2) only
+    for the sign-offs that no longer hold, so the attributes are assembled for few."""
+    facts = _facts(connection, project_id, control_id)
+    if facts.standing is None or _held(connection, project_id, control_id, facts):
+        return []
+    reasons = facts.stale()
+    if not reasons:
+        if facts.attributes is None:
+            facts = _assembled(connection, project_id, control_id, facts)
+        reasons = facts.out_of_date(facts.results())
+    return reasons or [LAPSED]
+
+
 def design_verdict(
     connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
 ) -> Verdict | None:

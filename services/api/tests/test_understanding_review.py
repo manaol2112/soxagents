@@ -28,6 +28,7 @@ from uuid import UUID, uuid4
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
+from hostile_model import no_answer
 from support import Database, run_plan_through
 from test_attributes_follow_understanding import (
     _GRANT_RECORD,
@@ -129,6 +130,7 @@ def test_the_review_asks_before_any_attribute_is_drafted_and_answering_completes
     assert [row[:3] for row in _reviews(migrated, control)] == [(1, "UNDERSTANDING", "PENDING")]
     agents = _Agents(migrated, team, control)
     agents.specialist = lambda given: _asking(given, WHO_APPLIES, "PERFORMER")
+    agents.other = no_answer  # the interview writer's failure path: questions kept
     _run(migrated, control, agents)
     # Read on the questions asked, per attribute, with what each needs.
     [given] = agents.specialist_given
@@ -225,6 +227,7 @@ def test_the_second_read_asks_only_follow_ups_of_its_questions_and_there_is_no_t
     _left_open(team, control, client, "wt-ac01-provisioning", "a contractor provisions it")
     agents = _Agents(migrated, team, control)
     agents.specialist = lambda given: _asking(given, WHO_APPLIES, "PERFORMER")
+    agents.other = no_answer  # the interview writer's failure path: questions kept
     _run(migrated, control, agents)
     [question] = _open_issues(migrated, control)
     _answer(client, team, control, question, "Other: a vendor applies them")
@@ -257,6 +260,7 @@ def test_the_second_read_asks_only_follow_ups_of_its_questions_and_there_is_no_t
 
     reading = _Agents(migrated, team, control)
     reading.specialist = second
+    reading.other = no_answer  # the interview writer's failure path: questions kept
     _run(migrated, control, reading)
     # Only the follow-up of its own question is asked; the rest are assumptions.
     [follow_up] = _open_issues(migrated, control)
@@ -298,6 +302,7 @@ def test_not_known_closes_the_question_never_as_an_answer_and_assumes_on_its_att
     _left_open(team, control, client, "wt-ac01-provisioning", "a contractor provisions it")
     agents = _Agents(migrated, team, control)
     agents.specialist = lambda given: _asking(given, WHO_APPLIES, "PERFORMER")
+    agents.other = no_answer  # the interview writer's failure path: questions kept
     _run(migrated, control, agents)
     [question] = _open_issues(migrated, control)
     path = f"{_path(team, control)}/issues/{question[0]}/not-known"
@@ -742,6 +747,7 @@ def test_the_replay_of_itgc_cm_06_never_reopens_drafts_no_narrative_and_never_wa
     agents = _Agents(migrated, team, control)
     agents.issues = [_GRANT_RECORD]
     agents.specialist = lambda given: _asking(given, WHO_APPLIES, "PERFORMER")
+    agents.other = no_answer  # the interview writer's failure path: questions kept
     _run(migrated, control, agents)
     [question] = _open_issues(migrated, control)
     assert [who for who in agents.calls if who != "other"] == []
@@ -880,6 +886,7 @@ def test_a_read_due_while_the_plain_run_is_queued_is_made_by_that_run(
     assert _reviews(migrated, control) == []
     agents = _Agents(migrated, team, control)
     agents.specialist = lambda given: _asking(given, WHO_APPLIES, "PERFORMER")
+    agents.other = no_answer  # the interview writer's failure path: questions kept
     _run(migrated, control, agents)
     # The plain run made the read that fell due: the question is asked, nothing is left
     # "Checking..." with no read.

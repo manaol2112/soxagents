@@ -163,6 +163,13 @@ def main() -> None:
     with psycopg.connect(settings.database_url, connect_timeout=3) as connection:
         raised = detect_everywhere(connection)
     print(f"plan impact: {raised} assessments raised")
+    # Open sheets follow the approved attributes and criteria (ST-1): those opened before
+    # are brought in step once; the worker resumes the runs asked for.
+    from ai_workforce_api.testing_engine import resync_everywhere
+
+    with psycopg.connect(settings.database_url, connect_timeout=3) as connection:
+        resynced = resync_everywhere(connection)
+    print(f"open test sheets: {resynced} brought in step with the approved attributes")
     # Stored prompts and answers past their retention are removed; the call records and
     # their hashes stay (Milestone 3a, provenance.py).
     from ai_workforce_api.provenance import purge_expired_contents

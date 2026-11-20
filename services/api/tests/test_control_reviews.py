@@ -7,6 +7,7 @@ import pytest
 from support import Database
 from test_evidence_analysis import _Provider
 from test_outbound import _session, migrated
+from test_planning_gate import _plan, _project
 from test_testing_engine import _base, _controls, _sheet
 from test_workpapers import _tested_control
 
@@ -354,6 +355,14 @@ def test_the_reviewer_decides_notes_a_must_fix_reopens_the_work_and_signs_off(
             (team["project"], UUID(sheet["control_id"])),
         )
 
+    # Rewritten 19 November 2026 (FP-7, decision D5, product owner). Old: with the interim
+    # exceptions found, the conclusion was final with the roll-forward left PENDING by
+    # the rules. New: an undecided phase holds the conclusion, so a person decides the
+    # roll-forward first (the plan approved again, the impact decided VALID). Reason: the
+    # rest of the period is either tested or scoped out by a person, never assumed.
+    _rollforward_decided(migrated, team, client, sheet["control_id"])
+    review = client.get(f"{base}/reviews").json()[0]
+
     # Nobody signs off a review of work they signed off: the preparer, given the reviewer
     # role, is still refused.
     with connect(migrated.url) as connection:
@@ -626,6 +635,45 @@ def _prepared_control(
     return team, client, sheet, ticket_file
 
 
+def _rollforward_decided(
+    migrated: Database, team: dict[str, Any], client: Any, control_id: str
+) -> None:
+    """A person decides the roll-forward the rules left PENDING after interim exceptions
+    (decision D5, product owner, 19 November 2026: an undecided phase holds the conclusion
+    until a person decides it): not applicable, with a reason. The decision revises the
+    plan; the owner approves it again, and a reviewer decides the signed interim results'
+    impact assessment VALID, as the agent recommends."""
+    phase = next(p for p in _plan(team, control_id)["phases"] if p["phase"] == "ROLLFORWARD")
+    decided = team["owner"].post(
+        f"{_project(team)}/controls/{control_id}/evidence-plan/phases/ROLLFORWARD",
+        json={
+            "applicability": "NOT_APPLICABLE",
+            "rationale": "The interim testing covers the period under audit this year.",
+            "version": phase["version"],
+        },
+    )
+    assert decided.status_code == 200, decided.text
+    plan = _plan(team, control_id)
+    approved = team["owner"].post(
+        f"{_project(team)}/controls/{control_id}/evidence-plan/approve",
+        json={"version": plan["version"], "comment": ""},
+    )
+    assert approved.status_code == 200, approved.text
+    base = _base(team)
+    reviewer = _session(migrated, team["reviewer_id"])
+    for assessment in client.get(f"{base}/impact").json():
+        if assessment["status"] == "PENDING" and assessment["control_id"] == control_id:
+            valid = reviewer.post(
+                f"{base}/impact/{assessment['id']}/decide",
+                json={
+                    "version": assessment["version"],
+                    "decision": "VALID",
+                    "rationale": "Only the roll-forward decision changed; the interim stands.",
+                },
+            )
+            assert valid.status_code == 200, valid.text
+
+
 def _all_pass(attributes: int) -> dict[str, Any]:
     """The reviewer passing every attribute, in its answer format (M3d closure): each pass
     shows the element it verified with a passage of the ticket file."""
@@ -665,3 +713,111 @@ def test_a_rejected_reviewer_answer_is_said_in_plain_words(migrated: Database) -
     assert review["reperform_note"].startswith("The reviewer could not finish ")
     assert plain in review["reperform_note"] and plain in review["failure_note"]
     assert reasons and all(reason not in review["failure_note"] for reason in reasons)
+
+
+def test_an_undecided_deficiency_proposal_holds_the_review(migrated: Database) -> None:
+    """ST-2 (product owner, 19 November 2026). Before, the review could be signed while
+    the deficiency the tester proposed from the exceptions was still undecided, and the
+    conclusion then read final Effective. Now the review waits for the proposal to be
+    logged or dismissed; the re-performer no longer raises a second note for it."""
+    team, client, sheet, _file = _tested_control(migrated, "review-undecided")
+    base = _base(team)
+    current = _sheet(client, team)
+    assert (current["conclusion"], current["proposal_status"]) == ("NOT_EFFECTIVE", "PROPOSED")
+    paper = next(
+        w
+        for w in client.get(f"{base}/workpapers", params={"control_id": sheet["control_id"]}).json()
+        if w["stage"] == "EFFECTIVENESS"
+    )
+    with connect(migrated.url) as connection:
+        assert run_draft(connection, _Provider([{"sections": []}]), UUID(paper["id"])) == "DONE"
+    paper = next(
+        w
+        for w in client.get(f"{base}/workpapers", params={"control_id": sheet["control_id"]}).json()
+        if w["stage"] == "EFFECTIVENESS"
+    )
+    prepared = client.post(
+        f"{base}/workpapers/{paper['id']}/prepare",
+        json={"version": paper["version"], "rationale_reviewed": True},
+    )
+    assert prepared.status_code == 200, prepared.text
+    review = client.get(f"{base}/reviews").json()[0]
+    # Reworded 19 November 2026 (E3 design review): old "the proposed deficiency is not
+    # logged or dismissed yet: decide it on the test sheet before the testing is
+    # re-performed"; new, the same hold without a second colon inside "Before sign-off:".
+    held = "the proposed deficiency is not yet logged or dismissed on the test sheet"
+    assert held in review["blocking"]
+    reviewer = _session(migrated, team["reviewer_id"])
+    refused = reviewer.post(f"{base}/reviews/{review['id']}/sign-off", json={"version": 1})
+    assert refused.status_code == 409
+    with connect(migrated.url) as connection:
+        assert run_reperformance(connection, None, UUID(review["id"])) == "DONE"
+    review = client.get(f"{base}/reviews").json()[0]
+    assert not any("is not decided" in note["text"] for note in review["notes"])
+    refused = reviewer.post(
+        f"{base}/reviews/{review['id']}/sign-off", json={"version": review["version"]}
+    )
+    assert refused.status_code == 409 and held in refused.json()["detail"]
+    current = _sheet(client, team)
+    dismissed = client.post(
+        f"{base}/test-sheets/{current['id']}/deficiency",
+        json={"version": current["version"], "action": "DISMISS", "reason": "Decided."},
+    )
+    assert dismissed.status_code == 200, dismissed.text
+    review = client.get(f"{base}/reviews").json()[0]
+    assert held not in review["blocking"]
+
+
+def test_the_review_waits_while_the_plan_is_revised_and_not_approved(migrated: Database) -> None:
+    """ST-4 (product owner, 19 November 2026). Before, the reviewer could sign the review
+    while the test plan was revised and not approved again, and while the signed-off
+    results predated its approved revision with no impact decided. Now the review waits
+    for the approval, then for a reviewer's impact decision."""
+    team, client, sheet, _file = _prepared_control(migrated, "review-plan-gate", "DISMISS")
+    base = _base(team)
+    control = sheet["control_id"]
+    review = client.get(f"{base}/reviews").json()[0]
+    with connect(migrated.url) as connection:
+        assert run_reperformance(connection, None, UUID(review["id"])) == "DONE"
+        # A material change to the approved plan, as the revision triggers make it.
+        connection.execute(
+            "SELECT revise_evidence_plan(id) FROM evidence_plans WHERE engagement_control_id = %s",
+            (control,),
+        )
+        connection.commit()
+    review = client.get(f"{base}/reviews").json()[0]
+    assert "approve the test plan first" in review["blocking"]
+    reviewer = _session(migrated, team["reviewer_id"])
+    refused = reviewer.post(
+        f"{base}/reviews/{review['id']}/sign-off", json={"version": review["version"]}
+    )
+    assert refused.status_code == 409 and "approve the test plan first" in refused.json()["detail"]
+    plan = _plan(team, control)
+    approved = team["owner"].post(
+        f"{_project(team)}/controls/{control}/evidence-plan/approve",
+        json={"version": plan["version"], "comment": ""},
+    )
+    assert approved.status_code == 200, approved.text
+    review = client.get(f"{base}/reviews").json()[0]
+    # Reworded 19 November 2026 (E3 design review): old "1 signed-off result predates the
+    # plan's approved revision: a reviewer decides the impact assessment first"; new, the
+    # same hold said once, without a second colon.
+    impact = "1 signed-off result awaits a reviewer's impact decision"
+    assert "approve the test plan first" not in review["blocking"]
+    assert impact in review["blocking"]
+    refused = reviewer.post(
+        f"{base}/reviews/{review['id']}/sign-off", json={"version": review["version"]}
+    )
+    assert refused.status_code == 409 and impact in refused.json()["detail"]
+    [assessment] = [a for a in client.get(f"{base}/impact").json() if a["status"] == "PENDING"]
+    valid = reviewer.post(
+        f"{base}/impact/{assessment['id']}/decide",
+        json={
+            "version": assessment["version"],
+            "decision": "VALID",
+            "rationale": "The revision changed nothing the interim results rest on.",
+        },
+    )
+    assert valid.status_code == 200, valid.text
+    review = client.get(f"{base}/reviews").json()[0]
+    assert impact not in review["blocking"]

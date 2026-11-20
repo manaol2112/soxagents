@@ -472,15 +472,8 @@ def rules_findings(
                     + ". Confirm why no deficiency is logged, or log one.",
                 )
             )
-        elif sheet.proposal_status == "PROPOSED":
-            findings.append(
-                Finding(
-                    "DEFICIENCY",
-                    {},
-                    "SHOULD_FIX",
-                    "The deficiency the tester proposed from the exceptions is not decided.",
-                )
-            )
+        # An undecided proposal holds the review itself (UNDECIDED_PROPOSAL, ST-2), so the
+        # re-performer raises no note of its own for it.
         elif deficiency_status is not None and deficiency_status == "CLOSED":
             findings.append(
                 Finding(
@@ -1185,7 +1178,8 @@ def _review(
     # The sheet this review is of: the round's own for a round review, else the interim.
     sheet = connection.execute(
         """
-        SELECT s.status, u.display_name, s.version, s.signed_by, s.id
+        SELECT s.status, u.display_name, s.version, s.signed_by, s.id, s.conclusion,
+               s.proposal_status
         FROM test_sheets s LEFT JOIN users u ON u.id = s.signed_by
         WHERE s.project_id = %s AND s.engagement_control_id = %s
           AND s.test_round_id IS NOT DISTINCT FROM %s
@@ -1208,6 +1202,29 @@ def _review(
     }
     prepared = (sheet is not None and sheet[3] == viewer) or any(p[4] == viewer for p in papers)
     blocking: list[str] = []
+    # The review signs only over the plan as approved (ST-4, 19 November 2026): before, a
+    # reviewer could sign while the plan was revised and not approved again, or while
+    # signed-off results predated its approved revision with no impact decided. The plan's
+    # gate is the one testing's sign-off reads (evidence_plans.gate_reason); finality reads
+    # the same two (PLAN, IMPACT), so the review and finality agree.
+    from ai_workforce_api.evidence_plans import gate_reason
+    from ai_workforce_api.readiness import unassessed_signoffs
+
+    planned = gate_reason(connection, control_id, None)
+    if planned is not None:
+        blocking.append(planned)
+    predating = (
+        0
+        if sheet is None
+        else unassessed_signoffs(connection, project_id, control_id, UUID(str(sheet[4]))).get(
+            control_id, 0
+        )
+    )
+    if predating:
+        blocking.append(
+            f"{predating} signed-off result{' awaits' if predating == 1 else 's await'} "
+            "a reviewer's impact decision"
+        )
     # The control's own review rests on its D&I conclusion (B0/B3, 8 November 2026). A design
     # signed off as not effective is reviewed without OE: nothing was tested to re-perform.
     design = None
@@ -1222,6 +1239,12 @@ def _review(
             blocking.append("the D&I conclusion is not signed off as effective")
         if sheet is None or sheet[0] != "SIGNED_OFF":
             blocking.append("the testing is not signed off")
+        elif sheet[5] == "NOT_EFFECTIVE" and sheet[6] == "PROPOSED":
+            # The deficiency proposed from the exceptions is decided first (ST-2, 19
+            # November 2026): before, the review signed with it undecided and the control
+            # read final Effective. Decided before the re-performance, it costs no second
+            # run (deciding it changes the sheet the re-performance read).
+            blocking.append(UNDECIDED_PROPOSAL)
         effectiveness = next((p for p in papers if p[1] == "EFFECTIVENESS"), None)
         if effectiveness is None or effectiveness[2] != "PREPARED":
             blocking.append("the effectiveness workpaper is not prepared")
@@ -1449,11 +1472,14 @@ def review_overview(connection: psycopg.Connection[Any], project_id: UUID) -> Re
     ).fetchone()
     signed = sum(1 for item in left if item == "SIGNED")
     # Complete means every in-scope control's conclusion is final: reviewed, with every
-    # required phase and round covered (control_journey.finality), not merely signed.
-    from ai_workforce_api.control_journey import finality, finality_facts
+    # required phase and round covered (control_journey.finality), not merely signed, and
+    # on the verdict the review signed (control_conclusions.concluded, ST-2): the same
+    # story as the register and the panel.
+    from ai_workforce_api.control_conclusions import engagement_conclusions
+    from ai_workforce_api.control_journey import finality_facts
 
-    facts = finality_facts(connection, project_id)
-    final = sum(1 for control_id in included if finality(facts.get(control_id)).final)
+    held = engagement_conclusions(connection, project_id, finality_facts(connection, project_id))
+    final = sum(1 for control_id in included if control_id in held and held[control_id].is_final)
     return ReviewOverview(
         in_scope=len(included),
         not_started=sum(1 for control_id in included if control_id not in states),
@@ -1921,7 +1947,17 @@ def _round_of(cursor: psycopg.Cursor[Any], review_id: UUID) -> UUID | None:
 def _locked(
     cursor: psycopg.Cursor[Any], project_id: UUID, review_id: UUID, version: int
 ) -> tuple[UUID, UUID, str]:
-    """The review, locked: (organization_id, control_id, status)."""
+    """The review, locked: (organization_id, control_id, status). The control's test plan
+    is locked first (the lock order of evidence_reliance: the plan before what follows it),
+    so a revision cannot commit between the plan's gate the review reads and its sign-off
+    (ST-4, 19 November 2026), and a review note that reopens the testing takes the plan
+    before the sheet, as plan approval does when it brings open sheets in step (ST-1)."""
+    cursor.execute(
+        "SELECT p.id FROM evidence_plans p JOIN control_reviews r "
+        "ON r.engagement_control_id = p.engagement_control_id "
+        "WHERE r.id = %s AND r.project_id = %s FOR UPDATE OF p",
+        (review_id, project_id),
+    )
     row = cursor.execute(
         "SELECT organization_id, engagement_control_id, status, version FROM control_reviews "
         "WHERE id = %s AND project_id = %s FOR UPDATE",
@@ -2182,6 +2218,9 @@ def _clear_note(
     return _result(connection, project_id, review_id, principal.id), []
 
 
+UNDECIDED_PROPOSAL = "the proposed deficiency is not yet logged or dismissed on the test sheet"
+
+
 def _sign_off(
     connection: psycopg.Connection[Any],
     principal: Principal,
@@ -2203,21 +2242,30 @@ def _sign_off(
                 "you signed off the testing or prepared a workpaper; "
                 "another reviewer must sign off the review"
             )
+        if current.test_round_id is not None:
+            from ai_workforce_api.test_rounds import round_reviewed
+
+            # A retest's deficiency is remediated only here, and only if the retest
+            # passed (owner's decision 2); a failed retest went back to remediation at
+            # its sign-off. Before the coverage, so the verdict it records follows it.
+            round_reviewed(cursor, organization_id, project_id, current.test_round_id, principal.id)
         # What this review covered, recorded as it signs: the sheet at its version, the
         # round, and each workpaper at its prepared version (workflow integrity W2). A
-        # later sign-off, round or workpaper is never covered by it.
+        # later sign-off, round or workpaper is never covered by it. Every review, a
+        # round's too, records the verdict the records propose as it signs (ST-2, 19
+        # November 2026): FINAL needs the latest signed review's verdict to be the one
+        # proposed (control_conclusions.concluded).
         from ai_workforce_api.control_conclusions import body_of
 
-        concluded = (
-            body_of(cursor.connection, project_id, control_id, principal)
-            if current.test_round_id is None
-            else None
-        )
+        concluded = body_of(cursor.connection, project_id, control_id, principal)
         coverage = {
             # The conclusion as proposed, and each deficiency's severity as rated (B3).
-            "conclusion": None if concluded is None else concluded.proposed,
+            "conclusion": concluded.proposed,
+            # Marks a verdict recorded as signed, none included (ST-2): reviews signed
+            # before recorded none for every round (control_conclusions.signed_verdict).
+            "verdict_recorded": True,
             "deficiencies": []
-            if concluded is None
+            if current.test_round_id is not None
             else [
                 {"id": str(item.id), "reference": item.reference, "severity": item.severity}
                 for item in concluded.deficiencies
@@ -2267,13 +2315,6 @@ def _sign_off(
                 """,
                 (project_id, control_id),
             )
-        else:
-            from ai_workforce_api.test_rounds import round_reviewed
-
-            # A retest's deficiency is remediated only here, and only if the retest
-            # passed (owner's decision 2); a failed retest went back to remediation at
-            # its sign-off.
-            round_reviewed(cursor, organization_id, project_id, current.test_round_id, principal.id)
         _audit(cursor, organization_id, project_id, principal.id, review_id, "review.signed_off",
                {"notes": current.counts, "coverage": coverage})  # fmt: skip
         _update_completion(cursor, project_id, principal.id)

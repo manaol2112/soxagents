@@ -32,7 +32,7 @@ from pydantic import BaseModel, Field, ValidationError
 from ai_workforce_api.after_commit import after_commit
 from ai_workforce_api.agent_answers import plain_problem
 from ai_workforce_api.agent_runs import cancel_requested, finish_cancelled
-from ai_workforce_api.control_design import design_for
+from ai_workforce_api.control_design import design_for, fills_placeholders
 from ai_workforce_api.control_instances import FAMILY_FILES, family_ids, shared_with_family
 from ai_workforce_api.db import (
     connect,
@@ -707,18 +707,24 @@ def _exception_stands(item: dict[str, Any]) -> dict[str, Any]:
             "note": _clean(f"{UNSUPPORTED_EXCEPTION} {item.get('note', '')}", 400)}  # fmt: skip
 
 
-def from_reviews(files: tuple[ItemFile, ...], attributes: int) -> list[dict[str, Any]] | None:
-    """A control tested once from screenshots reuses their first-pass review, if complete."""
+def from_reviews(
+    files: tuple[ItemFile, ...], attributes: tuple[str, ...] | list[str]
+) -> list[dict[str, Any]] | None:
+    """A control tested once from screenshots reuses their first-pass review, if complete.
+    Each review answer is matched to an attribute by the wording it was reviewed against,
+    never by its position (ST-1): one the review did not answer as worded now, or an answer
+    to a wording no longer approved, leaves the item to the tester or a person."""
     if not files or any(item.review is None for item in files):
         return None
+    wanted = {" ".join(text[:300].lower().split()): index for index, text in enumerate(attributes)}
     found: dict[int, dict[str, Any]] = {}
     for item in files:
         for test in (item.review or {}).get("attributes", []):
-            if not isinstance(test, dict) or not isinstance(test.get("index"), int):
-                continue
-            index = test["index"]
-            if index >= attributes:
-                continue
+            if not isinstance(test, dict) or not isinstance(test.get("attribute"), str):
+                return None
+            index = wanted.get(" ".join(str(test["attribute"])[:300].lower().split()))
+            if index is None:
+                return None
             result: Result = {"PASS": "PASS", "EXCEPTION": "EXCEPTION"}.get(
                 str(test.get("result")), "UNABLE"
             )  # type: ignore[assignment]
@@ -730,9 +736,9 @@ def from_reviews(files: tuple[ItemFile, ...], attributes: int) -> list[dict[str,
                     "result": result,
                     "note": _clean(f"{item.file_name}: {note}", 400),
                 }
-    if len(found) < attributes:
+    if len(found) < len(attributes):
         return None
-    return [found[index] for index in range(attributes)]
+    return [found[index] for index in range(len(attributes))]
 
 
 def unable(attributes: int, note: str) -> list[dict[str, Any]]:
@@ -1074,7 +1080,7 @@ class TooManyAttributes(Exception):
 
     def __init__(self, count: int) -> None:
         self.detail = (
-            f"the control has {count} approved test attributes and a test sheet holds at "
+            f"The control has {count} approved test attributes and a test sheet holds at "
             f"most {MAX_ATTRIBUTES}; combine or remove attributes before testing"
         )
 
@@ -1084,6 +1090,291 @@ def _attributes(value: Any) -> list[str]:
     if len(attributes) > MAX_ATTRIBUTES:
         raise TooManyAttributes(len(attributes))
     return attributes or ["The control operated as described"]
+
+
+# The basis open sheets are tested against (ST-1, product owner, 19 November 2026)
+#
+# An open sheet follows the approved attributes and the criteria a person owns: when they
+# change under an approved plan, the sheet's attributes are brought in step
+# (resync_open_sheets), each result follows its attribute rather than its position
+# (remap_results), and every tested item whose basis changed is tested again. Its basis is
+# read from the tester's call inputs (attribute_basis, criteria_sha256; decision D2: no
+# migration), and an item tested against a superseded basis is not tested (stale_basis).
+#
+# Lock order (evidence_reliance): the plan before the sheets. Every caller holds the
+# control's plan row (lock_plan) before the sheet rows resync_open_sheets locks.
+
+_APPROVED_PLAN = ("APPROVED", "CHANGES_PROPOSED")
+
+
+def normal_wording(text: str) -> str:
+    return " ".join(clean_line(text, 300).lower().split())
+
+
+def _sha(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(value, ensure_ascii=False, sort_keys=True).encode()
+    ).hexdigest()
+
+
+def list_sha256(attributes: list[str] | tuple[str, ...]) -> str:
+    """The approved attributes' wording as tested (M3d): the hash every call records."""
+    return hashlib.sha256(json.dumps(list(attributes), ensure_ascii=False).encode()).hexdigest()
+
+
+def attribute_keys(
+    connection: psycopg.Connection[Any], control_id: UUID, texts: list[str] | tuple[str, ...]
+) -> list[str]:
+    """Each attribute's identity: its control_attributes row, by its wording among the
+    approved ones, else among the earlier wordings (a reworded attribute is a new row), else
+    the approved one it is with a bracketed client value filled in (the same attribute,
+    milestone L3e). An attribute with no row (the default) is known by its wording."""
+    rows = connection.execute(
+        "SELECT id, text, status FROM control_attributes WHERE engagement_control_id = %s "
+        "ORDER BY (status = 'APPROVED') DESC, updated_at DESC",
+        (control_id,),
+    ).fetchall()
+    by_text: dict[str, str] = {}
+    for row_id, text, _status in rows:
+        by_text.setdefault(normal_wording(str(text)), str(row_id))
+    keys: list[str] = []
+    for text in texts:
+        found = by_text.get(normal_wording(text))
+        if found is None and "[" in text:
+            filled = connection.execute(
+                "SELECT id FROM control_attributes WHERE engagement_control_id = %s "
+                "AND status = 'APPROVED' AND fills_placeholders(%s, text) LIMIT 1",
+                (control_id, text),
+            ).fetchone()
+            found = None if filled is None else str(filled[0])
+        keys.append(found if found is not None else f"text:{normal_wording(text)}")
+    return keys
+
+
+@dataclass(frozen=True)
+class Basis:
+    """The approved attributes (as sheets store them, `_attributes`), each one's identity,
+    and each one's owned criteria as the tester is given them (`tailored_criteria`)."""
+
+    texts: tuple[str, ...]
+    keys: tuple[str, ...]
+    criteria: tuple[dict[str, Any] | None, ...]
+    revision: int | None
+    too_many: str | None = None
+
+    @property
+    def attributes_sha256(self) -> str:
+        return list_sha256(self.texts)
+
+    @property
+    def criteria_sha256(self) -> tuple[str, ...]:
+        return tuple(_sha(item) for item in self.criteria)
+
+
+def approved_basis(connection: psycopg.Connection[Any], control_id: UUID) -> Basis | None:
+    """What open sheets are tested against now, or None while the plan is not approved at
+    its current revision: until then the control's attributes are nobody's approved ones,
+    and the plan's gate is what a person reads."""
+    row = connection.execute(
+        "SELECT c.test_attributes, p.status, p.approved_revision FROM engagement_controls c "
+        "JOIN evidence_plans p ON p.engagement_control_id = c.id WHERE c.id = %s",
+        (control_id,),
+    ).fetchone()
+    if row is None or row[1] not in _APPROVED_PLAN:
+        return None
+    revision = None if row[2] is None else int(row[2])
+    try:
+        texts = _attributes(row[0])
+    except TooManyAttributes as error:
+        return Basis((), (), (), revision, error.detail)
+    return Basis(
+        tuple(texts),
+        tuple(attribute_keys(connection, control_id, texts)),
+        tuple(tailored_criteria(connection, control_id, texts)),
+        revision,
+    )
+
+
+def stale_basis(inputs: Any, basis: Basis) -> bool:
+    """Whether the call an item was tested with rests on another basis than the approved
+    one: an approved attribute it did not test, or one whose owned criteria changed since
+    (from `attribute_basis`). A call recorded before that key reads by the whole list's
+    wording and which attributes had owned criteria."""
+    if not isinstance(inputs, dict):
+        return False
+    recorded = inputs.get("attribute_basis")
+    if isinstance(recorded, list):
+        seen = {
+            str(entry.get("key")): str(entry.get("criteria_sha256"))
+            for entry in recorded
+            if isinstance(entry, dict)
+        }
+        return any(
+            seen.get(key) != criteria
+            for key, criteria in zip(basis.keys, basis.criteria_sha256, strict=True)
+        )
+    if "attributes_sha256" in inputs and inputs["attributes_sha256"] != basis.attributes_sha256:
+        return True
+    kinds = inputs.get("criteria")
+    if isinstance(kinds, list) and len(kinds) == len(basis.texts):
+        return [kind == "TAILORED" for kind in kinds] != [
+            item is not None for item in basis.criteria
+        ]
+    return False
+
+
+def filled_since(
+    tested_on: list[str] | tuple[str, ...], tested_keys: list[str] | tuple[str, ...], basis: Basis
+) -> bool:
+    """Whether an attribute the items were tested on with a bracketed client value still
+    unfilled ("removed within [N] days") reads now with the value filled in ("removed
+    within 5 days"): the same attribute (attribute_keys, L3e), but the items were tested
+    without the value the attribute now holds them to, so they are tested again. Decided
+    by the product owner, 19 November 2026 (N1: "Yes, retest them"); before, a filled-in
+    value tested nothing again and the sheet signed off on results that never read it."""
+    was = dict(zip(tested_keys, tested_on, strict=True))
+    return any(
+        fills_placeholders(was.get(key), text)
+        for key, text in zip(basis.keys, basis.texts, strict=True)
+    )
+
+
+def remap_results(
+    old: list[str] | tuple[str, ...],
+    new: list[str] | tuple[str, ...],
+    results: list[Any],
+    overrides: list[Any],
+) -> tuple[list[Any], list[Any]]:
+    """Each result and override at its attribute's new position, by the attribute's
+    identity (`old` and `new` are the keys at each position); one whose attribute was
+    removed or reworded is dropped, as it no longer answers an approved attribute."""
+    where = {key: index for index, key in enumerate(new)}
+
+    def moved(entries: list[Any]) -> list[Any]:
+        kept: list[Any] = []
+        for entry in entries:
+            if not isinstance(entry, dict) or not isinstance(entry.get("index"), int):
+                continue
+            index = int(entry["index"])
+            if 0 <= index < len(old) and old[index] in where:
+                kept.append({**entry, "index": where[old[index]]})
+        return kept
+
+    return moved(results), moved(overrides)
+
+
+def lock_plan(cursor: psycopg.Cursor[Any], control_id: UUID) -> None:
+    """The control's test plan row, locked before any of its sheets (the lock order)."""
+    cursor.execute(
+        "SELECT id FROM evidence_plans WHERE engagement_control_id = %s FOR UPDATE", (control_id,)
+    )
+
+
+def resync_open_sheets(
+    cursor: psycopg.Cursor[Any],
+    organization_id: UUID,
+    project_id: UUID,
+    control_id: UUID,
+    actor: UUID | None,
+    sheet_id: UUID | None = None,
+) -> list[UUID]:
+    """Bring the control's open sheets (the interim's and the rounds', or the one named) in
+    step with the approved attributes and owned criteria, under an approved plan only. The
+    attributes are rewritten; each result and override follows its attribute; a tested item
+    is marked to be tested again when an approved attribute was added or reworded, a client
+    value it was tested without is filled in (filled_since), or its call's basis is
+    superseded (stale_basis); a removal or a new order tests nothing again. The sheet is
+    re-based on the approved revision once nothing tested without a call keeps the old one.
+    Recorded as testing.sheet_resynced. Returns the sheets asked to run, for the caller to
+    schedule. The caller holds the plan row."""
+    basis = approved_basis(cursor.connection, control_id)
+    if basis is None or basis.too_many is not None:
+        # Not approved: nothing changes. Too many attributes: the sheet is left as it is,
+        # and its sign-off is held with the reason (test_sheets._sheet).
+        return []
+    queued: list[UUID] = []
+    for sid, stored, run_status in cursor.execute(
+        "SELECT id, attributes, run_status FROM test_sheets WHERE project_id = %s "
+        "AND engagement_control_id = %s AND status = 'OPEN' "
+        "AND (%s::uuid IS NULL OR id = %s) ORDER BY id FOR UPDATE",
+        (project_id, control_id, sheet_id, sheet_id),
+    ).fetchall():
+        old = [str(item) for item in stored] if isinstance(stored, list) else []
+        new = list(basis.texts)
+        same = old == new
+        old_keys = attribute_keys(cursor.connection, control_id, old)
+        gained = [key for key in basis.keys if key not in old_keys]
+        filled = filled_since(old, old_keys, basis)
+        marked: list[str] = []
+        moved = False
+        kept_old = False
+        for item_id, results, overrides, tested_at, needs_test, inputs in cursor.execute(
+            """
+            SELECT i.id, i.results, i.overrides, i.tested_at, i.needs_test,
+                   (SELECT m.inputs FROM model_calls m WHERE m.id = i.model_call_id)
+            FROM test_items i WHERE i.test_sheet_id = %s ORDER BY i.position FOR UPDATE OF i
+            """,
+            (sid,),
+        ).fetchall():
+            tested = tested_at is not None and not needs_test
+            stale = tested and (bool(gained) or filled or stale_basis(inputs, basis))
+            current = (list(results or []), list(overrides or []))
+            remapped = current if same else remap_results(old_keys, basis.keys, *current)
+            if tested and not stale and inputs is None:
+                kept_old = True
+            if same and not stale:
+                continue
+            # A new list bumps every item, tested or not: a run that read the item before
+            # (and the attributes with it) cannot write its result over the change.
+            cursor.execute(
+                "UPDATE test_items SET results = %s, overrides = %s, "
+                "needs_test = needs_test OR %s, version = version + 1 WHERE id = %s",
+                (Json(remapped[0]), Json(remapped[1]), stale, item_id),
+            )
+            moved = moved or remapped != current
+            if stale:
+                marked.append(str(item_id))
+        if same and not marked and not moved:
+            continue
+        cursor.execute(
+            "UPDATE test_sheets SET attributes = %s, version = version + 1, "
+            "plan_revision = CASE WHEN %s THEN plan_revision ELSE %s END WHERE id = %s",
+            (Json(new), kept_old, basis.revision, sid),
+        )
+        _audit(cursor, organization_id, project_id, actor, sid, "testing.sheet_resynced",
+               {"attributes_before": old, "attributes": new, "items_marked": marked,
+                "plan_revision": basis.revision})  # fmt: skip
+        # A run in progress read the items before the change: the new list bumped them, so
+        # its writes are refused, and it is asked to look again when it ends. Before, only
+        # a marked item asked, so a run under way over a removal or a new order ended with
+        # its untested items left untested and no run asked for.
+        working = not same and run_status == "WORKING"
+        if (marked or working) and (queued_id := request_run(cursor, UUID(str(sid)))) is not None:
+            queued.append(queued_id)
+    return queued
+
+
+def resync_everywhere(connection: psycopg.Connection[Any]) -> int:
+    """At deploy: every open sheet of a running engagement brought in step once (sheets
+    opened before ST-1 kept the attributes they opened with). Returns the sheets marked to
+    run; the worker resumes them (open_runs). Each control commits on its own, so one
+    failure keeps the others' and no plan stays locked to the end (review note N6, 19
+    November 2026: the list was read outside a transaction block, which made every
+    control's block a savepoint of it)."""
+    count = 0
+    with transaction(connection) as cursor:
+        controls = cursor.execute(
+            """
+            SELECT DISTINCT s.organization_id, s.project_id, s.engagement_control_id
+            FROM test_sheets s JOIN projects p ON p.id = s.project_id
+            WHERE s.status = 'OPEN' AND p.status <> 'ARCHIVED' AND p.deleted_at IS NULL
+            """
+        ).fetchall()
+    for organization_id, project_id, control_id in controls:
+        with transaction(connection) as cursor:
+            lock_plan(cursor, control_id)
+            count += len(resync_open_sheets(cursor, organization_id, project_id, control_id, None))
+    return count
 
 
 def request_run(cursor: psycopg.Cursor[Any], sheet_id: UUID) -> UUID | None:
@@ -1363,11 +1654,10 @@ def run_sheet(
             hold_claim(cursor, "test_sheets", "id", sheet_id, "run_status")
     if claimed is None:
         return "SKIPPED"
-    organization_id, project_id, control_id, method, test_id, attributes_raw, requester = claimed[
-        :7
-    ]
+    # The attributes are read with each item (_test_item), not here: a resync during the
+    # run would leave the items not reached yet tested against the attributes claimed.
+    organization_id, project_id, control_id, method, test_id, _claimed, requester = claimed[:7]
     round_id = claimed[7]
-    attributes = tuple(str(item) for item in attributes_raw)
     if method == "TEST_OF_ONE":
         sync_single_items(connection, sheet_id, project_id, control_id)
     _place_new_files(
@@ -1426,7 +1716,6 @@ def run_sheet(
             project_id,
             control_id,
             method,
-            attributes,
             requester,
             item_id,
             images,
@@ -1604,13 +1893,15 @@ def _test_item(
     project_id: UUID,
     control_id: UUID,
     method: str,
-    attributes: tuple[str, ...],
     requester: UUID,
     item_id: UUID,
     images: ImageLoader | None = None,
 ) -> bool:
     """Test one item and write its result. False when the run was cancelled before the
-    model call: nothing is written and the item waits for the next run."""
+    model call: nothing is written and the item waits for the next run. The item is tested
+    against the sheet's attributes as they stand with the item's version, read in one
+    statement (ST-1): a resync during the run changes both, so the result written at that
+    version is always tested against the attributes it was read with."""
     from ai_workforce_api.evidence_analysis import ocr_choice
     from ai_workforce_api.pbc_drafting import load_context
 
@@ -1619,7 +1910,7 @@ def _test_item(
         SELECT i.label, i.detail, i.version, s.id, s.version,
                (SELECT p.approved_revision FROM evidence_plans p
                 WHERE p.engagement_control_id = s.engagement_control_id),
-               i.position, t.population_file_id, t.population_sha256, t.seed
+               i.position, t.population_file_id, t.population_sha256, t.seed, s.attributes
         FROM test_items i JOIN test_sheets s ON s.id = i.test_sheet_id
         LEFT JOIN control_tests t ON t.id = s.control_test_id
         WHERE i.id = %s
@@ -1629,6 +1920,7 @@ def _test_item(
     if item is None:
         return True
     label, detail_raw, version = str(item[0]), item[1], int(item[2])
+    attributes = tuple(str(entry) for entry in (item[10] if isinstance(item[10], list) else []))
     # What the call is made from, kept on its record (Milestone 3a closure).
     inputs: dict[str, Any] = {
         "item": str(item_id),
@@ -1637,9 +1929,7 @@ def _test_item(
         "attributes": len(attributes),
         # The approved attributes' wording as tested (M3d): a change of wording is a
         # different test even under the same plan revision.
-        "attributes_sha256": hashlib.sha256(
-            json.dumps(list(attributes), ensure_ascii=False).encode()
-        ).hexdigest(),
+        "attributes_sha256": list_sha256(attributes),
         # The sample and the population it was drawn from (M3c traceability).
         "sample": {"label": str(item[0]), "position": int(item[6])},
         "population": None
@@ -1692,7 +1982,7 @@ def _test_item(
     # The screenshot review stands in for the tester only without a model; with one, the
     # tester tests again and cites what it relied on.
     if method == "TEST_OF_ONE" and caller is None:
-        results = from_reviews(files, len(attributes))
+        results = from_reviews(files, attributes)
         if results is not None:
             source = "REVIEW"
     if results is None and caller is not None:
@@ -1739,6 +2029,17 @@ def _test_item(
             )
         ]
         inputs["plan_evidence"] = [len(found) for found in context.required]
+        # The basis tested, per attribute (ST-1; decision D2, no migration): each one's
+        # identity and the hash of the owned criteria the tester was given for it, and the
+        # hash of them all. A later change of either is a superseded basis (stale_basis).
+        tailored = list(context.tailored or (None,) * len(attributes))
+        inputs["criteria_sha256"] = _sha(tailored)
+        inputs["attribute_basis"] = [
+            {"key": key, "criteria_sha256": _sha(found)}
+            for key, found in zip(
+                attribute_keys(connection, control_id, attributes), tailored, strict=True
+            )
+        ]
         call = caller.generate(
             ModelRequest(
                 operation="generate",
@@ -1840,7 +2141,7 @@ def _audit(
     cursor: psycopg.Cursor[Any],
     organization_id: UUID,
     project_id: UUID,
-    actor_id: UUID,
+    actor_id: UUID | None,
     sheet_id: UUID,
     action: str,
     payload: dict[str, Any],

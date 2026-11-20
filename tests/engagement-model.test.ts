@@ -5,6 +5,7 @@ import {
   byApplication,
   byArea,
   type ControlRow,
+  coverageGapsOf,
   detailTab,
   EMPTY_ENGAGEMENT,
   engagementNoticeFor,
@@ -18,9 +19,11 @@ import {
   openPhases,
   type Phase,
   parseControls,
+  parseCoverageGaps,
   parseDashboard,
   parseDeficiencies,
   parsePlan,
+  parseReviewHeld,
   phaseOf,
   recordAction,
   timelineMonths,
@@ -857,5 +860,137 @@ describe("one meaning per word: a plan waiting on approval (design review, 17 No
     assert.equal(PROGRESS_LABELS.PLAN_TO_APPROVE, "Plan to approve");
     assert.equal(PROGRESS_LABELS.PLAN_TO_APPROVE, PLAN_TO_APPROVE);
     assert.equal(PROGRESS_LABELS.PLAN_TO_APPROVE, PLAN_LABEL.PENDING);
+  });
+});
+
+describe("coverage gaps come from the API's typed field, never the wording", () => {
+  // E3 design review, 19 November 2026. The control's review step matched the reasons'
+  // prose (/review/ and /changed since|did not record|after the review/), so a conclusion
+  // that moved since the review signed it read as a coverage gap and the Review coverage
+  // form offered "It covers them (COVERS)", which can never clear it: only a review
+  // signed on the records as they are does. Synthetic reasons only.
+  const changed =
+    "Conclusion differs from the one the review signed: review outstanding";
+  const oldWording =
+    "Conclusion changed since the review signed it: review outstanding";
+
+  it("never yields a coverage gap, so no COVERS form, for a reason the API does not type as one", () => {
+    const rows = parseControls([
+      {
+        id: "c-1",
+        not_final: [
+          { kind: "REVIEW", text: changed, step: "REVIEW", coverage: false },
+          // The wording the old regexes matched, without the typed flag: still not one.
+          { kind: "REVIEW", text: oldWording, step: "REVIEW" },
+          {
+            kind: "REVIEW",
+            text: "Roll-forward testing changed since its review covered it: review outstanding",
+            step: "REVIEW",
+            phase: "ROLLFORWARD",
+            coverage: "true",
+          },
+          {
+            kind: "REVIEW",
+            text: "Independent review of the retest round outstanding",
+            step: "REVIEW",
+            phase: "RETEST",
+          },
+        ],
+      },
+    ]);
+    const row = rows?.[0] as ControlRow;
+    assert.deepEqual(row.coverageGaps, []);
+    assert.deepEqual(coverageGapsOf(row), {
+      control: "",
+      "roll-forward": "",
+      retest: "",
+    });
+    // Every reason is still listed as not final, in its own words.
+    assert.equal(row.notFinalBecause?.length, 4);
+  });
+
+  it("gives each signed review the gap the API typed for its phase", () => {
+    const gaps = parseCoverageGaps([
+      { kind: "REVIEW", text: changed, step: "REVIEW", coverage: false },
+      {
+        kind: "REVIEW",
+        text: "Design workpaper prepared after the review signed off: review outstanding",
+        step: "REVIEW",
+        phase: "DESIGN",
+        coverage: true,
+      },
+      {
+        kind: "REVIEW",
+        text: "The roll-forward review did not record the testing version it covered: review outstanding",
+        step: "REVIEW",
+        phase: "ROLLFORWARD",
+        coverage: true,
+      },
+      {
+        kind: "REVIEW",
+        text: "Retest testing changed since its review covered it: review outstanding",
+        step: "REVIEW",
+        phase: "RETEST",
+        coverage: true,
+      },
+      "not a reason",
+    ]);
+    assert.deepEqual(coverageGapsOf({ coverageGaps: gaps }), {
+      control:
+        "Design workpaper prepared after the review signed off: review outstanding",
+      "roll-forward":
+        "The roll-forward review did not record the testing version it covered: review outstanding",
+      retest:
+        "Retest testing changed since its review covered it: review outstanding",
+    });
+    assert.deepEqual(parseCoverageGaps(undefined), []);
+  });
+
+  it("says what holds a signed review that only a new sign-off clears, from the typed fields", () => {
+    // The changed conclusion holds the control's own review: said, never a COVERS form.
+    const row = parseControls([
+      {
+        id: "c-2",
+        not_final: [
+          { kind: "REVIEW", text: changed, step: "REVIEW", coverage: false },
+        ],
+      },
+    ])?.[0] as ControlRow;
+    assert.equal(row.reviewHeldBy, changed);
+    assert.equal(coverageGapsOf(row).control, "");
+    // A coverage gap is no hold of this kind; a round's review reason is the round's.
+    assert.equal(
+      parseReviewHeld([
+        {
+          kind: "REVIEW",
+          text: "Testing changed since the review covered it: review outstanding",
+          step: "REVIEW",
+          phase: "INTERIM",
+          coverage: true,
+        },
+        {
+          kind: "REVIEW",
+          text: "Independent review of the roll-forward round outstanding",
+          step: "REVIEW",
+          phase: "ROLLFORWARD",
+        },
+        {
+          kind: "DESIGN",
+          text: "D&I conclusion not signed off",
+          step: "REVIEW",
+        },
+      ]),
+      "",
+    );
+  });
+
+  it("is never read from the prose on the control's page", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const view = await readFile(
+      new URL("../apps/web/src/controls-view.tsx", import.meta.url),
+      "utf8",
+    );
+    assert.match(view, /coverageGapsOf\(control\)/);
+    assert.doesNotMatch(view, /changed since\|did not record/);
   });
 });

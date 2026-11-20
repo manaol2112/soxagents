@@ -129,6 +129,7 @@ import {
   CATEGORIES,
   type ControlFiles,
   type ControlRow,
+  coverageGapsOf,
   DEFICIENCY_STATUSES,
   DETAIL_TABS,
   type Deficiency,
@@ -196,6 +197,8 @@ import { RequestReview } from "./request-review";
 import {
   reviewFor as controlReviewFor,
   openNotes,
+  reviewHoldOf,
+  reviewRowTask,
   roundReviewsFor,
 } from "./review-model";
 import { ReviewTab } from "./review-view";
@@ -1176,22 +1179,8 @@ function ControlRecord({
     (item) => item.status === "PENDING" && item.viewerCanDecide,
   );
   const roundReviews = roundReviewsFor(engagement.reviews, control.id);
-  const reasons = control.notFinalBecause ?? [];
-  const coverageGaps = {
-    control:
-      reasons.find(
-        (text) =>
-          /review/i.test(text) &&
-          /changed since|did not record|after the review/i.test(text) &&
-          !/^(Roll-forward|Retest|The roll-forward|The retest)/.test(text),
-      ) ?? "",
-    "roll-forward":
-      reasons.find((text) =>
-        /^(Roll-forward|The roll-forward) .*review/i.test(text),
-      ) ?? "",
-    retest:
-      reasons.find((text) => /^(Retest|The retest) .*review/i.test(text)) ?? "",
-  };
+  // Only the reasons the API types as coverage gaps (never their wording).
+  const coverageGaps = coverageGapsOf(control);
   const index = siblings.findIndex((item) => item.id === control.id);
   const previous = index > 0 ? siblings[index - 1] : undefined;
   const next =
@@ -1210,6 +1199,16 @@ function ControlRecord({
   const canAct =
     canRequestEvidence(model.organization.role) &&
     model.selectedProject?.status === "ACTIVE";
+  // What holds the control's own signed review, from the typed reasons: the Review step,
+  // its node and its row read as outstanding while it stands, never as done (design
+  // review, 19 November 2026).
+  const reviewHold = reviewHoldOf({
+    signed: control.reviewStatus === "SIGNED_OFF",
+    held: control.reviewHeldBy ?? "",
+    gap: coverageGaps.control,
+    review,
+    canAct,
+  });
   const hasInput = hasDraftInput(control, engagement.files);
   const context =
     engagement.context !== null && engagement.context.controlId === control.id
@@ -1702,9 +1701,13 @@ function ControlRecord({
   };
   const lifeState = (key: string): PhaseState => {
     if (key === "review") {
-      // The control's own review or any round's: open is in progress, all signed is done.
+      // The control's own review or any round's: open is in progress, all signed is done;
+      // a signed one a typed reason holds needs attention, and does not fold away.
       if (controlReviews.some((item) => item.status === "OPEN")) {
         return "active";
+      }
+      if (reviewHold !== null) {
+        return "issue";
       }
       return controlReviews.length > 0 ? "done" : "todo";
     }
@@ -2177,6 +2180,7 @@ function ControlRecord({
       type: item.type,
     })),
     reviewStatus: control.reviewStatus ?? "",
+    reviewHold,
     conclusion: control.conclusion,
     proposedConclusion:
       engagement.controlConclusion?.controlId === control.id
@@ -3451,7 +3455,7 @@ function ControlRecord({
                           ? undefined
                           : "Once the testing workpaper is prepared, the independent reviewer agent re-performs the testing against the evidence and proposes review notes; a reviewer who did not test or prepare decides each note and signs the control off."
                       }
-                      task={taskOf("review")}
+                      task={reviewRowTask(taskOf("review"), reviewHold)}
                     >
                       <PhaseStep
                         number={1}
@@ -3479,6 +3483,7 @@ function ControlRecord({
                             ids={ids}
                             canAct={canAct}
                             automation={engagement.automation ?? null}
+                            outstanding={reviewHold !== null}
                           />
                         )}
                       </PhaseStep>
@@ -3501,6 +3506,8 @@ function ControlRecord({
                         review={review}
                         ids={ids}
                         gap={coverageGaps.control}
+                        held={control.reviewHeldBy ?? ""}
+                        said={reviewHold !== null}
                         canAct={canAct}
                       />
                     ) : null}
