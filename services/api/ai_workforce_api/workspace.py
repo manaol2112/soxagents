@@ -44,6 +44,7 @@ from ai_workforce_api.control_journey import (
     finality_facts,
     journey_of,
     leading_reason,
+    opinion_reached,
     round_in_hand,
 )
 from ai_workforce_api.control_reviews import (
@@ -1314,6 +1315,11 @@ def _controls(
     ).fetchall():
         findings.setdefault(control_id, []).append(str(severity))
     order = ["CONTROL_DEFICIENCY", "SIGNIFICANT_DEFICIENCY", "MATERIAL_WEAKNESS"]
+    # Each control's conclusion as its panel reads it (control_conclusions.concluded, ST-2):
+    # the register, the dashboard and the export say the same verdict and finality.
+    from ai_workforce_api.control_conclusions import engagement_conclusions
+
+    conclusions = engagement_conclusions(connection, project_id, fin_facts)
     result: list[ControlRow] = []
     for row in rows:
         mine = stages.get(row[0], {})
@@ -1347,18 +1353,24 @@ def _controls(
         )
         worst = max(found, key=order.index) if found else None
         fin = finality(fin_facts.get(row[0]))
+        held = conclusions.get(row[0])
         # A control is concluded once its testing is reviewed: the independent review is
         # signed off and its plan task is done. A task marked done by hand, with no
         # signed-off review, does not conclude a control. A deficiency found earlier, at
-        # the walkthrough, is a finding, not a conclusion.
+        # the walkthrough, is a finding, not a conclusion. The verdict is the panel's
+        # (ST-2, 19 November 2026): the final one, else the one the review signed, else
+        # the proposal. Before, it read the deficiencies standing now, so testing with
+        # exceptions and an undecided proposal read Effective.
         signed = row[0] in reviews and reviews[row[0]][0] == "SIGNED_OFF"
         conclusion: Literal["NOT_CONCLUDED", "EFFECTIVE", "EXCEPTION"]
-        if stage_body.review != "SUCCEEDED" or not signed:
+        if stage_body.review != "SUCCEEDED" or not signed or held is None or held.verdict is None:
             conclusion = "NOT_CONCLUDED"
-        elif found:
+        elif held.verdict == "NOT_EFFECTIVE":
             conclusion = "EXCEPTION"
         else:
             conclusion = "EFFECTIVE"
+        is_final = fin.final if held is None else held.is_final
+        not_final = fin.reasons if held is None else list(held.reasons)
         result.append(
             ControlRow(
                 id=row[0],
@@ -1392,7 +1404,7 @@ def _controls(
                 ),
                 sample_size=rules.sample_size(str(row[6]), str(row[8])),
                 # The lifecycle reads CONCLUDED only for a final conclusion.
-                stage=_stage(stage_body, conclusion if fin.final else "NOT_CONCLUDED"),
+                stage=_stage(stage_body, conclusion if is_final else "NOT_CONCLUDED"),
                 stages=stage_body,
                 evidence_requests=sum(pbc.values()),
                 evidence_received=received,
@@ -1440,7 +1452,7 @@ def _controls(
         current.reconcile = current.id in settle
         if current.id in design:
             current.design_step, current.design_by = design[current.id]
-        current.final, current.not_final = fin.final, fin.reasons
+        current.final, current.not_final = is_final, not_final
         if current.id in reopens:
             current.reopen_reason, current.reopened_from = reopens[current.id]  # type: ignore[assignment]
         step = step_of(current, stage_body, now)
@@ -1749,7 +1761,7 @@ def step_of(control: ControlRow, stages: StageBody, now: datetime | None = None)
         # review (docs/workflow-integrity.md §2: interim review is no prerequisite).
         word = "retest" if in_hand.phase == "RETEST" else "roll-forward"
         return Step(f"Finish the {word} testing and sign it off", "PREPARER")
-    if control.conclusion != "NOT_CONCLUDED":
+    if opinion_reached(control):
         # The opinion is reached. Concluded only when final; otherwise the first thing
         # keeping it open is the step (docs/workflow-integrity.md §2).
         if control.final or not control.not_final:
@@ -2004,7 +2016,7 @@ def progress_of(control: ControlRow, stages: StageBody, step: Step) -> Progress:
         return "TESTING_REOPENED"
     if round_in_hand(control.not_final) is not None and not control.final:
         return "READY_FOR_TESTING"
-    if control.conclusion != "NOT_CONCLUDED":
+    if opinion_reached(control):
         return _PROGRESS_FOR_STEP[leading_reason(control.not_final).step]
     if control.review_left is not None and control.review_left != "SIGNED":
         return (
@@ -2258,7 +2270,8 @@ def _dashboard(
             "in_scope": len(controls),
             "key": sum(1 for c in controls if c.key_control),
             "concluded": concluded,
-            "effective": sum(1 for c in controls if c.conclusion == "EFFECTIVE"),
+            # Within the concluded: effective and final (ST-2).
+            "effective": sum(1 for c in controls if c.final and c.conclusion == "EFFECTIVE"),
             "exceptions": sum(1 for c in controls if c.deficiencies > 0),
             "samples": sum(c.sample_size for c in controls),
             "by_category": {key: dict(value) for key, value in by_category.items()},

@@ -280,29 +280,45 @@ def load_facts(
     for cid, state in review_states(connection, project_id).items():
         if (found := facts.get(cid)) is not None:
             found.review_status = str(state[0])
-    # Signed-off results whose plan revision is unknown or older than the approved one,
-    # with no VALID assessment for the approved revision: pending, whether or not the
-    # assessment row exists yet.
-    for cid, count in connection.execute(
-        """
-        SELECT o.engagement_control_id, count(*)
-        FROM test_sheet_signoffs o
-        JOIN test_sheets s ON s.id = o.test_sheet_id AND s.status = 'SIGNED_OFF'
-        JOIN evidence_plans p ON p.engagement_control_id = o.engagement_control_id
-        WHERE o.project_id = %s AND o.reopened_at IS NULL AND p.approved_revision IS NOT NULL
-          AND (o.plan_revision IS NULL OR o.plan_revision <> p.approved_revision)
-          AND NOT EXISTS (
-              SELECT 1 FROM plan_impact_assessments a
-              WHERE a.signoff_id = o.id AND a.to_revision = p.approved_revision
-                AND a.status = 'VALID'
-          )
-        GROUP BY 1
-        """,
-        (project_id,),
-    ).fetchall():
-        if (found := facts.get(UUID(str(cid)))) is not None:
-            found.impact_pending = int(count)
+    for cid, count in unassessed_signoffs(connection, project_id).items():
+        if (found := facts.get(cid)) is not None:
+            found.impact_pending = count
     return facts
+
+
+def unassessed_signoffs(
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    control_id: UUID | None = None,
+    sheet_id: UUID | None = None,
+) -> dict[UUID, int]:
+    """By control, the signed-off results whose plan revision is unknown or older than the
+    approved one, with no VALID assessment for the approved revision: pending, whether or
+    not the assessment row exists yet. For the engagement, one control, or one sheet (the
+    review of that sheet waits for them, ST-4)."""
+    return {
+        UUID(str(cid)): int(count)
+        for cid, count in connection.execute(
+            """
+            SELECT o.engagement_control_id, count(*)
+            FROM test_sheet_signoffs o
+            JOIN test_sheets s ON s.id = o.test_sheet_id AND s.status = 'SIGNED_OFF'
+            JOIN evidence_plans p ON p.engagement_control_id = o.engagement_control_id
+            WHERE o.project_id = %s AND o.reopened_at IS NULL
+              AND p.approved_revision IS NOT NULL
+              AND (o.plan_revision IS NULL OR o.plan_revision <> p.approved_revision)
+              AND (%s::uuid IS NULL OR o.engagement_control_id = %s)
+              AND (%s::uuid IS NULL OR o.test_sheet_id = %s)
+              AND NOT EXISTS (
+                  SELECT 1 FROM plan_impact_assessments a
+                  WHERE a.signoff_id = o.id AND a.to_revision = p.approved_revision
+                    AND a.status = 'VALID'
+              )
+            GROUP BY 1
+            """,
+            (project_id, control_id, control_id, sheet_id, sheet_id),
+        ).fetchall()
+    }
 
 
 def _evidence(
@@ -731,9 +747,19 @@ def resume_testing(
     connection: psycopg.Connection[Any], project_id: UUID, control_id: UUID
 ) -> list[UUID]:
     """Once a control is no longer blocked, its open sheets that waited are asked to run
-    again. Returns the sheets for the caller to schedule."""
+    again. Returns the sheets for the caller to schedule, with those already asked to run
+    and not yet handed over (a plan approval or accepted criteria bring open sheets in step
+    and ask them to run: ST-1); a blocked control's run records why it waits."""
+    pending = [
+        UUID(str(row[0]))
+        for row in connection.execute(
+            "SELECT id FROM test_sheets WHERE project_id = %s AND engagement_control_id = %s "
+            "AND status = 'OPEN' AND run_status = 'PENDING' ORDER BY id",
+            (project_id, control_id),
+        ).fetchall()
+    ]
     if waiting_reason(connection, project_id, control_id):
-        return []
+        return pending
     from ai_workforce_api.db import transaction
     from ai_workforce_api.testing_engine import request_run
 
@@ -747,8 +773,9 @@ def resume_testing(
             """,
             (project_id, control_id),
         ).fetchall()
-        return [
+        resumed = [
             sheet
             for row in waiting
             if (sheet := request_run(cursor, UUID(str(row[0])))) is not None
         ]
+    return resumed + [sheet for sheet in pending if sheet not in resumed]

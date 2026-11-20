@@ -347,6 +347,122 @@ export function openNotes(review: ControlReview): ReviewNote[] {
   );
 }
 
+/** Where the Review step's decision line lands: the reopen form on the control's own
+ * review, and its coverage form. Each holds a `data-arrive` control that takes focus. */
+export const REVIEW_REOPEN_ANCHOR = "cw-review-reopen";
+export const REVIEW_COVERAGE_ANCHOR = "cw-review-coverage";
+
+/** The Review step's status while a reason holds a signed review (design review, 19
+ * November 2026: "Signed off" and "Nothing is needed from you here" beside "review
+ * outstanding" said two things at once). */
+export const REVIEW_OUTSTANDING = "Review outstanding";
+
+/** What holds the control's own signed review, from the typed reasons (never their
+ * wording): `reopen` where only a review signed again clears it, `coverage` where a
+ * reviewer's coverage assessment can; and whether the viewer can act on it now. */
+export type ReviewHold = {
+  reason: string;
+  clears: "reopen" | "coverage";
+  viewerActs: boolean;
+};
+
+/** Whether the viewer may record a coverage assessment on a signed review: its reviewer,
+ * independent of the work where independence is required (the API checks it again). */
+export function mayAssessCoverage(
+  review: Pick<
+    ControlReview,
+    "viewerIsReviewer" | "viewerPrepared" | "independenceRequired"
+  >,
+  canAct: boolean,
+): boolean {
+  return (
+    canAct &&
+    review.viewerIsReviewer &&
+    (!review.viewerPrepared || !review.independenceRequired)
+  );
+}
+
+/** The hold on the control's own signed review, or null where none stands. A reason only a
+ * review signed again clears comes first: reopening clears a coverage gap with it, and a
+ * coverage assessment never clears that reason. */
+export function reviewHoldOf(input: {
+  signed: boolean;
+  /** control.reviewHeldBy: the first reason a coverage assessment does not clear. */
+  held: string;
+  /** coverageGapsOf(control).control: the gap a coverage assessment answers. */
+  gap: string;
+  review: Pick<
+    ControlReview,
+    "viewerIsReviewer" | "viewerPrepared" | "independenceRequired"
+  > | null;
+  canAct: boolean;
+}): ReviewHold | null {
+  if (!input.signed) {
+    return null;
+  }
+  const review = input.review;
+  if (input.held !== "") {
+    return {
+      reason: input.held,
+      clears: "reopen",
+      // The reopen form's own condition (ReviewTab): the signed review's reviewer.
+      viewerActs: input.canAct && review?.viewerIsReviewer === true,
+    };
+  }
+  if (input.gap !== "") {
+    return {
+      reason: input.gap,
+      clears: "coverage",
+      viewerActs: review !== null && mayAssessCoverage(review, input.canAct),
+    };
+  }
+  return null;
+}
+
+/** The reviewer agent's task chip on the Independent review row, or none while a hold
+ * stands (design review, 19 November 2026, fix first: "Independent reviewer · Complete"
+ * under "Needs attention" read as the review being both complete and outstanding). The
+ * agent's re-performance stays under the step and in AI activity. */
+export function reviewRowTask<T>(
+  task: T | undefined,
+  hold: ReviewHold | null,
+): T | undefined {
+  return hold === null ? task : undefined;
+}
+
+/** What a signed review's coverage card says (coverage-form.tsx). `said` is true where the
+ * Review step's decision line already gives the reason and how it clears (the control's
+ * own review while its hold stands): the card then gives only the version it covered and
+ * the form, never the same two sentences again (design review, 19 November 2026, fix
+ * first). A round's review has no decision line, so its card says both. */
+export function coverageCardOf(input: {
+  /** review.coverage.sheet_version: a number where the version was recorded. */
+  covered: unknown;
+  gap: string;
+  held: string;
+  said: boolean;
+}): { state: string; offered: boolean; remedy: boolean } {
+  const reason = input.held !== "" ? input.held : input.gap;
+  const version =
+    typeof input.covered === "number"
+      ? `Signed off against testing version ${input.covered}.`
+      : "The version this review covered was not recorded.";
+  const tail =
+    reason === ""
+      ? " Nothing has changed since."
+      : input.said
+        ? ""
+        : ` ${reason}.`;
+  return {
+    state: `${version}${tail}`,
+    // A reason a coverage assessment does not clear comes first (reviewHoldOf):
+    // reopening clears a gap with it, so the form is offered only where it clears what
+    // holds the review.
+    offered: input.gap !== "" && input.held === "",
+    remedy: reason !== "" && !input.said,
+  };
+}
+
 export const SEVERITY_LABEL: Record<NoteSeverity, string> = {
   MUST_FIX: "Must fix",
   SHOULD_FIX: "Should fix",

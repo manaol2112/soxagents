@@ -11,6 +11,7 @@ client's values, and the values themselves.
 Only library controls on version 3 have a statement; a client's own control has none.
 """
 
+import re
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
@@ -117,6 +118,18 @@ class ValuesBody(BaseModel):
     # Also fill this slot on every other control in the engagement that uses it and has no
     # value yet.
     everywhere: bool = False
+
+
+def fills_placeholders(old: Any, new: Any) -> bool:
+    """Whether new is old with one or more of its bracketed client values filled in and
+    nothing else changed (migration 0086's fills_placeholders, in Python): the plan reports
+    it as values filled, not as a change; the open sheets test again what was tested on
+    the bracket (testing_engine.filled_since, N1)."""
+    if not isinstance(old, str) or not isinstance(new, str) or "[" not in old or old == new:
+        return False
+    parts = re.split(r"\s*\[[^\]]+\]\s*", " ".join(old.split()))
+    pattern = r"\s*(.+?)\s*".join(re.escape(part) for part in parts)
+    return re.fullmatch(pattern, " ".join(new.split())) is not None
 
 
 def _statement(
@@ -451,8 +464,16 @@ def set_values_many(
 ) -> list[UUID]:
     """Fill the values each control was answered for, all or none: one refused value
     leaves every control as it was. Returns every control changed."""
+    from ai_workforce_api.testing_engine import lock_plan
+
     changed: list[UUID] = []
-    with transaction(connection):
+    with transaction(connection) as cursor:
+        # Every answered control's plan, in control-id order, before any one's runs or
+        # sheets (lock order: evidence_reliance): one control's fill holds its sheets while
+        # the next control's is saved.
+        answering = {i.control_id for i in body.items if any(v.strip() for v in i.values.values())}
+        for answered_id in sorted(answering, key=str):
+            lock_plan(cursor, answered_id)
         for item in body.items:
             answered = {key: value for key, value in item.values.items() if value.strip()}
             if not answered:
@@ -508,6 +529,12 @@ def refresh_statement(cursor: psycopg.Cursor[Any], control_id: UUID) -> None:
     if found is None:
         return
     statement, context = found
+    # The plan first (lock order: evidence_reliance): the description's change below marks
+    # the control's runs out of date (step 3) and a fill brings its open sheets in step
+    # (step 4), so the plan (step 1) is held before either.
+    from ai_workforce_api.testing_engine import lock_plan, resync_open_sheets
+
+    lock_plan(cursor, control_id)
     values = {key: value[0] for key, value in _values(cursor, control_id).items()}
     values["system"] = context["system"]
     labels = {slot.key: slot.label for slot in statement.slots}
@@ -553,6 +580,16 @@ def refresh_statement(cursor: psycopg.Cursor[Any], control_id: UUID) -> None:
             changed = changed or status == "APPROVED"
     if changed:
         _write_list(cursor, control_id)
+        # A client value filled into an approved attribute is the same attribute (L3e: no
+        # plan revision), so approval does not run for it: the open sheets take its wording
+        # here, by the attribute's identity (ST-1), and the items tested on the bracket are
+        # tested again (N1). The plan was held above, before their rows.
+        owner = cursor.execute(
+            "SELECT organization_id, project_id FROM engagement_controls WHERE id = %s",
+            (control_id,),
+        ).fetchone()
+        if owner is not None:
+            resync_open_sheets(cursor, owner[0], owner[1], control_id, None)
 
 
 def set_values(
@@ -618,7 +655,14 @@ def set_values(
                 }  # fmt: skip
                 if shared - have:
                     targets[UUID(str(other))] = shared - have
-        for target, keys in targets.items():
+        # Every target's plan, in control-id order (lock order: evidence_reliance, as
+        # lock_served takes them), before any control's runs or sheets; then each control
+        # in the same order, so its refresh_statement takes no plan after another's sheets.
+        from ai_workforce_api.testing_engine import lock_plan
+
+        for target in sorted(targets, key=str):
+            lock_plan(cursor, target)
+        for target, keys in sorted(targets.items(), key=lambda kv: str(kv[0])):
             for key in keys:
                 value = cleaned[key]
                 cursor.execute(

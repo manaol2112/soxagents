@@ -1240,6 +1240,16 @@ def decide_proposals(
     changed: list[UUID] = []
     accepted = set(body.accept)
     with transaction(connection) as cursor:
+        # Every answered control's plan, in control-id order, before any one's fill (lock
+        # order: evidence_reliance), as set_values_many takes them: each fill holds its
+        # control's runs and sheets while the next control's is saved.
+        from ai_workforce_api.testing_engine import lock_plan
+
+        answered = {
+            UUID(str(r[1])) for r in rows if UUID(str(r[0])) in accepted and r[2] == "ANSWER"
+        }
+        for answered_id in sorted(answered, key=str):
+            lock_plan(cursor, answered_id)
         for row in rows:
             proposal_id, control_id = UUID(str(row[0])), UUID(str(row[1]))
             issue_id: UUID | None = None

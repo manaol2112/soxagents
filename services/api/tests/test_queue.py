@@ -7,7 +7,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from support import Database
-from test_control_reviews import _prepared_control
+from test_control_reviews import _prepared_control, _rollforward_decided
 from test_evidence_analysis import _no_ocr, _Provider
 from test_evidence_intake import _accept_population, _client, _engagement, _request, _Scheduler
 from test_evidence_review import (
@@ -171,6 +171,12 @@ def test_coverage_and_stopped_drafts_are_items_of_their_own(migrated: Database) 
     team, client, sheet, _file = _prepared_control(migrated, "queue-cover", "DISMISS")
     base = _base(team)
     control = sheet["control_id"]
+    # Rewritten 19 November 2026 (FP-7, decision D5, product owner). Old: with the interim
+    # exceptions dismissed, the conclusion was final with the roll-forward left PENDING by
+    # the rules. New: an undecided phase holds the conclusion, so a person decides the
+    # roll-forward first (the plan approved again, the impact decided VALID). Reason: the
+    # rest of the period is either tested or scoped out by a person, never assumed.
+    _rollforward_decided(migrated, team, client, control)
     review = client.get(f"{base}/reviews").json()[0]
     _sign_review(migrated, client, team, review["id"])
     # The design workpaper is prepared again after the review signed: the review's coverage
@@ -711,3 +717,40 @@ def test_an_item_names_its_control_instance_with_its_application(migrated: Datab
 
 def _ref_of(items: list[dict[str, Any]], control_id: str) -> str:
     return str(next(item["control_ref"] for item in items if item["control_id"] == control_id))
+
+
+def test_a_finality_step_is_routed_by_its_typed_fields_never_its_wording() -> None:
+    """E3 design review (19 November 2026). The queue read a step's obligation from the
+    finality reason's wording ("D&I conclusion", "since the review covered it", "whether
+    it applies is undecided"), so rewording a reason moved its item. Now a step that is a
+    finality reason is routed by the reason's typed fields."""
+    from ai_workforce_api.control_journey import NotFinal
+    from ai_workforce_api.queue import _step_obligation
+
+    def routed(reason: NotFinal) -> str:
+        return _step_obligation(reason.text, reason)
+
+    lapsed = NotFinal(
+        kind="DESIGN", text="D&I conclusion out of date: the records changed after the sign-off",
+        step="REVIEW", phase="DESIGN",
+    )  # fmt: skip
+    assert routed(lapsed) == "CONTROL_REVIEW"
+    # Any wording: the typed fields decide.
+    assert routed(lapsed.model_copy(update={"text": "Reworded"})) == "CONTROL_REVIEW"
+    gap = NotFinal(
+        kind="REVIEW", text="Interim testing signed off after the review: review outstanding",
+        step="REVIEW", phase="INTERIM", coverage=True,
+    )  # fmt: skip
+    assert routed(gap) == "COVERAGE_ASSESSMENT"
+    changed = NotFinal(
+        kind="REVIEW", text="Conclusion differs from the one the review signed: review outstanding",
+        step="REVIEW",
+    )  # fmt: skip
+    assert routed(changed) == "CONTROL_REVIEW"
+    undecided = NotFinal(
+        kind="PLAN", text="Roll-forward operating effectiveness: whether it applies is undecided",
+        step="PLAN", phase="ROLLFORWARD",
+    )  # fmt: skip
+    assert routed(undecided.model_copy(update={"text": "Reworded"})) == "EVIDENCE_PLAN"
+    # A step that is not the reason is read as a step, as before.
+    assert _step_obligation("Approve the samples", lapsed) == "SAMPLES_APPROVAL"
