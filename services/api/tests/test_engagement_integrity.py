@@ -494,8 +494,11 @@ def test_repeated_rows_that_differ_block_the_import_until_reconciled(migrated: D
         "each row or give each its own ID.",
         "Rows 6 and 7 share control ID AC 1.03 but row 7 names no system: name the system on "
         "each row or give each its own ID.",
+        "Row 9 repeats control ID AC 1.04 but cannot be read (it looks like it holds a "
+        "secret): fix the row in the file or give it its own ID.",
     ]
-    # A repeated row that looks like it holds a secret is skipped, never merged.
+    # A repeated row that looks like it holds a secret is skipped, never merged, and holds
+    # the import: Workday's instance of AC 1.04 would otherwise never be created.
     assert [(s.row, s.reason) for s in result.skipped] == [
         (9, "The row looks like it holds a secret.")
     ]
@@ -514,7 +517,58 @@ def test_repeated_rows_that_differ_block_the_import_until_reconciled(migrated: D
     owner, base = team["owner"], _base(team["org"], team["project"])
     uploaded = _upload(owner, base, CONFLICTING_RCM)
     assert uploaded["ready"] is False
-    assert uploaded["preview"]["problems"][:3] == result.problems
+    assert uploaded["preview"]["problems"][: len(result.problems)] == result.problems
+    imported = owner.post(
+        f"{base}/rcm/uploads/{uploaded['id']}/import", json={"version": uploaded["version"]}
+    )
+    assert imported.status_code == 409
+    assert imported.json()["detail"] == "mapping is incomplete"
+    assert owner.get(base).json()["controls"] == []
+
+
+# The undescribed row comes first, so it is skipped before the described row is kept.
+UNREAD_FIRST_RCM = RCM_HEAD + (
+    "AC 1.01,,As needed,Manual,User Access,Dana Ruiz,Ledger One,EMEA\n"
+    "AC 1.01,Managers approve new access.,As needed,Manual,User Access,Dana Ruiz,Workday,"
+    "EMEA\n"
+    "AC 1.01,Managers approve new access.,As needed,Manual,User Access,Dana Ruiz,Ledger One,"
+    "password = Spring2028y\n"
+)
+
+
+def test_a_repeated_row_that_cannot_be_read_blocks_the_import(migrated: Database) -> None:
+    """Fail closed whatever the row order: a skipped row of a kept control ID may name a
+    system whose instance would never be created, so the import waits for the file."""
+    result = _built(UNREAD_FIRST_RCM)
+    assert result.problems == [
+        "Row 2 repeats control ID AC 1.01 but cannot be read (no control description): fix "
+        "the row in the file or give it its own ID.",
+        "Row 4 repeats control ID AC 1.01 but cannot be read (it looks like it holds a "
+        "secret): fix the row in the file or give it its own ID.",
+    ]
+    # The skipped rows stay skipped, and neither is merged into the kept control.
+    assert [(s.row, s.reason) for s in result.skipped] == [
+        (2, "No control description."),
+        (4, "The row looks like it holds a secret."),
+    ]
+    (access,) = result.controls
+    assert access.applications == ["Workday"] and access.rows == [3]
+    # A secret's text never reaches the preview.
+    assert not any("Spring2028y" in line for line in result.problems + result.warnings)
+    # An unreadable row with an ID of its own is skipped as before and holds nothing.
+    alone = _built(
+        RCM_HEAD + "AC 9.01,,Daily,Manual,User Access,Dana Ruiz,Ledger One,EMEA\n"
+        "AC 1.01,Managers approve new access.,As needed,Manual,User Access,Dana Ruiz,Workday,"
+        "EMEA\n"
+    )
+    assert alone.problems == [] and [s.row for s in alone.skipped] == [2]
+    assert [c.control_ref for c in alone.controls] == ["AC 1.01"]
+    # Through the API: not ready, and Import writes nothing.
+    team = _new_engagement(migrated, "unread-repeat")
+    owner, base = team["owner"], _base(team["org"], team["project"])
+    uploaded = _upload(owner, base, UNREAD_FIRST_RCM)
+    assert uploaded["ready"] is False
+    assert uploaded["preview"]["problems"][: len(result.problems)] == result.problems
     imported = owner.post(
         f"{base}/rcm/uploads/{uploaded['id']}/import", json={"version": uploaded["version"]}
     )

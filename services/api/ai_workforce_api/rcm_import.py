@@ -1056,6 +1056,9 @@ def build(
     seen: dict[str, int] = {}
     contents: dict[str, dict[str, str]] = {}
     repeats: dict[str, _Repeat] = {}
+    # Rows skipped unread (no description, or a secret), by control ID: if another row of
+    # the ID is kept, the skipped row's system would be lost, so the import is held.
+    unread: dict[str, list[tuple[int, str]]] = {}
     bad_emails = 0
     for number, row in data_rows(rows, header_row):
 
@@ -1076,6 +1079,7 @@ def build(
         # another row's control, and none of its cells becomes a system.
         if any(_CREDENTIAL.search(value) for value in row):
             result.skipped.append(Skipped(number, "The row looks like it holds a secret."))
+            unread.setdefault(ref.lower(), []).append((number, "it looks like it holds a secret"))
             continue
         email = cell("owner_email").strip().lower()
         valid_email = email == "" or _EMAIL.fullmatch(email) is not None
@@ -1124,6 +1128,7 @@ def build(
             activity = title
         if activity == "":
             result.skipped.append(Skipped(number, "No control description."))
+            unread.setdefault(ref.lower(), []).append((number, "no control description"))
             continue
         if len(result.controls) >= MAX_CONTROLS:
             result.skipped.append(Skipped(number, f"Only {MAX_CONTROLS} controls are imported."))
@@ -1160,6 +1165,7 @@ def build(
             )
         )
     _report_repeats(result, repeats, seen)
+    _report_unread(result, unread, seen)
     if bad_emails:
         result.warnings.append(
             f"{bad_emails} owner email{'s are' if bad_emails > 1 else ' is'} not valid and "
@@ -1267,6 +1273,32 @@ def _report_repeats(result: BuildResult, repeats: dict[str, _Repeat], seen: dict
         result.warnings.append(
             f"And {len(merged) - REPEATS_LISTED} more control IDs are on more than one row "
             "with the same content: one control for each system they name."
+        )
+
+
+def _report_unread(
+    result: BuildResult, unread: dict[str, list[tuple[int, str]]], seen: dict[str, int]
+) -> None:
+    """A row skipped unread whose control ID another row imports holds the import (owner
+    decision, 19 November 2026; fail closed): the skipped row may name a system the control
+    would otherwise never be created for. Named by row number and the kept row's control ID
+    only, never by the skipped row's cells."""
+    held = [
+        (row, why, result.controls[seen[ref]].control_ref)
+        for ref, rows in unread.items()
+        if ref in seen
+        for row, why in rows
+    ]
+    held.sort()
+    for row, why, ref in held[:REPEATS_LISTED]:
+        result.problems.append(
+            f"Row {row} repeats control ID {ref} but cannot be read ({why}): fix the row in "
+            "the file or give it its own ID."
+        )
+    if len(held) > REPEATS_LISTED:
+        result.problems.append(
+            f"And {len(held) - REPEATS_LISTED} more rows repeat a control ID but cannot be "
+            "read: fix the rows in the file or give each its own ID."
         )
 
 
