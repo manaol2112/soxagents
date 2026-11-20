@@ -208,12 +208,17 @@ FACTS: tuple[Fact, ...] = (
 B1K_ADDED = date(2026, 11, 16)
 # The day the operations family's banks were added (see Question.since).
 OPERATIONS_ADDED = date(2026, 11, 18)
+# The day the question on evidence without a SOC 1 report was added (see Question.since;
+# owner decision, 19 November 2026, the interim fix of SOL's report defect 5).
+SOC1_NO_REPORT_ADDED = date(2026, 11, 19)
 
 # The only free-text questions (product owner, 11 November 2026: options wherever an answer
 # can be listed), each a narrative no list holds and each asked after a structured question
 # on the same follow-up: the dates, causes and resolution of each known deviation; when each
 # change in the period took effect and how the control ran before and after it; and the
-# service organization's name with the complementary user entity controls its report lists.
+# service organization's name with the complementary user entity controls the control relies
+# on (19 November 2026: no longer "in its report", which a control with no SOC 1 report has
+# not; the evidence approach without one is a structured question, wt-service-org-no-report).
 TEXT_KEPT: frozenset[str] = frozenset(
     {"wt-known-deviations-detail", "wt-changes-in-period-detail", "wt-service-org-detail"}
 )
@@ -374,6 +379,7 @@ _FACTS: dict[str, Fact] = {
     "wt-service-org": "OTHER",
     "wt-service-org-report": "OTHER",
     "wt-service-org-detail": "OTHER",
+    "wt-service-org-no-report": "OTHER",
     "wt-volume": "POPULATION",
     # Logical access, the family.
     "wt-ac-layers": "SYSTEM",
@@ -707,14 +713,40 @@ UNIVERSAL: tuple[Question, ...] = (
         "The service organization provides {answer}.",
         when=("wt-service-org", "Yes"),
     ),
-    # Short text: the organization's name and the controls its report lists are its own
-    # (TEXT_KEPT).
+    # Without a SOC 1 report the provider's part is evidenced another way, and how is the
+    # team's decision (owner decision, 19 November 2026; options as approved). Added later
+    # (since), so a completed understanding is not reopened (walkthrough_answers.holds). The
+    # bank's first follow-up of a follow-up: questions_for asks it directly after the report
+    # answer that opens it.
+    _choice(
+        "wt-service-org-no-report", "SERVICE_ORG", 0,
+        "Without a SOC 1 report, how will the team obtain evidence over the service "
+        "organization's part?",
+        "Without a SOC 1 report the service organization's part needs evidence of another kind, "
+        "and the approach decides what is requested and what is tested here.",
+        ("RELIANCE", "EVIDENCE"),
+        ("Test the service organization's controls directly",
+         "Rely on another assurance report (for example SOC 2 or ISAE 3402)",
+         "Test the user entity's own controls over the outsourced work",
+         "For the audit team to decide"),
+        # The parent's sentence ("...provides no SOC 1 report.") always comes directly before,
+        # so this one does not repeat it, and the colon reads every option, a phrase, as one
+        # sentence (design review, 19 November 2026).
+        "Evidence over the service organization's part: {answer}.",
+        when=("wt-service-org-report", "No SOC 1 report"),
+        since=SOC1_NO_REPORT_ADDED,
+    ),
+    # Short text: the organization's name and the complementary controls relied on are its
+    # own (TEXT_KEPT). Reworded 19 November 2026 (owner-approved): "in its report" dropped, as
+    # a control may have no SOC 1 report; the key, kind and condition are unchanged, so an
+    # answer confirmed before still stands (valid_answer does not read a TEXT question's
+    # words).
     _text(
         "wt-service-org-detail", "SERVICE_ORG", 0,
-        "Which service organization is it, and which complementary user entity controls in its "
-        "report does this control rely on?",
-        "The complementary controls the report expects of the user entity decide what is "
-        "requested from the service organization and what is tested here.",
+        "Which service organization is it, and which complementary user entity controls does "
+        "this control rely on?",
+        "The service organization and the complementary controls expected of the user entity "
+        "decide what is requested from the service organization and what is tested here.",
         ("RELIANCE", "EVIDENCE"),
         "The service organization and the complementary user entity controls relied on are "
         "as follows: {answer}.",
@@ -3883,9 +3915,28 @@ def _follow_up(item: Question) -> list[str]:
     return found
 
 
+def _under(item: Question, parent: str) -> bool:
+    """Whether a question is asked under `parent`: a follow-up of it, or of one under it."""
+    seen: set[str] = set()
+    while item.when is not None and item.key not in seen:
+        seen.add(item.key)
+        if item.when[0] == parent:
+            return True
+        above = _BY_KEY.get(item.when[0])
+        if above is None:
+            return False
+        item = above
+    return False
+
+
 def _order(scope: str, nature: str, frequency: str) -> list[str]:
     """For one control: each follow-up directly after its parent (or its parent's earlier
-    follow-ups), and no two questions of a topic sharing a place."""
+    follow-ups and what is asked under them), and no two questions of a topic sharing a place.
+
+    19 November 2026: the bank's first follow-up of a follow-up (wt-service-org-no-report).
+    Old: only the parent or a follow-up of the same parent could come directly before a
+    follow-up, which a follow-up nested under an earlier sibling breaks. New: the parent or
+    any question under it (_under); anything else still separates it from its parent."""
     found: list[str] = []
     asked = questions_for(scope, nature, frequency)
     where = scope or "any control"
@@ -3903,8 +3954,7 @@ def _order(scope: str, nature: str, frequency: str) -> list[str]:
             )
         else:
             before = asked[index - 1]
-            sibling = before.when is not None and before.when[0] == item.when[0]
-            if before.key != item.when[0] and not sibling:
+            if before.key != item.when[0] and not _under(before, item.when[0]):
                 found.append(f"{item.key}: not directly after its parent for {where}")
         seen.add(item.key)
     return found

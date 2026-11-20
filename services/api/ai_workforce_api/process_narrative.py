@@ -38,6 +38,7 @@ from ai_workforce_api.control_context import (
     line,
     raise_issues,
     record_not_asked,
+    records_basis,
     settled_answer,
     source_blocks,
     understanding_completed,
@@ -1508,8 +1509,8 @@ def raise_late_points(
                           AND status = 'OPEN' AND topic = %s
                         ORDER BY created_at DESC LIMIT 1)
             """,
-            (question, proposal, basis if basis in ("SOURCES", "TYPICAL") else "TYPICAL",
-             joined, control_id, topic),
+            (question, proposal, records_basis(basis, stated=True, cited=False), joined,
+             control_id, topic),
         )  # fmt: skip
         asked.add(_topic(topic))
         raised += 1
@@ -1517,11 +1518,13 @@ def raise_late_points(
 
 
 def _statement(item: _Question) -> tuple[str, str]:
-    """A point's statement to confirm and where it comes from; none when it holds a secret."""
+    """A point's statement to confirm and where it comes from; none when it holds a secret.
+    The drafter's points carry no citation, so none is "From the records" (owner decision, 19
+    November 2026: records_basis); its question review keeps that."""
     proposal = line(item.proposal, 400)
     if not proposal or contains_secret({"proposal": proposal}):
         return "", ""
-    return proposal, item.proposal_basis or "TYPICAL"
+    return proposal, records_basis(item.proposal_basis, stated=True, cited=False)
 
 
 def _suggestions(item: _Question) -> list[str]:
