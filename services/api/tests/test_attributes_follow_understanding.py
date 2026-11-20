@@ -632,17 +632,25 @@ def test_an_approved_plan_keeps_its_attributes_and_gets_the_tailoring_as_a_propo
     # The reviewer was told it may not revise them, and its revision reads as a concern.
     given = agents.reviewed[0]
     assert all(item["may_revise"] == [] for item in given["attributes"])
-    # Rewritten 19 November 2026 (SOL defect 3). Old: the concern was read from the row's
-    # mark. New: the reviewer reviewed the criteria the pending revision proposes for the
-    # row (pending_criteria), so its verdict is on those words: kept on the review, counted
-    # in the summary, and shown on the row once they are accepted. Why: the person decides
-    # on the pending criteria, which the reviewer never saw before.
+    # Rewritten 19 November 2026 (SOL defect 3), corrected 20 November 2026 (review
+    # finding 2). Old (before 19 Nov): the concern was read from the row's mark. 19 Nov: the
+    # reviewer reviews the criteria the pending revision proposes (pending_criteria), and
+    # the row's mark was no longer asserted. New (20 Nov): the row-level assertion is
+    # restored beside the new ones: the row shows the concern while the revision waits, so
+    # the person sees it before accepting, and the summary counts the row that shows it.
     first_given = next(item for item in given["attributes"] if item["id"] == str(first[0]))
     assert "pending_criteria" in first_given
-    mark = _stored_review(migrated, control)["items"][str(first[0])]
-    assert mark["verdict"] == "CONCERN" and "Name the system." in mark["note"]
+    stored = _stored_review(migrated, control)["items"][str(first[0])]
+    assert stored["verdict"] == "CONCERN" and "Name the system." in stored["note"]
     body = team["owner"].get(f"{_path(team, control)}/context").json()["attributes"]
+    mark = next(item for item in body["approved"] if item["id"] == str(first[0]))["review"]
+    assert mark["verdict"] == "CONCERN" and "Name the system." in mark["note"]
     assert body["review_summary"]["concerns"] == 1
+    shown = [
+        item for group in ("approved", "proposed") for item in body[group]
+        if (item.get("review") or {}).get("verdict") == "CONCERN"
+    ]  # fmt: skip
+    assert len(shown) == body["review_summary"]["concerns"]
 
 
 def test_a_planner_answer_that_cannot_be_used_ends_the_run_and_a_person_runs_it_again(

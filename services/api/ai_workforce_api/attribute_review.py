@@ -290,8 +290,14 @@ def review_of(
     on its words as they read, or on the criteria the pending revision would write on it,
     and the pending revision is the one the reviewer read (revision_mark). Before, the marks
     vanished on a Dismiss, an Accept or a later agent write, while the summary still read
-    REVIEWED. A verdict on criteria the pending revision proposes counts in `concerns`
-    before they are accepted: the row shows none until then, and the person decides there."""
+    REVIEWED.
+
+    A verdict on the criteria the pending revision proposes is the row's verdict while the
+    revision waits (one screen, one story; review finding of 20 November 2026): the person
+    who is asked to accept those criteria sees the reviewer's concern on that row before
+    deciding, and the summary's `concerns` counts exactly the rows that show one. Before,
+    such a verdict counted in `concerns` while the row showed no mark until after the
+    Accept."""
     from ai_workforce_api.evidence_plans import pending_criteria_items
 
     row = connection.execute(
@@ -327,9 +333,9 @@ def review_of(
             else _mark(found[1], proposed["condition"], proposed["pass_criteria"],
                        proposed["fail_criteria"], proposed["judgment_required"])
         )  # fmt: skip
-        if item is not None and item.mark == reads:
-            marks[UUID(key)] = ReviewMark(verdict=item.verdict, note=item.note)
         held = item is not None and item.mark in (reads, would)
+        if held and item is not None:
+            marks[UUID(key)] = ReviewMark(verdict=item.verdict, note=item.note)
         if held and item is not None and item.verdict == "CONCERN":
             concerns += 1
         if bool(found[6]) and not held:

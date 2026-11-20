@@ -1100,3 +1100,54 @@ def test_the_web_and_the_server_fold_whitespace_alike() -> None:
         assert _clean(given) == folded, given
     for given, folded in cases["wording"]:
         assert line(given, 300) == folded, given
+
+
+def test_stored_criteria_a_person_must_correct_never_refuse_the_correcting_save(
+    migrated: Database,
+) -> None:
+    """Review finding of 20 November 2026 (I12, fail closed for what is sent, never a lock on
+    what is stored). Criteria an agent wrote are screened by contains_secret, which passes
+    "The API key: rotated ..."; set_criteria's no-op check screened the stored side with
+    _clean, which refuses it, so every Save on those criteria failed, even the one removing
+    the phrase. The stored side is folded only: the correcting Save saves as the person's,
+    and a Save that still sends the phrase is still refused."""
+    from ai_workforce_api.actions import contains_secret
+
+    stored = "The API key: rotated each quarter by the admin."
+    assert not contains_secret({"condition": stored})
+    team = _launched(migrated, "master-stored-secretish")
+    control = _control(team, "ITGC-AC-01")["id"]
+    attribute = _master(team, control)["attributes"][0]
+    _agent_criteria(migrated, attribute["id"])
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE control_attributes SET condition = %s WHERE id = %s",
+            (stored, UUID(attribute["id"])),
+        )
+        connection.commit()
+    [(version,)] = _rows(
+        migrated, "SELECT version FROM control_attributes WHERE id = %s", UUID(attribute["id"])
+    )
+    path = f"{_project(team)}/controls/{control}/master-plan/attributes/{attribute['id']}/criteria"
+    body = {
+        "version": version,
+        "condition": stored,
+        "pass_criteria": "The user's manager approved the request in ServiceNow before the grant.",
+        "fail_criteria": "No approval is recorded, or the approval is dated after the grant.",
+        "judgment_required": None,
+        "automatable": None,
+    }
+    # Sending the phrase is still refused (the sent side stays screened).
+    refused = team["owner"].post(path, json=body)
+    assert refused.status_code in (400, 409, 422), refused.text
+    corrected = team["owner"].post(
+        path, json={**body, "condition": "The access key is rotated each quarter by the admin."}
+    )
+    assert corrected.status_code == 200, corrected.text
+    [(origin, condition)] = _rows(
+        migrated,
+        "SELECT criteria_origin, condition FROM control_attributes WHERE id = %s",
+        UUID(attribute["id"]),
+    )
+    assert origin == "PERSON"
+    assert condition == "The access key is rotated each quarter by the admin."

@@ -1365,8 +1365,13 @@ def test_the_set_reviewer_is_given_the_pending_criteria_and_its_verdict_holds_af
     assert sorted(item["id"] for item in with_pending) == sorted(waiting)
     assert all(item["pending_criteria"]["condition"] for item in with_pending)
     summary = context["attributes"]["review_summary"]
-    # Before Accept the concern on pending criteria is counted, though no row shows it yet.
+    # Before Accept the concern on the pending criteria is counted and shown on its row, so
+    # the person sees it before accepting (review finding of 20 November 2026; before, it
+    # was counted while no row showed it until after the Accept).
     assert summary["status"] == "REVIEWED" and summary["concerns"] == 1
+    before = {item["id"]: item for item in context["attributes"]["approved"]}
+    assert before[with_pending[0]["id"]]["review"]["verdict"] == "CONCERN"
+    assert "no system" in before[with_pending[0]["id"]]["review"]["note"]
     version = team["owner"].get(f"{_path(team, control)}/evidence-plan").json()["version"]
     accepted = team["owner"].post(
         f"{_path(team, control)}/evidence-plan/pending-revision",

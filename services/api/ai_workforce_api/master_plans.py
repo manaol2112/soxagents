@@ -2371,8 +2371,12 @@ class AcceptCriteriaBody(BaseModel):
 _SECRETISH = re.compile(r"(?i)\b(password|passwd|secret|api[_ -]?key|token)\s*[:=]")
 
 
+def _folded(text: str) -> str:
+    return " ".join(text.split())
+
+
 def _clean(text: str) -> str:
-    cleaned = " ".join(text.split())
+    cleaned = _folded(text)
     if _SECRETISH.search(cleaned):
         raise ValueError("the text must not contain credentials")
     return cleaned
@@ -2736,7 +2740,7 @@ def set_criteria(
     A save that changes nothing is no write (F2, the product owner's follow-up of 19 November
     2026; I12, I14): the sent values, normalised as they are stored (_clean, judgment and
     automatable as they are, None included, the phases in their order), are compared with
-    the stored ones normalised the same way; when they are equal nothing is written: no new
+    the stored ones folded the same way (never screened); when equal nothing is written: no new
     version, no history version, no audit event, and the criteria keep who stated them and
     whether a person accepted them. Before, an unchanged Save made an agent's criteria a
     person's, so saving stood for accepting; acceptance is by Accept only."""
@@ -2761,9 +2765,13 @@ def set_criteria(
             body.objective, body.condition, body.pass_criteria, body.fail_criteria,
             body.judgment_required, body.automatable, list(body.phases),
         )  # fmt: skip
+        # The stored side is folded, never screened (review finding of 20 November 2026):
+        # criteria an agent wrote are screened by contains_secret, which passes some text
+        # _clean refuses ("The API key: rotated ..."); screening them here refused every
+        # Save, even the one that removes the phrase, so a person could not correct them.
         stored = criteria_values(
             str(row[3] or ""), str(row[4] or ""), str(row[5] or ""), str(row[6] or ""),
-            row[7], row[8], [str(phase) for phase in row[9] or []],
+            row[7], row[8], [str(phase) for phase in row[9] or []], screen=False,
         )  # fmt: skip
         if sent == stored:
             return False
@@ -2801,13 +2809,18 @@ def criteria_values(
     judgment: bool | None,
     automatable: bool | None,
     phases: list[str],
+    *,
+    screen: bool = True,
 ) -> tuple[str, str, str, str, bool | None, bool | None, list[str]]:
     """An attribute's criteria as set_criteria stores them, for writing and for telling an
-    unchanged save: the texts with their whitespace folded (_clean, which refuses a
-    credential), judgment and automatable as they are (None is "not determined", never
-    False), and the phases once each in their order."""
+    unchanged save: the texts with their whitespace folded, judgment and automatable as
+    they are (None is "not determined", never False), and the phases once each in their
+    order. `screen` refuses a credential (_clean): it is for what a person sends, never for
+    what is already stored (screen=False folds only), so stored text can always be
+    corrected."""
+    fold = _clean if screen else _folded
     return (
-        _clean(objective), _clean(condition), _clean(passes), _clean(fails), judgment,
+        fold(objective), fold(condition), fold(passes), fold(fails), judgment,
         automatable,
         sorted(set(phases), key=lambda phase: PHASES.index(phase) if phase in PHASES else 99),
     )  # fmt: skip
