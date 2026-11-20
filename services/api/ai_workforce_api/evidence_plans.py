@@ -3150,7 +3150,7 @@ def run_plan(
             RETURNING organization_id, project_id, engagement_control_id, status,
                       coalesce(generated_by, (SELECT owner_user_id FROM projects
                                               WHERE id = evidence_plans.project_id)),
-                      run_stage, run_codes, run_cause
+                      run_stage, run_codes, run_cause, run_queued_at
             """,
             (PLAN_LEASE_MINUTES, plan_id, PLAN_RUN_ATTEMPTS),
         ).fetchone()
@@ -3232,13 +3232,21 @@ def run_plan(
         elif follows or (str(row[3]) == "PROPOSED" and (reviewed.status == "NONE" or plain)):
             began = _now(connection)
             read = agents_read(connection, project_id, control_id)
+            # A limited update follows what was saved while it waited in the queue too
+            # (SOL defect 1, 19 November 2026). Bounded by when it was queued, not by when
+            # the plan was generated, so an assumption's update is not widened by the
+            # change that queued it.
+            if follows and only:
+                only, cause = _widened(connection, control_id, only, cause, row[8])
             note, finished = _plan_pass(
                 connection, provider, organization_id, project_id, control_id, requester,
                 follows, only, cause,
             )  # fmt: skip
             # An answer saved while the agents worked was not read: once more, and only
-            # once, so a run always ends.
+            # once, so a run always ends; a limited update widened to what was saved.
             if follows and understanding_due(connection, project_id, control_id, began):
+                if only:
+                    only, cause = _widened(connection, control_id, only, cause, began)
                 read = agents_read(connection, project_id, control_id)
                 note, finished = _plan_pass(
                     connection, provider, organization_id, project_id, control_id,
@@ -3285,6 +3293,39 @@ def run_plan(
     return "DONE"
 
 
+def widened(only: tuple[str, ...], since: list[str] | None) -> tuple[str, ...]:
+    """The codes a limited update may change once what changed since its bound is known
+    (understanding_review.informed_update with `since`): None widens it to the whole set
+    (()), none keeps it as it was, and codes are added to it (NO_ATTRIBUTE only while
+    nothing else is named). Pure."""
+    from ai_workforce_api.understanding_review import NO_ATTRIBUTE, informed_codes
+
+    if since is None:
+        return ()
+    if not since:
+        return only
+    return tuple(informed_codes([code for code in (*only, *since) if code != NO_ATTRIBUTE]))
+
+
+def _widened(
+    connection: psycopg.Connection[Any],
+    control_id: UUID,
+    only: tuple[str, ...],
+    cause: str,
+    since: datetime | None,
+) -> tuple[tuple[str, ...], str]:
+    """A limited update's codes and cause, widened to what was saved after `since`
+    (widened). With no bound recorded, the whole set follows."""
+    from ai_workforce_api.criteria_history import cause_of
+    from ai_workforce_api.understanding_review import informed_update
+
+    if since is None:
+        return (), cause
+    found = informed_update(connection, control_id, since)
+    codes = widened(only, None if found is None else found[0])
+    return codes, cause_of([cause, "" if found is None else found[1]])
+
+
 def _now(connection: psycopg.Connection[Any]) -> datetime:
     row = connection.execute("SELECT clock_timestamp()").fetchone()
     assert row is not None
@@ -3325,7 +3366,7 @@ def _plan_pass(
         _, _drafts, note = generate(
             connection, provider, organization_id, project_id, control_id, requester
         )
-        return note, _pass_finished(connection, control_id, began, note)
+        return note, _pass_finished(connection, control_id, began)
     from ai_workforce_api.criteria_history import run_settings
 
     with run_settings(connection, cause or _answers_followed(connection, control_id), only):
@@ -3405,59 +3446,26 @@ def _staged_pass(
     review_note = review_set(
         connection, provider, organization_id, project_id, control_id, requester
     )
-    planner_note = attribute_note if attribute_note.startswith(KEPT_NOTE) else note
     return (
         " ".join(part for part in (attribute_note, note, review_note) if part),
-        _pass_finished(connection, control_id, began, planner_note),
+        _pass_finished(connection, control_id, began),
     )
 
 
-def _agents_answered(
-    connection: psycopg.Connection[Any], control_id: UUID, began: datetime
-) -> bool:
-    """Whether the attribute agent answered in a stage begun at `began`, and the reviewer of
-    its drafts did not fail after it: the question pass read the understanding. An agent
-    that was not asked (no model call) did not."""
-    from ai_workforce_api import control_attributes
+def _pass_finished(connection: psycopg.Connection[Any], control_id: UUID, began: datetime) -> bool:
+    """Whether a pass of a plan run finished its work (see _plan_pass): the planner did not
+    plan by the rules in its place (the plan's source), and the last call since the pass
+    began of each of the pass's agents (the attribute agent, its drafts' reviewer, the
+    planner and the set reviewer) succeeded and had its answer used: its recorded outcome is
+    ACCEPTED (agent_answers.note_used). An answer rejected, or with no outcome recorded,
+    never counts as finished.
 
-    row = connection.execute(
-        """
-        SELECT EXISTS (
-                   SELECT 1 FROM model_calls m
-                   WHERE m.target_type = 'engagement_control' AND m.target_id = %s
-                     AND m.created_at >= %s
-                     AND split_part(m.prompt_version, '/', 1) = %s)
-               AND NOT EXISTS (
-                   SELECT 1 FROM (
-                       SELECT DISTINCT ON (m.agent_key, m.prompt_version) m.status
-                       FROM model_calls m
-                       WHERE m.target_type = 'engagement_control' AND m.target_id = %s
-                         AND m.created_at >= %s
-                         AND split_part(m.prompt_version, '/', 1) = ANY(%s)
-                       ORDER BY m.agent_key, m.prompt_version, m.created_at DESC
-                   ) AS last
-                   WHERE last.status <> 'SUCCEEDED')
-        """,
-        (
-            control_id, began, control_attributes.PROMPT_VERSION.split("/", 1)[0],
-            control_id, began,
-            [version.split("/", 1)[0] for version in (
-                control_attributes.PROMPT_VERSION, control_attributes.REVIEW_PROMPT_VERSION
-            )],
-        ),
-    ).fetchone()  # fmt: skip
-    return row is not None and bool(row[0])
-
-
-def _pass_finished(
-    connection: psycopg.Connection[Any], control_id: UUID, began: datetime, planner_note: str
-) -> bool:
-    """Whether a pass of a plan run finished its work (see _plan_pass). The planner's
-    outcome is read from the plan; the attribute agent's, its drafts' reviewer's and the
-    set reviewer's from their calls on the control since the pass began: the last call of
-    each must have succeeded."""
-    if planner_note.startswith(KEPT_NOTE):
-        return False
+    Dated note, 19 November 2026 (FO-4 and R7 of the SOL attribute fixes). Old: a call that
+    succeeded counted, whatever was made of its answer, and the planner's outcome was read
+    from the words of the run's note (KEPT_NOTE). New: the typed outcome of every agent's
+    last call, the planner's among them (_planner_outcome records it), as informed_update
+    reads the attribute agent's. Why: a rejected answer recorded the read as made, so a
+    rerun read as not useful and nothing was queued again (I10)."""
     from ai_workforce_api import attribute_review, control_attributes
 
     agents = [
@@ -3466,6 +3474,7 @@ def _pass_finished(
             control_attributes.PROMPT_VERSION,
             control_attributes.REVIEW_PROMPT_VERSION,
             attribute_review.PROMPT_VERSION,
+            PLANNER_PROMPT_VERSION,
         )
     ]
     row = connection.execute(
@@ -3473,15 +3482,19 @@ def _pass_finished(
         SELECT p.source = 'FALLBACK'
                OR EXISTS (
                    SELECT 1 FROM (
-                       SELECT DISTINCT ON (m.agent_key, m.prompt_version) m.status
+                       SELECT DISTINCT ON (split_part(m.prompt_version, '/', 1))
+                              m.status, o.outcome ->> 'validation' AS validation
                        FROM model_calls m
+                       LEFT JOIN model_call_outcomes o ON o.model_call_id = m.id
                        WHERE m.target_type = 'engagement_control'
                          AND m.target_id = p.engagement_control_id
                          AND m.created_at >= %s
                          AND split_part(m.prompt_version, '/', 1) = ANY(%s)
-                       ORDER BY m.agent_key, m.prompt_version, m.created_at DESC
+                       ORDER BY split_part(m.prompt_version, '/', 1), m.created_at DESC,
+                                m.id DESC
                    ) AS last
-                   WHERE last.status <> 'SUCCEEDED')
+                   WHERE last.status <> 'SUCCEEDED'
+                      OR last.validation IS DISTINCT FROM 'ACCEPTED')
         FROM evidence_plans p WHERE p.engagement_control_id = %s
         """,
         (began, agents, control_id),
@@ -4993,19 +5006,64 @@ def pending_criteria(
     proposed criteria differ from the attribute's own. In the attributes' order. On
     ITGC-AC-01 (13 November 2026) the criteria for A1, A4 and A5 waited there and the
     Attributes step read "Needs criteria" with nothing said."""
+    matched = _pending_matches(connection, control_id, CRITERIA_WRITABLE_SQL)
+    if matched is None:
+        return False, []
+    return True, [
+        PendingCriteriaBody(attribute_id=attribute_id, code=code)
+        for attribute_id, code, _item in matched
+    ]
+
+
+# CRITERIA_WRITABLE_SQL as a person's request reads it: app.criteria_only is a run's session
+# setting (criteria_history.run_settings), and a person's Accept of the pending revision
+# (master_plans.decide_pending_revision, _write_each_criteria) runs without it, so it writes
+# every matched attribute, whichever run's session reads them.
+_WRITABLE_ON_ACCEPT_SQL = CRITERIA_WRITABLE_SQL.replace(ONLY_NAMED_SQL, "true")
+assert _WRITABLE_ON_ACCEPT_SQL != CRITERIA_WRITABLE_SQL
+
+
+def pending_criteria_items(
+    connection: psycopg.Connection[Any], control_id: UUID
+) -> dict[str, dict[str, Any]]:
+    """The criteria the plan's pending revision would write on Accept, by attribute id:
+    exactly what _write_each_criteria writes (its raw values, judgment as a boolean), for the
+    attributes it would write them on, whichever session reads them (a limited run's included:
+    _WRITABLE_ON_ACCEPT_SQL). What the set reviewer is given in place of their standing
+    criteria, and what its verdict on them is tied to (attribute_review; SOL defect 3, 19
+    November 2026). Empty when no revision waits."""
+    matched = _pending_matches(connection, control_id, _WRITABLE_ON_ACCEPT_SQL)
+    return {
+        str(attribute_id): {
+            "condition": str(item.get("condition") or ""),
+            "pass_criteria": str(item.get("pass_criteria") or ""),
+            "fail_criteria": str(item.get("fail_criteria") or ""),
+            "judgment_required": bool(item.get("judgment_required")),
+        }
+        for attribute_id, _code, item in matched or []
+    }
+
+
+def _pending_matches(
+    connection: psycopg.Connection[Any], control_id: UUID, writable: str
+) -> list[tuple[UUID, str, dict[str, Any]]] | None:
+    """The approved attributes `writable` allows whose criteria the pending revision proposes
+    (matched by wording as _criteria_differ and _write_each_criteria match them) where they
+    differ from the attribute's own, each with its code and the revision's item, in the
+    attributes' order; None when no revision waits."""
     row = connection.execute(
         "SELECT pending_revision FROM evidence_plans WHERE engagement_control_id = %s",
         (control_id,),
     ).fetchone()
     if row is None or row[0] is None:
-        return False, []
+        return None
     revision = row[0] if isinstance(row[0], dict) else {}
     proposed = {
         " ".join(str(item.get("attribute") or "").split()).lower(): item
         for item in revision.get("criteria") or []
         if isinstance(item, dict)
     }
-    found: list[PendingCriteriaBody] = []
+    found: list[tuple[UUID, str, dict[str, Any]]] = []
     for (
         attribute_id,
         code,
@@ -5020,7 +5078,7 @@ def pending_criteria(
             SELECT a.id, coalesce(a.code, ''), a.text, a.condition, a.pass_criteria,
                    a.fail_criteria, a.judgment_required, a.automatable
             FROM control_attributes a
-            WHERE a.engagement_control_id = %s AND {CRITERIA_WRITABLE_SQL}
+            WHERE a.engagement_control_id = %s AND {writable}
             ORDER BY a.position, a.created_at
             """,
         (control_id,),
@@ -5030,8 +5088,8 @@ def pending_criteria(
             item.get("condition"), item.get("pass_criteria"), item.get("fail_criteria"),
             bool(item.get("judgment_required")), item.get("automatable"),
         ):  # fmt: skip
-            found.append(PendingCriteriaBody(attribute_id=attribute_id, code=str(code)))
-    return True, found
+            found.append((UUID(str(attribute_id)), str(code), item))
+    return found
 
 
 def plan_run_failure_note(connection: psycopg.Connection[Any], control_id: UUID) -> str:

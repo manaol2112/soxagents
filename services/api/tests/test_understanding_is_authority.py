@@ -162,6 +162,9 @@ class _Understood(_Agents):
         self.answer: Any = lambda facts: {"attributes": [], "issues": []}
         # The drafts as their reviewer returns them, from the drafts; None: as drafted.
         self.redraft: Any = None
+        # What the reviewer of the drafts says it corrected or left out (19 November 2026,
+        # FO-3: a draft left out needs its reason, or the answer is no review).
+        self.fixes: list[str] = []
         self.contexts: list[dict[str, Any]] = []
         self.planner_prompts: list[str] = []
         self._drafted: list[dict[str, Any]] = []
@@ -179,7 +182,7 @@ class _Understood(_Agents):
             self.prompts.append(request.prompt)
             self._note("draft-review")
             drafts = self._drafted if self.redraft is None else self.redraft(self._drafted)
-            return ModelRaw({"attributes": drafts, "fixes": []}, (), 100, 100)
+            return ModelRaw({"attributes": drafts, "fixes": self.fixes}, (), 100, 100)
         if request.system == PLANNER_SYSTEM:
             self.planner_prompts.append(request.prompt)
         return super().complete(request, config)
@@ -388,7 +391,12 @@ def test_the_attribute_follows_the_understanding_and_the_conflict_is_never_raise
         "WHERE engagement_control_id = %s ORDER BY question_key",
         UUID(control),
     )
+    from set_review_answers import every_ok
+
     agents = _Understood(migrated, team, control)
+    # Rewritten 19 November 2026 (SOL defect 4): the set reviewer's answer is stated, a
+    # verdict on each attribute; the default empty one is now corrected and not used.
+    agents.review = every_ok
     # The agent tailors A3 and still returns the conflict, in the words it used.
     agents.answer = lambda facts: {
         "attributes": [_change(a3_id, facts)],
@@ -1464,10 +1472,13 @@ def test_the_reviewer_of_the_drafts_corrects_or_leaves_out_a_followed_draft_like
         }
 
     agents.answer = drafted
-    # The reviewer takes the invented figure out and leaves the duplicate out.
+    # The reviewer takes the invented figure out and leaves the duplicate out. Rewritten 19
+    # November 2026 (FO-3): it says why it left the draft out; before, leaving drafts out
+    # with no reason was read as a review, and an empty answer dropped every draft.
     agents.redraft = lambda drafts: [
         {**drafts[0], "pass_criteria": TICKET_CRITERIA["pass_criteria"]}
     ]
+    agents.fixes = ["The addition repeats the change and was left out."]
     _inline(migrated, team, control, agents)
     [proposed] = _attributes(team, control)["proposed"]
     assert proposed["proposal"] == "CHANGE" and "3 days" not in proposed["pass_criteria"]
@@ -1482,6 +1493,7 @@ def test_the_reviewer_of_the_drafts_corrects_or_leaves_out_a_followed_draft_like
     # it back, and the audit trail says what happened.
     agents.answer = lambda facts: {"attributes": [_change(a3_id, facts)], "issues": []}
     agents.redraft = lambda drafts: []
+    agents.fixes = ["The change does not follow the confirmed understanding."]
     _inline(migrated, team, control, agents)
     assert _attributes(team, control)["proposed"] == []
     last = _followed_audit(migrated, control)[-1][2]
@@ -1494,6 +1506,7 @@ def test_the_reviewer_of_the_drafts_corrects_or_leaves_out_a_followed_draft_like
     agents.redraft = lambda drafts: [
         {key: value for key, value in drafts[0].items() if key != "follows"}
     ]
+    agents.fixes = []
     _inline(migrated, team, control, agents)
     [proposed] = _attributes(team, control)["proposed"]
     assert proposed["text"] == A3_FOLLOWS and proposed["understanding_basis"] is None
@@ -1538,13 +1551,16 @@ def test_the_reviewer_of_the_set_revises_merges_and_questions_a_followed_attribu
         "fail_criteria": TICKET_CRITERIA["fail_criteria"],
     }
 
+    from set_review_answers import every_ok, with_every_verdict
+
     def review(given: dict[str, Any]) -> dict[str, Any]:
         change = next(item for item in given["attributes"] if item["state"] == "AGENT_REWORDS")
         addition = next(item for item in given["attributes"] if item["state"] == "AGENT_ADDS")
         # Both say they follow the understanding, and both are the reviewer's to revise.
         assert change["follows_understanding"] and addition["follows_understanding"]
         assert change["may_revise"] == addition["may_revise"] == ["criteria", "text"]
-        return {
+        # Rewritten 19 November 2026 (SOL defect 4): OK on every other attribute given.
+        return with_every_verdict({
             "attributes": [
                 # A revision of the followed change: applied.
                 {"id": change["id"], "verdict": "REVISED", "note": "Names the first entry.",
@@ -1554,7 +1570,7 @@ def test_the_reviewer_of_the_set_revises_merges_and_questions_a_followed_attribu
                  "note": "It is the change again.", **tighter},
             ],
             "findings": [],
-        }  # fmt: skip
+        }, given)  # fmt: skip
 
     agents.review = review
     with connect(migrated.url) as connection:
@@ -1574,7 +1590,10 @@ def test_the_reviewer_of_the_set_revises_merges_and_questions_a_followed_attribu
     ) == [("SUPERSEDED",)]
 
     def reviewed_with(answer: dict[str, Any]) -> dict[str, Any]:
-        agents.review = lambda given: {"attributes": [answer], "findings": []}
+        # Rewritten 19 November 2026 (SOL defect 4): OK on every other attribute given.
+        agents.review = lambda given: with_every_verdict(
+            {"attributes": [answer], "findings": []}, given
+        )
         with connect(migrated.url) as connection:
             assert (
                 attribute_review.review_set(
@@ -1589,7 +1608,7 @@ def test_the_reviewer_of_the_set_revises_merges_and_questions_a_followed_attribu
 
     # A fresh followed change, with its line shown.
     agents.answer = lambda facts: {"attributes": [_change(a3_id, facts)], "issues": []}
-    agents.review = lambda given: {"attributes": [], "findings": []}
+    agents.review = every_ok
     _inline(migrated, team, control, agents)
     [fresh] = _attributes(team, control)["proposed"]
     assert fresh["understanding_basis"] is not None
@@ -1746,8 +1765,11 @@ def test_every_agent_that_reads_the_understanding_is_given_the_precedence(
         # new "attributes/8" in the second fix round of B1k (each issue names its codes).
         # Old ("attributes/8", "attribute-review/4", "attribute-set-review/4",
         # "engagement-planner/10"); new /9, /5, /5 and /11 (18 November 2026, owner-approved
-        # S1: the data's tags are made inert, nothing this test reads changed).
-    ) == ("attributes/9", "attribute-review/5", "attribute-set-review/5", "engagement-planner/11")
+        # S1: the data's tags are made inert, nothing this test reads changed). Old
+        # "attribute-set-review/5"; new "/6" (19 November 2026, owner-approved bump for the
+        # SOL attribute fixes: a verdict on every attribute, the pending criteria reviewed;
+        # the precedence and every rule this test reads stay word for word).
+    ) == ("attributes/9", "attribute-review/5", "attribute-set-review/6", "engagement-planner/11")
     team, control, client, _a3 = _case(migrated, "uia-inputs")
     _walkthrough_confirmed(migrated, team, control, client)
     with connect(migrated.url) as connection:

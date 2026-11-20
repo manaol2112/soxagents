@@ -2058,7 +2058,11 @@ def approve(
             cursor, organization_id, project_id, actor, "evidence_plan.approved",
             "evidence_plan", plan_id,
             {"revision": revision, "content_hash": digest, "previous_status": status,
-             "values_answered": sorted(answered)},
+             "values_answered": sorted(answered),
+             # The basis the approval stands on (I1; SOL scope C1, 19 November 2026): what
+             # the plan follows, and the library standard's status when it was approved.
+             "test_basis": plan.test_basis, "library_key": plan.library_key,
+             "library_status": plan.library_status},
         )  # fmt: skip
         # Results signed off under an earlier revision now await a reviewer's impact
         # assessment (plan_impact.py, W3); the agent recommends, a person decides.
@@ -2725,14 +2729,23 @@ def set_criteria(
     attribute_id: UUID,
     actor: UUID,
     body: CriteriaBody,
-) -> None:
+) -> bool:
     """How an attribute is judged, as a person states it. Empty fields fall back to the
-    library's definition, where there is one."""
+    library's definition, where there is one. Returns whether anything changed.
+
+    A save that changes nothing is no write (F2, the product owner's follow-up of 19 November
+    2026; I12, I14): the sent values, normalised as they are stored (_clean, judgment and
+    automatable as they are, None included, the phases in their order), are compared with
+    the stored ones normalised the same way; when they are equal nothing is written: no new
+    version, no history version, no audit event, and the criteria keep who stated them and
+    whether a person accepted them. Before, an unchanged Save made an agent's criteria a
+    person's, so saving stood for accepting; acceptance is by Accept only."""
     with transaction(connection) as cursor:
         _plan_id(cursor, project_id, control_id)
         row = cursor.execute(
-            "SELECT version, status, code FROM control_attributes WHERE id = %s "
-            "AND engagement_control_id = %s FOR UPDATE",
+            "SELECT version, status, code, objective, condition, pass_criteria, "
+            "fail_criteria, judgment_required, automatable, phases FROM control_attributes "
+            "WHERE id = %s AND engagement_control_id = %s FOR UPDATE",
             (attribute_id, control_id),
         ).fetchone()
         if row is None:
@@ -2744,6 +2757,16 @@ def set_criteria(
         # A person's own criteria count as accepted, so a conflict that holds the attribute
         # is decided first here too (B1l point 6; decided after the review of B1k).
         _not_held_by_conflict(cursor, control_id, None if row[2] is None else str(row[2]))
+        sent = criteria_values(
+            body.objective, body.condition, body.pass_criteria, body.fail_criteria,
+            body.judgment_required, body.automatable, list(body.phases),
+        )  # fmt: skip
+        stored = criteria_values(
+            str(row[3] or ""), str(row[4] or ""), str(row[5] or ""), str(row[6] or ""),
+            row[7], row[8], [str(phase) for phase in row[9] or []],
+        )  # fmt: skip
+        if sent == stored:
+            return False
         from ai_workforce_api.criteria_history import writing
 
         # The criteria history names the person as their writer (B1j, migration 0172).
@@ -2756,11 +2779,7 @@ def set_criteria(
                     criteria_origin = 'PERSON', version = version + 1
                 WHERE id = %s
                 """,
-                (
-                    _clean(body.objective), _clean(body.condition), _clean(body.pass_criteria),
-                    _clean(body.fail_criteria), body.judgment_required, body.automatable,
-                    sorted(set(body.phases), key=PHASES.index), attribute_id,
-                ),
+                (*sent, attribute_id),
             )  # fmt: skip
         _audit(
             cursor, organization_id, project_id, actor, "control_attribute.criteria_set",
@@ -2771,6 +2790,27 @@ def set_criteria(
         from ai_workforce_api.understanding_once import complete_if_accepted
 
         complete_if_accepted(cursor, project_id, control_id)
+    return True
+
+
+def criteria_values(
+    objective: str,
+    condition: str,
+    passes: str,
+    fails: str,
+    judgment: bool | None,
+    automatable: bool | None,
+    phases: list[str],
+) -> tuple[str, str, str, str, bool | None, bool | None, list[str]]:
+    """An attribute's criteria as set_criteria stores them, for writing and for telling an
+    unchanged save: the texts with their whitespace folded (_clean, which refuses a
+    credential), judgment and automatable as they are (None is "not determined", never
+    False), and the phases once each in their order."""
+    return (
+        _clean(objective), _clean(condition), _clean(passes), _clean(fails), judgment,
+        automatable,
+        sorted(set(phases), key=lambda phase: PHASES.index(phase) if phase in PHASES else 99),
+    )  # fmt: skip
 
 
 def accept_criteria(
@@ -3315,9 +3355,11 @@ def register_master_plans(app: FastAPI, settings: Settings, scheduler: Any = Non
     ) -> MasterPlanBody:  # fmt: skip
         def work(c: psycopg.Connection[Any], p: Principal) -> MasterPlanBody:
             allowed(c, p, organization_id, project_id, control_id, Action.TASK_UPDATE)
-            set_criteria(c, organization_id, project_id, control_id, attribute_id, p.id, body)
-            followed(c, p, project_id, control_id)
-            settled(c, p, organization_id, project_id, control_id)
+            # An unchanged save changes nothing, so nothing follows it (F2).
+            if set_criteria(c, organization_id, project_id, control_id, attribute_id, p.id,
+                            body):  # fmt: skip
+                followed(c, p, project_id, control_id)
+                settled(c, p, organization_id, project_id, control_id)
             return read(c, p, organization_id, project_id, control_id)
 
         return run(request, work)

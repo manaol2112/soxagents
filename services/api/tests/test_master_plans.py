@@ -965,3 +965,138 @@ def test_each_blocker_says_where_it_is_resolved() -> None:
     assert any(resolve == "PHASES" and not blocks for _, blocks, resolve in found)
     assert ("2 proposed changes to the evidence to decide.", True, "EVIDENCE_CHANGES") in found
     assert any(resolve == "REVISION" and blocks for _, blocks, resolve in found)
+
+
+# SOL attribute fixes (19 November 2026)
+
+
+def test_every_plan_approval_records_its_basis_and_library_status(migrated: Database) -> None:
+    """SOL scope C1 (I1): the approval's audit record says what the plan follows and the
+    standard's status on the Library when it was approved. Every route approves through
+    master_plans.approve (the single route here; the bulk route and a group's decision call
+    it per control)."""
+    team = _launched(migrated, "master-basis-audit")
+    control = _control(team, "ITGC-AC-01")["id"]
+    _approve(team, control)
+    [(payload, key)] = _rows(
+        migrated,
+        "SELECT a.payload, c.library_key FROM audit_events a JOIN evidence_plans p "
+        "ON p.id = a.target_id JOIN engagement_controls c ON c.id = p.engagement_control_id "
+        "WHERE a.action = 'evidence_plan.approved' AND c.id = %s",
+        UUID(control),
+    )
+    assert key and payload["library_key"] == key
+    assert payload["test_basis"] in ("STANDARD", "CUSTOM", "CLIENT")
+    assert isinstance(payload["library_status"], str) and payload["library_status"]
+
+
+def _agent_criteria(migrated: Database, attribute_id: str) -> None:
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE control_attributes SET condition = %s, pass_criteria = %s, "
+            "fail_criteria = %s, objective = '', judgment_required = NULL, automatable = NULL, "
+            "phases = '{}', criteria_origin = 'AGENT', criteria_accepted_at = NULL, "
+            "criteria_accepted_by = NULL WHERE id = %s",
+            (
+                "The ServiceNow request names the user and the role requested.",
+                "The user's manager approved the request in ServiceNow before the grant.",
+                "No approval is recorded, or the approval is dated after the grant.",
+                UUID(attribute_id),
+            ),
+        )
+        connection.commit()
+
+
+def test_an_unchanged_criteria_save_changes_nothing(
+    migrated: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F2 (the product owner's follow-up, 19 November 2026; I12, I14). Old: Save on the
+    agent's criteria as they read made them a person's (criteria_origin PERSON, a new version,
+    a kept history version, an audit event, the runs followed), so saving stood for
+    accepting. New: a save whose values equal the stored ones once normalised changes
+    nothing; "not determined" (None) is not "objectively testable" (False); a real change
+    still saves as the person's."""
+    from ai_workforce_api import evidence_assurance, phase_release
+
+    team = _launched(migrated, "master-unchanged")
+    control = _control(team, "ITGC-AC-01")["id"]
+    attribute = _master(team, control)["attributes"][0]
+    _agent_criteria(migrated, attribute["id"])
+    followed: list[Any] = []
+    monkeypatch.setattr(evidence_assurance, "follow_control", lambda *a, **k: followed.append(a))
+    monkeypatch.setattr(phase_release, "settle_design", lambda *a, **k: followed.append(a))
+    state = (
+        "SELECT version, criteria_origin, criteria_accepted_at, judgment_required, "
+        "(SELECT count(*) FROM attribute_criteria_versions v WHERE v.attribute_id = a.id), "
+        "(SELECT count(*) FROM audit_events e WHERE e.target_id = a.id "
+        " AND e.action = 'control_attribute.criteria_set') "
+        "FROM control_attributes a WHERE a.id = %s"
+    )
+    [before] = _rows(migrated, state, UUID(attribute["id"]))
+    path = f"{_project(team)}/controls/{control}/master-plan/attributes/{attribute['id']}/criteria"
+    same = {
+        "version": before[0],
+        "condition": "  The ServiceNow request names the user and the role requested. ",
+        "pass_criteria": "The user's manager approved the request in ServiceNow before the\ngrant.",
+        "fail_criteria": "No approval is recorded, or the approval is dated after the grant.",
+        "judgment_required": None,
+        "automatable": None,
+    }
+    saved = team["owner"].post(path, json=same)
+    assert saved.status_code == 200, saved.text
+    assert _rows(migrated, state, UUID(attribute["id"])) == [before]
+    assert before[1] == "AGENT" and before[2] is None and followed == []
+    # "Objectively testable" where nothing was determined is a decision: it saves.
+    decided = team["owner"].post(path, json={**same, "judgment_required": False})
+    assert decided.status_code == 200, decided.text
+    [after] = _rows(migrated, state, UUID(attribute["id"]))
+    assert after[0] == before[0] + 1 and after[1] == "PERSON" and after[3] is False
+    assert after[5] == before[5] + 1 and followed
+
+
+def test_an_unchanged_attribute_edit_changes_nothing(
+    migrated: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F2: rewording an attribute to the words it has, with other whitespace, writes no new
+    row and no attribute.edited event, and nothing follows it."""
+    from ai_workforce_api import evidence_assurance
+
+    team = _launched(migrated, "master-unchanged-edit")
+    control = _control(team, "ITGC-AC-01")["id"]
+    attribute = _master(team, control)["attributes"][0]
+    told: list[Any] = []
+    monkeypatch.setattr(evidence_assurance, "follow_control", lambda *a, **k: told.append(a))
+    count = (
+        "SELECT count(*), (SELECT count(*) FROM audit_events WHERE project_id = %s "
+        "AND action = 'attribute.edited') FROM control_attributes "
+        "WHERE engagement_control_id = %s"
+    )
+    [before] = _rows(migrated, count, team["project"], UUID(control))
+    edited = team["owner"].patch(
+        f"{_project(team)}/controls/{control}/attributes/{attribute['id']}",
+        json={
+            "text": f"  {attribute['text']} ".replace(" ", "  "),
+            "version": attribute["version"],
+        },
+    )
+    assert edited.status_code == 200, edited.text
+    assert _rows(migrated, count, team["project"], UUID(control)) == [before]
+    assert told == []
+
+
+def test_the_web_and_the_server_fold_whitespace_alike() -> None:
+    """F2 (R5c): the one table of cases the web's Save check reads too
+    (tests/criteria-whitespace-cases.json, tests/attributes-review-model.test.ts), so the
+    web never offers a save the server reads as no change."""
+    import json
+    from pathlib import Path
+
+    from ai_workforce_api.control_context import line
+    from ai_workforce_api.master_plans import _clean
+
+    table = Path(__file__).resolve().parents[3] / "tests" / "criteria-whitespace-cases.json"
+    cases = json.loads(table.read_text(encoding="utf-8"))
+    for given, folded in cases["criteria"]:
+        assert _clean(given) == folded, given
+    for given, folded in cases["wording"]:
+        assert line(given, 300) == folded, given

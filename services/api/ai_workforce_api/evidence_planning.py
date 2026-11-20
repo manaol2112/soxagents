@@ -2198,14 +2198,23 @@ _PRIOR_YEAR_PROOF = re.compile(
     r"|\b(?:based on|relying on|rel(?:y|ies) on|carried forward from)\s+(?:the\s+)?"
     r"(?:prior|previous|last)[- ](?:year|period)"
 )
+# 19 November 2026 (SOL defect 2, FO-7): minutes too ("739 minutes" reached proposed
+# criteria). Months, years, quarters, the hyphen form, number words and currency codes wait
+# for a whole-figure comparison in _check_fabrication and the audit period's length among
+# check_sources: without them "the 30-day window" or "the 12 months of the period" would be
+# refused against records that say "30 days" or give the period by its dates.
 _THRESHOLD = re.compile(
     r"(?i)(?:[$€£]\s?\d[\d,]*(?:\.\d+)?|\b\d+(?:\.\d+)?\s?(?:%|percent\b)"
-    r"|\b\d+\s+(?:business\s+|working\s+|calendar\s+)?(?:days?|hours?|weeks?)\b)"
+    r"|\b\d+\s+(?:business\s+|working\s+|calendar\s+)?(?:minutes?|days?|hours?|weeks?)\b)"
 )
-# Words that leave a criterion to the tester's impression instead of stating it.
+# Words that leave a criterion to the tester's impression instead of stating it. 19 November
+# 2026 (FO-7): promptly, periodically, regularly, routinely, as soon as possible and without
+# undue delay too. "As required" and "as necessary" are not: the library's own criteria use
+# them ("Reviewed as required."), so criteria restating a standard would be refused.
 _VAGUE = re.compile(
     r"(?i)\b(?:operat\w* effectively|appropriate(?:ly)?|adequate(?:ly)?|properly|"
-    r"sufficient(?:ly)?|reasonabl[ey]|as needed|in a timely manner|timely)\b"
+    r"sufficient(?:ly)?|reasonabl[ey]|as needed|in a timely manner|timely|promptly|"
+    r"periodically|regularly|routinely|as soon as possible|without undue delay)\b"
 )
 
 

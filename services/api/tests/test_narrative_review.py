@@ -343,8 +343,13 @@ def _open_points(client: Any, team: dict[str, Any], cid: str) -> list[dict[str, 
     return [i for i in issues if i["status"] == "OPEN" and i["question"]]
 
 
-def _clean(passed: bool) -> dict[str, Any]:
-    return {"passed": passed, "coverage": [], "findings": [], "fixes": [], "revised": False,
+def _clean(passed: bool, codes: list[str] | tuple[str, ...] = ()) -> dict[str, Any]:
+    """The reviewer's clean answer. Rewritten 19 November 2026 (FO-25). Old: no coverage at
+    all, and `passed` alone counted. New: the attributes `codes` marked covered. Why: the
+    review now passes only on its own full coverage and no findings."""
+    return {"passed": passed,
+            "coverage": [{"code": code, "covered": True, "note": ""} for code in codes],
+            "findings": [], "fixes": [], "revised": False,
             "sections": [], "steps": [], "questions": []}  # fmt: skip
 
 
@@ -364,7 +369,7 @@ def test_points_come_in_one_round_then_only_contradictions(migrated: Database) -
     # Round one: the points are stored as statements, with their section and codes.
     assert _ask(migrated, team, cid)
     first = _Provider([{**draft, "questions": [_point("Evidence of the check", codes)]},
-                       _clean(True)])  # fmt: skip
+                       _clean(True, codes)])  # fmt: skip
     _run(migrated, first, cid)
     [point] = _open_points(client, team, cid)
     assert point["proposal"] == (
@@ -406,7 +411,7 @@ def test_points_come_in_one_round_then_only_contradictions(migrated: Database) -
     # After the second round nothing more is asked, and the review can pass on what is known.
     third = _Provider([
         {**draft, "questions": [_point("Monitoring of grants", codes, "CONTRADICTION")]},
-        _clean(True),
+        _clean(True, codes),
     ])  # fmt: skip
     assert _run(migrated, third, cid) == "PASSED"
     assert '"may_ask": "NONE"' in third.requests[0].prompt
@@ -506,7 +511,7 @@ def test_the_page_sees_each_stage_while_the_agents_work(migrated: Database) -> N
     cid = control["id"]
     codes = _codes(migrated, cid)
     draft = {"sections": _sections(codes), "steps": _steps(codes), "questions": []}
-    watching = _Watching(migrated.url, cid, [draft, _clean(True)])
+    watching = _Watching(migrated.url, cid, [draft, _clean(True, codes)])
     assert _ask(migrated, team, cid)
     _run(migrated, watching, cid)
     assert watching.seen == [("WORKING", "DRAFTING"), ("WORKING", "REVIEWING")]

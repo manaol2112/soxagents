@@ -602,9 +602,13 @@ def test_an_approved_plan_keeps_its_attributes_and_gets_the_tailoring_as_a_propo
     _answer_required(migrated, team, control, client)
     plan_id = _plan_run(migrated, control)[0]
     assert scheduler.plans == [plan_id]
+    from set_review_answers import with_every_verdict
+
     first = _approved(migrated, control)[0]
     agents = _Agents(migrated, team, control)
-    agents.review = lambda given: {
+    # Rewritten 19 November 2026 (SOL defect 4, I11): the reviewer gives a verdict on every
+    # attribute it is given (OK on the others); before, its one verdict stood for the set.
+    agents.review = lambda given: with_every_verdict({
         "attributes": [
             {"id": str(first[0]), "verdict": "REVISED", "note": "Name the system.",
              "condition": "The ServiceNow request names the user and the SAP role requested.",
@@ -612,7 +616,7 @@ def test_an_approved_plan_keeps_its_attributes_and_gets_the_tailoring_as_a_propo
              "fail_criteria": "The request in ServiceNow names no user or no SAP role."}
         ],
         "findings": [],
-    }  # fmt: skip
+    }, given)  # fmt: skip
     with connect(migrated.url) as connection:
         assert run_plan_through(connection, agents, plan_id) == "DONE"
     assert "planner" in agents.calls and "set-review" in agents.calls
@@ -628,9 +632,17 @@ def test_an_approved_plan_keeps_its_attributes_and_gets_the_tailoring_as_a_propo
     # The reviewer was told it may not revise them, and its revision reads as a concern.
     given = agents.reviewed[0]
     assert all(item["may_revise"] == [] for item in given["attributes"])
-    body = team["owner"].get(f"{_path(team, control)}/context").json()["attributes"]
-    mark = next(item for item in body["approved"] if item["id"] == str(first[0]))["review"]
+    # Rewritten 19 November 2026 (SOL defect 3). Old: the concern was read from the row's
+    # mark. New: the reviewer reviewed the criteria the pending revision proposes for the
+    # row (pending_criteria), so its verdict is on those words: kept on the review, counted
+    # in the summary, and shown on the row once they are accepted. Why: the person decides
+    # on the pending criteria, which the reviewer never saw before.
+    first_given = next(item for item in given["attributes"] if item["id"] == str(first[0]))
+    assert "pending_criteria" in first_given
+    mark = _stored_review(migrated, control)["items"][str(first[0])]
     assert mark["verdict"] == "CONCERN" and "Name the system." in mark["note"]
+    body = team["owner"].get(f"{_path(team, control)}/context").json()["attributes"]
+    assert body["review_summary"]["concerns"] == 1
 
 
 def test_a_planner_answer_that_cannot_be_used_ends_the_run_and_a_person_runs_it_again(
@@ -640,11 +652,16 @@ def test_a_planner_answer_that_cannot_be_used_ends_the_run_and_a_person_runs_it_
     schema. The planner's own checks read such an answer and ask for a correction, twice;
     if it still breaks a rule the rules plan instead. The run must then end, say so, and
     leave nothing working."""
+    from set_review_answers import every_ok
+
     team, control, scheduler, client = _ready(migrated, "afu-unusable")
     _answer_required(migrated, team, control, client)
     plan_id = _plan_run(migrated, control)[0]
     assert _plan_run(migrated, control)[1:] == ("PENDING", "ATTRIBUTES")
     agents = _Agents(migrated, team, control)
+    # Rewritten 19 November 2026 (SOL defect 4): the set reviewer's answer is stated, a
+    # verdict on each attribute; the default empty one is now corrected and not used.
+    agents.review = every_ok
     # An object where the schema asks for an array, and required parts missing.
     agents.plan = lambda: {"understanding": {}, "phases": {"DESIGN": []}}
     with connect(migrated.url) as connection:
@@ -691,6 +708,7 @@ def test_a_planner_answer_that_cannot_be_used_ends_the_run_and_a_person_runs_it_
     assert _plan_run(migrated, control)[1:] == ("PENDING", "ATTRIBUTES")
     # This time the planner answers: the criteria are tailored and nothing reads stopped.
     good = _Agents(migrated, team, control)
+    good.review = every_ok
     with connect(migrated.url) as connection:
         assert run_plan_through(connection, good, plan_id) == "DONE"
         assert attributes_run(connection, UUID(control)) == ("", "", "")
@@ -760,7 +778,12 @@ def test_a_run_whose_process_died_reads_as_stopped_and_resumes_when_the_worker_s
     with connect(migrated.url) as connection:
         assert plan_id in open_plan_runs(connection, team["project"])
     # Run for real, it starts again with the attributes, as the run it resumes did.
+    from set_review_answers import every_ok
+
     agents = _Agents(migrated, team, control)
+    # Rewritten 19 November 2026 (SOL defect 4): the set reviewer's answer is stated, a
+    # verdict on each attribute; the default empty one is now corrected and not used.
+    agents.review = every_ok
     with connect(migrated.url) as connection:
         assert run_plan_through(connection, agents, plan_id) == "DONE"
     assert [who for who in agents.calls if who != "other"] == [
@@ -844,18 +867,28 @@ def _stored_review(migrated: Database, control: str) -> dict[str, Any]:
 
 
 def _as_duplicate_of(target: Any) -> Any:
-    """The set reviewer's answer: the agent's addition repeats `target`, merged as MERGED."""
+    """The set reviewer's answer: the agent's addition repeats `target`, merged as MERGED,
+    and every other attribute is OK.
+
+    Rewritten 19 November 2026 (SOL defect 4, I11). Old: a verdict on the addition alone,
+    which was read as a review of the whole set. New: the same verdict, with OK on every
+    other attribute given. Why: a review that gives no verdict on an attribute it was given
+    is corrected and then not used, so the merge these tests are about would not happen."""
+    from set_review_answers import with_every_verdict
 
     def review(given: dict[str, Any]) -> dict[str, Any]:
         added = next(item for item in given["attributes"] if item["state"] == "AGENT_ADDS")
-        return {
-            "attributes": [
-                {"id": added["id"], "verdict": "DUPLICATE", "duplicate_of": str(target),
-                 "note": "It is the approved attribute plus who performed the removal.",
-                 **MERGED}
-            ],
-            "findings": [],
-        }  # fmt: skip
+        return with_every_verdict(
+            {
+                "attributes": [
+                    {"id": added["id"], "verdict": "DUPLICATE", "duplicate_of": str(target),
+                     "note": "It is the approved attribute plus who performed the removal.",
+                     **MERGED}
+                ],
+                "findings": [],
+            },
+            given,
+        )  # fmt: skip
 
     return review
 
@@ -1158,7 +1191,12 @@ def test_the_server_alone_keeps_a_repeated_attribute_out_when_both_reviewers_pas
     def addition(text: str) -> dict[str, Any]:
         return {**_duplicate_addition(), "text": text}
 
+    from set_review_answers import every_ok
+
     agents = _Agents(migrated, team, control)
+    # Rewritten 19 November 2026 (SOL defect 4): "the set's reviewer finding nothing" is
+    # stated as OK on each attribute; the default empty answer is now corrected, not used.
+    agents.review = every_ok
     agents.proposals = [
         # The approved wording again, in other case and punctuation.
         addition(same_text.upper().replace(",", " ;")),
@@ -1413,9 +1451,12 @@ def test_two_additions_named_as_each_others_duplicate_never_both_vanish(
     agents = _Agents(migrated, team, control)
     agents.proposals = _two_additions()
 
+    from set_review_answers import with_every_verdict
+
     def review(given: dict[str, Any]) -> dict[str, Any]:
         one, two = (item for item in given["attributes"] if item["state"] == "AGENT_ADDS")
-        return {
+        # Rewritten 19 November 2026 (SOL defect 4): OK on every other attribute given.
+        return with_every_verdict({
             "attributes": [
                 {"id": one["id"], "verdict": "DUPLICATE", "duplicate_of": two["id"],
                  "note": "The same removal.", **MERGED},
@@ -1423,7 +1464,7 @@ def test_two_additions_named_as_each_others_duplicate_never_both_vanish(
                  "note": "The same removal.", **MERGED},
             ],
             "findings": [],
-        }  # fmt: skip
+        }, given)  # fmt: skip
 
     agents.review = review
     with connect(migrated.url) as connection:
@@ -1486,6 +1527,8 @@ def test_the_reviewers_revision_is_not_written_over_a_plan_approved_during_the_r
 ) -> None:
     """On a path with no plan run at work (the request's own, the review of a control, the
     narrative's run), a person can approve the plan while the reviewer's call is out."""
+    from set_review_answers import with_every_verdict
+
     team, control, _scheduler, _client_ = _ready(migrated, "afu-plan-approved-meanwhile", AC02)
     first = _approved(migrated, control)[0]
     agents = _Agents(migrated, team, control)
@@ -1497,13 +1540,14 @@ def test_the_reviewers_revision_is_not_written_over_a_plan_approved_during_the_r
         told.append(mine["may_revise"])
         # ... and a person approves the plan while its call is out.
         approve_control_plan(migrated, control)
-        return {
+        # Rewritten 19 November 2026 (SOL defect 4): OK on every other attribute given.
+        return with_every_verdict({
             "attributes": [
                 {"id": str(first[0]), "verdict": "REVISED", "note": "Name the record.",
                  **MERGED}
             ],
             "findings": [],
-        }  # fmt: skip
+        }, given)  # fmt: skip
 
     agents.review = review
     with connect(migrated.url) as connection:
@@ -1606,7 +1650,15 @@ def test_a_detail_for_an_attribute_left_as_worded_passes_the_reviewers_checks_or
         "SELECT payload FROM audit_events WHERE target_id = %s AND action = 'attribute.proposed'",
         UUID(control),
     )
-    assert (audit[-1][0]["criteria_detailed"], audit[-1][0]["duplicates_left_out"]) == (1, 2)
+    # Rewritten 19 November 2026 (SOL defect 2). Old: the two refused details counted as
+    # duplicates left out, (1, 2). New: they count as refused criteria, and no duplicate was
+    # left out. Why: a refusal is not a duplicate; the step tells it apart (the criteria are
+    # left for a person), and the payload keeps its own count.
+    assert (
+        audit[-1][0]["criteria_detailed"],
+        audit[-1][0]["duplicates_left_out"],
+        audit[-1][0]["criteria_refused"],
+    ) == (1, 0, 2)
 
 
 def test_two_additions_written_from_one_library_attribute_do_not_both_land(
@@ -2124,7 +2176,12 @@ def test_completing_the_understanding_of_a_control_with_no_plan_queues_its_revie
     _nothing_requested(migrated, team)
     # The worker's run: the review asks nothing, so the understanding completes and the
     # attributes follow in the same run, before a person opens the Attributes step.
+    from set_review_answers import every_ok
+
     agents = _Agents(migrated, team, control)
+    # Rewritten 19 November 2026 (SOL defect 4): the set reviewer's answer is stated, a
+    # verdict on each attribute; the default empty one is now corrected and not used.
+    agents.review = every_ok
     with connect(migrated.url) as connection:
         assert run_plan_through(connection, agents, UUID(str(plan_id))) == "DONE"
     assert len(agents.specialist_given) == 1
