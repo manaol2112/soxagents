@@ -594,6 +594,59 @@ export function criteriaState(criteria: AttributeCriteria): CriteriaState {
     : "MISSING";
 }
 
+// The whitespace the server folds (Python's str.split(): JavaScript's \s without U+FEFF,
+// with U+001C to U+001F and U+0085). One table of cases is checked on both sides
+// (tests/criteria-whitespace-cases.json), so Save is never offered for a change the server
+// reads as none.
+const SERVER_WHITESPACE =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: the server's whitespace is matched on purpose
+  /[\t\n\v\f\r\x1c-\x1f \x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+/u;
+// The control characters the server drops from an attribute's wording before it folds its
+// whitespace (control_context.line).
+// biome-ignore lint/suspicious/noControlCharactersInRegex: the controls the server strips are matched on purpose
+const WORDING_CONTROLS = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/gu;
+
+/** A criteria text as the server stores it: its whitespace folded to single spaces and
+ * trimmed (master_plans._clean). Pure. */
+export function foldedCriteria(text: string): string {
+  return text
+    .split(SERVER_WHITESPACE)
+    .filter((part) => part !== "")
+    .join(" ");
+}
+
+/** An attribute's wording as the server compares it (control_context.line, 300 characters).
+ * Pure. */
+export function foldedWording(text: string): string {
+  return foldedCriteria(text.replace(WORDING_CONTROLS, "")).slice(0, 300);
+}
+
+/** Whether a criteria form says anything the saved criteria do not (F2, 19 November 2026):
+ * Save is offered only then, as the server writes nothing for an unchanged save. The texts
+ * are compared as the server stores them; judgment as it is, "not determined" (null) being
+ * no decision. Saving never stands for accepting: that is Accept's. Pure. */
+export function criteriaChanged(
+  saved: Pick<
+    AttributeCriteria,
+    "condition" | "passCriteria" | "failCriteria" | "judgmentRequired"
+  >,
+  form: { condition: string; pass_criteria: string; fail_criteria: string },
+  judgment: boolean | null,
+): boolean {
+  return (
+    foldedCriteria(form.condition) !== foldedCriteria(saved.condition) ||
+    foldedCriteria(form.pass_criteria) !== foldedCriteria(saved.passCriteria) ||
+    foldedCriteria(form.fail_criteria) !== foldedCriteria(saved.failCriteria) ||
+    judgment !== saved.judgmentRequired
+  );
+}
+
+/** Whether an attribute's new wording differs from its wording as the server compares it
+ * (F2): an edit that reads the same is not offered. Pure. */
+export function wordingChanged(before: string, after: string): boolean {
+  return foldedWording(after) !== foldedWording(before);
+}
+
 /** The approved attributes whose criteria a person can accept as they read. */
 export function criteriaToAccept(context: {
   approved: Attribute[];
@@ -914,6 +967,22 @@ export type RowOffer = {
 
 /** Said in place of Remove on the control's last attribute. */
 export const KEEPS_ONE = "A control keeps at least one attribute.";
+
+/** What a row accepted in this visit still offers beside "Accepted just now" (F1, the
+ * product owner's follow-up of 19 November 2026; before, it offered nothing until the page
+ * was opened again): quiet Edit of its criteria and Remove (asked first), once the row read
+ * again is an approved attribute; never Accept again. Only what can succeed: no Edit while a
+ * conflict holds the attribute (its criteria cannot be saved then), no Remove of the last
+ * attribute, and nothing while the agents work or for a person who cannot act. Pure. */
+export function acceptedRowActions(
+  row: Pick<UnifiedRow, "kind">,
+  options: { canAct: boolean; held: boolean; lastOne: boolean },
+): { edit: boolean; remove: boolean } {
+  if (!options.canAct || row.kind !== "APPROVED") {
+    return { edit: false, remove: false };
+  }
+  return { edit: !options.held, remove: !options.lastOne };
+}
 
 export function rowOffer(
   row: UnifiedRow,

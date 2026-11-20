@@ -425,10 +425,11 @@ def register_control_context(
     ) -> ContextBody:
         def work(c: psycopg.Connection[Any], p: Principal) -> ContextBody:
             _allowed(c, p, organization_id, project_id, control_id)
-            control_attributes.edit_attribute(
+            # A wording that reads the same changes nothing, so nothing follows it (F2).
+            if control_attributes.edit_attribute(
                 c, organization_id, project_id, control_id, attribute_id, p.id, body
-            )
-            changed(c, project_id, control_id, p.id)
+            ):
+                changed(c, project_id, control_id, p.id)
             return _body(c, project_id, control_id)
 
         return run(request, work)

@@ -16,7 +16,11 @@ import {
   type Assumption,
   type Attribute,
   acceptAllRows,
+  acceptedRowActions,
+  criteriaChanged,
   firstUnifiedToDecide,
+  foldedCriteria,
+  foldedWording,
   GONE_CHIPS,
   type GoneRow,
   historyWords,
@@ -34,6 +38,7 @@ import {
   rowOriginLine,
   UNIFIED_CHIPS,
   unifiedRows,
+  wordingChanged,
 } from "../apps/web/src/control-context-model.ts";
 import {
   reviewCount,
@@ -539,5 +544,122 @@ describe("the old words do not come back on this step", () => {
     );
     // Accept all and its note are kept together when the bar wraps (design review).
     assert.match(step, /<span className="tar-all">/);
+  });
+});
+
+describe("an accepted row and an unchanged save (F1, F2; 19 November 2026)", () => {
+  const cases = JSON.parse(
+    readFileSync("tests/criteria-whitespace-cases.json", "utf8"),
+  ) as { criteria: [string, string][]; wording: [string, string][] };
+
+  it("folds whitespace exactly as the server does, from the one table of cases", () => {
+    for (const [given, folded] of cases.criteria) {
+      assert.equal(foldedCriteria(given), folded, JSON.stringify(given));
+    }
+    for (const [given, folded] of cases.wording) {
+      assert.equal(foldedWording(given), folded, JSON.stringify(given));
+    }
+  });
+
+  it("offers Save only for a change, judgment's 'not determined' included", () => {
+    const form = {
+      condition: `  ${tailored.condition}\n`,
+      pass_criteria: tailored.passCriteria.replace(" ", "  "),
+      fail_criteria: tailored.failCriteria,
+    };
+    assert.equal(criteriaChanged(tailored, form, false), false);
+    assert.equal(criteriaChanged(tailored, form, true), true);
+    assert.equal(
+      criteriaChanged(
+        tailored,
+        { ...form, fail_criteria: "Never approved." },
+        false,
+      ),
+      true,
+    );
+    const undetermined = { ...tailored, judgmentRequired: null };
+    assert.equal(criteriaChanged(undetermined, form, null), false);
+    // "Objectively testable" where nothing was determined is a decision.
+    assert.equal(criteriaChanged(undetermined, form, false), true);
+  });
+
+  it("reads a wording that differs only in whitespace as unchanged", () => {
+    assert.equal(
+      wordingChanged(
+        "Approved before the grant",
+        " Approved  before the grant ",
+      ),
+      false,
+    );
+    assert.equal(
+      wordingChanged("Approved before the grant", "Approved before access"),
+      true,
+    );
+  });
+
+  it("keeps quiet Edit and Remove on a row accepted in this visit, only where they can succeed", () => {
+    const options = { canAct: true, held: false, lastOne: false };
+    assert.deepEqual(acceptedRowActions({ kind: "APPROVED" }, options), {
+      edit: true,
+      remove: true,
+    });
+    // Not yet read again as an approved attribute, or a removal: nothing.
+    for (const kind of ["ADDED", "REWORDED", "REMOVAL"] as const) {
+      assert.deepEqual(acceptedRowActions({ kind }, options), {
+        edit: false,
+        remove: false,
+      });
+    }
+    assert.deepEqual(
+      acceptedRowActions({ kind: "APPROVED" }, { ...options, held: true }),
+      {
+        edit: false,
+        remove: true,
+      },
+    );
+    assert.deepEqual(
+      acceptedRowActions({ kind: "APPROVED" }, { ...options, lastOne: true }),
+      {
+        edit: true,
+        remove: false,
+      },
+    );
+    assert.deepEqual(
+      acceptedRowActions({ kind: "APPROVED" }, { ...options, canAct: false }),
+      {
+        edit: false,
+        remove: false,
+      },
+    );
+  });
+
+  it("wires them: quiet buttons, Remove asked first, Save off until something changed", () => {
+    const view = readFileSync("apps/web/src/control-context-view.tsx", "utf8");
+    const criteria = readFileSync(
+      "apps/web/src/attribute-criteria.tsx",
+      "utf8",
+    );
+    assert.match(
+      view,
+      /acceptedRowActions\(each, \{ canAct: canAct && !running, held, lastOne \}\)/,
+    );
+    assert.match(view, /if \(!acting && !\(asking && quiet\.remove\)\) \{/);
+    assert.match(
+      view,
+      /onClick=\{\(\) => setConfirming\(item\.id\)\}\s*>\s*Remove/,
+    );
+    assert.match(
+      view,
+      /const changed = wordingChanged\(attribute\?\.text \?\? "", text\);/,
+    );
+    assert.match(
+      criteria,
+      /const changed = criteriaChanged\(criteria, form, judgment\);/,
+    );
+    assert.match(criteria, /disabled=\{busy \|\| !complete \|\| !changed\}/);
+    assert.match(
+      criteria,
+      /useState<boolean \| null>\(\s*criteria\.judgmentRequired,\s*\)/,
+    );
   });
 });

@@ -4,6 +4,7 @@ import { type ReactNode, useId, useState } from "react";
 import {
   type Attribute,
   type CriteriaState,
+  criteriaChanged,
   criteriaState,
   holdWords,
 } from "./control-context-model";
@@ -68,8 +69,10 @@ export function TailoredCriteria({
     fail_criteria: criteria.failCriteria || (item.definition?.fails ?? ""),
   };
   const [form, setForm] = useState(start);
-  const [judgment, setJudgment] = useState<boolean>(
-    criteria.judgmentRequired === true,
+  // As stored, "not determined" (null) included: an untouched box sends what was there, so
+  // an unchanged save is one (F2, 19 November 2026; before, null was sent as false).
+  const [judgment, setJudgment] = useState<boolean | null>(
+    criteria.judgmentRequired,
   );
   const stated =
     criteria.condition !== "" ||
@@ -82,10 +85,12 @@ export function TailoredCriteria({
         ? "Written by the team"
         : `Accepted by ${criteria.acceptedBy || "a person"}`;
   const complete =
-    judgment ||
+    judgment === true ||
     (form.condition.trim() !== "" &&
       form.pass_criteria.trim() !== "" &&
       form.fail_criteria.trim() !== "");
+  // Save is offered only for a change: an unchanged save writes nothing (F2).
+  const changed = criteriaChanged(criteria, form, judgment);
   // B1l point 6: an OPEN conflict on the attribute holds its acceptance until a person
   // decides it; Accept is off, with the reason.
   const held = item.heldByConflict === true;
@@ -101,7 +106,7 @@ export function TailoredCriteria({
     });
   const startEditing = () => {
     setForm(start);
-    setJudgment(criteria.judgmentRequired === true);
+    setJudgment(criteria.judgmentRequired);
     setEditing(true);
   };
   const editor = editing ? (
@@ -114,6 +119,7 @@ export function TailoredCriteria({
       hint={item.definition !== null}
       busy={action.pending}
       complete={complete}
+      changed={changed}
       onSave={async () => {
         const done = await action.run({
           intent: "criteria",
@@ -383,18 +389,22 @@ function CriteriaEditor({
   hint,
   busy,
   complete,
+  changed,
   onSave,
   onCancel,
 }: {
   id: string;
   form: CriteriaForm;
   onForm: (form: CriteriaForm) => void;
-  judgment: boolean;
+  /** As stored until the box is changed: null is "not determined". */
+  judgment: boolean | null;
   onJudgment: (judgment: boolean) => void;
   /** The attribute has a standard's requirement to keep. */
   hint: boolean;
   busy: boolean;
   complete: boolean;
+  /** The form differs from the saved criteria (criteriaChanged). */
+  changed: boolean;
   onSave: () => Promise<void>;
   onCancel: () => void;
 }) {
@@ -423,7 +433,7 @@ function CriteriaEditor({
       <label className="tc-judgment">
         <input
           type="checkbox"
-          checked={judgment}
+          checked={judgment === true}
           onChange={(event) => onJudgment(event.target.checked)}
         />
         Needs professional judgment (not objectively testable)
@@ -438,7 +448,8 @@ function CriteriaEditor({
         <button
           type="button"
           className="btn btn-primary btn-sm"
-          disabled={busy || !complete}
+          disabled={busy || !complete || !changed}
+          title={changed ? undefined : "Nothing has changed to save."}
           onClick={() => void onSave()}
         >
           {busy ? "Saving…" : "Save criteria"}

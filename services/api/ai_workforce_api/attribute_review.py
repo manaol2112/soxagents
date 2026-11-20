@@ -35,6 +35,7 @@ with a mark of the words reviewed, so it never stands for words that changed aft
 
 import hashlib
 import json
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import UUID
@@ -59,8 +60,11 @@ from ai_workforce_api.provenance import AgentCaller, Job, agent_actor
 # November 2026, after the review of B1k): its correction carries the previous answer as
 # escaped data (agent_answers.correction_prompt); every verdict and power of /3 stays. /5
 # (18 November 2026, owner-approved S1): every tag-shaped token in its inputs is made inert
-# (prompt_data.neutral); its wording is as /4.
-PROMPT_VERSION = "attribute-set-review/5"
+# (prompt_data.neutral); its wording is as /4. /6 (19 November 2026, owner-approved bump for
+# the SOL attribute fixes): an answer without a verdict on every attribute is corrected once
+# with the ids it left out (covering), and a pending revision's criteria are reviewed in
+# place of the standing ones; every verdict and power of /5 stays.
+PROMPT_VERSION = "attribute-set-review/6"
 REVIEWER = "Reviewer agent"
 NOT_REVIEWED = (
     "The reviewer agent did not finish, so the attributes and criteria are as drafted and "
@@ -92,6 +96,10 @@ that wrote it says it follows: the confirmed fact as the records hold it (fact),
 own summary of it, what it set aside, and why. Check it as you check everything else: that \
 the fact says what the attribute and its criteria rest on, and that the criteria still meet \
 every part of the standard. It exempts the attribute from no verdict.
+
+An attribute with pending_criteria has a revision of its criteria waiting on the approved \
+plan: those are the criteria a person will be asked to accept, so review them in place of \
+its criteria.
 
 For each attribute in attributes, answer with its id and one verdict:
 - OK: the attribute is appropriate and its criteria can be applied as written.
@@ -214,6 +222,10 @@ class _Stored(BaseModel):
     findings: list[str] = Field(default_factory=list, max_length=MAX_FINDINGS)
     items: dict[str, _StoredItem] = Field(default_factory=dict)
     merges: list[_Merge] = Field(default_factory=list, max_length=40)
+    # A hash of the criteria the plan's pending revision proposed when the reviewer read them
+    # (revision_mark; SOL defect 3, 19 November 2026). None on a review stored before: it
+    # read no pending criteria.
+    revision_mark: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class ReviewMark(BaseModel):
@@ -244,11 +256,50 @@ def _mark(text: Any, condition: Any, passes: Any, fails: Any, judgment: Any) -> 
     return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
 
+def revision_mark(pending: dict[str, dict[str, Any]]) -> str:
+    """A hash of a pending revision's criteria by attribute (evidence_plans.
+    pending_criteria_items): their raw values as Accept writes them, judgment as a boolean,
+    in the order of the attribute ids. Pure."""
+    data = json.dumps(
+        [
+            [key, str(item["condition"]), str(item["pass_criteria"]),
+             str(item["fail_criteria"]), bool(item["judgment_required"])]
+            for key, item in sorted(pending.items())
+        ],
+        ensure_ascii=False,
+    )  # fmt: skip
+    return hashlib.sha256(data.encode("utf-8")).hexdigest()
+
+
+# What the summary says when the review stands for words that no longer read so.
+CHANGED_SINCE = (
+    "The attributes or their criteria changed after the reviewer agent's review, so they are "
+    "not reviewed as they read now."
+)
+
+
 def review_of(
     connection: psycopg.Connection[Any], control_id: UUID
 ) -> tuple[ReviewSummary | None, dict[UUID, ReviewMark]]:
     """The stored review, for the attribute API: the summary, and each attribute's verdict
-    only while the attribute still reads as it was reviewed."""
+    only while the attribute still reads as it was reviewed.
+
+    The summary reads REVIEWED only while the review stands for the words as they read now
+    (I11, I2; SOL defect 3, 19 November 2026): every attribute an agent wrote (a proposal
+    from an agent, or approved criteria an agent wrote that no person accepted) has a verdict
+    on its words as they read, or on the criteria the pending revision would write on it,
+    and the pending revision is the one the reviewer read (revision_mark). Before, the marks
+    vanished on a Dismiss, an Accept or a later agent write, while the summary still read
+    REVIEWED.
+
+    A verdict on the criteria the pending revision proposes is the row's verdict while the
+    revision waits (one screen, one story; review finding of 20 November 2026): the person
+    who is asked to accept those criteria sees the reviewer's concern on that row before
+    deciding, and the summary's `concerns` counts exactly the rows that show one. Before,
+    such a verdict counted in `concerns` while the row showed no mark until after the
+    Accept."""
+    from ai_workforce_api.evidence_plans import pending_criteria_items
+
     row = connection.execute(
         "SELECT attribute_review FROM evidence_plans WHERE engagement_control_id = %s",
         (control_id,),
@@ -259,24 +310,47 @@ def review_of(
         stored = _Stored.model_validate(row[0])
     except ValidationError:
         return None, {}
+    pending = pending_criteria_items(connection, control_id)
     marks: dict[UUID, ReviewMark] = {}
-    if stored.items:
-        for found in connection.execute(
-            "SELECT id, text, condition, pass_criteria, fail_criteria, judgment_required "
-            "FROM control_attributes WHERE engagement_control_id = %s "
-            "AND status IN ('APPROVED', 'PROPOSED')",
-            (control_id,),
-        ).fetchall():
-            item = stored.items.get(str(found[0]))
-            if item is not None and item.mark == _mark(*found[1:]):
-                marks[UUID(str(found[0]))] = ReviewMark(verdict=item.verdict, note=item.note)
+    concerns = 0
+    unmarked = bool(pending) and revision_mark(pending) != stored.revision_mark
+    for found in connection.execute(
+        "SELECT id, text, condition, pass_criteria, fail_criteria, judgment_required, "
+        "(status = 'PROPOSED' AND source_kind IN ('AGENT', 'DOCUMENT')) "
+        "OR (status = 'APPROVED' AND criteria_origin = 'AGENT' "
+        "    AND criteria_accepted_at IS NULL) "
+        "FROM control_attributes WHERE engagement_control_id = %s "
+        "AND status IN ('APPROVED', 'PROPOSED')",
+        (control_id,),
+    ).fetchall():
+        key = str(found[0])
+        item = stored.items.get(key)
+        reads = _mark(*found[1:6])
+        proposed = pending.get(key)
+        would = (
+            None
+            if proposed is None
+            else _mark(found[1], proposed["condition"], proposed["pass_criteria"],
+                       proposed["fail_criteria"], proposed["judgment_required"])
+        )  # fmt: skip
+        held = item is not None and item.mark in (reads, would)
+        if held and item is not None:
+            marks[UUID(key)] = ReviewMark(verdict=item.verdict, note=item.note)
+        if held and item is not None and item.verdict == "CONCERN":
+            concerns += 1
+        if bool(found[6]) and not held:
+            unmarked = True
+    status = stored.status
+    note = stored.note
+    if status == "REVIEWED" and unmarked:
+        status, note = "NOT_REVIEWED", CHANGED_SINCE
     summary = ReviewSummary(
-        status=stored.status,
+        status=status,
         reviewed_at=stored.reviewed_at,
         reviewer=REVIEWER,
-        note=stored.note,
+        note=note,
         findings=stored.findings,
-        concerns=sum(1 for mark in marks.values() if mark.verdict == "CONCERN"),
+        concerns=concerns,
     )
     return summary, marks
 
@@ -294,11 +368,16 @@ def _inputs(
         _APPROVED_PLAN,
         CRITERIA_WRITABLE_SQL,
         narrative_facts,
+        pending_criteria_items,
         statement_fields,
     )
     from ai_workforce_api.pbc_drafting import load_context
 
     context = load_context(connection, project_id, control_id)
+    # The criteria a person will be asked to accept on the plan's pending revision, read as
+    # Accept writes them (SOL defect 3, 19 November 2026: before, the reviewer read the
+    # standing criteria, and none of the five pending).
+    pending = pending_criteria_items(connection, control_id)
     control = connection.execute(
         "SELECT c.classifications, coalesce(c.library_key, ''), p.status, p.approved_by "
         "FROM engagement_controls c LEFT JOIN evidence_plans p "
@@ -376,7 +455,11 @@ def _inputs(
             "definition_key": found[11],
             # A person stated or accepted the criteria: no agent changes the attribute.
             "owned": found[9] == "PERSON" or bool(found[10]),
+            # Who stated the criteria (PERSON, AGENT, SEEDED or none), for the check of an OK.
+            "origin": str(found[9] or ""),
         }
+        if not proposed and row["id"] in pending:
+            row["pending"] = pending[row["id"]]
         rows[row["id"]] = row
         standard = attribute_for(library_key, str(found[11] or ""), str(found[4]))
         entry: dict[str, Any] = {
@@ -396,6 +479,8 @@ def _inputs(
             ),
             "may_revise": may,
         }
+        if "pending" in row:
+            entry["pending_criteria"] = dict(row["pending"])
         if proposed and found[3] is not None:
             entry["replaces"] = texts.get(str(found[3]), "")
         if follows is not None:
@@ -497,6 +582,31 @@ def refused_criteria(criteria: tuple[str, str, str], known: str) -> str | None:
     return None
 
 
+def unsourced(row: dict[str, Any], known: str) -> bool:
+    """Whether an agent's criteria no person accepted state a figure or a citation the
+    records do not give (`known`, control_attributes.figures_known): the reviewer's OK on
+    them is then no verdict that they stand (I12; SOL defect 2, 19 November 2026: before, the
+    reviewer's OK vouched for "2 months" that nothing gave). The figure check alone
+    (evidence_planning._check_fabrication), never the length or wording checks: blank
+    criteria, which a person writes, are no concern. The demo's prepared criteria (SEEDED)
+    and a person's are not the agent's; the criteria a pending revision proposes always are,
+    and are what is checked on a row that has them. Pure."""
+    from ai_workforce_api.evidence_planning import _check_fabrication
+
+    criteria = row.get("pending")
+    if criteria is None:
+        if row["owned"] or row.get("origin") != "AGENT":
+            return False
+        criteria = row
+    try:
+        _check_fabrication(
+            [criteria["condition"], criteria["pass_criteria"], criteria["fail_criteria"]], known
+        )
+    except ValueError:
+        return True
+    return False
+
+
 def _kept(
     cursor: psycopg.Cursor[Any],
     control_id: UUID,
@@ -506,8 +616,10 @@ def _kept(
     wordings: set[str],
 ) -> tuple[Verdict, str]:
     """Apply one REVISED answer where an agent may write, and say how the attribute reads:
-    REVISED when something was kept, OK when the revision changed nothing, CONCERN when it
-    could not be kept."""
+    REVISED when something was kept, CONCERN when it could not be kept or changed nothing.
+    (Dated note, 19 November 2026, FO-6. Old: a revision that changed nothing read OK. New:
+    it reads CONCERN. Why: the reviewer said the attribute needed a change and gave none, so
+    no verdict says the attribute stands.)"""
     from ai_workforce_api.control_attributes import _normal
     from ai_workforce_api.criteria_history import REVIEWER as REVIEWER_NAME
     from ai_workforce_api.criteria_history import writing
@@ -592,7 +704,15 @@ def _kept(
         wordings.add(_normal(text))
         row["text"] = text
         changed = True
-    return ("REVISED", note) if changed else ("OK", note)
+    if changed:
+        return "REVISED", note
+    # A revision that changes nothing (no criteria and no wording returned, or the same ones
+    # again) is no verdict that the attribute stands: a person checks it (FO-6, 19 November
+    # 2026; before, it read OK).
+    return "CONCERN", line(
+        "The reviewer marked this attribute as revised but returned no change, so a person "
+        f"checks it: {note}", 400,
+    )  # fmt: skip
 
 
 def write_detail(
@@ -755,6 +875,30 @@ def _merged(
     )  # fmt: skip
 
 
+def covering(rows: dict[str, dict[str, Any]]) -> Callable[[dict[str, Any]], _Answer]:
+    """The set reviewer's reading: its answer, only when it gives a verdict on every
+    attribute it was given (I11: a review covers its scope; 19 November 2026, defect 4 of
+    the SOL attribute verification). Before, an empty or partial answer was stored as
+    REVIEWED, its call ACCEPTED, and the audit read "0 concerns". Only ids are named in the
+    reason, never an attribute's words: the reason goes back to the model as its correction
+    (agent_answers.correction_prompt) and is read for its plain words
+    (agent_answers.plain_problem). A verdict on an id it was not given covers nothing; a
+    second verdict on the same id is ignored, as review_set does. Pure."""
+
+    def read(output: dict[str, Any]) -> _Answer:
+        answer = _Answer.model_validate(output)
+        given = {item.id.strip() for item in answer.attributes}
+        missing = [key for key in rows if key not in given]
+        if missing:
+            raise ValueError(
+                f"{len(missing)} of the {len(rows)} attributes have no verdict; give one "
+                f"verdict for each of these ids: {', '.join(missing)}"
+            )
+        return answer
+
+    return read
+
+
 def _store(cursor: psycopg.Cursor[Any], control_id: UUID, stored: _Stored) -> None:
     cursor.execute(
         "UPDATE evidence_plans SET attribute_review = %s WHERE engagement_control_id = %s",
@@ -782,8 +926,7 @@ def review_set(
 ) -> str:
     """Review the control's attributes and criteria as they stand, apply what the reviewer
     may correct, and keep the review. Returns a note for the team: empty when it finished."""
-    from ai_workforce_api.control_attributes import _json, _normal
-    from ai_workforce_api.evidence_planning import _normal as plain
+    from ai_workforce_api.control_attributes import _json, _normal, figures_known
 
     data, rows = _inputs(connection, project_id, control_id)
     if not rows:
@@ -817,7 +960,7 @@ def review_set(
         ),
         PROMPT_VERSION,
         {"control": str(control_id), "attributes": len(rows)},
-        _Answer.model_validate,
+        covering(rows),
     )
     call = answered.call
     now = datetime.now(UTC)
@@ -839,20 +982,31 @@ def review_set(
         )
         return NOT_REVIEWED
     note_used(connection, call)
-    # What a revision may state a figure from: everything the reviewer was given.
-    known = plain(_json(data))
+    # What a revision, and criteria the reviewer says are OK, may state a figure from: the
+    # positive list every agent's criteria are checked against (figures_known), never the
+    # agents' own words in the reviewer's inputs.
+    known = figures_known(connection, project_id, control_id)
     items: dict[str, _StoredItem] = {}
     merges: list[_Merge] = []
 
     def marked(row: dict[str, Any], verdict: Verdict, note: str) -> None:
+        # A row with pending criteria was reviewed on them: its verdict is on the words it
+        # reads once they are accepted, as _write_each_criteria writes them.
+        criteria = row.get("pending", row)
         items[row["id"]] = _StoredItem(
             verdict=verdict,
             note=note,
-            mark=_mark(row["text"], row["condition"], row["pass_criteria"],
-                       row["fail_criteria"], row["judgment_required"]),
+            mark=_mark(row["text"], criteria["condition"], criteria["pass_criteria"],
+                       criteria["fail_criteria"], criteria["judgment_required"]),
         )  # fmt: skip
 
     with transaction(connection) as cursor:
+        # The plan before any attribute, as a person's save of criteria takes them
+        # (master_plans.set_criteria): a save and the reviewer's corrections never deadlock.
+        cursor.execute(
+            "SELECT id FROM evidence_plans WHERE engagement_control_id = %s FOR UPDATE",
+            (control_id,),
+        )
         wordings = {_normal(str(row["text"])) for row in rows.values()}
         seen: set[str] = set()
         duplicates: list[tuple[dict[str, Any], _Item]] = []
@@ -871,6 +1025,11 @@ def review_set(
             note = line(item.note, 300)
             if verdict == "REVISED":
                 verdict, note = _kept(cursor, control_id, row, item, known, wordings)
+            elif verdict == "OK" and unsourced(row, known):
+                verdict, note = "CONCERN", line(
+                    "The criteria state a figure or a citation the records do not give, so a "
+                    f"person checks them before accepting. {note}", 400,
+                )  # fmt: skip
             marked(row, verdict, note)
         # Duplicates last, so a merge is the final word on the attribute it lands on.
         for row, item in duplicates:
@@ -891,7 +1050,10 @@ def review_set(
             cursor, control_id,
             _Stored(status="REVIEWED", reviewed_at=now, prompt_version=PROMPT_VERSION,
                     model_call_id=call.call_id, findings=findings[:MAX_FINDINGS], items=items,
-                    merges=merges),
+                    merges=merges,
+                    revision_mark=revision_mark(
+                        {key: row["pending"] for key, row in rows.items() if "pending" in row}
+                    )),
         )  # fmt: skip
         # The review on the audit trail, as the attribute agent's proposals are
         # (attribute.proposed): what the reviewer agent changed, by its model call, in the

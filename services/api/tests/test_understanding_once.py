@@ -316,6 +316,11 @@ def test_the_question_pass_asks_in_one_go_and_the_understanding_then_stays_compl
          "assumed": "The ServiceNow ticket history shows when access was granted.",
          "attribute_codes": [a1[1]]},
     ]  # fmt: skip
+    from set_review_answers import every_ok
+
+    # Rewritten 19 November 2026 (SOL defect 4): the set reviewer's answer is stated, a
+    # verdict on each attribute; the default empty one is now corrected and not used.
+    followed.review = every_ok
     with connect(migrated.url) as connection:
         assert run_plan_through(connection, followed, plan_id) == "DONE"
     # The follow-up read (round 2) finds everything established: the understanding is
@@ -514,7 +519,10 @@ def test_thats_right_and_change_and_the_one_update_limited_to_the_named_attribut
          "quote": "", "note": "", "condition": "", "pass_criteria": "", "fail_criteria": "",
          "judgment_required": False},
     ]  # fmt: skip
-    agents.review = lambda given: {
+    from set_review_answers import with_every_verdict
+
+    # Rewritten 19 November 2026 (SOL defect 4): OK on every other attribute given.
+    agents.review = lambda given: with_every_verdict({
         "attributes": [
             {"id": str(a2_id), "verdict": "REVISED", "note": "Name the system.",
              "condition": "The ServiceNow request names the role.",
@@ -522,7 +530,7 @@ def test_thats_right_and_change_and_the_one_update_limited_to_the_named_attribut
              "fail_criteria": "The ServiceNow request names no role."},
         ],
         "findings": [],
-    }  # fmt: skip
+    }, given)  # fmt: skip
     with connect(migrated.url) as connection:
         assert run_plan_through(connection, agents, plan_id) == "DONE"
     told = _package_of(_attribute_prompts(agents)[0])

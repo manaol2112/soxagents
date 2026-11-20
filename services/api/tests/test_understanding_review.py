@@ -196,7 +196,12 @@ def test_the_review_asks_before_any_attribute_is_drafted_and_answering_completes
     answered = _answer(client, team, control, question, APPLIED_BY)
     assert answered["understanding_completed_at"] is None
     assert [row[:3] for row in _reviews(migrated, control)][-1] == (2, "UNDERSTANDING", "PENDING")
+    from set_review_answers import every_ok
+
     followed = _Agents(migrated, team, control)
+    # Rewritten 19 November 2026 (SOL defect 4): the set reviewer's answer is stated, a
+    # verdict on each attribute; the default empty one is now corrected and not used.
+    followed.review = every_ok
     _run(migrated, control, followed)
     assert [given["round"] for given in followed.specialist_given] == [2]
     assert _completed_at(migrated, control) is not None
@@ -1649,3 +1654,114 @@ def test_follow_never_hands_back_a_run_out_of_attempts_under_an_expired_lease(
     again = client.post(f"{_path(team, control)}/understanding/review/follow")
     assert again.status_code == 200 and len(_reviews(migrated, control)) == 1
     assert len(scheduler.plans) == handed
+
+
+# SOL defect 1 (19 November 2026): a limited update follows what was saved while it was
+# queued or at work (I10)
+
+
+def _limited_update_queued(
+    migrated: Database, slug: str
+) -> tuple[dict[str, Any], str, TestClient, list[str]]:
+    """A completed control with the one limited update an informing answer starts, queued."""
+    team, control, _scheduler, client = _ready(migrated, slug)
+    _answer_required(migrated, team, control, client)
+    _run(migrated, control, _Agents(migrated, team, control))
+    assert _completed_at(migrated, control) is not None
+    definitions = {
+        str(row[0])
+        for row in _rows(
+            migrated,
+            "SELECT definition_key FROM control_attributes WHERE engagement_control_id = %s "
+            "AND status = 'APPROVED' AND definition_key IS NOT NULL AND code IS NOT NULL",
+            UUID(control),
+        )
+    }
+    parents = {item.when[0] for item in walkthrough_questions._all() if item.when is not None}
+    with connect(migrated.url) as connection:
+        rows = answers_of(connection, UUID(control))
+        asked = [item for item in questions_asked(connection, UUID(control), rows)
+                 if item.key in rows and item.when is None and item.key not in parents
+                 and not rows[item.key].not_applicable]  # fmt: skip
+    informing = next(item for item in asked if any(need in definitions for need in item.informs))
+    saved = client.put(
+        f"{_path(team, control)}/walkthrough-answers",
+        json={"answers": {informing.key: {"value": _another(informing, rows[informing.key].value),
+                                          "not_applicable": False}}},
+    )  # fmt: skip
+    assert saved.status_code == 200, saved.text
+    [queued] = _rows(
+        migrated,
+        "SELECT run_status, run_codes FROM evidence_plans WHERE engagement_control_id = %s",
+        UUID(control),
+    )
+    assert queued[0] == "PENDING" and queued[1]
+    return team, control, client, [str(code) for code in queued[1]]
+
+
+def _only_of_each_pass(agents: _Agents) -> list[list[str] | None]:
+    """What each attribute agent's call was told it may change (None: the whole set)."""
+    import json
+
+    found: list[list[str] | None] = []
+    for prompt in agents.prompts:
+        if not prompt.startswith("Propose test attributes for this control."):
+            continue
+        package = json.loads(
+            prompt.split("<control_context>\n", 1)[1].split("\n</control_context>", 1)[0]
+        )
+        found.append(package.get("only_attributes"))
+    return found
+
+
+def _value_saved(migrated: Database, control: str) -> None:
+    """A client value of the control saved now: a change that is not a walkthrough answer,
+    so the whole set follows it."""
+    with connect(migrated.url) as connection:
+        changed = connection.execute(
+            "UPDATE control_parameters SET updated_at = clock_timestamp() "
+            "WHERE engagement_control_id = %s",
+            (UUID(control),),
+        ).rowcount
+        connection.commit()
+    assert changed > 0
+
+
+def test_an_answer_saved_while_the_limited_update_is_queued_is_followed(
+    migrated: Database,
+) -> None:
+    """Old: the update's attributes were fixed when it was queued, so a value saved while it
+    waited was never followed, and its read was recorded as made. New: the update widens to
+    what changed after it was queued, here the whole set; with nothing saved meanwhile it
+    stays as limited as it was queued."""
+    team, control, _client, codes = _limited_update_queued(migrated, "ur-sol1-queued")
+    limited = _Agents(migrated, team, control)
+    _run(migrated, control, limited)
+    assert _only_of_each_pass(limited) == [codes]
+    # Queued again by another informing answer, and a value saved while it waits.
+    team2, control2, _client2, _codes2 = _limited_update_queued(migrated, "ur-sol1-queued-2")
+    _value_saved(migrated, control2)
+    widened = _Agents(migrated, team2, control2)
+    _run(migrated, control2, widened)
+    assert _only_of_each_pass(widened) == [None]
+
+
+def test_an_answer_saved_while_the_limited_update_works_is_followed(migrated: Database) -> None:
+    """Old: the second pass, run because a save landed while the agents worked, kept the
+    codes it was queued with ([['A2'], ['A2']]). New: it widens to what was saved."""
+    team, control, _client, codes = _limited_update_queued(migrated, "ur-sol1-works")
+    agents = _Agents(migrated, team, control)
+    agents.on_plan = lambda: _value_saved(migrated, control)
+    _run(migrated, control, agents)
+    assert _only_of_each_pass(agents) == [codes, None]
+
+
+def test_a_limited_update_is_bounded_by_when_it_was_queued() -> None:
+    """The pure part: what a limited update widens to (evidence_plans.widened)."""
+    from ai_workforce_api.evidence_plans import widened
+
+    assert widened(("A2",), None) == ()
+    assert widened(("A2",), []) == ("A2",)
+    assert widened(("A2",), ["A3", "A2"]) == ("A2", "A3")
+    assert widened((review.NO_ATTRIBUTE,), ["A3"]) == ("A3",)
+    assert widened((review.NO_ATTRIBUTE,), [review.NO_ATTRIBUTE]) == (review.NO_ATTRIBUTE,)

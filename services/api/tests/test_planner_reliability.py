@@ -627,7 +627,7 @@ def test_run_again_does_nothing_when_nothing_the_agents_read_has_changed(
     team, control, scheduler, client = _ready(migrated, "pr-noop")
     _answer_required(migrated, team, control, client)
     plan_id = _plan_run(migrated, control)[0]
-    agents = _Agents(migrated, team, control)
+    agents = _reviewing(migrated, team, control)
     with connect(migrated.url) as connection:
         # Queued and waiting: there is nothing to start.
         assert not attributes_rerun_useful(connection, team["project"], UUID(control))
@@ -674,14 +674,14 @@ def test_a_kept_plan_says_the_answer_could_not_be_used_only_while_something_wait
     _answer_required(migrated, team, control, client)
     plan_id = _plan_run(migrated, control)[0]
     with connect(migrated.url) as connection:
-        assert run_plan_through(connection, _Agents(migrated, team, control), plan_id) == "DONE"
+        assert run_plan_through(connection, _reviewing(migrated, team, control), plan_id) == "DONE"
     assert _context(team, control, client)["attributes_rerun_useful"] is False
     # The understanding changes: the run is queued by the save, and this time the planner's
     # answer cannot be used.
     _volume(team, control, client, "25 to 100")
     assert _plan_run(migrated, control)[1:] == ("PENDING", "ATTRIBUTES")
     before = _snapshot(migrated, control)
-    failing = _Agents(migrated, team, control)
+    failing = _reviewing(migrated, team, control)
     failing.plan = _unusable
     with connect(migrated.url) as connection:
         assert run_plan_through(connection, failing, plan_id) == "DONE"
@@ -707,7 +707,7 @@ def test_a_kept_plan_says_the_answer_could_not_be_used_only_while_something_wait
     assert len(scheduler.plans) == handed + 1
     # This time the planner answers: nothing reads stopped, and nothing waits.
     with connect(migrated.url) as connection:
-        assert run_plan_through(connection, _Agents(migrated, team, control), plan_id) == "DONE"
+        assert run_plan_through(connection, _reviewing(migrated, team, control), plan_id) == "DONE"
         assert attributes_run(connection, UUID(control)) == ("", "", "")
     body = _context(team, control, client)
     assert (body["attributes_run"], body["attributes_rerun_useful"]) == ("", False)
@@ -730,7 +730,7 @@ def _finished_run(migrated: Database, slug: str) -> tuple[dict[str, Any], str, A
     _answer_required(migrated, team, control, client)
     plan_id = _plan_run(migrated, control)[0]
     with connect(migrated.url) as connection:
-        assert run_plan_through(connection, _Agents(migrated, team, control), plan_id) == "DONE"
+        assert run_plan_through(connection, _reviewing(migrated, team, control), plan_id) == "DONE"
     return team, control, scheduler, client, plan_id
 
 
@@ -776,7 +776,13 @@ def test_a_person_can_always_run_the_agents_on_purpose(migrated: Database) -> No
     assert forced.json()["attributes_run"] == "PENDING" and forced.json()["note"] == ""
     assert scheduler.plans == [*handed, plan_id]
     assert _plan_run(migrated, control)[1:] == ("PENDING", "ATTRIBUTES")
+    from set_review_answers import every_ok
+
     agents = _Agents(migrated, team, control)
+    # Rewritten 19 November 2026 (SOL defect 4, FO-4): the set reviewer's answer is stated,
+    # a verdict on each attribute; the default empty one is now corrected and not used, and
+    # a pass whose answer was not used is not finished.
+    agents.review = every_ok
     with connect(migrated.url) as connection:
         assert run_plan_through(connection, agents, plan_id) == "DONE"
     assert [who for who in agents.calls if who != "other"] == [
@@ -818,7 +824,7 @@ def test_anything_the_agents_read_makes_a_rerun_useful_and_accepting_their_work_
         )
         connection.commit()
     assert _useful(migrated, team, control) is True
-    _forced_run(migrated, team, control, _Agents(migrated, team, control))
+    _forced_run(migrated, team, control, _reviewing(migrated, team, control))
     assert _useful(migrated, team, control) is False
     # The control's record from the RCM changes.
     with connect(migrated.url) as connection:
@@ -831,14 +837,14 @@ def test_anything_the_agents_read_makes_a_rerun_useful_and_accepting_their_work_
     assert _useful(migrated, team, control) is True
     # A run of which a stage did not finish is not a finished run: the reviewer's answer
     # cannot be read while the planner succeeds, and the rerun stays useful.
-    failing = _Agents(migrated, team, control)
+    failing = _reviewing(migrated, team, control)
     failing.review = lambda given: None
     before = _run_marks(migrated, control)
     _forced_run(migrated, team, control, failing)
     after = _run_marks(migrated, control)
     assert after[0] == before[0] and len(after[2]) == 64 and after[2] != after[0]
     assert _useful(migrated, team, control) is True
-    _forced_run(migrated, team, control, _Agents(migrated, team, control))
+    _forced_run(migrated, team, control, _reviewing(migrated, team, control))
     assert _run_marks(migrated, control)[2] == ""
     assert _useful(migrated, team, control) is False
 
@@ -866,7 +872,7 @@ def test_a_kept_replan_is_not_queued_again_on_every_save_and_the_missing_evidenc
     team, control, scheduler, client = _ready(migrated, "pr-replan")
     _answer_required(migrated, team, control, client)
     plan_id = _plan_run(migrated, control)[0]
-    agents = _Agents(migrated, team, control)
+    agents = _reviewing(migrated, team, control)
     agents.proposals = [
         {
             "action": "ADD", "replaces": "", "text": ADDED, "basis": "INFERRED", "source": "",
@@ -898,7 +904,7 @@ def test_a_kept_replan_is_not_queued_again_on_every_save_and_the_missing_evidenc
     assert accepted.status_code == 200, accepted.text
     # The accepted addition has no evidence: the planner is asked to plan it.
     assert _plan_run(migrated, control)[1:] == ("PENDING", "")
-    failing = _Agents(migrated, team, control)
+    failing = _reviewing(migrated, team, control)
     failing.plan = _unusable
     with connect(migrated.url) as connection:
         assert run_plan_through(connection, failing, plan_id) == "DONE"
@@ -930,7 +936,7 @@ def test_a_kept_replan_is_not_queued_again_on_every_save_and_the_missing_evidenc
     _volume(team, control, client, "25 to 100")
     assert _plan_run(migrated, control)[1] == "PENDING"
     with connect(migrated.url) as connection:
-        assert run_plan_through(connection, _Agents(migrated, team, control), plan_id) == "DONE"
+        assert run_plan_through(connection, _reviewing(migrated, team, control), plan_id) == "DONE"
         assert attributes_run(connection, UUID(control)) == ("", "", "")
         assert plan_body(connection, team["project"], UUID(control)).kept_note == ""
     assert _run_marks(migrated, control)[2] == ""
@@ -1020,3 +1026,47 @@ def test_a_waived_request_is_a_persons_decision_that_keeps_the_fallback_out(
         )
         connection.commit()
     assert note.startswith(KEPT_NOTE) and _snapshot(migrated, control) == before
+
+
+def test_a_pass_whose_answer_was_rejected_is_not_finished(migrated: Database) -> None:
+    """FO-4 and R7 of the SOL attribute fixes (19 November 2026). Old: a pass counted as
+    finished when every agent's last call succeeded, whatever was made of its answer, so a
+    set review whose answer was rejected (here an empty one, corrected and still empty)
+    recorded the read as made and the rerun read as not useful. New: the last call of each
+    agent of the pass, the planner's too, must have its answer used (outcome ACCEPTED)."""
+    team, control, _scheduler, client = _ready(migrated, "pr-rejected-pass")
+    _answer_required(migrated, team, control, client)
+    plan_id = _plan_run(migrated, control)[0]
+    agents = _Agents(migrated, team, control)
+    agents.review = lambda given: {"attributes": [], "findings": []}
+    with connect(migrated.url) as connection:
+        assert run_plan_through(connection, agents, plan_id) == "DONE"
+    statuses = _rows(
+        migrated,
+        "SELECT m.status, o.outcome ->> 'validation' FROM model_calls m "
+        "JOIN model_call_outcomes o ON o.model_call_id = m.id WHERE m.target_id = %s "
+        "AND split_part(m.prompt_version, '/', 1) = 'attribute-set-review' "
+        "ORDER BY m.created_at",
+        UUID(control),
+    )
+    assert statuses == [("SUCCEEDED", "REJECTED"), ("SUCCEEDED", "REJECTED")]
+    assert _generated(migrated, control)[0] == "MODEL"
+    read, stamped, tried, _attempts = _run_marks(migrated, control)
+    assert (read, stamped) == ("", False) and len(tried) == 64
+    assert _context(team, control, client)["attributes_rerun_useful"] is True
+
+
+def _reviewing(migrated: Database, team: dict[str, Any], control: str) -> _Agents:
+    """The run's agents, the set reviewer giving a verdict (OK) on each attribute.
+
+    Rewritten 19 November 2026 (SOL defect 4 and FO-4). Old: these tests ran the agents with
+    the shared fake's empty set review, which was read as a finished review. New: the
+    reviewer's answer is stated. Why: an empty review is now corrected and not used, and a
+    pass whose answer was not used is not finished, so these tests (about what makes a rerun
+    useful) state a review that is used; the unused case has its own test
+    (test_a_pass_whose_answer_was_rejected_is_not_finished)."""
+    from set_review_answers import every_ok
+
+    agents = _Agents(migrated, team, control)
+    agents.review = every_ok
+    return agents
