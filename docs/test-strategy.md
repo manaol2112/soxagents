@@ -121,7 +121,8 @@ refreshes the times from a run's logs); the fast tier's files that are not
 critical (`make test-fast-only`, `FAST_PY` minus `CRITICAL_PY`, which no CI run reached
 before; every file of either list runs in exactly one part); every Node test, which includes
 `CRITICAL_NODE`; and the web app's production build (`make web-build`). `security.yml` runs
-the secret scan and the dependency audit. Branch protection requires `baseline`, which
+the secret scan (a pull request's own commits; every branch's whole history on a push and
+weekly) and the dependency audit. Branch protection requires `baseline`, which
 always runs and fails unless every part succeeded, `secrets` and `dependencies`. Each job has
 a time limit, and a test part stops itself at 25 minutes, under its job's 30, so its
 summary is written. A CI result is reported only once the run on GitHub shows it; a

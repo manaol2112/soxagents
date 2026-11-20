@@ -4,6 +4,10 @@ name: Security
 # CI so a new advisory on a dependency nobody changed does not block unrelated work: the scan
 # for secrets runs on every push and pull request; the dependency audit when a lockfile
 # changes, and every week for advisories published since.
+#
+# The secret scan's scope (owner, 19 November 2026): on a pull request, only the pull
+# request's own commits (base..head), so a finding elsewhere in the history does not block
+# it; on a push and on the weekly schedule, every commit of every branch, as before.
 on:
   push:
     branches: [main, windows-dev, macbook-pro-dev, governance]
@@ -29,11 +33,16 @@ jobs:
           fetch-depth: 0
 
       # A fixed release, checked against its published checksum. Findings already checked
-      # by a person and not secrets are listed in .gitleaksignore; any other fails here.
-      - name: Scan every commit for secrets
+      # by a person and not secrets are listed in .gitleaksignore; any other fails here. A
+      # pull request scans its own commits; a push and the weekly run scan every commit of
+      # every branch (gitleaks' default, git log --all).
+      - name: Scan for secrets
         env:
           GITLEAKS_VERSION: 8.30.1
           GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
           archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
@@ -41,7 +50,15 @@ jobs:
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$archive"
           echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/$archive" | sha256sum --check --strict
           tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
-          "$RUNNER_TEMP/gitleaks" git . --redact --no-banner --gitleaks-ignore-path .gitleaksignore
+          scope=()
+          if [ "$EVENT" = "pull_request" ]; then
+            echo "Scanning the pull request's own commits: ${BASE_SHA}..${HEAD_SHA}"
+            scope=(--log-opts "${BASE_SHA}..${HEAD_SHA}")
+          else
+            echo "Scanning every commit of every branch"
+          fi
+          "$RUNNER_TEMP/gitleaks" git . --redact --no-banner \
+            --gitleaks-ignore-path .gitleaksignore "${scope[@]}"
 
   dependencies:
     runs-on: ubuntu-latest
