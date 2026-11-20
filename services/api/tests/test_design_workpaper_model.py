@@ -2292,7 +2292,9 @@ def test_an_accepted_limitation_on_one_request_is_read_first_over_a_review_on_an
         [design_conclusions.AttributeStanding("B", view.read_by([reviewed, limited]).kind, None)]
     )
     assert (both.design.result, both.implementation.result) == ("OPEN", "OPEN")
-    assert "accepted as not available" in both.design.sentence
+    # Said once, in the proposal (design review, 20 November 2026), not in each result.
+    assert both.not_available == ("B",)
+    assert "accepted as not available" in design_conclusions.proposal_of(0, both)[1][-1]
     only_review = design_conclusions.results_of(
         [design_conclusions.AttributeStanding("B", view.read_by([reviewed]).kind, None)]
     )

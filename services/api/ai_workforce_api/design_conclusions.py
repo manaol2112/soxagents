@@ -342,11 +342,11 @@ def not_available_sentence(codes: Sequence[str]) -> str:
     follow-up but shows nothing, so alternative evidence is needed (the tickmark reopened
     and a file whose check shows it, or "Shown, on my review" on an annotation), else the
     design is not effective (a design deficiency logged first)."""
-    verb = "is" if len(codes) == 1 else "are"
+    one = len(codes) == 1
     return (
-        f"{_attributes(codes, capital=True)} {verb} accepted as not available, which shows "
-        "nothing: alternative evidence is needed (reopen the tickmark), or the conclusion is "
-        "Not effective."
+        f"{_attributes(codes, capital=True)} {'is' if one else 'are'} accepted as not "
+        f"available, so {'it is' if one else 'they are'} not shown. Provide alternative "
+        "evidence, or conclude Not effective."
     )
 
 
@@ -392,6 +392,10 @@ class Results:
     # Every approved attribute is marked not applicable (D1): the records propose nothing
     # and the preparer concludes, with a reason.
     not_applicable_only: bool = False
+    # The attributes accepted as not available (D1), in the attributes' order: the
+    # proposal says once what they still need (`not_available_sentence`), never once per
+    # result.
+    not_available: tuple[str, ...] = ()
 
     def found_since(self, when: datetime) -> bool:
         """Whether a current check that shows an exception finished after `when`. A run
@@ -459,16 +463,15 @@ def results_of(attributes: Sequence[AttributeStanding], excepted: Collection[str
             tuple(code for code in implemented_open if code not in exceptions),
             tuple(a.found_at for a in attributes if a.state == "EXCEPTION"),
         )
-    # An attribute accepted as not available is open in both, and the sentence says what
+    # An attribute accepted as not available is open in both; the proposal says once what
     # it still needs (D1).
-    unavailable = [a.code for a in attributes if a.state == _NOT_AVAILABLE]
-    limitation = f" {not_available_sentence(unavailable)}" if unavailable else ""
+    unavailable = tuple(a.code for a in attributes if a.state == _NOT_AVAILABLE)
     design = (
         ResultBody(result="DESIGNED", sentence=DESIGNED_SENTENCE)
         if not designed_open
         else ResultBody(
             result="OPEN",
-            sentence=_not_yet(designed_open, ", as designed or in an instance") + limitation,
+            sentence=_not_yet(designed_open, ", as designed or in an instance"),
             open=designed_open,
         )
     )
@@ -477,7 +480,7 @@ def results_of(attributes: Sequence[AttributeStanding], excepted: Collection[str
         if not implemented_open
         else ResultBody(
             result="OPEN",
-            sentence=_not_yet(implemented_open, " in the records of an instance") + limitation,
+            sentence=_not_yet(implemented_open, " in the records of an instance"),
             open=implemented_open,
         )
     )
@@ -485,6 +488,7 @@ def results_of(attributes: Sequence[AttributeStanding], excepted: Collection[str
         design,
         implementation,
         not_applicable_only=all(a.state == _NOT_APPLICABLE for a in attributes),
+        not_available=unavailable,
     )
 
 
@@ -513,7 +517,10 @@ def proposal_of(deficiencies: int, results: Results) -> tuple[DesignConclusionKi
         return "EXCEPTIONS_NOTED", [results.design.sentence]
     opened = [r.sentence for r in (results.design, results.implementation) if r.result == "OPEN"]
     if opened:
-        return "NOT_CONCLUDED", list(dict.fromkeys(opened))
+        # What an attribute accepted as not available still needs, said once (D1).
+        limited = results.not_available
+        limitation = [not_available_sentence(limited)] if limited else []
+        return "NOT_CONCLUDED", list(dict.fromkeys(opened)) + limitation
     if results.not_applicable_only:
         # Nothing was shown: a person concludes, with a reason (D1, I14).
         return "NOT_CONCLUDED", [ALL_NOT_APPLICABLE]

@@ -51,6 +51,7 @@ import {
   COMPLETE_CONSEQUENCE,
   canCloseOut,
   closedNotice,
+  completionLead,
   deleteConsequence,
   detailsEditable,
   homeListsWork,
@@ -3538,32 +3539,33 @@ function EngagementCloseOut({
         {running && completion !== null && !completion.canComplete ? (
           <div className="closeout-open">
             <p>
-              <strong>
-                {completion.openCount}{" "}
-                {completion.openCount === 1 ? "item is" : "items are"} still
-                open.
-              </strong>{" "}
-              The engagement can be completed once they are done.
+              <strong>{completionLead(completion).strong}</strong>{" "}
+              {completionLead(completion).rest}
             </p>
-            <ul className="closeout-list">
-              {uniqueKeys(
-                completion.openItems,
-                (item) => `${item.kind}-${item.label}`,
-              ).map(([key, item]) => (
-                <li key={key}>
-                  {item.controlId !== null ? (
-                    <a href={controlHref(item.controlId)}>{item.label}</a>
-                  ) : (
-                    <span>{item.label}</span>
-                  )}
-                </li>
-              ))}
-            </ul>
-            {completion.openCount > completion.openItems.length ? (
-              <p className="form-hint">
-                And {completion.openCount - completion.openItems.length} more.
-              </p>
-            ) : null}
+            {completion.nothingInScope ? null : (
+              <>
+                <ul className="closeout-list">
+                  {uniqueKeys(
+                    completion.openItems,
+                    (item) => `${item.kind}-${item.label}`,
+                  ).map(([key, item]) => (
+                    <li key={key}>
+                      {item.controlId !== null ? (
+                        <a href={controlHref(item.controlId)}>{item.label}</a>
+                      ) : (
+                        <span>{item.label}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                {completion.openCount > completion.openItems.length ? (
+                  <p className="form-hint">
+                    And {completion.openCount - completion.openItems.length}{" "}
+                    more.
+                  </p>
+                ) : null}
+              </>
+            )}
           </div>
         ) : null}
         {detail.status === "COMPLETED" ? (

@@ -276,6 +276,9 @@ export type Completion = {
   completedBy: string;
   reopenings: Reopening[];
   deletable: boolean;
+  /** No control is in scope (C3): nothing was tested, so the engagement is archived,
+   * never completed, and the card says only that (`completionLead`). */
+  nothingInScope: boolean;
 };
 
 const OPEN_KINDS = new Set([
@@ -303,7 +306,8 @@ export function parseCompletion(value: unknown): Completion | null {
     typeof body.open_count !== "number" ||
     !Array.isArray(body.open_items) ||
     !Array.isArray(body.reopenings) ||
-    typeof body.deletable !== "boolean"
+    typeof body.deletable !== "boolean" ||
+    typeof body.nothing_in_scope !== "boolean"
   ) {
     return null;
   }
@@ -352,6 +356,7 @@ export function parseCompletion(value: unknown): Completion | null {
     completedBy: typeof body.completed_by === "string" ? body.completed_by : "",
     reopenings,
     deletable: body.deletable,
+    nothingInScope: body.nothing_in_scope,
   };
 }
 
@@ -372,4 +377,29 @@ export function statusLabel(status: string): string {
 export function statusOrder(status: string): number {
   const index = ENGAGEMENT_STATUSES.findIndex(([key]) => key === status);
   return index === -1 ? ENGAGEMENT_STATUSES.length : index;
+}
+
+/** What the completion card leads with while the engagement cannot be completed: with
+ * nothing in scope, one line that says to archive it and no count or list (design
+ * review, 20 November 2026: before, "2 items are still open. The engagement can be
+ * completed once they are done." stood above "Archive the engagement instead of
+ * completing it."); otherwise how many items are open, in agreement with the count. */
+export function completionLead(
+  completion: Pick<Completion, "nothingInScope" | "openCount">,
+):
+  | { kind: "NOTHING_IN_SCOPE"; strong: string; rest: string }
+  | { kind: "OPEN"; strong: string; rest: string } {
+  if (completion.nothingInScope) {
+    return {
+      kind: "NOTHING_IN_SCOPE",
+      strong: "Nothing is in scope.",
+      rest: "No control has been tested, so the engagement cannot be completed. Archive it instead.",
+    };
+  }
+  const one = completion.openCount === 1;
+  return {
+    kind: "OPEN",
+    strong: `${completion.openCount} ${one ? "item is" : "items are"} still open.`,
+    rest: `The engagement can be completed once ${one ? "it is" : "they are"} done.`,
+  };
 }

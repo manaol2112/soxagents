@@ -1276,8 +1276,8 @@ def test_migration_0165_gives_each_sign_off_its_conclusion_and_keeps_the_oe_gate
 
 HOW_ALL_MET = {"A": "MET", "B": "MET", "C": "MET", "D": "MET", "E": "MET"}
 _LIMITED = (
-    "Attribute B is accepted as not available, which shows nothing: alternative evidence is "
-    "needed (reopen the tickmark), or the conclusion is Not effective."
+    "Attribute B is accepted as not available, so it is not shown. Provide alternative "
+    "evidence, or conclude Not effective."
 )
 
 
@@ -1298,9 +1298,17 @@ def test_an_accepted_limitation_is_not_evidence() -> None:
     results = design_conclusions.results_of(_standing_of(("A", "SHOWN"), ("B", "NOT_AVAILABLE")))
     assert (results.design.result, results.implementation.result) == ("OPEN", "OPEN")
     assert results.design.open == ["B"] and results.implementation.open == ["B"]
-    assert results.implementation.sentence.endswith(_LIMITED)
+    assert results.not_available == ("B",)
+    # Said once, as its own reason, never once per result (design review, 20 November
+    # 2026: the sentence appeared under both the design and the implementation).
+    assert _LIMITED not in results.design.sentence + results.implementation.sentence
     kind, reasons = design_conclusions.proposal_of(0, results)
-    assert kind == "NOT_CONCLUDED" and any(_LIMITED in reason for reason in reasons)
+    assert kind == "NOT_CONCLUDED"
+    assert reasons == [
+        "Attribute B is not yet shown, as designed or in an instance.",
+        "Attribute B is not yet shown in the records of an instance.",
+        _LIMITED,
+    ]
     for refused in ("EFFECTIVE", "NO_INSTANCE", "EXCEPTIONS_NOTED"):
         assert design_conclusions.choice_refusal(refused, 0, results) is not None, refused
     assert design_conclusions.choice_refusal("NOT_EFFECTIVE", 0, results) is None
@@ -1349,7 +1357,8 @@ def test_every_attribute_not_available_is_refused_effective_and_oe_stays_shut(
     body = case.body()
     assert body["proposed_conclusion"] == "NOT_CONCLUDED"
     assert body["implementation"]["open"] == ["B"] and body["design"]["open"] == ["B"]
-    assert body["implementation"]["sentence"].endswith(_LIMITED)
+    assert _LIMITED not in body["implementation"]["sentence"]
+    assert body["proposed_reasons"][-1] == _LIMITED
     refused = case.choose("EFFECTIVE", reason=REASONS["NOT_CONCLUDED"])
     assert refused.status_code == 409
     assert refused.json()["detail"] == (
@@ -1455,10 +1464,14 @@ def test_a_file_not_relied_on_under_a_combined_showing_blocks_effective(
     view = case.view()
     assert {a["shown_by"] for a in view["attributes"]} == {"NOT_RELIED"}
     assert {a["tickmark"] for a in view["attributes"]} == {"NONE"}
+    # One point for the one file, naming every attribute resting on it (design review, 20
+    # November 2026: before, one point per attribute).
     resting = [p for p in view["points"] if p["kind"] == "NOT_RELIED"]
-    assert resting and all(
-        p["text"].endswith("rests on a file not relied on: “sap change log.txt”.") for p in resting
-    )
+    codes = sorted(a["code"] for a in view["attributes"])
+    assert [p["text"] for p in resting] == [
+        f"Attributes {', '.join(codes[:3])} and {len(codes) - 3} more rest on a file not "
+        "relied on: “sap change log.txt”."
+    ]
     refused = case.choose("EFFECTIVE", reason=REASONS["NOT_CONCLUDED"])
     assert refused.status_code == 409, refused.text
     assert "so the conclusion cannot be “Effective”" in refused.json()["detail"]

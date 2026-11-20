@@ -32,6 +32,7 @@ Audit integrity (critical tier):
   firm finds nothing, an agent is refused, and an archived engagement is read-only.
 """
 
+import re
 from collections.abc import Callable
 from functools import partial
 from typing import Any
@@ -268,12 +269,12 @@ def test_each_kind_is_recorded_read_back_replaced_and_reopened_and_the_check_sta
     assert entry_e1["established"] == ""
     # Section 3.9: old, an OPEN matter; new, a NOT_RELIED point at attribute A's row,
     # settled by a decision on the file (or a consideration).
-    [resting] = [
-        p for p in paper["points"]
-        # Reworded 19 November 2026 (D3): old "is shown only on a file not relied on",
-        # new "rests on a file not relied on" (a showing that rests on it in any part).
-        if p["text"].startswith("Attribute A rests on a file not")
-    ]  # fmt: skip
+    # Reworded 19 November 2026 (D3): old "is shown only on a file not relied on", new
+    # "rests on a file not relied on" (a showing that rests on it in any part). Grouped 20
+    # November 2026 (design review): one point for the file, naming every attribute
+    # resting on it, A first.
+    [resting] = [p for p in paper["points"] if p["kind"] == "NOT_RELIED"]
+    assert re.match(r"Attributes? A[ ,].* rests? on a file not relied on: ", resting["text"])
     assert (resting["kind"], resting["settle"]) == ("NOT_RELIED", ["RELIABILITY", "CONSIDER"])
     assert resting["place"]["at"] == "ATTRIBUTE"
 

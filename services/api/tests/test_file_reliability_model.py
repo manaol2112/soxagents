@@ -405,10 +405,13 @@ def test_a_file_not_relied_on_takes_the_mark_away_and_is_a_point() -> None:
     # point: the evidence index says it on the file's line (below). Why: the product owner
     # removed the matters; each item is at its place.
     points = points_of(REQUESTS, checks, ATTRIBUTES, left, [], evidence, decisions)
+    # Rewritten (design review, 20 November 2026). Old: one point per attribute, "Attribute
+    # A rests on ..." and "Attribute B rests on ...", each with the same decision on the
+    # same file. New: one point for the file, naming both, under the last of them. Why:
+    # one decision about one file is one traceable grouped decision (Product and UX
+    # standards).
     assert [(p.kind, p.text, p.refs, p.place.at, p.place.attribute_id) for p in points] == [
-        ("NOT_RELIED", "Attribute A rests on a file not relied on: "
-         "“sap change log.txt”.", ["E2"], "ATTRIBUTE", A),
-        ("NOT_RELIED", "Attribute B rests on a file not relied on: "
+        ("NOT_RELIED", "Attributes A and B rest on a file not relied on: "
          "“sap change log.txt”.", ["E2"], "ATTRIBUTE", B),
     ]  # fmt: skip
     assert points[0].settle == ["RELIABILITY", "CONSIDER"]

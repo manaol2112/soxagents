@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import {
   canCloseOut,
   closedNotice,
+  completionLead,
   detailsEditable,
   ENGAGEMENT_STATUSES,
   engagementPhase,
@@ -92,6 +93,7 @@ describe("completion state", () => {
         },
       ],
       deletable: false,
+      nothing_in_scope: false,
     });
     assert.ok(parsed !== null);
     assert.equal(parsed.openItems[0]?.controlId, "c1");
@@ -218,6 +220,7 @@ describe("scope items on completion (C3, 19 November 2026)", () => {
     completed_by: "",
     reopenings: [],
     deletable: false,
+    nothing_in_scope: false,
   });
 
   it("reads a SCOPE item, with no control to link to", () => {
@@ -247,5 +250,53 @@ describe("scope items on completion (C3, 19 November 2026)", () => {
       ),
       null,
     );
+  });
+});
+
+describe("the completion card's lead (design review, 20 November 2026)", () => {
+  it("with nothing in scope, says only to archive: no count and no list", () => {
+    // Before: "2 items are still open. The engagement can be completed once they are
+    // done." above "Archive the engagement instead of completing it."
+    const lead = completionLead({ nothingInScope: true, openCount: 2 });
+    assert.equal(lead.kind, "NOTHING_IN_SCOPE");
+    assert.equal(
+      `${lead.strong} ${lead.rest}`,
+      "Nothing is in scope. No control has been tested, so the engagement cannot be completed. Archive it instead.",
+    );
+    assert.ok(!/\d/.test(`${lead.strong} ${lead.rest}`));
+  });
+
+  it("otherwise counts the open items, singular and plural agreeing", () => {
+    const one = completionLead({ nothingInScope: false, openCount: 1 });
+    assert.equal(
+      `${one.strong} ${one.rest}`,
+      "1 item is still open. The engagement can be completed once it is done.",
+    );
+    const two = completionLead({ nothingInScope: false, openCount: 2 });
+    assert.equal(
+      `${two.strong} ${two.rest}`,
+      "2 items are still open. The engagement can be completed once they are done.",
+    );
+  });
+
+  it("reads nothing_in_scope from the body, and refuses a body without it", () => {
+    const base = {
+      status: "ACTIVE",
+      version: 3,
+      can_complete: false,
+      open_count: 1,
+      open_items: [
+        { kind: "SCOPE", label: "No control is in scope", control_id: null },
+      ],
+      completed_at: null,
+      completed_by: "",
+      reopenings: [],
+      deletable: false,
+    };
+    assert.equal(
+      parseCompletion({ ...base, nothing_in_scope: true })?.nothingInScope,
+      true,
+    );
+    assert.equal(parseCompletion(base), null);
   });
 });

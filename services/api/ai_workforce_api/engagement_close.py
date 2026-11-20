@@ -153,6 +153,10 @@ class CompletionBody(BaseModel):
     reopenings: list[ReopeningBody]
     # The engagement never launched, so an owner or admin may delete it.
     deletable: bool
+    # No control is in scope (C3): nothing was tested, so the engagement is archived, never
+    # completed, and the page says only that (design review, 20 November 2026). Its open
+    # items then hold the NOTHING_IN_SCOPE item and never a system without controls.
+    nothing_in_scope: bool = False
 
 
 class CompleteBody(BaseModel):
@@ -594,16 +598,25 @@ def _open_work(cursor: psycopg.Cursor[Any], project_id: UUID) -> tuple[int, list
             kind: Literal["TEST", "REVIEW"] = "REVIEW" if reason.kind in _REVIEW_KINDS else "TEST"
             items.append(OpenItem(kind=kind, label=f"{label}: {reason.text}",
                                   control_id=control_id))  # fmt: skip
-    for (name,) in cursor.execute(
-        """
-        SELECT a.name FROM engagement_applications a
-        WHERE a.project_id = %s AND a.out_of_scope_at IS NULL
-          AND NOT EXISTS (SELECT 1 FROM engagement_controls c
-                          WHERE c.engagement_application_id = a.id AND c.included)
-        ORDER BY a.name
-        """,
-        (project_id,),
-    ).fetchall():
+    # A system in scope with no control in scope, only while some control is in scope:
+    # with nothing in scope the engagement is archived, so taking each system out of scope
+    # would lead nowhere (design review, 20 November 2026: before, the card said to archive
+    # and, below, to mark each system out of scope).
+    systems = (
+        cursor.execute(
+            """
+            SELECT a.name FROM engagement_applications a
+            WHERE a.project_id = %s AND a.out_of_scope_at IS NULL
+              AND NOT EXISTS (SELECT 1 FROM engagement_controls c
+                              WHERE c.engagement_application_id = a.id AND c.included)
+            ORDER BY a.name
+            """,
+            (project_id,),
+        ).fetchall()
+        if controls
+        else []
+    )
+    for (name,) in systems:
         items.append(OpenItem(kind="SCOPE", label=f"{name}: {SYSTEM_WITHOUT_CONTROLS}"))
     for reference, title, control_id in cursor.execute(
         """
@@ -672,6 +685,8 @@ def _completion(
         completed_by=str(completed_by),
         reopenings=reopenings,
         deletable=launched is not True and str(status) in ("DRAFT", "ARCHIVED"),
+        # The first item where nothing is in scope (_open_work), in this module's words.
+        nothing_in_scope=bool(items) and items[0].label == NOTHING_IN_SCOPE,
     )
 
 

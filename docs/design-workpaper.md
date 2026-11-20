@@ -514,10 +514,10 @@ waits for (`attribute_dispositions.CLOSING`, `closed_by_tickmark`), but the attr
 open in both Design and Implementation (`design_conclusions.SETTLES_THE_ATTRIBUTE` holds
 only `SHOWN_ON_REVIEW` and `NOT_APPLICABLE`). So `EFFECTIVE`, `NO_INSTANCE` and
 `EXCEPTIONS_NOTED` are refused while it stands, and a sign-off held to its rules that
-rests on it goes out of date on read (`rule_broken`), and OE closes for it. The results'
-sentence says what it needs: "Attribute D is accepted as not available, which shows
-nothing: alternative evidence is needed (reopen the tickmark), or the conclusion is Not
-effective." The ways back are a file whose current check shows the attribute, or "Shown,
+rests on it goes out of date on read (`rule_broken`), and OE closes for it. The
+proposal says once, as its own reason after the open results, what it needs: "Attribute D
+is accepted as not available, so it is not shown. Provide alternative evidence, or conclude
+Not effective." The ways back are a file whose current check shows the attribute, or "Shown,
 on my review" on an annotation; but where the tickmark stands on any request it is read
 first (`_DISPOSITION_PRECEDENCE` keeps "not available" ahead, which fails closed), so it
 is reopened with a reason before another request's showing counts. For a genuine scope

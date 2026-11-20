@@ -488,6 +488,7 @@ def test_an_engagement_with_nothing_in_scope_is_not_completed(migrated: Database
     state = owner.get(f"{project}/completion").json()
     assert state["status"] == "ACTIVE" and state["can_complete"] is False
     assert state["open_items"] == [{"kind": "SCOPE", "label": NOTHING_SCOPED, "control_id": None}]
+    assert state["nothing_in_scope"] is True
     refused = owner.post(f"{project}/complete", json={"version": state["version"]})
     assert refused.status_code == 409
     assert owner.get(project).json()["status"] == "ACTIVE"
@@ -495,7 +496,12 @@ def test_an_engagement_with_nothing_in_scope_is_not_completed(migrated: Database
 
 def test_taking_every_control_out_holds_completion(migrated: Database) -> None:
     """C3. Every control taken out of scope through the API, with a reason: nothing is in
-    scope and the system has no control in scope, so completion is held by both."""
+    scope, so completion is held and the engagement is to be archived. Rewritten (design
+    review, 20 November 2026). Old: held by both "nothing is in scope" and "SAP ERP: no
+    control in scope; mark the system out of scope". New: held by "nothing is in scope"
+    only. Why: with nothing in scope the engagement is archived, never completed, so
+    marking a system out of scope cannot lead to completion and the card contradicted
+    itself."""
     team = _launched(migrated, "all-out")
     owner, project = team["owner"], _project(team)
     base = _base(team["org"], team["project"])
@@ -517,10 +523,8 @@ def test_taking_every_control_out_holds_completion(migrated: Database) -> None:
     state = owner.get(f"{project}/completion").json()
     assert state["can_complete"] is False
     scope = [item for item in state["open_items"] if item["kind"] == "SCOPE"]
-    assert [item["label"] for item in scope] == [
-        NOTHING_SCOPED,
-        "SAP ERP: no control in scope; mark the system out of scope with your reason",
-    ]
+    assert [item["label"] for item in scope] == [NOTHING_SCOPED]
+    assert state["nothing_in_scope"] is True
     refused = owner.post(f"{project}/complete", json={"version": state["version"]})
     assert refused.status_code == 409
 
@@ -569,6 +573,8 @@ def test_a_system_with_no_control_in_scope_holds_completion_until_it_is_marked_o
             "control_id": None,
         }
     ]
+    # One SCOPE item with no control, yet something is in scope: not "nothing in scope".
+    assert state["nothing_in_scope"] is False
     assert owner.post(f"{project}/complete", json={"version": state["version"]}).status_code == 409
     marked = owner.post(
         f"{base}/applications/{workday['id']}/remove",

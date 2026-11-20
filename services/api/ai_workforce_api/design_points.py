@@ -271,10 +271,12 @@ def points_of(
     Keys, by what each point is about (section 3.9: the same on every read while the point
     is the same, new when it changes, as when a new check has other words): STALE the
     request; FINDING the finding; NOT_CONCLUDED the attribute and the request that leaves
-    it open; NOT_RELIED the attribute; CONFLICT the attribute and the request that does
-    not show it; HELD the file and the gate's code; COMPLETENESS the request and the
-    sentence; FOLLOW_UP the request and the follow-up's words. A check run again that says
+    it open; NOT_RELIED the files and the attributes resting on them (one point for
+    them all); CONFLICT the attribute and the request that does not show it; HELD the
+    file and the gate's code; COMPLETENESS the request and the sentence; FOLLOW_UP the
+    request and the follow-up's words. A check run again that says
     the same keeps the key, and a consideration of it still stands."""
+    from ai_workforce_api import design_conclusions as conclusions
     from ai_workforce_api import design_workpaper as view
 
     found: list[PointBody] = []
@@ -344,6 +346,12 @@ def points_of(
                     settle=_settle("TICKMARK"),
                 )
             )
+    # The attributes resting on files not relied on, grouped by the files they rest on:
+    # one decision about one file is one point, under the last attribute it names (design
+    # review, 20 November 2026: before, one point per attribute repeated the same decision
+    # on the same file once per attribute).
+    excluded = {(d.requirement_id, d.file_id) for d in decisions if d.kind == "NOT_RELIED_ON"}
+    resting: dict[tuple[UUID, ...], list[AttributeRecord]] = {}
     for attribute in attributes:
         supporting = [
             r for r in readings.get(attribute.id, []) if r.state in ("SHOWN", "SHOWN_IN_PART")
@@ -352,10 +360,7 @@ def points_of(
             # D3 (19 November 2026): a showing rests on a file not relied on where any of
             # its files is one; the point names those files only, never the relied ones
             # beside them (before, every file of the showing was named as not relied on).
-            excluded = {
-                (d.requirement_id, d.file_id) for d in decisions if d.kind == "NOT_RELIED_ON"
-            }
-            resting_on = list(
+            files = tuple(
                 dict.fromkeys(
                     file_id
                     for r in supporting
@@ -363,20 +368,30 @@ def points_of(
                     if (r.requirement_id, file_id) in excluded
                 )
             )
-            add(
-                PointBody(
-                    key=point_key("NOT_RELIED", attribute.id),
-                    kind="NOT_RELIED",
-                    text=_sentence(
-                        f"Attribute {attribute.code} rests on "
-                        f"{'files' if len(resting_on) > 1 else 'a file'} not relied on: "
-                        f"{view._listed_names([names.get(f, 'a file') for f in resting_on])}."
-                    ),
-                    refs=_refs(resting_on, evidence),
-                    place=PlaceBody(at="ATTRIBUTE", attribute_id=attribute.id),
-                    settle=_settle("RELIABILITY"),
-                )
+            resting.setdefault(files, []).append(attribute)
+    for files, grouped in resting.items():
+        codes = [attribute.code for attribute in grouped]
+        add(
+            PointBody(
+                # The files, then the attributes resting on them: new when either changes.
+                key=point_key(
+                    "NOT_RELIED",
+                    *sorted(str(file_id) for file_id in files),
+                    "attributes",
+                    *sorted(str(attribute.id) for attribute in grouped),
+                ),
+                kind="NOT_RELIED",
+                text=_sentence(
+                    f"{conclusions._attributes(codes, capital=True)} "
+                    f"{'rests' if len(codes) == 1 else 'rest'} on "
+                    f"{'files' if len(files) > 1 else 'a file'} not relied on: "
+                    f"{view._listed_names([names.get(f, 'a file') for f in files])}."
+                ),
+                refs=_refs(list(files), evidence),
+                place=PlaceBody(at="ATTRIBUTE", attribute_id=grouped[-1].id),
+                settle=_settle("RELIABILITY"),
             )
+        )
     for attribute in attributes:
         mine = readings.get(attribute.id, [])
         if view.standing(mine)[0] != "SHOWN":

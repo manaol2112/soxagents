@@ -140,8 +140,9 @@ def test_closing_tickmarks_count_as_settled_for_both() -> None:
     # Rewritten 19 November 2026 (D1, product owner: "Evidence not available" settles the
     # follow-up but never shows the attribute). Old: with D accepted as not available, both
     # results were DESIGNED and IN_PLACE. New: without D they are; with D both are OPEN on
-    # D alone, and the sentence says alternative evidence is needed. Why: a scope
-    # limitation accepted is not evidence (audit invariant I3).
+    # D alone, and the proposal says alternative evidence is needed (once, as its own
+    # reason: design review, 20 November 2026; before, in each result's sentence). Why: a
+    # scope limitation accepted is not evidence (audit invariant I3).
     settled = [
         _stand("A"),
         _stand("B", "SHOWN_ON_REVIEW", None),
@@ -152,7 +153,9 @@ def test_closing_tickmarks_count_as_settled_for_both() -> None:
     limited = results_of([*settled, _stand("D", "NOT_AVAILABLE", None)])
     assert (limited.design.result, limited.implementation.result) == ("OPEN", "OPEN")
     assert limited.design.open == ["D"] and limited.implementation.open == ["D"]
-    assert "Attribute D is accepted as not available" in limited.design.sentence
+    assert limited.not_available == ("D",)
+    assert "accepted as not available" not in limited.design.sentence
+    assert proposal_of(0, limited)[1][-1].startswith("Attribute D is accepted as not available")
 
 
 @pytest.mark.parametrize("state", ["NOT_TESTED", "NOT_SHOWN", "SHOWN_IN_PART", "NOT_CONCLUDED"])
