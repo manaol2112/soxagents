@@ -807,6 +807,28 @@ def test_a_partial_reperformance_names_the_items_that_stand(migrated: Database) 
     for words in ("the model", "The reviewer could", "broke a rule", "checked against"):
         assert words not in review["failure_note"], words
     assert review["attestation_needed"] is True
+    # Signed over the reviewer's record by hand, the review no longer says to re-perform
+    # (before, "Re-perform to try again" stood beside "Reviewed"); the note stays.
+    reviewer = _session(migrated, team["reviewer_id"])
+    for proposed in [n for n in review["notes"] if n["status"] == "PROPOSED"]:
+        decided = reviewer.post(
+            f"{_base(team)}/reviews/{review['id']}/notes/{proposed['id']}/decide",
+            json={"version": review["version"], "action": "DISMISS", "reason": "Seen."},
+        )
+        assert decided.status_code == 200, decided.text
+        review = decided.json()
+    signed = reviewer.post(
+        f"{_base(team)}/reviews/{review['id']}/sign-off",
+        json={
+            "version": review["version"],
+            "note": "Re-performed the other two items by hand.",
+            "reperformed_by_hand": True,
+        },
+    )
+    assert signed.status_code == 200, signed.text
+    review = client.get(f"{_base(team)}/reviews").json()[0]
+    assert review["status"] == "SIGNED_OFF"
+    assert review["failure_note"] == "" and review["reperform_note"] == said
 
 
 def test_partly_reperformed_names_at_most_three_items() -> None:

@@ -463,15 +463,21 @@ def fail_reperformance(connection: psycopg.Connection[Any], review_id: UUID) -> 
 
 
 def reperform_failure_note(
-    status: str, source: str | None, note: str, record: ReperformanceBody
+    status: str,
+    source: str | None,
+    note: str,
+    record: ReperformanceBody,
+    signed: bool = False,
 ) -> str:
     """The reviewer agent's last re-performance, said for a person when it gave no usable
     answer: one that gave up changed nothing; one whose every model call failed (FALLBACK)
     left the rules' checks; one the model did only in part (MODEL, fewer re-performed than
     due) kept the items it did. Read from the typed record (FO-1, 19 November 2026); before,
     from the note's wording (REPERFORM_FAILED, the partial note). The agent is "the reviewer
-    agent", never "the model" (design review, 20 November 2026)."""
-    if status in ("PENDING", "WORKING") or not note:
+    agent", never "the model" (design review, 20 November 2026). A signed review is not a
+    failure to act on: its sign-off recorded the rest by hand, so "Re-perform to try again"
+    is not said over it (before, it was, beside "Reviewed")."""
+    if signed or status in ("PENDING", "WORKING") or not note:
         return ""
     if record.failed:
         return (
@@ -1695,7 +1701,11 @@ def _review(
         reperform_source=None if row[7] is None else str(row[7]),
         reperform_note=str(row[8]),
         failure_note=reperform_failure_note(
-            str(row[5]), None if row[7] is None else str(row[7]), str(row[8]), record
+            str(row[5]),
+            None if row[7] is None else str(row[7]),
+            str(row[8]),
+            record,
+            signed=row[4] == "SIGNED_OFF",
         ),
         reperformance=record,
         attestation_needed=needs_attestation(tested_branch, record),
