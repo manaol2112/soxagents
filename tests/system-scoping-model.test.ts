@@ -21,6 +21,8 @@ import {
   parseSuggestion,
   type ReasonFacts,
   reasonNeeded,
+  reasonPlan,
+  recordedReasons,
   reliedOnSoc,
   returnAnchor,
   type SetupSystem,
@@ -960,6 +962,120 @@ describe("the system wizard", () => {
     assert.deepEqual(initialNotes(items), {
       C: "Covered by the SOC 1 report.",
     });
+  });
+
+  it("asks one reason per control area, never one reason across areas", () => {
+    const REVIEWED: ReasonFacts = { ...NO_REVIEW, reviewed: true };
+    const order = ["ACCESS", "CHANGE", "OPERATIONS", "ITAC", "IPE"];
+    const items = [
+      candidate("AC-1", { status: "RECOMMENDED" }),
+      candidate("ITAC-1", { domain: "ITAC", status: "POTENTIAL" }),
+      candidate("CM-1", { domain: "CHANGE", status: "POTENTIAL" }),
+      candidate("CM-2", { domain: "CHANGE", status: "JUDGMENT" }),
+      candidate("OP-1", { domain: "OPERATIONS" }),
+      candidate("AC-2", { status: "POTENTIAL" }),
+    ];
+    const kept: Record<string, boolean> = {};
+    const empty = reasonPlan(items, kept, {}, {}, REVIEWED, new Set(), order);
+    // The recommended control has its own field; the others group by area, in the
+    // Controls step's order, whatever order the candidates came in.
+    assert.deepEqual(empty.recommended, ["AC-1"]);
+    assert.deepEqual(
+      empty.areas.map((area) => [area.domain, area.refs, area.valid]),
+      [
+        ["ACCESS", ["AC-2"], false],
+        ["CHANGE", ["CM-1", "CM-2"], false],
+        ["OPERATIONS", ["OP-1"], false],
+        ["ITAC", ["ITAC-1"], false],
+      ],
+    );
+    assert.equal(empty.complete, false);
+    // A change management reason lands on the change controls only.
+    const soc = "Relied on the service organization's SOC 1 report";
+    const partial = reasonPlan(
+      items,
+      kept,
+      { "AC-1": "Tested by the parent's auditors." },
+      { CHANGE: `  ${soc} ` },
+      REVIEWED,
+      new Set(),
+      order,
+    );
+    assert.deepEqual(partial.recommended, []);
+    assert.equal(partial.complete, false);
+    assert.equal(partial.filled["CM-1"], soc);
+    assert.equal(partial.filled["CM-2"], soc);
+    assert.equal(partial.filled["ITAC-1"], undefined);
+    assert.equal(partial.filled["AC-1"], "Tested by the parent's auditors.");
+    const done = reasonPlan(
+      items,
+      kept,
+      { "AC-1": "Tested by the parent's auditors." },
+      {
+        ACCESS: "Covered by another control",
+        CHANGE: soc,
+        OPERATIONS: "Not relevant to financial reporting",
+        ITAC: "ok",
+      },
+      REVIEWED,
+      new Set(),
+      order,
+    );
+    // Two characters are not a reason: ITAC still needs one.
+    assert.deepEqual(
+      done.areas.filter((area) => !area.valid).map((area) => area.domain),
+      ["ITAC"],
+    );
+    assert.equal(done.complete, false);
+    // No SOC report can be relied on and nothing is on record: only the recommended
+    // control is asked.
+    const waived = reasonPlan(
+      items,
+      kept,
+      { "AC-1": "Tested by the parent's auditors." },
+      {},
+      {
+        ...REVIEWED,
+        hosting: "ON_PREMISES",
+        socExpected: false,
+        factsConfirmed: true,
+      },
+      new Set(),
+      order,
+    );
+    assert.deepEqual(waived.areas, []);
+    assert.equal(waived.complete, true);
+  });
+
+  it("shows the reasons on record for the controls left out, by area and reason", () => {
+    const order = ["ACCESS", "CHANGE"];
+    const items = [
+      candidate("CM-1", { domain: "CHANGE" }),
+      candidate("AC-1", {}),
+      candidate("CM-2", { domain: "CHANGE" }),
+      candidate("AC-2", { status: "RECOMMENDED" }),
+      candidate("AC-3", {}),
+    ];
+    const notes = {
+      "CM-1": "Relied on the SOC 1 report.",
+      "CM-2": "Relied on the  SOC 1 report.",
+      "AC-1": "Not used.",
+      "AC-2": "Tested elsewhere.",
+      "AC-3": "no",
+    };
+    // The recommended control keeps its own field; a note under three characters is no
+    // reason on record; a selected control shows none.
+    assert.deepEqual(recordedReasons(items, { "AC-1": true }, notes, order), [
+      {
+        domain: "CHANGE",
+        note: "Relied on the SOC 1 report.",
+        refs: ["CM-1", "CM-2"],
+      },
+    ]);
+    assert.deepEqual(
+      recordedReasons(items, {}, notes, order).map((entry) => entry.domain),
+      ["ACCESS", "CHANGE"],
+    );
   });
 
   it("builds each call and refuses what does not fit", () => {

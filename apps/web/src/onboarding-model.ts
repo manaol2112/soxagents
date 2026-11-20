@@ -885,6 +885,9 @@ export type RcmImport = {
     skippedCount: number;
     warnings: string[];
     problems: string[];
+    /** The problems include rows that must be fixed in the file itself: no mapping
+     * choice settles them. */
+    fixInFile: boolean;
     controls: Array<{
       row: number;
       controlRef: string;
@@ -1471,6 +1474,7 @@ export function parseImport(value: unknown): RcmImport | null {
       skippedCount: Number(preview.skipped_count ?? 0),
       warnings: strings(preview.warnings),
       problems: strings(preview.problems),
+      fixInFile: preview.fix_in_file === true,
       controls: records(preview.controls).map((item) => ({
         row: Number(item.row ?? 0),
         controlRef: str(item.control_ref),
@@ -2461,6 +2465,122 @@ export function initialNotes(
       )
       .map((item) => [item.controlRef, item.decisionNote]),
   );
+}
+
+/** Reasons usually given for leaving controls out of a system: one is picked, or the
+ * team's own words are written instead (suggest, don't ask). */
+export const LEFT_OUT_REASONS: readonly string[] = [
+  "Relied on the service organization's SOC 1 report",
+  "Not relevant to financial reporting",
+  "Covered by another control",
+];
+
+/** A reason as the API stores it: spacing collapsed. */
+function reasonText(text: string | undefined): string {
+  return (text ?? "").split(/\s+/).join(" ").trim();
+}
+
+/** The reasons a selection still needs, as the Review step asks for them: each control
+ * the agent recommended on its own, every other one by its control area (in `order`, the
+ * Controls step's), one reason for the area. `notes` are the per-control reasons, and
+ * `areaNotes` the reason given for each area. The notes every control is saved with come
+ * back in `filled`; `complete` says whether the selection can be saved. */
+export function reasonPlan(
+  candidates: readonly Candidate[],
+  selected: Readonly<Record<string, boolean>>,
+  notes: Readonly<Record<string, string>>,
+  areaNotes: Readonly<Record<string, string>>,
+  facts: ReasonFacts,
+  onRecord: ReadonlySet<string>,
+  order: readonly string[],
+): {
+  recommended: string[];
+  areas: Array<{ domain: string; refs: string[]; valid: boolean }>;
+  filled: Record<string, string>;
+  complete: boolean;
+} {
+  const first = new Map<string, Candidate>();
+  for (const item of candidates) {
+    if (!first.has(item.controlRef)) {
+      first.set(item.controlRef, item);
+    }
+  }
+  const unexplained = [
+    ...new Set(needsReason(candidates, selected, notes, facts, onRecord)),
+  ];
+  const recommended = unexplained.filter(
+    (ref) => first.get(ref)?.status === "RECOMMENDED",
+  );
+  const byArea = new Map<string, string[]>();
+  for (const ref of unexplained) {
+    const domain = first.get(ref)?.domain ?? "";
+    if (first.get(ref)?.status !== "RECOMMENDED") {
+      byArea.set(domain, [...(byArea.get(domain) ?? []), ref]);
+    }
+  }
+  const known = [
+    ...order,
+    ...[...byArea.keys()].filter((key) => !order.includes(key)),
+  ];
+  const areas = known
+    .filter((domain) => byArea.has(domain))
+    .map((domain) => ({
+      domain,
+      refs: byArea.get(domain) ?? [],
+      valid: isReason(areaNotes[domain]),
+    }));
+  const filled: Record<string, string> = {};
+  for (const [ref, note] of Object.entries(notes)) {
+    filled[ref] = reasonText(note);
+  }
+  for (const area of areas) {
+    if (area.valid) {
+      for (const ref of area.refs) {
+        filled[ref] = reasonText(areaNotes[area.domain]);
+      }
+    }
+  }
+  return {
+    recommended,
+    areas,
+    filled,
+    complete: recommended.length === 0 && areas.every((area) => area.valid),
+  };
+}
+
+/** The reasons on record for the controls left out that are not asked again, one entry
+ * per area and reason, in `order`: what the Review step shows read-only. The agent's
+ * recommended controls are left out: each keeps its own field. */
+export function recordedReasons(
+  candidates: readonly Candidate[],
+  selected: Readonly<Record<string, boolean>>,
+  notes: Readonly<Record<string, string>>,
+  order: readonly string[],
+): Array<{ domain: string; note: string; refs: string[] }> {
+  const groups = new Map<
+    string,
+    { domain: string; note: string; refs: string[] }
+  >();
+  const seen = new Set<string>();
+  for (const item of candidates) {
+    const note = reasonText(notes[item.controlRef]);
+    if (
+      seen.has(item.controlRef) ||
+      selected[item.controlRef] === true ||
+      item.status === "RECOMMENDED" ||
+      !isReason(note)
+    ) {
+      continue;
+    }
+    seen.add(item.controlRef);
+    const key = `${item.domain}\u0000${note}`;
+    const group = groups.get(key) ?? { domain: item.domain, note, refs: [] };
+    group.refs.push(item.controlRef);
+    groups.set(key, group);
+  }
+  const rank = (domain: string) =>
+    order.includes(domain) ? order.indexOf(domain) : order.length;
+  return [...groups.values()].sort((a, b) => rank(a.domain) - rank(b.domain));
 }
 
 export type WizardWrite =

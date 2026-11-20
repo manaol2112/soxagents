@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import {
+  useCallback,
   useEffect,
   useId,
   useMemo,
@@ -28,9 +29,12 @@ import {
   initialSelection,
   isReason,
   LAYERS,
+  LEFT_OUT_REASONS,
   needsReason,
   parseSuggestion,
   reasonFacts,
+  reasonPlan,
+  recordedReasons,
   type SetupSystem,
   suggestedCode,
   suggestionSummary,
@@ -43,6 +47,7 @@ import { SocAssessment, SocReports, SocUpload } from "./soc-view";
 import { refusalFrom } from "./trial-model";
 import { UiIcon } from "./ui-icon";
 import { isTopmostDialog, useFocusTrap } from "./use-focus-trap";
+import { SuggestedAnswer } from "./value-options";
 
 type Props = {
   organizationId: string;
@@ -169,19 +174,21 @@ function Wizard({
     null,
   );
   const [notes, setNotes] = useState<Record<string, string>>({});
-  // One reason for every other control left out that needs one (reasonNeeded), copied
-  // into each one's note on save.
-  const [groupNote, setGroupNote] = useState("");
+  // One reason for the other controls of each area left out that need one
+  // (reasonNeeded), by area, copied into each one's note on save (reasonPlan).
+  const [areaNotes, setAreaNotes] = useState<Record<string, string>>({});
+  // A save was tried: each reason field still missing says so beside itself.
+  const [tried, setTried] = useState(false);
   const [onlyRecommended, setOnlyRecommended] = useState(false);
   const [busy, setBusy] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
   // What is on record for the in-scope controls the selection takes out, read once on
-  // the Review step (and again after the API finds work on record).
+  // the Review step (and again after the API finds work on record), by control.
   const [impact, setImpact] = useState<{
     key: string;
     state: "loading" | "ready" | "failed";
     onRecord: ReadonlySet<string>;
-    lines: string[];
+    lines: ReadonlyMap<string, string[]>;
   } | null>(null);
   const [impactRound, setImpactRound] = useState(0);
   const latestImpact = useRef(0);
@@ -237,7 +244,7 @@ function Wizard({
     }
     const ask = latestImpact.current + 1;
     latestImpact.current = ask;
-    setImpact({ key, state: "loading", onRecord: new Set(), lines: [] });
+    setImpact({ key, state: "loading", onRecord: new Set(), lines: new Map() });
     const targets = removing.map((item) => ({
       ref: item.controlRef,
       id: item.controlId ?? "",
@@ -277,9 +284,7 @@ function Wizard({
           key,
           state: "ready",
           onRecord: new Set(material.map((answer) => answer.ref)),
-          lines: material.flatMap((answer) =>
-            answer.lines.map((line) => `${answer.ref}: ${line}`),
-          ),
+          lines: new Map(material.map((answer) => [answer.ref, answer.lines])),
         });
       },
       () => {
@@ -290,7 +295,7 @@ function Wizard({
           key,
           state: "failed",
           onRecord: new Set(targets.map((target) => target.ref)),
-          lines: [],
+          lines: new Map(),
         });
       },
     );
@@ -458,48 +463,41 @@ function Wizard({
     onClose();
   }
 
-  function statusOf(ref: string): Candidate["status"] {
-    return candidates.find((item) => item.controlRef === ref)?.status ?? null;
-  }
+  // The reason fields of the Review step: one per recommended control left out, one per
+  // area for the others.
+  const reasonId = (ref: string) => `${id}-why-${ref}`;
+  const areaId = (domain: string) => `${id}-why-area-${domain}`;
 
   async function save() {
     if (selected === null || live === null || impactLoading) {
       return;
     }
-    const unexplained = needsReason(
+    const plan = reasonPlan(
       candidates,
       selected,
       notes,
+      areaNotes,
       reasonFacts(live),
       onRecord,
+      DOMAIN_ORDER,
     );
-    const missing = unexplained.filter(
-      (ref) => statusOf(ref) === "RECOMMENDED",
-    );
-    if (missing.length > 0) {
+    if (!plan.complete) {
+      // Each field still missing a reason says so beside itself; the first takes focus.
       setStep(3);
-      setProblem(
-        `Say why ${missing.length === 1 ? "this recommended control is" : "these recommended controls are"} not selected: ${missing.join(", ")}.`,
-      );
+      setProblem(null);
+      setTried(true);
+      const first =
+        plan.recommended[0] !== undefined
+          ? reasonId(plan.recommended[0])
+          : areaId(plan.areas.find((area) => !area.valid)?.domain ?? "");
+      requestAnimationFrame(() => document.getElementById(first)?.focus());
       return;
     }
-    const grouped = unexplained.filter(
-      (ref) => statusOf(ref) !== "RECOMMENDED",
-    );
-    if (grouped.length > 0 && !isReason(groupNote)) {
-      setStep(3);
-      setProblem("Say why the other controls left out are not selected.");
-      return;
-    }
-    const filled: Record<string, string> = {
-      ...notes,
-      ...Object.fromEntries(grouped.map((ref) => [ref, groupNote.trim()])),
-    };
     const result = await call("save", {
       selections: candidates.map((item) => ({
         control_ref: item.controlRef,
         selected: selected[item.controlRef] === true,
-        note: filled[item.controlRef] ?? "",
+        note: plan.filled[item.controlRef] ?? "",
       })),
     });
     if (result.ok) {
@@ -526,18 +524,71 @@ function Wizard({
     (item) =>
       item.status === "RECOMMENDED" && selected?.[item.controlRef] !== true,
   );
-  // The other controls left out that need a reason and have none yet: one reason for all.
-  const others =
+  // Every control left out, and how the Review step treats each: a recommended control
+  // has its own field (`against`), the others that need a reason one field per area
+  // (`plan.areas`), a reason already on record is shown with Edit (`recorded`), and the
+  // rest need none (`unasked`).
+  const leftOut = [
+    ...new Set(
+      candidates
+        .filter((item) => selected?.[item.controlRef] !== true)
+        .map((item) => item.controlRef),
+    ),
+  ];
+  const plan =
     live === null || selected === null
-      ? []
-      : needsReason(
+      ? null
+      : reasonPlan(
           candidates,
           selected,
           notes,
+          areaNotes,
           reasonFacts(live),
           onRecord,
-        ).filter((ref) => statusOf(ref) !== "RECOMMENDED");
-  const shownOthers = others.slice(0, 12);
+          DOMAIN_ORDER,
+        );
+  const recorded =
+    selected === null
+      ? []
+      : recordedReasons(candidates, selected, notes, DOMAIN_ORDER);
+  // The controls a reason would be asked for with none on record: a recorded reason can
+  // be edited only where one stays required, so Edit never drops it.
+  const askable = new Set(
+    live === null || selected === null
+      ? []
+      : needsReason(candidates, selected, {}, reasonFacts(live), onRecord),
+  );
+  const asked = new Set([
+    ...against.map((item) => item.controlRef),
+    ...(plan?.areas ?? []).flatMap((area) => area.refs),
+    ...recorded.flatMap((entry) => entry.refs),
+  ]);
+  const unasked = leftOut.filter((ref) => !asked.has(ref));
+  const linesOf = (ref: string) => impactNow?.lines.get(ref) ?? [];
+  const areaLabel = (domain: string) => DOMAIN_LABELS[domain] ?? domain;
+
+  function editRecorded(entry: {
+    domain: string;
+    note: string;
+    refs: string[];
+  }) {
+    // The controls go back to their area's field, holding the reason on record.
+    setNotes((current) =>
+      Object.fromEntries(
+        Object.entries(current).filter(([ref]) => !entry.refs.includes(ref)),
+      ),
+    );
+    setAreaNotes((current) => ({
+      ...current,
+      [entry.domain]:
+        (current[entry.domain] ?? "").trim() === ""
+          ? entry.note
+          : (current[entry.domain] ?? ""),
+    }));
+    requestAnimationFrame(() =>
+      document.getElementById(areaId(entry.domain))?.focus(),
+    );
+  }
 
   return createPortal(
     // biome-ignore lint/a11y/noStaticElementInteractions: a click on the backdrop cancels; Escape and Cancel do too.
@@ -852,90 +903,171 @@ function Wizard({
                     ))}
                   </p>
                 )}
-                {against.length > 0 ? (
-                  <div className="sw-reasons">
-                    <p className="form-hint">
-                      The agent recommended these, and they are not selected.
-                      Say why for each.
+              </div>
+              {leftOut.length > 0 ? (
+                <div className="sw-block">
+                  <h3>
+                    Not selected <span className="num">{leftOut.length}</span>
+                  </h3>
+                  {impactLoading ? (
+                    <p className="form-hint sw-checking" role="status">
+                      <span className="spinner small" aria-hidden="true" />
+                      Checking the work on record for the controls this
+                      selection takes out of scope…
                     </p>
-                    {against.map((item) => (
-                      <label key={item.controlRef} className="sw-reason">
-                        <span>
-                          <strong>{item.controlRef}</strong> {item.title}
-                        </span>
-                        <input
-                          autoComplete="off"
-                          value={notes[item.controlRef] ?? ""}
-                          maxLength={500}
-                          placeholder="Why it does not apply, or who tests it instead"
-                          onChange={(event) =>
-                            setNotes({
-                              ...notes,
-                              [item.controlRef]: event.target.value,
-                            })
-                          }
-                        />
-                      </label>
-                    ))}
-                  </div>
-                ) : null}
-                {impactLoading ? (
-                  <p className="form-hint" role="status">
-                    Checking the work on record for the controls this selection
-                    takes out of scope…
-                  </p>
-                ) : null}
-                {others.length > 0 ? (
-                  <div className="sw-reasons">
-                    <p className="form-hint">
-                      {others.some((ref) => onRecord.has(ref))
-                        ? "Work is on record for some of these controls, and others may rest on a SOC report. Say why they are left out; the reason goes in the audit trail."
-                        : "These controls are left out. Where a SOC report may be relied on instead of testing, say why; the reason goes in the audit trail."}
-                    </p>
-                    <p className="sw-chosen">
-                      {shownOthers.map((ref) => (
-                        <span key={ref} className="sw-chip">
-                          {ref}
-                        </span>
-                      ))}
-                      {others.length > shownOthers.length ? (
-                        <span className="sw-chip">
-                          and {others.length - shownOthers.length} more
-                        </span>
-                      ) : null}
-                    </p>
-                    {impactNow !== null && impactNow.lines.length > 0 ? (
-                      <ul className="sw-list">
-                        {impactNow.lines.map((line) => (
-                          <li key={line}>{line}</li>
-                        ))}
-                      </ul>
-                    ) : null}
-                    {impactNow?.state === "failed" ? (
+                  ) : impactNow?.state === "failed" ? (
+                    <div className="sw-why-foot">
                       <p className="form-hint">
                         The work on record could not be checked, so a reason is
-                        asked for each control this selection takes out.
+                        needed for each control this selection takes out.
                       </p>
-                    ) : null}
-                    <label className="sw-reason">
-                      <span>
-                        Why{" "}
-                        {others.length === 1
-                          ? "this control is"
-                          : `these ${others.length} controls are`}{" "}
-                        not selected
-                      </span>
-                      <input
-                        autoComplete="off"
-                        value={groupNote}
-                        maxLength={500}
-                        placeholder="For example, relied on the vendor's SOC 1 Type 2 report"
-                        onChange={(event) => setGroupNote(event.target.value)}
-                      />
-                    </label>
-                  </div>
-                ) : null}
-              </div>
+                      <button
+                        type="button"
+                        className="btn-secondary btn-sm"
+                        onClick={() => setImpactRound((round) => round + 1)}
+                      >
+                        Check again
+                      </button>
+                    </div>
+                  ) : against.length > 0 || (plan?.areas.length ?? 0) > 0 ? (
+                    <p className="form-hint">
+                      Say why these controls are not selected. The reason is
+                      recorded in the audit trail.
+                    </p>
+                  ) : null}
+                  {against.length > 0 ? (
+                    <div className="sw-reasons">
+                      <p className="form-hint">
+                        The agent recommended these, and they are not selected.
+                        Say why for each.
+                      </p>
+                      {against.map((item) => {
+                        const field = reasonId(item.controlRef);
+                        const bad = tried && !isReason(notes[item.controlRef]);
+                        const lines = linesOf(item.controlRef);
+                        return (
+                          <div key={item.controlRef} className="sw-reason">
+                            <label htmlFor={field}>
+                              <strong>{item.controlRef}</strong> {item.title}
+                            </label>
+                            <SuggestedAnswer
+                              id={field}
+                              single
+                              multiline
+                              maxLength={500}
+                              value={notes[item.controlRef] ?? ""}
+                              options={LEFT_OUT_REASONS}
+                              placeholder="Why it does not apply, or who tests it instead"
+                              error={bad ? REASON_ERROR : null}
+                              onChange={(value) =>
+                                setNotes((current) => ({
+                                  ...current,
+                                  [item.controlRef]: value,
+                                }))
+                              }
+                            />
+                            {lines.length > 0 ? (
+                              <ul className="sw-list sw-impact">
+                                {lines.map((line) => (
+                                  <li key={line}>{line}</li>
+                                ))}
+                              </ul>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                  {(plan?.areas ?? []).map((area) => {
+                    const field = areaId(area.domain);
+                    const bad = tried && !area.valid;
+                    const lines = area.refs.flatMap((ref) =>
+                      linesOf(ref).map((line) => `${ref}: ${line}`),
+                    );
+                    return (
+                      <fieldset key={area.domain} className="sw-why">
+                        <legend className="sw-why-head">
+                          {areaLabel(area.domain)}{" "}
+                          <span className="num">{area.refs.length}</span>
+                        </legend>
+                        <ChipList refs={area.refs} />
+                        {lines.length > 0 ? (
+                          <ul className="sw-list sw-impact">
+                            {lines.map((line) => (
+                              <li key={line}>{line}</li>
+                            ))}
+                          </ul>
+                        ) : null}
+                        <div className="sw-reason">
+                          <label htmlFor={field}>
+                            Why{" "}
+                            {area.refs.length === 1
+                              ? "this control is"
+                              : `these ${area.refs.length} controls are`}{" "}
+                            not selected
+                          </label>
+                          <SuggestedAnswer
+                            id={field}
+                            single
+                            multiline
+                            maxLength={500}
+                            value={areaNotes[area.domain] ?? ""}
+                            options={LEFT_OUT_REASONS}
+                            placeholder="Pick a suggestion or write the reason"
+                            error={bad ? REASON_ERROR : null}
+                            onChange={(value) =>
+                              setAreaNotes((current) => ({
+                                ...current,
+                                [area.domain]: value,
+                              }))
+                            }
+                          />
+                        </div>
+                      </fieldset>
+                    );
+                  })}
+                  {recorded.map((entry) => (
+                    <div
+                      key={`${entry.domain}-${entry.note}`}
+                      className="sw-why"
+                    >
+                      <p className="sw-why-head">
+                        {areaLabel(entry.domain)}{" "}
+                        <span className="num">{entry.refs.length}</span>
+                      </p>
+                      <ChipList refs={entry.refs} />
+                      <div className="sw-why-foot">
+                        <p className="sw-why-note">
+                          <b>Reason recorded</b>
+                          {entry.note}
+                        </p>
+                        {entry.refs.every((ref) => askable.has(ref)) ? (
+                          <button
+                            type="button"
+                            className="btn-ghost btn-sm"
+                            aria-label={`Edit the reason recorded for ${areaLabel(entry.domain)}`}
+                            onClick={() => editRecorded(entry)}
+                          >
+                            Edit
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                  {unasked.length > 0 ? (
+                    <div className="sw-reasons">
+                      <p className="form-hint">
+                        No reason is needed for{" "}
+                        {unasked.length === 1
+                          ? "this control"
+                          : `these ${unasked.length} controls`}
+                        .
+                      </p>
+                      <ChipList refs={unasked} />
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               <div className="sw-block">
                 <h3>SOC 1 assessment</h3>
                 <SocAssessment system={live} />
@@ -1301,6 +1433,35 @@ function moveTo(from: HTMLElement, targetId: string) {
     8;
 }
 
+const CHIPS_SHOWN = 12;
+const REASON_ERROR = "Give a reason of at least 3 characters.";
+
+/** Controls left out, outlined so they never read as the selected ones; past twelve, the
+ * rest open on request. */
+function ChipList({ refs }: { refs: readonly string[] }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? refs : refs.slice(0, CHIPS_SHOWN);
+  return (
+    <p className="sw-chosen is-out">
+      {shown.map((ref) => (
+        <span key={ref} className="sw-chip">
+          {ref}
+        </span>
+      ))}
+      {refs.length > CHIPS_SHOWN ? (
+        <button
+          type="button"
+          className="sw-chip sw-chip-more"
+          aria-expanded={all}
+          onClick={() => setAll(!all)}
+        >
+          {all ? "Show fewer" : `and ${refs.length - CHIPS_SHOWN} more`}
+        </button>
+      ) : null}
+    </p>
+  );
+}
+
 function ControlRow({
   item,
   checked,
@@ -1312,11 +1473,22 @@ function ControlRow({
 }) {
   const id = useId();
   const [open, setOpen] = useState(false);
+  // A decision's reason shows on the row, two lines until the row is opened.
+  const note = item.decision !== null ? item.decisionNote.trim() : "";
+  // Measured once the clamped line is drawn (it is drawn again when the note changes): a
+  // note longer than its two lines opens with the row.
+  const [longNote, setLongNote] = useState(false);
+  const measureNote = useCallback((box: HTMLSpanElement | null) => {
+    if (box !== null) {
+      setLongNote(box.scrollHeight > box.clientHeight + 1);
+    }
+  }, []);
   const more =
     item.description !== "" ||
     item.support !== "" ||
     item.missing !== "" ||
-    item.adaptedFrom.length > 0;
+    item.adaptedFrom.length > 0 ||
+    longNote;
   return (
     <li
       className={`sw-row${checked ? " is-checked" : ""}${open ? " is-open" : ""}`}
@@ -1350,13 +1522,23 @@ function ControlRow({
               ) : null}
             </>
           ) : null}
-          {item.decision !== null ? (
+          {item.decision !== null && note === "" ? (
             <span className="sw-decided">
               {item.decision === "SELECTED" ? "Selected" : "Not selected"} by{" "}
               {item.decidedBy ?? "the team"}
             </span>
           ) : null}
         </span>
+        {note !== "" ? (
+          <span
+            key={note}
+            ref={measureNote}
+            className={`sw-row-decision${open ? "" : " is-clamped"}`}
+          >
+            {item.decision === "SELECTED" ? "Selected" : "Not selected"} by{" "}
+            {item.decidedBy ?? "the team"}: {note}
+          </span>
+        ) : null}
         {item.description !== "" ? (
           <span className="sw-row-text">{item.description}</span>
         ) : null}

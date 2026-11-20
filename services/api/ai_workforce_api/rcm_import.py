@@ -572,6 +572,8 @@ class BuildResult:
     skipped: list[Skipped] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
+    # Some problems are rows to fix in the file itself, which no mapping choice settles.
+    fix_in_file: bool = False
 
 
 # Reading files
@@ -1234,6 +1236,8 @@ def _report_repeats(result: BuildResult, repeats: dict[str, _Repeat], seen: dict
     """A repeated control ID in the preview: merged rows as a warning, rows that cannot be
     one control as a problem that holds the import."""
     held = [group for group in repeats.values() if group.differs or group.unnamed]
+    if held:
+        result.fix_in_file = True
     for group in held[:REPEATS_LISTED]:
         rows = listed([str(row) for row in group.rows], 20)
         unnamed = (
@@ -1290,6 +1294,8 @@ def _report_unread(
         for row, why in rows
     ]
     held.sort()
+    if held:
+        result.fix_in_file = True
     for row, why, ref in held[:REPEATS_LISTED]:
         result.problems.append(
             f"Row {row} repeats control ID {ref} but cannot be read ({why}): fix the row in "

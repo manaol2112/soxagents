@@ -168,6 +168,9 @@ class ImportPreview(BaseModel):
     skipped_count: int
     warnings: list[str]
     problems: list[str]
+    # The problems include rows to fix in the file itself: the next step is a corrected
+    # upload, not a mapping change.
+    fix_in_file: bool = False
     controls: list[ControlPreview]
     new_applications: list[str]
 
@@ -595,6 +598,18 @@ def _read(
         project_id=project_id,
     )
     return _body(connection, project_id, _load(connection, project_id, import_id))
+
+
+def upload_hold(
+    connection: psycopg.Connection[Any], project_id: UUID, import_id: UUID
+) -> Literal["ROWS", "OTHER"] | None:
+    """What holds the import of an upload still being mapped, from the same preview the
+    page shows (the caller has authorized the read): rows to fix in the file, anything
+    else, or nothing."""
+    preview = _body(connection, project_id, _load(connection, project_id, import_id))
+    if preview.ready:
+        return None
+    return "ROWS" if preview.preview.fix_in_file else "OTHER"
 
 
 def _layout(
@@ -1350,6 +1365,7 @@ def _body(connection: psycopg.Connection[Any], project_id: UUID, stored: _Stored
             skipped_count=len(result.skipped),
             warnings=warnings,
             problems=problems,
+            fix_in_file=result.fix_in_file,
             controls=[
                 ControlPreview(
                     row=control.row,

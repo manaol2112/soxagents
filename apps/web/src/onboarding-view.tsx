@@ -1351,7 +1351,9 @@ function RcmImportView({
           <span className="form-hint">
             {upload.ready
               ? "Nothing is sent to the organization. Owners, scope, and templates can be adjusted after import."
-              : "Resolve the items above, then save the mapping."}
+              : preview.fixInFile
+                ? "Fix the rows listed above in the file, then discard this upload and upload the corrected file."
+                : "Resolve the items above, then save the mapping."}
           </span>
           <form autoComplete="off" method="post" action="/workspace/setup">
             <Identity

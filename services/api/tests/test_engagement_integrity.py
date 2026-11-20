@@ -518,12 +518,46 @@ def test_repeated_rows_that_differ_block_the_import_until_reconciled(migrated: D
     uploaded = _upload(owner, base, CONFLICTING_RCM)
     assert uploaded["ready"] is False
     assert uploaded["preview"]["problems"][: len(result.problems)] == result.problems
+    # The rows are fixed in the file, not by the mapping (the page's next step), and the
+    # setup agent says the upload is held rather than only that the step is ready.
+    assert result.fix_in_file is True and uploaded["preview"]["fix_in_file"] is True
+    assert ROWS_TO_FIX in _rcm_readiness(owner, base)["advisories"]
     imported = owner.post(
         f"{base}/rcm/uploads/{uploaded['id']}/import", json={"version": uploaded["version"]}
     )
     assert imported.status_code == 409
     assert imported.json()["detail"] == "mapping is incomplete"
     assert owner.get(base).json()["controls"] == []
+    # A mapping gap is settled by the mapping: not a row to fix in the file.
+    _kind, sheets = parse_file("rcm.csv", CONFLICTING_RCM.encode())
+    unmapped = build(sheets[0].rows, 1, suggest_fields(headers(sheets[0].rows, 1)), {})
+    assert unmapped.problems and unmapped.fix_in_file is False
+    ignored = owner.patch(
+        f"{base}/rcm/uploads/{uploaded['id']}/mapping",
+        json={
+            "version": uploaded["version"],
+            "column_fields": ["ignore"] * len(uploaded["columns"]),
+            "values": [],
+        },
+    )
+    assert ignored.status_code == 200, ignored.text
+    assert ignored.json()["preview"]["fix_in_file"] is False
+    advisories = _rcm_readiness(owner, base)["advisories"]
+    assert ROWS_TO_FIX not in advisories
+    assert "The uploaded RCM has items to resolve before it can be imported." in advisories
+    # Discarded, nothing holds an import and the agent says nothing of it.
+    discarded = owner.post(f"{base}/rcm/uploads/{uploaded['id']}/discard")
+    assert discarded.status_code == 200, discarded.text
+    assert not any("uploaded RCM" in line for line in _rcm_readiness(owner, base)["advisories"])
+
+
+ROWS_TO_FIX = "The uploaded RCM has rows to fix before it can be imported."
+
+
+def _rcm_readiness(owner: Any, base: str) -> dict[str, Any]:
+    state = owner.get(base).json()
+    item: dict[str, Any] = next(i for i in state["readiness"] if i["step"] == "rcm")
+    return item
 
 
 # The undescribed row comes first, so it is skipped before the described row is kept.
@@ -563,12 +597,15 @@ def test_a_repeated_row_that_cannot_be_read_blocks_the_import(migrated: Database
     )
     assert alone.problems == [] and [s.row for s in alone.skipped] == [2]
     assert [c.control_ref for c in alone.controls] == ["AC 1.01"]
+    assert result.fix_in_file is True and alone.fix_in_file is False
     # Through the API: not ready, and Import writes nothing.
     team = _new_engagement(migrated, "unread-repeat")
     owner, base = team["owner"], _base(team["org"], team["project"])
     uploaded = _upload(owner, base, UNREAD_FIRST_RCM)
     assert uploaded["ready"] is False
     assert uploaded["preview"]["problems"][: len(result.problems)] == result.problems
+    assert uploaded["preview"]["fix_in_file"] is True
+    assert ROWS_TO_FIX in _rcm_readiness(owner, base)["advisories"]
     imported = owner.post(
         f"{base}/rcm/uploads/{uploaded['id']}/import", json={"version": uploaded["version"]}
     )
