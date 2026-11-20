@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 
 import {
@@ -12,11 +13,14 @@ import {
   chooseAll,
   cuecRows,
   filterOffers,
+  initialNotes,
   initialSelection,
   needsReason,
   otherRecommendations,
   parseOnboarding,
   parseSuggestion,
+  type ReasonFacts,
+  reasonNeeded,
   reliedOnSoc,
   returnAnchor,
   type SetupSystem,
@@ -28,6 +32,7 @@ import {
   setupProblem,
   setupWrite,
   socOverview,
+  socWaived,
   suggestedCode,
   suggestionSummary,
   systemControls,
@@ -291,6 +296,48 @@ describe("scoping each system", () => {
       setupWrite(fields({ intent: "system-decide", action: "ACCEPT" }), {}),
       { error: "invalid" },
     );
+    // Relying on the SOC report instead of testing carries the person's reason.
+    assert.deepEqual(
+      setupWrite(
+        fields({
+          intent: "system-decide",
+          action: "ACCEPT",
+          reason: "  Relied on the SOC 1 Type 2 report.  ",
+        }),
+        { recommendation: [REC] },
+      ),
+      {
+        intent: "system-decide",
+        step: "controls",
+        method: "POST",
+        path: `${BASE}/recommendations/decide`,
+        body: {
+          ids: [REC],
+          action: "ACCEPT",
+          reason: "Relied on the SOC 1 Type 2 report.",
+        },
+      },
+    );
+    assert.deepEqual(
+      setupWrite(
+        fields({
+          intent: "system-decide",
+          action: "ACCEPT",
+          reason: "password = Winter2027x",
+        }),
+        { recommendation: [REC] },
+      ),
+      { error: "invalid" },
+    );
+    for (const detail of [
+      "say why the SOC report is relied on instead of testing",
+      "say why a recommended control is not selected",
+    ]) {
+      assert.equal(
+        setupNoticeFor("system-decide", 409, detail),
+        "setup-needs-reason",
+      );
+    }
     // Keeping a control the SOC report covers in scope after all.
     assert.deepEqual(
       setupWrite(fields({ intent: "system-decide", action: "KEEP" }), {
@@ -749,6 +796,21 @@ describe("SOC 1 reports to address", () => {
 });
 
 describe("the system wizard", () => {
+  const NO_REVIEW: ReasonFacts = {
+    hosting: null,
+    socExpected: null,
+    factsConfirmed: false,
+    socReports: 0,
+    reviewed: false,
+  };
+  // The team confirmed the system runs on premises with no SOC report expected or on file.
+  const ON_PREMISES: ReasonFacts = {
+    hosting: "ON_PREMISES",
+    socExpected: false,
+    factsConfirmed: true,
+    socReports: 0,
+    reviewed: true,
+  };
   const candidate = (
     ref: string,
     overrides: Partial<Candidate> = {},
@@ -810,11 +872,94 @@ describe("the system wizard", () => {
       candidate("B", { status: "RECOMMENDED" }),
       candidate("C", { status: "POTENTIAL" }),
     ];
-    assert.deepEqual(needsReason(items, { A: true }, {}), ["B"]);
+    // Rewritten 19 November 2026 (owner decision, scope integrity part A). needsReason
+    // takes the system's facts, never optional, so no caller can ask less than the API.
+    // Old: only B, the Recommended control, needed a reason. New: C, Potentially
+    // applicable and left out, needs one too, unless the team confirmed that no SOC report
+    // can be relied on. Why: leaving out a control because of a SOC report needs a
+    // reason, and the assessment does not say which exclusions rest on one.
+    assert.deepEqual(needsReason(items, { A: true }, {}, NO_REVIEW), [
+      "B",
+      "C",
+    ]);
+    assert.deepEqual(needsReason(items, { A: true }, {}, ON_PREMISES), ["B"]);
     assert.deepEqual(
-      needsReason(items, { A: true }, { B: "Vendor does it." }),
+      needsReason(
+        items,
+        { A: true },
+        { B: "Vendor does it.", C: "Not used." },
+        NO_REVIEW,
+      ),
       [],
     );
+    // Two characters are not a reason (the API's threshold).
+    assert.deepEqual(
+      needsReason(items, { A: true }, { B: " no " }, ON_PREMISES),
+      ["B"],
+    );
+  });
+
+  it("asks a reason exactly where the API does, from one table of cases", () => {
+    const table = JSON.parse(
+      readFileSync("tests/fixtures/scope-reasons/cases.json", "utf8"),
+    ) as {
+      cases: Array<{
+        name: string;
+        status: Candidate["status"];
+        reviewed: boolean;
+        hosting: string | null;
+        socExpected: boolean | null;
+        confirmed: boolean;
+        reports: number;
+        needs: boolean;
+      }>;
+    };
+    assert.ok(table.cases.length >= 10);
+    for (const item of table.cases) {
+      const facts: ReasonFacts = {
+        hosting: item.hosting,
+        socExpected: item.socExpected,
+        factsConfirmed: item.confirmed,
+        socReports: item.reports,
+        reviewed: item.reviewed,
+      };
+      assert.equal(
+        reasonNeeded(item.status, item.reviewed, socWaived(facts)),
+        item.needs,
+        item.name,
+      );
+      // The same rule through needsReason, for one control left out with no note.
+      assert.deepEqual(
+        needsReason([candidate("X", { status: item.status })], {}, {}, facts),
+        item.needs ? ["X"] : [],
+        item.name,
+      );
+    }
+  });
+
+  it("asks why a control with work on record leaves scope, and keeps reasons on record", () => {
+    const items = [
+      candidate("A", { inScope: true }),
+      candidate("B", { inScope: true }),
+      candidate("C", {
+        decision: "NOT_SELECTED",
+        decisionNote: "Covered by the SOC 1 report.",
+      }),
+      candidate("D", {
+        inScope: true,
+        decision: "NOT_SELECTED",
+        decisionNote: "An earlier reason.",
+      }),
+    ];
+    // Before a review, a control leaves with no reason unless work is on record for it.
+    assert.deepEqual(needsReason(items, {}, {}, NO_REVIEW, new Set(["B"])), [
+      "B",
+    ]);
+    // A recorded reason is kept for a control still left out, and never reused for one
+    // in scope again.
+    assert.deepEqual(initialNotes(items), {
+      C: "Covered by the SOC 1 report.",
+    });
   });
 
   it("builds each call and refuses what does not fit", () => {
@@ -877,6 +1022,14 @@ describe("the system wizard", () => {
     assert.equal(
       wizardProblem(409, "say why a recommended control is not selected"),
       "Say why each recommended control you leave out is not selected.",
+    );
+    assert.equal(
+      wizardProblem(409, "say why a control left out is not selected"),
+      "Say why the controls you leave out are not selected.",
+    );
+    assert.equal(
+      wizardProblem(409, "say why: this has work on record"),
+      "Work is on record for a control this selection takes out of scope. Say why it leaves scope.",
     );
     assert.equal(wizardProblem(200), null);
   });

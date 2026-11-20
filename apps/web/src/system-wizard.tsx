@@ -24,10 +24,13 @@ import {
   chooseAll,
   type DetailField,
   type DetailSuggestion,
+  initialNotes,
   initialSelection,
+  isReason,
   LAYERS,
   needsReason,
   parseSuggestion,
+  reasonFacts,
   type SetupSystem,
   suggestedCode,
   suggestionSummary,
@@ -35,6 +38,7 @@ import {
   systemNameKey,
   wizardProblem,
 } from "./onboarding-model";
+import { impactHref } from "./setup-impact-model";
 import { SocAssessment, SocReports, SocUpload } from "./soc-view";
 import { refusalFrom } from "./trial-model";
 import { UiIcon } from "./ui-icon";
@@ -165,9 +169,22 @@ function Wizard({
     null,
   );
   const [notes, setNotes] = useState<Record<string, string>>({});
+  // One reason for every other control left out that needs one (reasonNeeded), copied
+  // into each one's note on save.
+  const [groupNote, setGroupNote] = useState("");
   const [onlyRecommended, setOnlyRecommended] = useState(false);
   const [busy, setBusy] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
+  // What is on record for the in-scope controls the selection takes out, read once on
+  // the Review step (and again after the API finds work on record).
+  const [impact, setImpact] = useState<{
+    key: string;
+    state: "loading" | "ready" | "failed";
+    onRecord: ReadonlySet<string>;
+    lines: string[];
+  } | null>(null);
+  const [impactRound, setImpactRound] = useState(0);
+  const latestImpact = useRef(0);
 
   const live = systems.find((item) => item.id === systemId) ?? null;
   const assessment = live?.assessment ?? null;
@@ -175,6 +192,117 @@ function Wizard({
   const working =
     assessment !== null &&
     (assessment.status === "PENDING" || assessment.status === "WORKING");
+  // The system's own in-scope controls this selection takes out.
+  const removing = useMemo(
+    () =>
+      candidates.filter(
+        (item) =>
+          item.controlId !== null &&
+          item.inScope &&
+          selected !== null &&
+          selected[item.controlRef] !== true,
+      ),
+    [candidates, selected],
+  );
+  const removingKey = removing
+    .map((item) => `${item.controlRef}:${item.controlId}`)
+    .join(",");
+  const impactNow =
+    impact !== null && impact.key === `${removingKey}#${impactRound}`
+      ? impact
+      : null;
+  const impactLoading =
+    removing.length > 0 &&
+    (impactNow === null || impactNow.state === "loading");
+  const onRecord: ReadonlySet<string> = impactNow?.onRecord ?? new Set();
+
+  // Reasons already on record for controls still left out come back with the selection,
+  // so a later save keeps them.
+  useEffect(() => {
+    if (candidates.length === 0) {
+      return;
+    }
+    setNotes((current) => ({ ...initialNotes(candidates), ...current }));
+  }, [candidates]);
+
+  // The impact of taking those controls out, read before the selection is saved. A failed
+  // read asks the reason for each of them (fail closed); a late answer is ignored.
+  useEffect(() => {
+    if (step !== 3 || removing.length === 0) {
+      return;
+    }
+    const key = `${removingKey}#${impactRound}`;
+    if (impact?.key === key) {
+      return;
+    }
+    const ask = latestImpact.current + 1;
+    latestImpact.current = ask;
+    setImpact({ key, state: "loading", onRecord: new Set(), lines: [] });
+    const targets = removing.map((item) => ({
+      ref: item.controlRef,
+      id: item.controlId ?? "",
+    }));
+    void Promise.all(
+      targets.map(async (target) => {
+        const response = await fetch(
+          impactHref(organizationId, projectId, {
+            kind: "control",
+            id: target.id,
+          }),
+        );
+        if (!response.ok) {
+          throw new Error("impact unavailable");
+        }
+        const body = (await response.json()) as {
+          material?: unknown;
+          lines?: unknown;
+        };
+        if (typeof body.material !== "boolean") {
+          throw new Error("impact unavailable");
+        }
+        const lines = Array.isArray(body.lines)
+          ? body.lines.filter(
+              (line): line is string => typeof line === "string",
+            )
+          : [];
+        return { ref: target.ref, material: body.material, lines };
+      }),
+    ).then(
+      (answers) => {
+        if (ask !== latestImpact.current) {
+          return;
+        }
+        const material = answers.filter((answer) => answer.material);
+        setImpact({
+          key,
+          state: "ready",
+          onRecord: new Set(material.map((answer) => answer.ref)),
+          lines: material.flatMap((answer) =>
+            answer.lines.map((line) => `${answer.ref}: ${line}`),
+          ),
+        });
+      },
+      () => {
+        if (ask !== latestImpact.current) {
+          return;
+        }
+        setImpact({
+          key,
+          state: "failed",
+          onRecord: new Set(targets.map((target) => target.ref)),
+          lines: [],
+        });
+      },
+    );
+  }, [
+    step,
+    removingKey,
+    impactRound,
+    impact?.key,
+    organizationId,
+    projectId,
+    removing,
+  ]);
 
   // The page refreshes while the agent works; the wizard keeps its own selections.
   useEffect(() => {
@@ -229,7 +357,7 @@ function Wizard({
     intent: string,
     extra: Record<string, unknown> = {},
     target: string | null = systemId,
-  ): Promise<{ ok: boolean; onboarding: unknown }> {
+  ): Promise<{ ok: boolean; onboarding: unknown; detail: string }> {
     setBusy(intent);
     setProblem(null);
     let status = 0;
@@ -267,7 +395,7 @@ function Wizard({
     if (message === null) {
       startTransition(() => router.refresh());
     }
-    return { ok: message === null, onboarding };
+    return { ok: message === null, onboarding, detail };
   }
 
   async function saveDetails() {
@@ -330,11 +458,24 @@ function Wizard({
     onClose();
   }
 
+  function statusOf(ref: string): Candidate["status"] {
+    return candidates.find((item) => item.controlRef === ref)?.status ?? null;
+  }
+
   async function save() {
-    if (selected === null) {
+    if (selected === null || live === null || impactLoading) {
       return;
     }
-    const missing = needsReason(candidates, selected, notes);
+    const unexplained = needsReason(
+      candidates,
+      selected,
+      notes,
+      reasonFacts(live),
+      onRecord,
+    );
+    const missing = unexplained.filter(
+      (ref) => statusOf(ref) === "RECOMMENDED",
+    );
     if (missing.length > 0) {
       setStep(3);
       setProblem(
@@ -342,16 +483,32 @@ function Wizard({
       );
       return;
     }
+    const grouped = unexplained.filter(
+      (ref) => statusOf(ref) !== "RECOMMENDED",
+    );
+    if (grouped.length > 0 && !isReason(groupNote)) {
+      setStep(3);
+      setProblem("Say why the other controls left out are not selected.");
+      return;
+    }
+    const filled: Record<string, string> = {
+      ...notes,
+      ...Object.fromEntries(grouped.map((ref) => [ref, groupNote.trim()])),
+    };
     const result = await call("save", {
       selections: candidates.map((item) => ({
         control_ref: item.controlRef,
         selected: selected[item.controlRef] === true,
-        note: notes[item.controlRef] ?? "",
+        note: filled[item.controlRef] ?? "",
       })),
     });
     if (result.ok) {
       document.dispatchEvent(new Event(SYSTEM_SAVED_EVENT));
       onClose();
+    } else if (result.detail === "say why: this has work on record") {
+      // Work reached a control since the impact was read: read it again, so the reason
+      // is asked for it.
+      setImpactRound((round) => round + 1);
     }
   }
 
@@ -369,6 +526,18 @@ function Wizard({
     (item) =>
       item.status === "RECOMMENDED" && selected?.[item.controlRef] !== true,
   );
+  // The other controls left out that need a reason and have none yet: one reason for all.
+  const others =
+    live === null || selected === null
+      ? []
+      : needsReason(
+          candidates,
+          selected,
+          notes,
+          reasonFacts(live),
+          onRecord,
+        ).filter((ref) => statusOf(ref) !== "RECOMMENDED");
+  const shownOthers = others.slice(0, 12);
 
   return createPortal(
     // biome-ignore lint/a11y/noStaticElementInteractions: a click on the backdrop cancels; Escape and Cancel do too.
@@ -710,6 +879,62 @@ function Wizard({
                     ))}
                   </div>
                 ) : null}
+                {impactLoading ? (
+                  <p className="form-hint" role="status">
+                    Checking the work on record for the controls this selection
+                    takes out of scope…
+                  </p>
+                ) : null}
+                {others.length > 0 ? (
+                  <div className="sw-reasons">
+                    <p className="form-hint">
+                      {others.some((ref) => onRecord.has(ref))
+                        ? "Work is on record for some of these controls, and others may rest on a SOC report. Say why they are left out; the reason goes in the audit trail."
+                        : "These controls are left out. Where a SOC report may be relied on instead of testing, say why; the reason goes in the audit trail."}
+                    </p>
+                    <p className="sw-chosen">
+                      {shownOthers.map((ref) => (
+                        <span key={ref} className="sw-chip">
+                          {ref}
+                        </span>
+                      ))}
+                      {others.length > shownOthers.length ? (
+                        <span className="sw-chip">
+                          and {others.length - shownOthers.length} more
+                        </span>
+                      ) : null}
+                    </p>
+                    {impactNow !== null && impactNow.lines.length > 0 ? (
+                      <ul className="sw-list">
+                        {impactNow.lines.map((line) => (
+                          <li key={line}>{line}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {impactNow?.state === "failed" ? (
+                      <p className="form-hint">
+                        The work on record could not be checked, so a reason is
+                        asked for each control this selection takes out.
+                      </p>
+                    ) : null}
+                    <label className="sw-reason">
+                      <span>
+                        Why{" "}
+                        {others.length === 1
+                          ? "this control is"
+                          : `these ${others.length} controls are`}{" "}
+                        not selected
+                      </span>
+                      <input
+                        autoComplete="off"
+                        value={groupNote}
+                        maxLength={500}
+                        placeholder="For example, relied on the vendor's SOC 1 Type 2 report"
+                        onChange={(event) => setGroupNote(event.target.value)}
+                      />
+                    </label>
+                  </div>
+                ) : null}
               </div>
               <div className="sw-block">
                 <h3>SOC 1 assessment</h3>
@@ -778,7 +1003,7 @@ function Wizard({
             <button
               type="button"
               className="btn-sm"
-              disabled={busy !== "" || candidates.length === 0}
+              disabled={busy !== "" || candidates.length === 0 || impactLoading}
               onClick={() => void save()}
             >
               {busy === "save" ? "Saving…" : "Save selection"}

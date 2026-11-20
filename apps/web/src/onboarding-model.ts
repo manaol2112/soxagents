@@ -2367,21 +2367,100 @@ export function initialSelection(
   );
 }
 
-/** The controls a selection leaves out although the agent recommended them: each needs
- * a reason before the selection is saved. */
+/** What decides whether leaving a control out of a system needs a reason. */
+export type ReasonFacts = {
+  hosting: string | null;
+  socExpected: boolean | null;
+  factsConfirmed: boolean;
+  /** SOC reports on file for the system, in any status. */
+  socReports: number;
+  /** The system has had a review (the agent's or the reviewed rules'). */
+  reviewed: boolean;
+};
+
+export function reasonFacts(system: SetupSystem): ReasonFacts {
+  return {
+    hosting: system.hosting,
+    socExpected: system.socExpected,
+    factsConfirmed: system.factsConfirmed,
+    socReports: system.socReports.length,
+    reviewed: (system.assessment?.reviewedAt ?? null) !== null,
+  };
+}
+
+/** No SOC report can be relied on: the team itself confirmed the system runs on premises
+ * with none expected, and none is on file. An agent's assumption never waives a reason
+ * (system_applicability.soc_waived; tests/fixtures/scope-reasons/cases.json). */
+export function socWaived(facts: ReasonFacts): boolean {
+  return (
+    facts.factsConfirmed &&
+    facts.hosting === "ON_PREMISES" &&
+    facts.socExpected === false &&
+    facts.socReports === 0
+  );
+}
+
+/** Whether leaving out a control with this recommendation needs a reason (owner decision,
+ * 19 November 2026; system_applicability.reason_needed). The assessment does not say
+ * whether an exclusion rests on a SOC report, so every assessed control is asked, and
+ * every candidate once the system has a review, unless no SOC report can be relied on. */
+export function reasonNeeded(
+  status: Applicability | null,
+  reviewed: boolean,
+  waived: boolean,
+): boolean {
+  if (status === "RECOMMENDED") {
+    return true;
+  }
+  if (waived) {
+    return false;
+  }
+  return status !== null || reviewed;
+}
+
+/** A reason the API accepts: three characters or more once spacing is collapsed. */
+export function isReason(text: string | undefined): boolean {
+  return (text ?? "").split(/\s+/).join(" ").trim().length >= 3;
+}
+
+/** The controls a selection leaves out that need a reason before it is saved: those the
+ * agent recommended, those the reason rule asks for (reasonNeeded), and in-scope controls
+ * with work on record that it takes out (`onRecord`, from the scope impact). The facts are
+ * required, so no caller can ask less than the API does. */
 export function needsReason(
   candidates: readonly Candidate[],
   selected: Readonly<Record<string, boolean>>,
   notes: Readonly<Record<string, string>>,
+  facts: ReasonFacts,
+  onRecord: ReadonlySet<string> = new Set(),
 ): string[] {
+  const waived = socWaived(facts);
   return candidates
     .filter(
       (item) =>
-        item.status === "RECOMMENDED" &&
         selected[item.controlRef] !== true &&
-        (notes[item.controlRef] ?? "").trim() === "",
+        !isReason(notes[item.controlRef]) &&
+        (reasonNeeded(item.status, facts.reviewed, waived) ||
+          onRecord.has(item.controlRef)),
     )
     .map((item) => item.controlRef);
+}
+
+/** The reasons already on record, for the controls still left out: a save that sends
+ * them again keeps them. A control back in scope since starts with none. */
+export function initialNotes(
+  candidates: readonly Candidate[],
+): Record<string, string> {
+  return Object.fromEntries(
+    candidates
+      .filter(
+        (item) =>
+          item.decision === "NOT_SELECTED" &&
+          !item.inScope &&
+          item.decisionNote.trim() !== "",
+      )
+      .map((item) => [item.controlRef, item.decisionNote]),
+  );
 }
 
 export type WizardWrite =
@@ -2879,6 +2958,10 @@ export function wizardProblem(
   const known: Record<string, string> = {
     "say why a recommended control is not selected":
       "Say why each recommended control you leave out is not selected.",
+    "say why a control left out is not selected":
+      "Say why the controls you leave out are not selected.",
+    "say why: this has work on record":
+      "Work is on record for a control this selection takes out of scope. Say why it leaves scope.",
     "unknown control": "A control changed. Refresh and try again.",
     "system changed": "This system changed. Refresh and try again.",
     "a detail cannot hold a credential":
@@ -3893,11 +3976,16 @@ export function setupWrite(
     }
     const ids = [...new Set(multi.recommendation ?? [])];
     const action = fields.action ?? "";
+    // Why the SOC report is relied on instead of testing, or a recommended control is
+    // not added: the person's words, sent only when given (the API asks for them).
+    const reason = (fields.reason ?? "").split(/\s+/).join(" ").trim();
     if (
       ids.length === 0 ||
       ids.length > 60 ||
       !ids.every((id) => UUID.test(id)) ||
-      (action !== "ACCEPT" && action !== "DISMISS" && action !== "KEEP")
+      (action !== "ACCEPT" && action !== "DISMISS" && action !== "KEEP") ||
+      reason.length > 500 ||
+      SECRET.test(reason)
     ) {
       return { error: "invalid" };
     }
@@ -3906,7 +3994,7 @@ export function setupWrite(
       step: "controls",
       method: "POST",
       path: `${path}/recommendations/decide`,
-      body: { ids, action },
+      body: reason === "" ? { ids, action } : { ids, action, reason },
     };
   }
   if (intent === "control-scope") {
