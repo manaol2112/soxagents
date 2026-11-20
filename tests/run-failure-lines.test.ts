@@ -809,6 +809,7 @@ describe("workpaper drafting and the review's re-performance", () => {
       failed: true,
     };
     const review = {
+      status: "OPEN" as const,
       reperforming: false,
       reperformState: "IDLE" as const,
       reperformNote:

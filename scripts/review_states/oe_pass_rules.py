@@ -24,6 +24,9 @@ of this database only).
                       from the preparer's result (its note left proposed)
 - oe-review-signed    the partial review signed off over the reviewer's record of
                       re-performing the rest by hand
+- oe-review-signed-failed  the failed review (a later re-performance gave up after the
+                      partial one) signed off over the reviewer's record by hand: no
+                      failure banner, no "Re-perform", and the reviewer lane not stopped
 """
 
 from typing import Any
@@ -271,6 +274,30 @@ def _more_review_states(seed: Any) -> None:
     review = client.get(f"{seed.base(team)}/reviews").json()[0]
     assert review["status"] == "SIGNED_OFF", review["status"]
     _add_review(seed, "oe-review-signed", team, control, review)
+
+    team, client, control, review = _reviewed(seed, "oe-signed-failed")
+    reviewer = _reviewer(seed, team)
+    asked = reviewer.post(
+        f"{seed.base(team)}/reviews/{review['id']}/reperform", json={"version": review["version"]}
+    )
+    assert asked.status_code == 200, asked.text
+    with connect(seed.url) as connection:
+        fail_reperformance(connection, UUID(review["id"]))
+        connection.commit()
+    review = client.get(f"{seed.base(team)}/reviews").json()[0]
+    assert review["reperformance"]["failed"] is True, review["reperformance"]
+    signed = reviewer.post(
+        f"{seed.base(team)}/reviews/{review['id']}/sign-off",
+        json={
+            "version": review["version"],
+            "note": "Re-performed u0001 to u0003 by hand against the access tickets.",
+            "reperformed_by_hand": True,
+        },
+    )
+    assert signed.status_code == 200, signed.text
+    review = client.get(f"{seed.base(team)}/reviews").json()[0]
+    assert review["status"] == "SIGNED_OFF" and review["failure_note"] == "", review
+    _add_review(seed, "oe-review-signed-failed", team, control, review)
 
 
 def build(seed: Any) -> None:

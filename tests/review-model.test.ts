@@ -13,6 +13,7 @@ import {
   reviewPill,
   reviewWrite,
   roundReviewsFor,
+  runFailureLine,
 } from "../apps/web/src/review-model.ts";
 
 const org = "11111111-1111-7111-8111-111111111111";
@@ -433,9 +434,24 @@ describe("a sign-off over a re-performance by hand (FO-1, 19 November 2026)", ()
       ),
       { words: "Ready to sign off", tone: "" },
     );
+    // Code review, 20 November 2026: a last attempt that gave up after a full run held
+    // nothing ("Ready to sign off", reperformHold null while attestationNeeded was false)
+    // while the server's run_lets_sign withheld "Sign off the review" from the queue.
+    // New: a failed attempt holds the sign-off whatever the earlier run did.
+    const fullThenFailed = { ...partial, done: 3, failed: true };
     assert.equal(
-      reperformHold({ attestationNeeded: false, reperformance: failed }),
-      null,
+      reperformHold({
+        attestationNeeded: false,
+        reperformance: fullThenFailed,
+      }),
+      "Re-performance did not finish",
+    );
+    assert.deepEqual(
+      reviewPill(
+        { ...base, attestationNeeded: false, reperformance: fullThenFailed },
+        idle,
+      ),
+      { words: "Re-performance did not finish", tone: "tone-warning" },
     );
     // Open notes and a signed review keep their own words.
     assert.equal(
@@ -450,13 +466,56 @@ describe("a sign-off over a re-performance by hand (FO-1, 19 November 2026)", ()
       ),
       { words: "Review outstanding", tone: "tone-warning" },
     );
+    // Code review, 20 November 2026: the header said the earlier run's count ("Re-performed
+    // 1 of 3 items: no differences ...") above the banner's "did not finish". New: the
+    // header says the run did not finish, as the banner does, after a partial or a full run.
     assert.equal(
       reperformedWords(failed, "MODEL", 0),
-      "Re-performed 1 of 3 items: no differences from the preparer's results",
+      "The re-performance did not finish",
+    );
+    assert.equal(
+      reperformedWords(fullThenFailed, "MODEL", 0),
+      "The re-performance did not finish",
     );
     assert.equal(
       reperformedWords({ ...partial, done: 0 }, "MODEL", 0),
       "The reviewer agent did not re-perform the items",
+    );
+  });
+});
+
+describe("a signed review over a re-performance that gave up (code review, 20 November 2026)", () => {
+  it("says no failure and no hold once the review is signed off", () => {
+    // Before: runFailureLine fell through to the re-performance note ("Re-perform to try
+    // again") over a signed review whose record still said failed, beside "Reviewed".
+    const failed = {
+      known: true,
+      source: "MODEL",
+      due: 3,
+      done: 1,
+      capped: false,
+      dropped: 0,
+      failed: true,
+    };
+    const open = {
+      status: "OPEN" as const,
+      reperforming: false,
+      reperformState: "IDLE" as const,
+      reperformNote:
+        "The re-performance did not finish. Re-perform to try again.",
+      failureNote: "",
+      reperformance: failed,
+    };
+    assert.match(runFailureLine(open) ?? "", /did not finish/);
+    const signed = { ...open, status: "SIGNED_OFF" as const };
+    assert.equal(runFailureLine(signed), null);
+    assert.equal(runFailureLine(signed, "Anything the server said."), null);
+    assert.deepEqual(
+      reviewPill(
+        { ...signed, attestationNeeded: true },
+        { waiting: 0, outstanding: false, unavailable: false },
+      ),
+      { words: "Reviewed", tone: "tone-success" },
     );
   });
 });

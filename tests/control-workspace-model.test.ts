@@ -922,6 +922,33 @@ describe("the agents on a control", () => {
       lane({ reperformSource: "SEEDED", reperformance: null }),
       "Re-performed the testing: no differences from the preparer's results",
     );
+    // Code review, 20 November 2026: a signed review whose last re-performance gave up
+    // showed the reviewer lane as stopped, "Re-perform to try again", beside its sign-off.
+    const gaveUp = {
+      reperformance: { ...record(3, 1), failed: true },
+      reperformNote:
+        "The re-performance did not finish. Re-perform to try again.",
+    };
+    const stoppedLane = laneOf(
+      agentLanes(input({ review: review(gaveUp) })),
+      "reviewer",
+    );
+    assert.equal(stoppedLane.run, "stopped");
+    const signedLane = laneOf(
+      agentLanes(
+        input({
+          review: review({
+            ...gaveUp,
+            status: "SIGNED_OFF",
+            signedBy: "Riley Reviewer",
+          }),
+        }),
+      ),
+      "reviewer",
+    );
+    assert.notEqual(signedLane.run, "stopped");
+    assert.doesNotMatch(signedLane.runNote, /Re-perform/);
+    assert.equal(signedLane.decision.text, "Signed off by Riley Reviewer");
   });
 
   it("leaves out the agents of a phase the plan says does not apply", () => {

@@ -13,6 +13,7 @@ from test_workpapers import _tested_control
 
 from ai_workforce_api.control_reviews import (
     disagreements,
+    fail_reperformance,
     not_reperformed,
     partly_reperformed,
     run_reperformance,
@@ -860,6 +861,57 @@ def test_a_partial_reperformance_names_the_items_that_stand(migrated: Database) 
     review = client.get(f"{_base(team)}/reviews").json()[0]
     assert review["status"] == "SIGNED_OFF"
     assert review["failure_note"] == "" and review["reperform_note"] == said
+
+
+def test_a_signed_review_over_a_failed_reperformance_says_no_failure(
+    migrated: Database,
+) -> None:
+    """Code review (20 November 2026). A review whose last re-performance gave up after a
+    partial run, then signed over the reviewer's record by hand, keeps its typed record
+    (failed) and its note, and says no failure: the server's failure note is empty and the
+    status is SIGNED_OFF, the one typed fact the web decides the signed case from (before,
+    the web fell through to the note's "Re-perform to try again" beside "Reviewed")."""
+    team, client, sheet, _file = _prepared_control(migrated, "review-signed-failed", "DISMISS")
+    _rollforward_decided(migrated, team, client, sheet["control_id"])
+    review = client.get(f"{_base(team)}/reviews").json()[0]
+    rejected = {"results": [{"index": 99, "result": "PASS", "note": "x"}]}
+    provider = _Provider([_all_pass(len(sheet["attributes"])), rejected, rejected])
+    with connect(migrated.url) as connection:
+        assert run_reperformance(connection, provider, UUID(review["id"])) == "DONE"
+    reviewer = _session(migrated, team["reviewer_id"])
+    review = client.get(f"{_base(team)}/reviews").json()[0]
+    asked = reviewer.post(
+        f"{_base(team)}/reviews/{review['id']}/reperform", json={"version": review["version"]}
+    )
+    assert asked.status_code == 200, asked.text
+    with connect(migrated.url) as connection:
+        fail_reperformance(connection, UUID(review["id"]))
+        connection.commit()
+    review = client.get(f"{_base(team)}/reviews").json()[0]
+    assert review["reperformance"]["failed"] is True, review["reperformance"]
+    assert "did not finish" in review["failure_note"], review["failure_note"]
+    assert review["attestation_needed"] is True
+    for proposed in [n for n in review["notes"] if n["status"] == "PROPOSED"]:
+        decided = reviewer.post(
+            f"{_base(team)}/reviews/{review['id']}/notes/{proposed['id']}/decide",
+            json={"version": review["version"], "action": "DISMISS", "reason": "Seen."},
+        )
+        assert decided.status_code == 200, decided.text
+        review = decided.json()
+    signed = reviewer.post(
+        f"{_base(team)}/reviews/{review['id']}/sign-off",
+        json={
+            "version": review["version"],
+            "note": "Re-performed the three items by hand against the tickets.",
+            "reperformed_by_hand": True,
+        },
+    )
+    assert signed.status_code == 200, signed.text
+    review = client.get(f"{_base(team)}/reviews").json()[0]
+    assert review["status"] == "SIGNED_OFF"
+    assert review["reperformance"]["failed"] is True
+    assert review["failure_note"] == "", review["failure_note"]
+    assert "did not finish" in review["reperform_note"], review["reperform_note"]
 
 
 def test_a_capped_reperformance_counts_and_names_every_item_due(
