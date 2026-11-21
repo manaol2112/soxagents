@@ -2204,6 +2204,8 @@ function SignOffOf({
           workpaper.shownVersion === 0 ||
           workpaper.shownVersion === workpaper.currentVersion,
         choice: paper.conclusion.choice,
+        // D4: the conclusion section in the preparer's own words (the server's word).
+        ownWords: paper.conclusion.inOwnWords,
         unsaved: sign.unsaved,
         behind: sign.behind,
         // Section 3.9: the button waits while a point is not settled.

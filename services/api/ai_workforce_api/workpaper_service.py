@@ -1066,12 +1066,23 @@ def _apply(
             and answer.walkthrough
         ):
             lost: list[int] = []
-            rows = [
-                [_cell(connection, project_id, s.step, 300, lost), clean_line(s.who, 120),
-                 _cell(connection, project_id, s.evidence, 400, lost),
-                 _cell(connection, project_id, s.result, 300, lost)]
-                for s in answer.walkthrough
-            ]  # fmt: skip
+            rows: list[list[str]] = []
+            for s in answer.walkthrough:
+                kept: list[int] = []
+                row = [
+                    _cell(connection, project_id, s.step, 300, lost, kept),
+                    clean_line(s.who, 120),
+                    _cell(connection, project_id, s.evidence, 400, lost, kept),
+                    _cell(connection, project_id, s.result, 300, lost, kept),
+                ]
+                # D4 (product owner, 19 November 2026; audit invariant I12): a result no
+                # passage found in a file supports is the agent's observation, not a
+                # recorded result. Its words are emptied and the cell says why, so the
+                # preparer reads the walkthrough again; the step and its evidence stay.
+                # Typed: the count of citations found, never the wording.
+                if row[3] and not sum(kept):
+                    row[3] = UNCITED_RESULT
+                rows.append(row)
             if sum(lost):
                 removed.append((section.key, section.title, sum(lost)))
             sections.append(section.model_copy(update={"rows": rows, "source": "AGENT"}))
@@ -1116,18 +1127,28 @@ def removed_note(note: str, removed: list[tuple[str, str, int]]) -> str:
     return said
 
 
+# What a walkthrough result the agent drafted with no citation found says instead (D4).
+UNCITED_RESULT = (
+    "No source was cited for this result, so it was emptied: read the walkthrough again."
+)
+
+
 def _cell(
     connection: psycopg.Connection[Any],
     project_id: UUID,
     value: str,
     limit: int,
     lost: list[int] | None = None,
+    kept: list[int] | None = None,
 ) -> str:
     """A table cell with each checked citation written out; a table has no footnotes. The
-    count of citations dropped (their words not found) is added to `lost`."""
+    count of citations dropped (their words not found) is added to `lost`, and the count
+    of those found and written out to `kept`."""
     text, citations, dropped = resolve(connection, project_id, value)
     if lost is not None:
         lost.append(dropped)
+    if kept is not None:
+        kept.append(len(citations))
     by_number = {citation.number: citation for citation in citations}
 
     def written(found: re.Match[str]) -> str:
@@ -1729,6 +1750,70 @@ def _edit(
 # section 3.7), each one sentence.
 PREPARE_NEEDS_CONCLUSION = "record a conclusion first"
 PREPARE_NOT_CONCLUDED = "Not concluded is not signed: record the conclusion the records support"
+# D4 (product owner, 19 November 2026): before Prepare the preparer saves the conclusion
+# section in their own words, after recording the conclusion it states (audit invariants
+# I14 and I16). Before, the agent's drafted paragraph (even one that said "not
+# effective" under an Effective conclusion) was attested and signed unchanged.
+PREPARE_OWN_WORDS = (
+    "write the conclusion section in your own words for the conclusion you recorded, then prepare"
+)
+PREPARE_NO_CONCLUSION_SECTION = (
+    "the workpaper has no conclusion section to write the conclusion in; it cannot be prepared"
+)
+
+
+def conclusion_in_own_words(
+    connection: psycopg.Connection[Any], workpaper_id: UUID, since: datetime
+) -> bool | None:
+    """Whether the design workpaper's conclusion section, as it stands, was last changed by
+    a person's save after `since` (the standing choice's recorded_at): the latest version
+    that changed the section's text is a PERSON version created after it. Typed and
+    time-based, never read from the text: a section the agent drafted, the records filled,
+    or a person saved before the conclusion was recorded (or changed) is not. None where
+    the workpaper has no conclusion section (design_workpaper.conclusion_section, the one
+    finder)."""
+    from ai_workforce_api.design_workpaper import conclusion_section
+
+    rows = connection.execute(
+        "SELECT content, source, created_at FROM workpaper_versions WHERE workpaper_id = %s "
+        "ORDER BY number DESC",
+        (workpaper_id,),
+    ).fetchall()
+    standing: str | None = None
+    changed_by: tuple[str, datetime] | None = None
+    for content, source, created_at in rows:
+        section = conclusion_section(Content.model_validate(content))
+        if changed_by is None:
+            if section is None:
+                return None
+            standing, changed_by = section.text, (str(source), created_at)
+            continue
+        if section is None or section.text != standing:
+            break
+        changed_by = (str(source), created_at)
+    if changed_by is None:
+        return None
+    return changed_by[0] == "PERSON" and changed_by[1] > since
+
+
+def conclusion_words_refusal(
+    cursor: psycopg.Cursor[Any], project_id: UUID, control_id: UUID, workpaper_id: UUID
+) -> str | None:
+    """Why the design workpaper cannot be prepared on its conclusion text (D4): the
+    section is not the preparer's own words for the conclusion recorded, or the template has
+    no such section (fails closed). None where it can be, and where no choice stands (the
+    choice's own refusal says that)."""
+    row = cursor.execute(
+        "SELECT recorded_at FROM design_conclusion_choices WHERE project_id = %s "
+        "AND engagement_control_id = %s AND ended_at IS NULL",
+        (project_id, control_id),
+    ).fetchone()
+    if row is None:
+        return None
+    words = conclusion_in_own_words(cursor.connection, workpaper_id, row[0])
+    if words is None:
+        return PREPARE_NO_CONCLUSION_SECTION
+    return None if words else PREPARE_OWN_WORDS
 
 
 def design_prepare_refusal(
@@ -1806,6 +1891,13 @@ def prepare_in(
 
         if not demo_seeding(connection, project_id, principal.id):
             refusal = prepare_rule_refusal(connection, project_id, UUID(str(control_id)))
+            if refusal is not None:
+                raise WorkpaperState(refusal)
+            # The conclusion section in the preparer's own words (D4). The demo seeding its
+            # own engagement keeps the rules it had (it saves the records' words).
+            refusal = conclusion_words_refusal(
+                cursor, project_id, UUID(str(control_id)), workpaper_id
+            )
             if refusal is not None:
                 raise WorkpaperState(refusal)
         # Then every point of the workpaper is settled, by its own action or by a

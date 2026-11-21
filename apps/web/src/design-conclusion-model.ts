@@ -830,6 +830,40 @@ export function outOfDateNext(conclusion: DesignConclusion): string {
   return `What to do: ${reopen ? "reopen the design workpaper, record" : "record"} a conclusion in section ${DW_SECTION.conclusion} of D&I Assessment, and prepare the workpaper${reopen ? " again" : ""}. OE waits until a reviewer signs that conclusion off.`;
 }
 
+/** The heading's words for the review step of a prepared workpaper with no request
+ * standing: a sign-off that no longer holds says so (design review, 20 November 2026:
+ * before, a lapsed sign-off read "not sent for review", as if no review had happened). */
+export function preparedReviewWords(
+  conclusion: Pick<DesignConclusion, "status" | "reviewFlow">,
+): string {
+  if (conclusion.status === "OUT_OF_DATE") {
+    return "· sign-off out of date";
+  }
+  return conclusion.reviewFlow ? "not sent for review" : "not signed off yet";
+}
+
+/** What a person who cannot sign reads under a lapsed sign-off of a prepared workpaper
+ * with no request standing. A reviewer may sign again without a request (section 3.8:
+ * only a standing request names the one who signs), so the line says who it waits for:
+ * the one reviewer offered, else the reviewer who signed before where still offered,
+ * else a reviewer. Where no conclusion stands to sign, `outOfDateNext` says what comes
+ * first. */
+export function lapsedNext(conclusion: DesignConclusion): string {
+  const standing = standingKind(conclusion);
+  if (standing !== undefined && signableKind(standing) === null) {
+    return outOfDateNext(conclusion);
+  }
+  const offered = conclusion.reviewers.filter((item) => item.offered);
+  const before = conclusion.signed?.signedBy ?? "";
+  const who =
+    offered.length === 1 && offered[0] !== undefined
+      ? offered[0].name
+      : before !== "" && offered.some((item) => item.name === before)
+        ? `${before} or another reviewer`
+        : "a reviewer";
+  return `Waiting for ${who} to sign off again. OE waits until then.`;
+}
+
 /** "Attribute B · Dana Lee on Nov 15, 2026": who recorded an exception, and when. The
  * date is given by the caller (formatDate), so this stays free of the clock. */
 export function exceptionLine(

@@ -174,9 +174,17 @@ REASON_MAX = 1000
 # How much of the reason an audit event carries.
 AUDIT_REASON = 200
 CHOSEN = "design_conclusion.chosen"
-# The attribute states (design_workpaper.AttributeState) a person's closing tickmark
-# reads by, and those that are an exception: the check's, or one a person recorded.
-_CLOSED_STATES: frozenset[str] = frozenset({"SHOWN_ON_REVIEW", "NOT_APPLICABLE", "NOT_AVAILABLE"})
+# The attribute states (design_workpaper.AttributeState) of a person's tickmark that
+# settle the attribute itself, and those that are an exception: the check's, or one a
+# person recorded. D1 (product owner, 19 November 2026): "Evidence not available" settles
+# the follow-up (attribute_dispositions.CLOSING) but never shows the attribute: a scope
+# limitation accepted is not evidence that the control is designed or in place (audit
+# invariant I3). Before, NOT_AVAILABLE was in this set, so an attribute accepted as not
+# available read as shown, Effective was proposed and signed on it and OE opened.
+SETTLES_THE_ATTRIBUTE: frozenset[str] = frozenset({"SHOWN_ON_REVIEW", "NOT_APPLICABLE"})
+_CLOSED_STATES = SETTLES_THE_ATTRIBUTE
+_NOT_AVAILABLE = "NOT_AVAILABLE"
+_NOT_APPLICABLE = "NOT_APPLICABLE"
 _EXCEPTION_STATES: frozenset[str] = frozenset({"EXCEPTION", "EXCEPTION_RECORDED"})
 
 # The refusals of the preparer's choice and of the sign-off, each one sentence.
@@ -270,6 +278,19 @@ def decisions_changed(file_names: Sequence[str]) -> str:
     )
 
 
+def checked_since(request_titles: Sequence[str]) -> str:
+    """Why a sign-off no longer holds, where the evidence of a D&I request was checked again
+    after it (D5, product owner, 19 November 2026: a re-check after the sign-off puts the
+    sign-off out of date, whatever its result): the reason names the requests, at most
+    NAMED_MOST and then how many more. Before, a check run again with the same result
+    left the old sign-off standing, so OE reopened on an assessment no reviewer saw."""
+    names = [clean_line(title, FILE_NAME_LIMIT).strip() or "a request" for title in request_titles]
+    return (
+        f"the evidence of {'request' if len(names) == 1 else 'requests'} "
+        f"{_listed(names, len(names))} was checked again after the sign-off"
+    )
+
+
 def exception_sentence(code: str, check_current: bool = True) -> str:
     """What keeps a reviewer from signing while an exception a person recorded on the
     attribute stands and no design deficiency does. Where the request it is recorded on
@@ -311,6 +332,22 @@ IN_PLACE_SENTENCE = (
     "Every attribute is shown in the records of the instance, or closed by a tickmark."
 )
 NO_DEFICIENCY_NOR_EXCEPTION = "No design deficiency is logged and no exception stands."
+# D1 (product owner, 19 November 2026): an all-not-applicable control is concluded by a
+# person, never proposed effective by the records (audit invariant I14).
+ALL_NOT_APPLICABLE = "Every attribute is marked not applicable; the preparer concludes."
+
+
+def not_available_sentence(codes: Sequence[str]) -> str:
+    """What an attribute accepted as not available still needs (D1): it settles the
+    follow-up but shows nothing, so alternative evidence is needed (the tickmark reopened
+    and a file whose check shows it, or "Shown, on my review" on an annotation), else the
+    design is not effective (a design deficiency logged first)."""
+    one = len(codes) == 1
+    return (
+        f"{_attributes(codes, capital=True)} {'is' if one else 'are'} accepted as not "
+        f"available, so {'it is' if one else 'they are'} not shown. Provide alternative "
+        "evidence, or conclude Not effective."
+    )
 
 
 @dataclass(frozen=True)
@@ -352,6 +389,13 @@ class Results:
     # For each attribute whose state is the check's exception, when the latest current
     # check that shows it finished (None where unknown).
     found: tuple[datetime | None, ...] = ()
+    # Every approved attribute is marked not applicable (D1): the records propose nothing
+    # and the preparer concludes, with a reason.
+    not_applicable_only: bool = False
+    # The attributes accepted as not available (D1), in the attributes' order: the
+    # proposal says once what they still need (`not_available_sentence`), never once per
+    # result.
+    not_available: tuple[str, ...] = ()
 
     def found_since(self, when: datetime) -> bool:
         """Whether a current check that shows an exception finished after `when`. A run
@@ -419,6 +463,9 @@ def results_of(attributes: Sequence[AttributeStanding], excepted: Collection[str
             tuple(code for code in implemented_open if code not in exceptions),
             tuple(a.found_at for a in attributes if a.state == "EXCEPTION"),
         )
+    # An attribute accepted as not available is open in both; the proposal says once what
+    # it still needs (D1).
+    unavailable = tuple(a.code for a in attributes if a.state == _NOT_AVAILABLE)
     design = (
         ResultBody(result="DESIGNED", sentence=DESIGNED_SENTENCE)
         if not designed_open
@@ -437,7 +484,12 @@ def results_of(attributes: Sequence[AttributeStanding], excepted: Collection[str
             open=implemented_open,
         )
     )
-    return Results(design, implementation)
+    return Results(
+        design,
+        implementation,
+        not_applicable_only=all(a.state == _NOT_APPLICABLE for a in attributes),
+        not_available=unavailable,
+    )
 
 
 def _deficiencies_sentence(count: int) -> str:
@@ -465,7 +517,13 @@ def proposal_of(deficiencies: int, results: Results) -> tuple[DesignConclusionKi
         return "EXCEPTIONS_NOTED", [results.design.sentence]
     opened = [r.sentence for r in (results.design, results.implementation) if r.result == "OPEN"]
     if opened:
-        return "NOT_CONCLUDED", list(dict.fromkeys(opened))
+        # What an attribute accepted as not available still needs, said once (D1).
+        limited = results.not_available
+        limitation = [not_available_sentence(limited)] if limited else []
+        return "NOT_CONCLUDED", list(dict.fromkeys(opened)) + limitation
+    if results.not_applicable_only:
+        # Nothing was shown: a person concludes, with a reason (D1, I14).
+        return "NOT_CONCLUDED", [ALL_NOT_APPLICABLE]
     return "EFFECTIVE", [NO_DEFICIENCY_NOR_EXCEPTION, results.implementation.sentence]
 
 
@@ -948,7 +1006,12 @@ def _changed(
     """What a person recorded or ended after the sign-off, as the reasons the conclusion
     gives: the tickmarks, naming the attributes by their letters in the attributes' order
     (the letters of the D&I list: evidence_assurance._approved), and the decisions on
-    files' reliability, naming the files."""
+    files' reliability, naming the files; and what was checked again after it (D5): the
+    D&I requests with a check run created or finished after the sign-off, whatever its
+    result (evidence_assessments holds D&I checks only), naming the requests. A run queued
+    before the sign-off and finished after it counts: its result was never seen. Every way
+    a run is made counts the same: a person's check again, a file added, a basis changed,
+    the retry worker, the backfill, a run copied for an unchanged basis."""
     reasons: list[str] = []
     if attribute_ids:
         approved = [
@@ -966,6 +1029,22 @@ def _changed(
         names = file_reliability.changed_since(connection, control_id, signed_at)
         if names:
             reasons.append(decisions_changed(names))
+        rechecked = [
+            str(row[0])
+            for row in connection.execute(
+                """
+                SELECT q.title FROM evidence_requirements q
+                WHERE q.engagement_control_id = %s
+                  AND EXISTS (SELECT 1 FROM evidence_assessments a
+                              WHERE a.requirement_id = q.id
+                                AND (a.created_at > %s OR a.finished_at > %s))
+                ORDER BY q.title, q.id
+                """,
+                (control_id, signed_at, signed_at),
+            ).fetchall()
+        ]
+        if rechecked:
+            reasons.append(checked_since(rechecked))
     return tuple(reasons)
 
 

@@ -1508,6 +1508,22 @@ tier).
   file not relied on: “…”." A review whose reliability is unresolved no longer keeps the
   marks away once every file it questions is decided, either way; and the check's own
   sentence about a decided file is no longer listed as an open `COMPLETENESS` matter.
+- D3 (product owner, 19 November 2026): a showing that rests in any part on a file not
+  relied on does not count. Before, only a showing resting wholly on such files was
+  discounted, so excluding the only approval file left the attribute "Shown" where its
+  other element rested on a relied file, with a mark (AGREED, or COMPARED on a date read
+  from the excluded file) and Effective proposed. Now `Reading.not_relied` is set where any
+  file the showing rests on is not relied on (`readings_of`): the attribute reads as the
+  check found it, `shown_by` `NOT_RELIED`, tickmark `NONE`, so the design and the
+  implementation leave it open, and the `NOT_RELIED` point (where every showing of the
+  attribute is so discounted) reads "Attribute A rests on a file not relied on: “…”.",
+  naming only the files not relied on, never the relied ones beside them. An exception
+  read from an excluded file stays an exception (only showings are discounted, which fails
+  closed). A person's "Shown, on my review" restores the attribute. Decisions are scoped
+  per request (`readings_of` reads only those on the check's own request): the same file
+  linked to a second request ("link not move") still shows the attribute there until it
+  is decided on that request too; whether a decision should reach every request a file is
+  on is an open owner question.
 - Rewritten test: `test_design_workpaper_model.py::test_reports_come_from_the_workpapers_own_section`
   expected each report row as `{ref, report, source, procedure}`; a row now also carries
   `mark: null, established: ""` where no decision is on record (the shape grew; the

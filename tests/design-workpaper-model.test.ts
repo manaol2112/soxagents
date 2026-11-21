@@ -2657,3 +2657,22 @@ describe("the conclusion the preparer records, and the agent's proposal", () => 
     assert.equal(conclusionHref("/?step=x#other"), "/?step=x#di-conclusion");
   });
 });
+
+describe("the conclusion in the preparer's own words (D4, 19 November 2026)", () => {
+  const withWords = (value: unknown) =>
+    parseDesignWorkpaper(
+      sent({
+        conclusion: {
+          ...(sample().conclusion as Record<string, unknown>),
+          in_own_words: value,
+        },
+      }),
+    );
+
+  it("is true only where the server says so in as many words", () => {
+    assert.equal(withWords(true)?.conclusion.inOwnWords, true);
+    for (const value of [false, "true", 1, null, undefined]) {
+      assert.equal(withWords(value)?.conclusion.inOwnWords, false);
+    }
+  });
+});
