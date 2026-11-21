@@ -187,13 +187,15 @@ export function reperformedWords(
   if (record === null || record === undefined || !record.known) {
     return "The reviewer agent's re-performance has no record of the items it re-performed";
   }
-  // The last attempt gave up (fail_reperformance): said as the banner says it, never as
-  // the earlier run's count (code review, 20 November 2026; before, "Re-performed 1 of 3
-  // items" stood above "The re-performance did not finish"). Named as the last attempt,
-  // so the pill and the banner say "did not finish" and the header does not repeat it
-  // (design review, 20 November 2026).
+  // The last attempt gave up (fail_reperformance): never the earlier run's count (code
+  // review, 20 November 2026; before, "Re-performed 1 of 3 items" stood above "The
+  // re-performance did not finish"). The run's date (reperformedAt) is the last one that
+  // finished, written only when a run finishes, so the words name that run and the pill
+  // and the banner say a later attempt did not finish (code review, 20 November 2026;
+  // before, "Last re-performance attempt · <date>" gave the failed attempt the earlier
+  // run's date).
   if (record.failed) {
-    return "Last re-performance attempt";
+    return "Last finished re-performance";
   }
   if (record.due === 0) {
     return "No tested item with evidence to re-perform";
@@ -222,31 +224,74 @@ export function reviewDifferences(notes: readonly ReviewNote[]): number {
   ).length;
 }
 
+/** What an open review's sign-off waits for from the last re-performance, as the server
+ * types it (control_reviews.signoff_hold; product owner, 20 November 2026): nothing; the
+ * reviewer's record of a re-performance by hand (the tested branch); or a run that
+ * finishes, with no record by hand to offer (a failed attempt on a design signed off as
+ * not effective, where nothing was tested). */
+export type SignOffHold = "NONE" | "ATTESTATION" | "RUN";
+
+export function parseSignOffHold(value: unknown): SignOffHold {
+  return value === "ATTESTATION" || value === "RUN" ? value : "NONE";
+}
+
 /** What an open review's sign-off still waits for from the re-performance, from the
- * server's typed `attestationNeeded` and the run record (design review, 20 November
- * 2026): before, the pill said "Ready to sign off" over a partial or failed
- * re-performance whose sign-off needs the reviewer's record by hand. A last attempt that
- * gave up holds it whatever the earlier run did, as the server's run_lets_sign withholds
- * "Sign off the review" from the queue (code review, 20 November 2026; before, a failure
- * after a full run read "Ready to sign off"). Null when the re-performance holds nothing.
- * The server holds the same sign-off: its attestationNeeded is true whenever the last
- * attempt failed (needs_attestation), so the form asks for the record by hand. The run's
- * own words are the banner's and the header's (`reperformedWords`), so the sign-off form
- * does not repeat them. */
+ * server's typed `attestationNeeded` and `signoffHold` and the run record (design review,
+ * 20 November 2026): before, the pill said "Ready to sign off" over a partial or failed
+ * re-performance. A last attempt that gave up holds it on either branch, whatever the
+ * earlier run did, as the server's run_lets_sign withholds "Sign off the review" from the
+ * queue (code review, 20 November 2026). Null when the re-performance holds nothing. On
+ * the tested branch the form then asks for the record by hand (attestationNeeded); on a
+ * design signed off as not effective it waits for a run that finishes (signoffHold RUN,
+ * signOffAsk). The run's own words are the banner's and the header's
+ * (`reperformedWords`), so the sign-off form does not repeat them. */
 export function reperformHold(
-  review: Pick<ControlReview, "attestationNeeded" | "reperformance">,
+  review: Pick<
+    ControlReview,
+    "attestationNeeded" | "reperformance" | "signoffHold"
+  >,
 ): string | null {
-  if (review.reperformance?.failed === true) {
+  if (review.reperformance?.failed === true || review.signoffHold === "RUN") {
     return "Re-performance did not finish";
   }
-  return review.attestationNeeded === true ? "Re-perform needed" : null;
+  return review.attestationNeeded === true ||
+    review.signoffHold === "ATTESTATION"
+    ? "Re-perform needed"
+    : null;
+}
+
+/** What the sign-off form asks of the reviewer: ATTEST, the record of a re-performance
+ * by hand (a checkbox and a note of at least ATTESTATION_MIN characters); WAIT, nothing it
+ * can give: the sign-off waits for a re-performance that finishes, as the review's
+ * blocking reason says, and offers no record by hand (product owner, 20 November 2026:
+ * on a design signed off as not effective nothing was tested, so none could be true);
+ * NOTE, an optional note. */
+export function signOffAsk(
+  review: Pick<
+    ControlReview,
+    "attestationNeeded" | "reperformance" | "signoffHold"
+  >,
+): "ATTEST" | "WAIT" | "NOTE" {
+  if (
+    review.attestationNeeded === true ||
+    review.signoffHold === "ATTESTATION"
+  ) {
+    return "ATTEST";
+  }
+  return review.signoffHold === "RUN" || review.reperformance?.failed === true
+    ? "WAIT"
+    : "NOTE";
 }
 
 /** The review header's pill: its words and tone, from the review's typed state. */
 export function reviewPill(
   review: Pick<
     ControlReview,
-    "status" | "reperforming" | "attestationNeeded" | "reperformance"
+    | "status"
+    | "reperforming"
+    | "attestationNeeded"
+    | "reperformance"
+    | "signoffHold"
   >,
   {
     waiting,
@@ -305,6 +350,8 @@ export type ControlReview = {
   reperformance?: Reperformance | null;
   /** Signing needs the reviewer's record of a re-performance by hand (FO-1). */
   attestationNeeded?: boolean;
+  /** What the sign-off waits for from the last re-performance (signoff_hold). */
+  signoffHold?: SignOffHold;
   cancelState?: CancelState;
   sheetStatus: string | null;
   sheetSignedBy: string | null;
@@ -460,6 +507,7 @@ export function parseReviews(value: unknown): ControlReview[] | null {
         : {}),
       reperformance: parseReperformance(item.reperformance),
       attestationNeeded: item.attestation_needed === true,
+      signoffHold: parseSignOffHold(item.signoff_hold),
       cancelState: parseCancelState(item.cancel_state),
       sheetStatus: maybe(item.sheet_status),
       sheetSignedBy: maybe(item.sheet_signed_by),

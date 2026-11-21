@@ -31,13 +31,22 @@ of this database only).
                       the header, the round's reviews and the review queue hold
                       "Re-performance did not finish", never "Ready to sign off", and
                       the sign-off asks for the record by hand
+- oe-review-untested-failed  a control whose design is signed off as not effective
+                      (nothing tested), after a re-performance that gave up: the sign-off
+                      waits for a re-performance that finishes, says why, and offers no
+                      record of a re-performance by hand
 """
 
 from typing import Any
 from uuid import UUID
 
 from seed_review_states import _token
-from test_control_reviews import _all_pass, _prepared_control, _rollforward_decided
+from test_control_reviews import (
+    _all_pass,
+    _not_effective_review,
+    _prepared_control,
+    _rollforward_decided,
+)
 from test_evidence_analysis import _Provider
 from test_evidence_intake import _accept_population, _engagement, _request
 from test_testing_engine import _add, _base, _Citing, _read_all, _sheet, _year
@@ -320,7 +329,26 @@ def _more_review_states(seed: Any) -> None:
     _add_review(seed, "oe-review-failed-full", team, control, review)
 
 
+def _untested_failed_state(seed: Any) -> None:
+    team, reviewer, control = _not_effective_review(seed.database, "oe-untested-failed")
+    reviews = f"{seed.base(team)}/reviews"
+    review = next(r for r in reviewer.get(reviews).json() if r["control_id"] == control)
+    asked = reviewer.post(
+        f"{reviews}/{review['id']}/reperform", json={"version": review["version"]}
+    )
+    assert asked.status_code == 200, asked.text
+    with connect(seed.url) as connection:
+        fail_reperformance(connection, UUID(review["id"]))
+        connection.commit()
+    review = next(r for r in reviewer.get(reviews).json() if r["control_id"] == control)
+    # The failed attempt waits for a run that finishes: no record by hand (signoff_hold RUN).
+    assert review["reperformance"]["failed"] is True, review["reperformance"]
+    assert (review["signoff_hold"], review["attestation_needed"]) == ("RUN", False), review
+    _add_review(seed, "oe-review-untested-failed", team, control, review)
+
+
 def build(seed: Any) -> None:
     _sheet_states(seed)
     _review_states(seed)
     _more_review_states(seed)
+    _untested_failed_state(seed)

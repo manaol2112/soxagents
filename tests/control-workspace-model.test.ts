@@ -934,6 +934,9 @@ describe("the agents on a control", () => {
       "reviewer",
     );
     assert.equal(stoppedLane.run, "stopped");
+    // Code review, 20 November 2026: the lane said "Last re-performance attempt" of the
+    // run whose output it shows, the earlier one that finished; it names that run now.
+    assert.equal(stoppedLane.output, "Last finished re-performance");
     const signedLane = laneOf(
       agentLanes(
         input({

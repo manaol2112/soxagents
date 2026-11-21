@@ -15,6 +15,7 @@ import {
   reviewWrite,
   roundReviewsFor,
   runFailureLine,
+  signOffAsk,
 } from "../apps/web/src/review-model.ts";
 
 const org = "11111111-1111-7111-8111-111111111111";
@@ -471,16 +472,121 @@ describe("a sign-off over a re-performance by hand (FO-1, 19 November 2026)", ()
     // 1 of 3 items: no differences ...") above the banner's "did not finish". New: the
     // header names the last attempt after a partial or a full run, never the earlier
     // count. Design review, 20 November 2026: "did not finish" stood three times on the
-    // card (header, pill, banner); the header now says "Last re-performance attempt".
+    // card (header, pill, banner). Code review, 20 November 2026: the header read "Last
+    // re-performance attempt · <reperformedAt>", the date of the earlier run that finished
+    // (reperformedAt is written only when a run finishes), so the failed attempt was given
+    // that run's date. New: the words name the last run that finished, the date's own, and
+    // the pill and the banner say a later attempt did not finish.
     for (const record of [failed, fullThenFailed]) {
       const said = reperformedWords(record, "MODEL", 0);
-      assert.equal(said, "Last re-performance attempt");
-      assert.doesNotMatch(said, /did not finish|Re-performed \d/);
+      assert.equal(said, "Last finished re-performance");
+      assert.doesNotMatch(said, /attempt|did not finish|Re-performed \d/);
     }
     assert.equal(
       reperformedWords({ ...partial, done: 0 }, "MODEL", 0),
       "The reviewer agent did not re-perform the items",
     );
+  });
+});
+
+describe("a failed re-performance on a design not effective (product owner, 20 November 2026)", () => {
+  // Code review of dda278f: on a design signed off as not effective nothing was tested,
+  // yet a failed attempt asked for the reviewer's record of re-performing the testing by
+  // hand, a record that could only be false. Now the sign-off waits for a run that
+  // finishes (the server's signoffHold RUN), with no record by hand offered.
+  const failed = {
+    known: false,
+    source: null,
+    due: 0,
+    done: 0,
+    capped: false,
+    dropped: 0,
+    failed: true,
+  };
+  const untested = {
+    status: "OPEN" as const,
+    reperforming: false,
+    attestationNeeded: false,
+    signoffHold: "RUN" as const,
+    reperformance: failed,
+  };
+  const idle = { waiting: 0, outstanding: false, unavailable: false };
+
+  it("waits for a run: no record by hand, the pill says the run did not finish", () => {
+    assert.equal(signOffAsk(untested), "WAIT");
+    assert.equal(reperformHold(untested), "Re-performance did not finish");
+    assert.deepEqual(reviewPill(untested, idle), {
+      words: "Re-performance did not finish",
+      tone: "tone-warning",
+    });
+    // A run that finishes clears it: an optional note, ready to sign off.
+    const finished = {
+      ...untested,
+      signoffHold: "NONE" as const,
+      reperformance: { ...failed, failed: false },
+    };
+    assert.equal(signOffAsk(finished), "NOTE");
+    assert.equal(reperformHold(finished), null);
+    assert.deepEqual(reviewPill(finished, idle), {
+      words: "Ready to sign off",
+      tone: "",
+    });
+    // The tested branch keeps the record by hand after a failed attempt (dda278f).
+    assert.equal(
+      signOffAsk({
+        attestationNeeded: true,
+        signoffHold: "ATTESTATION",
+        reperformance: { ...failed, known: true, due: 3, done: 3 },
+      }),
+      "ATTEST",
+    );
+    // Fail closed: a failed record waits even if the hold was not sent.
+    assert.equal(
+      signOffAsk({ attestationNeeded: false, reperformance: failed }),
+      "WAIT",
+    );
+  });
+
+  it("parses the server's typed hold", () => {
+    const parsed = parseReviews([
+      {
+        id: review,
+        control_id: control,
+        control_ref: "ITGC-AC-01",
+        label: "ITGC-AC-01",
+        status: "OPEN",
+        reperforming: false,
+        reperform_state: "IDLE",
+        reperformed_at: null,
+        reperform_source: null,
+        reperform_note: "",
+        reperformance: failed,
+        attestation_needed: false,
+        signoff_hold: "RUN",
+        workpapers: [],
+        notes: [],
+        counts: {},
+        blocking: [
+          "the last re-performance did not finish: re-perform to try again",
+        ],
+      },
+    ])?.[0];
+    assert.equal(parsed?.signoffHold, "RUN");
+    assert.equal(signOffAsk(parsed ?? untested), "WAIT");
+    const unknown = parseReviews([
+      {
+        id: review,
+        control_id: control,
+        control_ref: "ITGC-AC-01",
+        status: "OPEN",
+        signoff_hold: "SOMETHING",
+        workpapers: [],
+        notes: [],
+        counts: {},
+        blocking: [],
+      },
+    ])?.[0];
+    assert.equal(unknown?.signoffHold, "NONE");
   });
 });
 

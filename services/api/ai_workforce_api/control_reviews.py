@@ -377,22 +377,51 @@ class ReperformanceBody(BaseModel):
         return self.known and self.source == "MODEL" and self.done >= self.due > 0
 
 
+# What an open review's sign-off waits for from the reviewer agent's last re-performance
+# (product owner, 20 November 2026): NONE, nothing; ATTESTATION, the reviewer's record of a
+# re-performance by hand (needs_attestation); RUN, a re-performance that finishes, with no
+# record by hand to offer (waits_for_run).
+SignOffHold = Literal["NONE", "ATTESTATION", "RUN"]
+
+
+def signoff_hold(tested_branch: bool, record: ReperformanceBody) -> SignOffHold:
+    """What the review's sign-off waits for from its last re-performance, one rule for the
+    review body, sign_off, run_lets_sign and the queue (product owner, 20 November 2026).
+
+    On the tested branch (not a design signed off as not effective), the review signs only
+    with the reviewer's record of a re-performance by hand (FO-1) when the agent did not
+    re-perform every item due, when it has no record (re-performed before one was kept: fail
+    closed), or when the last attempt gave up (fail_reperformance) whatever an earlier run
+    did; a new run that finishes clears it too.
+
+    On the untested branch (a design signed off as not effective, nothing tested), a last
+    attempt that gave up holds the sign-off until a re-performance finishes: there is
+    nothing tested to re-perform by hand, so no record by hand is offered and none can be
+    false. Before (code review, 20 November 2026), the failure was read before the branch
+    and asked there for a record by hand of testing that never existed."""
+    if not tested_branch:
+        return "RUN" if record.failed else "NONE"
+    if record.failed:
+        return "ATTESTATION"
+    if record.known and record.due == 0:
+        return "NONE"
+    return "NONE" if record.fully_reperformed() else "ATTESTATION"
+
+
 def needs_attestation(tested_branch: bool, record: ReperformanceBody) -> bool:
     """Whether the review signs only with the reviewer's record of a re-performance by hand
-    (FO-1): on the tested branch (not a design signed off as not effective, where nothing
-    was tested), with items due, when the agent did not re-perform them all. A review
-    without a record (re-performed before it was kept) needs it too: fail closed. A last
-    attempt that gave up (fail_reperformance) needs it whatever an earlier run did, the rule
-    run_lets_sign and the queue already hold (design review, 20 November 2026; before, a
-    failure after a full run signed with an optional note while every status on the
-    screen said to re-perform)."""
-    if record.failed:
-        return True
-    if not tested_branch:
-        return False
-    if record.known and record.due == 0:
-        return False
-    return not record.fully_reperformed()
+    (signoff_hold ATTESTATION): only ever on the tested branch."""
+    return signoff_hold(tested_branch, record) == "ATTESTATION"
+
+
+def waits_for_run(tested_branch: bool, record: ReperformanceBody) -> bool:
+    """Whether the review signs only after a re-performance that finishes (signoff_hold RUN):
+    a failed attempt on the untested branch, where nothing can be re-performed by hand."""
+    return signoff_hold(tested_branch, record) == "RUN"
+
+
+# The review's reason, on the untested branch, while a failed attempt holds the sign-off.
+RUN_DID_NOT_FINISH = "the last re-performance did not finish: re-perform to try again"
 
 
 def reperformance_of(connection: psycopg.Connection[Any], review_id: UUID) -> ReperformanceBody:
@@ -428,11 +457,12 @@ def reperformances_of(
 
 
 def run_lets_sign(record: ReperformanceBody, tested_branch: bool) -> bool:
-    """Whether the reviewer agent's last run leaves the review to sign as it is: it did not
-    give up (fail_reperformance), and the review needs no record of a re-performance by
-    hand (needs_attestation). The queue and the register say "Sign off the review" only
-    then (S5, 20 November 2026); before, they said it after any run with a date."""
-    return not record.failed and not needs_attestation(tested_branch, record)
+    """Whether the reviewer agent's last run leaves the review to sign as it is: its sign-off
+    waits for nothing (signoff_hold NONE: no record by hand, no run that finishes; a failed
+    attempt holds it on either branch). The queue and the register say "Sign off the
+    review" only then (S5, 20 November 2026); before, they said it after any run with a
+    date."""
+    return signoff_hold(tested_branch, record) == "NONE"
 
 
 def signs_after_run(
@@ -499,6 +529,7 @@ def reperform_failure_note(
     note: str,
     record: ReperformanceBody,
     signed: bool = False,
+    tested_branch: bool = True,
 ) -> str:
     """The reviewer agent's last re-performance, said for a person when it gave no usable
     answer: one that gave up changed nothing; one whose every model call failed (FALLBACK)
@@ -507,9 +538,13 @@ def reperform_failure_note(
     from the note's wording (REPERFORM_FAILED, the partial note). The agent is "the reviewer
     agent", never "the model" (design review, 20 November 2026). A signed review is not a
     failure to act on: its sign-off recorded the rest by hand, so "Re-perform to try again"
-    is not said over it (before, it was, beside "Reviewed")."""
+    is not said over it (before, it was, beside "Reviewed"). On the untested branch (a design
+    signed off as not effective) nothing was tested, so no re-performance by hand is offered
+    (signoff_hold RUN; product owner, 20 November 2026)."""
     if signed or status in ("PENDING", "WORKING") or not note:
         return ""
+    if record.failed and not tested_branch:
+        return f"{note} The notes are kept as they were."
     if record.failed:
         # One sentence per idea, no semicolon (design review, 20 November 2026).
         return (
@@ -1519,6 +1554,9 @@ class ReviewBody(BaseModel):
     # Whether signing needs the reviewer's record that they re-performed the testing by
     # hand: the agent did not re-perform every item due on the tested branch (FO-1).
     attestation_needed: bool = False
+    # What the sign-off waits for from the last re-performance (signoff_hold): RUN only on
+    # the untested branch, where a failed attempt waits for a run that finishes.
+    signoff_hold: SignOffHold = "NONE"
     cancel_state: CancelState = "NONE"
     sheet_status: str | None
     sheet_signed_by: str | None
@@ -1726,6 +1764,16 @@ def _review(
             )
             if held is not None:
                 blocking.append(f"{str(paper[1]).lower()} workpaper: {held}")
+    hold = signoff_hold(tested_branch, record)
+    if hold == "RUN":
+        # The untested branch's failed attempt holds the sign-off until a run finishes, the
+        # one it may be running now included; no record by hand is offered there (product
+        # owner, 20 November 2026).
+        blocking.append(
+            RUN_DID_NOT_FINISH
+            if row[5] == "IDLE"
+            else "the reviewer agent is still re-performing the testing"
+        )
     waiting = counts["PROPOSED"] + counts["OPEN"] + counts["RESPONDED"]
     if waiting:
         blocking.append(f"{_count(waiting, 'note')} not cleared yet")
@@ -1747,9 +1795,11 @@ def _review(
             str(row[8]),
             record,
             signed=row[4] == "SIGNED_OFF",
+            tested_branch=tested_branch,
         ),
         reperformance=record,
-        attestation_needed=needs_attestation(tested_branch, record),
+        attestation_needed=hold == "ATTESTATION",
+        signoff_hold=hold,
         cancel_state=cancel_state(row[5], row[18], row[19], row[8]),
         sheet_status=None if sheet is None else str(sheet[0]),
         sheet_signed_by=None if sheet is None or sheet[1] is None else str(sheet[1]),
@@ -2731,9 +2781,14 @@ def _sign_off(
         attestation = clean_line(body.note, 1000)
         if by_hand:
             if not body.reperformed_by_hand:
+                # The failed attempt is the reason when there is one, never the earlier
+                # run's count (code review, 20 November 2026; before, "re-performed 3 of 3
+                # items" was said over a later attempt that did not finish).
                 raise ReviewState(
                     (
-                        f"the reviewer agent re-performed {record.done} of "
+                        "the last re-performance did not finish"
+                        if record.failed
+                        else f"the reviewer agent re-performed {record.done} of "
                         f"{_count(record.due, 'item')}"
                         if record.known
                         else "the reviewer agent's re-performance has no record of the "

@@ -16,6 +16,7 @@ import {
   reviewDifferences,
   reviewPill,
   SEVERITY_LABEL,
+  signOffAsk,
   TARGET_LABEL,
 } from "./review-model";
 import type { TestSheet } from "./sheet-model";
@@ -105,6 +106,8 @@ export function ReviewTab({
       executionOf({ agent: "reviewer", run: review.reperformState, automation })
         .state === "UNAVAILABLE",
   });
+  // What the sign-off form asks: the record by hand, nothing (it waits for a run), or a note.
+  const ask = signOffAsk(review);
   const relaxed = !review.independenceRequired;
   const decides = canAct && review.viewerIsReviewer && review.status === "OPEN";
   // The preparer of this work adds notes and answers them; another reviewer decides them.
@@ -523,9 +526,11 @@ export function ReviewTab({
                 className="review-signoff"
               >
                 <Hidden ids={ids} review={review} intent="sign-off" />
-                {review.attestationNeeded === true ? (
+                {ask === "ATTEST" ? (
                   // The person's own attestation, in a check row of its own: the run's
-                  // facts are the banner's and the header's, never mixed in here.
+                  // facts are the banner's and the header's, never mixed in here. Never
+                  // offered while the sign-off waits for a run (ask WAIT: a design signed
+                  // off as not effective, where nothing was tested to re-perform by hand).
                   <label className="check-row">
                     <input
                       type="checkbox"
@@ -541,24 +546,18 @@ export function ReviewTab({
                 <input
                   name="text"
                   maxLength={1000}
-                  required={review.attestationNeeded === true}
-                  minLength={
-                    review.attestationNeeded === true
-                      ? ATTESTATION_MIN
-                      : undefined
-                  }
+                  required={ask === "ATTEST"}
+                  minLength={ask === "ATTEST" ? ATTESTATION_MIN : undefined}
                   placeholder={
-                    review.attestationNeeded === true
+                    ask === "ATTEST"
                       ? "What you re-performed by hand"
                       : "Sign-off note (optional)"
                   }
                   aria-describedby={
-                    review.attestationNeeded === true
-                      ? `review-attest-${review.id}`
-                      : undefined
+                    ask === "ATTEST" ? `review-attest-${review.id}` : undefined
                   }
                 />
-                {review.attestationNeeded === true ? (
+                {ask === "ATTEST" ? (
                   // The note's rule, visible before submit at every width (a placeholder
                   // is cut on a phone); minLength enforces it.
                   <p className="form-hint" id={`review-attest-${review.id}`}>
@@ -569,7 +568,7 @@ export function ReviewTab({
                 <button
                   type="submit"
                   className="btn-sm"
-                  disabled={review.blocking.length > 0}
+                  disabled={review.blocking.length > 0 || ask === "WAIT"}
                 >
                   Sign off the review
                 </button>

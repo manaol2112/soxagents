@@ -963,7 +963,12 @@ def test_a_failure_after_a_full_reperformance_holds_the_sign_off(migrated: Datab
         json={"version": review["version"], "note": ""},
     )
     assert refused.status_code == 409, refused.text
-    assert "record that you re-performed the testing by hand" in refused.text, refused.text
+    # Code review, 20 November 2026: the refusal said the earlier run's count
+    # ("re-performed 3 of 3 items") over the attempt that did not finish.
+    assert refused.json()["detail"] == (
+        "the last re-performance did not finish: re-perform again, or record that you "
+        "re-performed the testing by hand"
+    ), refused.text
     assert client.get(f"{_base(team)}/reviews").json()[0]["status"] == "OPEN"
     signed = reviewer.post(
         f"{_base(team)}/reviews/{review['id']}/sign-off",
@@ -974,6 +979,153 @@ def test_a_failure_after_a_full_reperformance_holds_the_sign_off(migrated: Datab
         },
     )
     assert signed.status_code == 200, signed.text
+
+
+def _not_effective_review(migrated: Database, slug: str) -> tuple[dict[str, Any], Any, str]:
+    """A control whose design is signed off as not effective, its deficiency rated: its own
+    review rests on the design alone (nothing tested) and holds nothing else."""
+    from test_design_conclusions import (
+        _concluded,
+        _control,
+        _design_deficiency,
+        _reviewer_role,
+        _signing,
+    )
+    from test_evidence_flow import _project as project_of
+    from test_phase_release import _launched
+
+    team = _launched(migrated, slug)
+    control = _control(team)
+    concluded = _concluded(migrated, team, control, "NOT_EFFECTIVE")
+    _design_deficiency(migrated, team, control)
+    _reviewer_role(migrated, team, team["reviewer_id"])
+    reviewer = _session(migrated, team["reviewer_id"])
+    signed = reviewer.post(
+        f"{project_of(team)}/design-conclusions/{control}/sign-off",
+        json=_signing(concluded, "NOT_EFFECTIVE"),
+    )
+    assert signed.status_code == 200, signed.text
+    with connect(migrated.url) as connection:
+        _rate_all(connection, team)
+        connection.commit()
+    return team, reviewer, control
+
+
+def test_a_failed_attempt_on_an_untested_design_waits_for_a_run_with_no_record_by_hand(
+    migrated: Database,
+) -> None:
+    """Product owner, 20 November 2026 (code review of dda278f). On a design signed off as
+    not effective nothing was tested, yet a failed re-performance asked for the reviewer's
+    record that they re-performed the testing by hand (needs_attestation read the failure
+    before the branch): a record that could only be false. Now the failed attempt holds the
+    sign-off until a re-performance finishes, and no record by hand is offered or taken. The
+    rule itself: test_the_sign_off_hold_is_one_typed_rule_on_both_branches."""
+    from test_evidence_flow import _project as project_of
+
+    from ai_workforce_api.control_reviews import ReperformanceBody
+
+    waits = "the last re-performance did not finish: re-perform to try again"
+    team, reviewer, control = _not_effective_review(migrated, "review-untested-failed")
+    reviews = f"{project_of(team)}/reviews"
+
+    def current() -> dict[str, Any]:
+        return next(r for r in reviewer.get(reviews).json() if r["control_id"] == control)
+
+    review = current()
+    assert review["blocking"] == [], review["blocking"]
+    asked = reviewer.post(
+        f"{reviews}/{review['id']}/reperform", json={"version": review["version"]}
+    )
+    assert asked.status_code == 200, asked.text
+    with connect(migrated.url) as connection:
+        fail_reperformance(connection, UUID(review["id"]))
+        connection.commit()
+    review = current()
+    assert review["reperformance"]["failed"] is True, review["reperformance"]
+    # Before: attestation_needed was true here, and a record by hand signed it off.
+    assert review["attestation_needed"] is False
+    assert review["blocking"] == [waits], review["blocking"]
+    assert review["signoff_hold"] == "RUN"
+    # No re-performance by hand is offered where nothing was tested.
+    assert review["failure_note"] == (
+        "The re-performance did not finish. Re-perform to try again. "
+        "The notes are kept as they were."
+    ), review["failure_note"]
+    note = "Re-performed the design walkthrough by hand against the narrative."
+    for body in (
+        {"version": review["version"], "note": ""},
+        {"version": review["version"], "note": note, "reperformed_by_hand": True},
+    ):
+        refused = reviewer.post(f"{reviews}/{review['id']}/sign-off", json=body)
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["detail"] == waits, refused.text
+        assert current()["status"] == "OPEN"
+    # The queue and the register say to re-perform, never to sign off.
+    with connect(migrated.url) as connection:
+        from ai_workforce_api.control_reviews import signs_after_run
+
+        assert (
+            signs_after_run(
+                connection,
+                UUID(str(team["project"])),
+                control,
+                False,
+                ReperformanceBody(failed=True),
+            )
+            is False
+        )
+    # While a new run goes, the sign-off still waits for it.
+    asked = reviewer.post(
+        f"{reviews}/{review['id']}/reperform", json={"version": review["version"]}
+    )
+    assert asked.status_code == 200, asked.text
+    review = current()
+    assert review["blocking"] == ["the reviewer agent is still re-performing the testing"]
+    # A later run that finishes clears the hold: the review signs with an optional note.
+    with connect(migrated.url) as connection:
+        assert run_reperformance(connection, None, UUID(review["id"])) == "DONE"
+    review = current()
+    assert review["reperformance"]["failed"] is False, review["reperformance"]
+    assert (review["signoff_hold"], review["blocking"], review["failure_note"]) == (
+        "NONE",
+        [],
+        "",
+    ), review
+    signed = reviewer.post(
+        f"{reviews}/{review['id']}/sign-off", json={"version": review["version"], "note": ""}
+    )
+    assert signed.status_code == 200, signed.text
+    coverage = signed.json()["coverage"]["reperformance"]
+    assert coverage["by_hand"] is False and coverage["attestation"] == "", coverage
+
+
+def test_the_sign_off_hold_is_one_typed_rule_on_both_branches() -> None:
+    """Product owner, 20 November 2026: on the tested branch a failed attempt asks for the
+    record by hand (dda278f); on the untested branch (a design signed off as not effective)
+    it waits for a run that finishes, with no record by hand. needs_attestation,
+    waits_for_run and run_lets_sign read the one signoff_hold."""
+    from ai_workforce_api.control_reviews import (
+        RUN_DID_NOT_FINISH,
+        ReperformanceBody,
+        needs_attestation,
+        run_lets_sign,
+        signoff_hold,
+        waits_for_run,
+    )
+
+    failed = ReperformanceBody(failed=True)
+    full = ReperformanceBody(known=True, source="MODEL", due=3, done=3)
+    assert signoff_hold(False, failed) == "RUN"
+    assert needs_attestation(False, failed) is False
+    assert waits_for_run(False, failed) is True
+    assert run_lets_sign(failed, False) is False
+    for record in (failed, full.model_copy(update={"failed": True})):
+        assert signoff_hold(True, record) == "ATTESTATION"
+        assert waits_for_run(True, record) is False
+        assert run_lets_sign(record, True) is False
+    assert signoff_hold(False, ReperformanceBody()) == "NONE"
+    assert signoff_hold(True, full) == "NONE" and run_lets_sign(full, True) is True
+    assert RUN_DID_NOT_FINISH == "the last re-performance did not finish: re-perform to try again"
 
 
 def test_a_capped_reperformance_counts_and_names_every_item_due(
