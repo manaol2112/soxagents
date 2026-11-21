@@ -126,6 +126,18 @@ class ModelProviderError(Exception):
         self.status = status
 
 
+class ModelCutOff(ModelProviderError):
+    """The chat answer was cut off at the output limit: what arrived is partial and is not
+    an answer (21 November 2026). A generation's cut-off is told by ModelRaw.stopped
+    instead; a chat reply has no schema to fail, so it is refused here. It carries the
+    usage the provider reported, so the call is recorded and counted at what it cost."""
+
+    def __init__(self, input_tokens: int = 0, output_tokens: int = 0) -> None:
+        super().__init__()
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+
+
 @dataclass(frozen=True)
 class ToolProposal:
     tool_id: str
@@ -138,6 +150,15 @@ class ModelImage:
 
     media_type: Literal["image/png", "image/jpeg"]
     data: bytes
+
+
+# The output allowance of a call that names none (21 November 2026, D-N0-1). The provider's
+# current models think before they answer, and the thinking is spent from the same
+# allowance, so the old default of 4,096 tokens (8,192 with images) cut off 12 of 16 design
+# drafts in the N0 baseline, each then replaced by a stand-in. With 16,000 all 12 finished,
+# in 3,500 to 6,300 tokens and within their 120 seconds. Only the tokens written are billed;
+# the budget reserves the full allowance before a call (provenance.estimate_micros).
+DEFAULT_OUTPUT_TOKENS = 16_000
 
 
 @dataclass(frozen=True)
@@ -155,7 +176,8 @@ class ModelRequest:
     # How many web searches the model may run (milestone 8.10). Only callers allowed to
     # reach the web set this, and they send no client names in the prompt it searches from.
     web_search: int = 0
-    # A larger answer than the default, for long structured outputs. 0 keeps the default.
+    # The output allowance. 0 gives DEFAULT_OUTPUT_TOKENS, which holds a long structured
+    # answer; a call names its own only for a deliberately shorter or longer one.
     max_tokens: int = 0
     # Read the answer's representation as the schema declares it (models.unnested): a
     # property the schema declares as an object or a list that arrives as JSON text, at any

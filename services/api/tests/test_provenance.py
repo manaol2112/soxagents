@@ -29,6 +29,7 @@ from ai_workforce_api.model_providers import (
 )
 from ai_workforce_api.models import (
     ModelConfig,
+    ModelCutOff,
     ModelProviderError,
     ModelRateLimit,
     ModelRequest,
@@ -40,6 +41,7 @@ from ai_workforce_api.provenance import (
     Job,
     Limits,
     agent_actor,
+    estimate_micros,
     purge_expired_contents,
     sha256_text,
 )
@@ -318,7 +320,12 @@ def test_budgets_refuse_a_call_before_dispatch_and_record_the_refusal(
 ) -> None:
     seeded, project_id, _owner = _ready(migrated, "budget", "")
     org, owner_id = seeded["organization_id"], seeded["user_id"]
-    long_prompt = "x" * 40_000  # about 13,300 tokens: $0.027 in, plus $0.041 of output allowance
+    # About 13,300 tokens: $0.027 in, plus the output allowance ($0.16 of 16,000 tokens since
+    # 21 November 2026; $0.041 of 4,096 before). The limits below are set from the
+    # estimate, so each still sits between the first call and the second.
+    long_prompt = "x" * 40_000
+    estimate = estimate_micros(SONNET, _request(long_prompt))
+    assert estimate > 50_000
     with connect(migrated.url) as connection:
         job = Job("itgc-change-tester", "test_sheet", uuid4(), org, project_id, owner_id)
         # The limit a call.
@@ -331,7 +338,10 @@ def test_budgets_refuse_a_call_before_dispatch_and_record_the_refusal(
         assert "budget is exhausted" in refused.note
         # The limit a job: the first call fits, the second would pass the limit.
         provider = _Scripted([{"answer": "ok"}, {"answer": "ok"}])
-        caller = AgentCaller(connection, provider, job, config=SONNET, limits=Limits(0, 70_000, 0))
+        # The job's limit was 70,000 with the $0.068 estimate: room for one call, not two.
+        caller = AgentCaller(
+            connection, provider, job, config=SONNET, limits=Limits(0, estimate + 1_000, 0)
+        )
         first = caller.generate(_request(long_prompt), "control-tester/1")
         assert first.status == "SUCCEEDED" and caller.spent == 3_600
         second = caller.generate(_request(long_prompt), "control-tester/1")
@@ -440,6 +450,35 @@ def test_a_cancellation_is_honoured_before_the_call(migrated: Database) -> None:
         assert (call.status, provider.requests) == ("CANCELLED", [])
         assert _error(connection, call.call_id) == "cancelled before the call"
         assert call.note == "The model call was cancelled."
+
+
+def test_a_cut_off_chat_reply_is_recorded_and_counted_at_what_it_cost(
+    migrated: Database,
+) -> None:
+    """A chat reply cut off at the output limit was written and billed (21 November 2026,
+    G2 of D-N0-1): it is refused, but recorded with the provider's usage and its cost, and
+    counted in the job's spend, as a cut-off generation is."""
+
+    class _CutOff:
+        def converse(self, *_args: Any) -> Any:
+            raise ModelCutOff(100, 16_000)
+
+    seeded, project_id, _owner = _ready(migrated, "chat-cutoff", "")
+    org, owner_id = seeded["organization_id"], seeded["user_id"]
+    with connect(migrated.url) as connection:
+        job = Job("console-lead", "console_message", uuid4(), org, project_id, owner_id)
+        caller = AgentCaller(connection, _CutOff(), job, config=SONNET)
+        hello = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+        with pytest.raises(ModelCutOff):
+            caller.chat(_CutOff(), "Be brief.", hello, (), 30)
+        row = connection.execute(
+            "SELECT status, input_tokens, output_tokens, cost_micros FROM model_calls "
+            "WHERE job_id = %s",
+            (job.job_id,),
+        ).fetchone()
+    cost = cost_micros(SONNET, 100, 16_000)
+    assert cost > 0 and tuple(row or ()) == ("MALFORMED", 100, 16_000, cost)
+    assert caller.spent == cost
 
 
 def _ready(database: Database, slug: str, key: str) -> tuple[dict[str, Any], UUID, Any]:
@@ -647,13 +686,18 @@ def test_retries_respect_a_cancellation_and_budgets_count_every_attempt(
         ).fetchall()
         assert [tuple(r) for r in rows] == [("TIMEOUT", 1), ("CANCELLED", 2)]
         # The job's spend accumulates across its calls and is checked before every
-        # attempt, retries included: a short prompt estimates at about $0.041 here.
+        # attempt, retries included. The limit was 45,000 when a short prompt estimated at
+        # about $0.041 (a 4,096-token allowance; 16,000 since 21 November 2026): room for
+        # two calls' spend and the estimate of the next, not three.
+        estimate = estimate_micros(SONNET, _request())
         flag["cancel"] = False
         other = Job("itgc-access-tester", "test_sheet", uuid4(), org, project_id, owner_id)
         spend = _Scripted(
             [{"answer": "one"}, ModelTimeout(), {"answer": "two"}, {"answer": "three"}]
         )
-        caller = AgentCaller(connection, spend, other, config=SONNET, limits=Limits(0, 45_000, 0))
+        caller = AgentCaller(
+            connection, spend, other, config=SONNET, limits=Limits(0, estimate + 5_000, 0)
+        )
         first = caller.generate(_request(), "control-tester/1")
         second = caller.generate(_request(), "control-tester/1")
         third_call = caller.generate(_request(), "control-tester/1")

@@ -52,12 +52,14 @@ from ai_workforce_api.model_providers import (
     tier_config,
 )
 from ai_workforce_api.models import (
+    DEFAULT_OUTPUT_TOKENS,
     ChatProvider,
     ChatReply,
     ChatTool,
     ModelBudgetExceeded,
     ModelCancelled,
     ModelConfig,
+    ModelCutOff,
     ModelProvider,
     ModelProviderError,
     ModelRateLimit,
@@ -161,7 +163,7 @@ def config_for(settings: Settings | None, tier: ModelTier) -> ModelConfig:
 def estimate_micros(config: ModelConfig, request: ModelRequest) -> int:
     """The most a call can cost: the prompt and system text, the images, and the full
     output allowance."""
-    output = request.max_tokens or (8192 if request.images else 4096)
+    output = request.max_tokens or DEFAULT_OUTPUT_TOKENS
     inputs = (
         estimate_tokens(request.prompt)
         + estimate_tokens(request.system)
@@ -379,7 +381,9 @@ class AgentCaller:
         nothing = ModelRaw(None, (), 0, 0)
         inputs = {"messages": len(messages), "tools": len(tools)}
         estimate = cost_micros(
-            self.config, estimate_tokens(system) + estimate_tokens(transcript), 4096
+            self.config,
+            estimate_tokens(system) + estimate_tokens(transcript),
+            DEFAULT_OUTPUT_TOKENS,
         )
         refusal = self._over_budget(estimate)
         reservation: UUID | None = None
@@ -407,19 +411,32 @@ class AgentCaller:
                 "ModelTimeout": "TIMEOUT",
                 "ModelRateLimit": "RATE_LIMITED",
                 "ModelCancelled": "CANCELLED",
+                # The same status and words as a cut-off generation (models.outcome).
+                "ModelCutOff": "MALFORMED",
             }.get(type(error).__name__, "MODEL_ERROR")
             detail = (
-                f"provider error (status {error.status})"
+                "answer was cut off at the output limit"
+                if isinstance(error, ModelCutOff)
+                else f"provider error (status {error.status})"
                 if isinstance(error, ModelProviderError) and error.status
                 else status.lower().replace("_", " ")
             )
+            # A cut-off reply was written and billed: it is recorded and counted at the
+            # usage the provider reported, like a cut-off generation.
+            spent = (
+                ModelRaw(None, (), error.input_tokens, error.output_tokens, stopped="max_tokens")
+                if isinstance(error, ModelCutOff)
+                else nothing
+            )
+            cost = cost_micros(self.config, spent.input_tokens, spent.output_tokens)
+            self.spent += cost
             call_id = self._record(
-                status, nothing, request, prompt_version, attempt, duration, detail, inputs,
+                status, spent, request, prompt_version, attempt, duration, detail, inputs,
                 operation="propose_tools",
             )  # fmt: skip
             # A failed turn may still have cost tokens the provider did not report: the
             # reservation settles at its worst case, never below what was used.
-            settle_call(self._connection, reservation, call_id, estimate)
+            settle_call(self._connection, reservation, call_id, max(cost, estimate))
             raise
         duration = int((time.perf_counter() - started) * 1000)
         raw = ModelRaw(
@@ -547,7 +564,9 @@ def call_config(config: ModelConfig, tier: str | None, request: ModelRequest) ->
         "model": config.model_name,
         "tier": tier,
         "operation": request.operation,
-        "max_tokens": request.max_tokens,
+        # The allowance sent: 0 stands for DEFAULT_OUTPUT_TOKENS, whose figure has changed
+        # (4,096 before 21 November 2026), so the record names it.
+        "max_tokens": request.max_tokens or DEFAULT_OUTPUT_TOKENS,
         "timeout_seconds": request.timeout_seconds,
         "output_schema_sha256": sha256_text(json.dumps(request.output_schema, sort_keys=True)),
         "allowed_tool_ids": list(request.allowed_tool_ids),

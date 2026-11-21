@@ -26,8 +26,10 @@ from ai_workforce_api.models import ModelConfig, ModelRaw, ModelRequest
 
 __all__ = ["migrated"]
 
-# The allowance a request gets when it names none (model_providers.py: 4,096 without images).
-PROVIDER_DEFAULT = 4096
+# The provider's default allowance that cut these answers off: 4,096 tokens without images.
+# Since 21 November 2026 a request that names none gets models.DEFAULT_OUTPUT_TOKENS
+# (16,000); these agents still name their own, and none may fall back to the old 4,096.
+CUT_OFF_DEFAULT = 4096
 
 
 class _Recorded(_Agents):
@@ -75,7 +77,7 @@ def test_each_agent_of_the_attribute_run_asks_for_more_than_the_providers_defaul
         "draft-review": (PLANNER_TOKENS, 300),
         "set-review": (8000, 180),
     }
-    assert all(tokens > PROVIDER_DEFAULT for tokens, _seconds in agents.asked.values())
+    assert all(tokens > CUT_OFF_DEFAULT for tokens, _seconds in agents.asked.values())
     # The time allows for the allowance: no agent is given less time than the question
     # reviewer, whose 8,000 tokens run in 180 seconds.
     assert all(seconds >= 180 for _tokens, seconds in agents.asked.values())
