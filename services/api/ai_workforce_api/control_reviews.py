@@ -381,7 +381,13 @@ def needs_attestation(tested_branch: bool, record: ReperformanceBody) -> bool:
     """Whether the review signs only with the reviewer's record of a re-performance by hand
     (FO-1): on the tested branch (not a design signed off as not effective, where nothing
     was tested), with items due, when the agent did not re-perform them all. A review
-    without a record (re-performed before it was kept) needs it too: fail closed."""
+    without a record (re-performed before it was kept) needs it too: fail closed. A last
+    attempt that gave up (fail_reperformance) needs it whatever an earlier run did, the rule
+    run_lets_sign and the queue already hold (design review, 20 November 2026; before, a
+    failure after a full run signed with an optional note while every status on the
+    screen said to re-perform)."""
+    if record.failed:
+        return True
     if not tested_branch:
         return False
     if record.known and record.due == 0:
@@ -505,9 +511,10 @@ def reperform_failure_note(
     if signed or status in ("PENDING", "WORKING") or not note:
         return ""
     if record.failed:
+        # One sentence per idea, no semicolon (design review, 20 November 2026).
         return (
-            f"{note} The review's notes stay as they were; you can also re-perform the "
-            "testing by hand."
+            f"{note.removesuffix(' Re-perform to try again.')} Re-perform to try again, or "
+            "re-perform the testing by hand. The notes are kept as they were."
         )
     # Both notes name the items that stand (not_reperformed, partly_reperformed), so the
     # next actions say "them" (design review, 20 November 2026; before, "the items").

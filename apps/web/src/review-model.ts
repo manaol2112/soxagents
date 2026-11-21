@@ -189,9 +189,11 @@ export function reperformedWords(
   }
   // The last attempt gave up (fail_reperformance): said as the banner says it, never as
   // the earlier run's count (code review, 20 November 2026; before, "Re-performed 1 of 3
-  // items" stood above "The re-performance did not finish").
+  // items" stood above "The re-performance did not finish"). Named as the last attempt,
+  // so the pill and the banner say "did not finish" and the header does not repeat it
+  // (design review, 20 November 2026).
   if (record.failed) {
-    return "The re-performance did not finish";
+    return "Last re-performance attempt";
   }
   if (record.due === 0) {
     return "No tested item with evidence to re-perform";
@@ -227,8 +229,10 @@ export function reviewDifferences(notes: readonly ReviewNote[]): number {
  * gave up holds it whatever the earlier run did, as the server's run_lets_sign withholds
  * "Sign off the review" from the queue (code review, 20 November 2026; before, a failure
  * after a full run read "Ready to sign off"). Null when the re-performance holds nothing.
- * The run's own words are the banner's and the header's (`reperformedWords`), so the
- * sign-off form does not repeat them. */
+ * The server holds the same sign-off: its attestationNeeded is true whenever the last
+ * attempt failed (needs_attestation), so the form asks for the record by hand. The run's
+ * own words are the banner's and the header's (`reperformedWords`), so the sign-off form
+ * does not repeat them. */
 export function reperformHold(
   review: Pick<ControlReview, "attestationNeeded" | "reperformance">,
 ): string | null {

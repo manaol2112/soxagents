@@ -469,15 +469,14 @@ describe("a sign-off over a re-performance by hand (FO-1, 19 November 2026)", ()
     );
     // Code review, 20 November 2026: the header said the earlier run's count ("Re-performed
     // 1 of 3 items: no differences ...") above the banner's "did not finish". New: the
-    // header says the run did not finish, as the banner does, after a partial or a full run.
-    assert.equal(
-      reperformedWords(failed, "MODEL", 0),
-      "The re-performance did not finish",
-    );
-    assert.equal(
-      reperformedWords(fullThenFailed, "MODEL", 0),
-      "The re-performance did not finish",
-    );
+    // header names the last attempt after a partial or a full run, never the earlier
+    // count. Design review, 20 November 2026: "did not finish" stood three times on the
+    // card (header, pill, banner); the header now says "Last re-performance attempt".
+    for (const record of [failed, fullThenFailed]) {
+      const said = reperformedWords(record, "MODEL", 0);
+      assert.equal(said, "Last re-performance attempt");
+      assert.doesNotMatch(said, /did not finish|Re-performed \d/);
+    }
     assert.equal(
       reperformedWords({ ...partial, done: 0 }, "MODEL", 0),
       "The reviewer agent did not re-perform the items",

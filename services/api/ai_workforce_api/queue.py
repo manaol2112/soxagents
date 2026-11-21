@@ -803,7 +803,7 @@ def _reviews(
             ready = False
         elif record is not None and record.failed:
             title, reason, role = (
-                "Re-perform the testing for the review again",
+                "Re-perform the testing again",
                 REPERFORM_FAILED,
                 "REVIEWER",
             )

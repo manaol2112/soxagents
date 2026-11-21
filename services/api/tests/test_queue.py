@@ -294,7 +294,7 @@ def test_queued_agent_work_is_upcoming_with_a_worker_and_blocked_without(
         ).fetchone()
     assert reperformed is not None and reperformed[0] is not None
     [again] = [i for i in _queue(reviewer, team)["items"] if i["id"] == key]
-    assert again["title"] == "Re-perform the testing for the review again"
+    assert again["title"] == "Re-perform the testing again"
     assert again["obligation"] == "REPERFORMANCE_STOPPED" and again["bucket"] == "MINE"
     assert again["reason"] == REPERFORM_FAILED
     [row] = [r for r in _controls(reviewer, team) if r["id"] == control]

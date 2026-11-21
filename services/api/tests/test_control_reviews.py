@@ -914,6 +914,68 @@ def test_a_signed_review_over_a_failed_reperformance_says_no_failure(
     assert "did not finish" in review["reperform_note"], review["reperform_note"]
 
 
+def test_a_failure_after_a_full_reperformance_holds_the_sign_off(migrated: Database) -> None:
+    """Design review (20 November 2026). A last re-performance that gave up after a full
+    one held "Sign off the review" from the queue and read "Re-performance did not finish"
+    on the pill, yet the review's attestation_needed was false and sign_off accepted it
+    with an optional note. Now the failed attempt holds the sign-off on the server too: it
+    signs only with the reviewer's record of a re-performance by hand."""
+    from ai_workforce_api.control_reviews import ReperformanceBody, needs_attestation
+
+    full = ReperformanceBody(known=True, source="MODEL", due=3, done=3)
+    assert needs_attestation(True, full) is False
+    assert needs_attestation(True, full.model_copy(update={"failed": True})) is True
+    team, client, sheet, _file = _prepared_control(migrated, "review-full-failed", "DISMISS")
+    _rollforward_decided(migrated, team, client, sheet["control_id"])
+    review = client.get(f"{_base(team)}/reviews").json()[0]
+    passing = _all_pass(len(sheet["attributes"]))
+    with connect(migrated.url) as connection:
+        provider = _Provider([passing, passing, passing])
+        assert run_reperformance(connection, provider, UUID(review["id"])) == "DONE"
+    reviewer = _session(migrated, team["reviewer_id"])
+    review = client.get(f"{_base(team)}/reviews").json()[0]
+    assert review["reperformance"]["done"] == review["reperformance"]["due"] == 3
+    assert review["attestation_needed"] is False
+    asked = reviewer.post(
+        f"{_base(team)}/reviews/{review['id']}/reperform", json={"version": review["version"]}
+    )
+    assert asked.status_code == 200, asked.text
+    with connect(migrated.url) as connection:
+        fail_reperformance(connection, UUID(review["id"]))
+        connection.commit()
+    review = client.get(f"{_base(team)}/reviews").json()[0]
+    assert review["reperformance"]["failed"] is True, review["reperformance"]
+    assert review["attestation_needed"] is True
+    assert review["failure_note"] == (
+        "The re-performance did not finish. Re-perform to try again, or re-perform the "
+        "testing by hand. The notes are kept as they were."
+    ), review["failure_note"]
+    for proposed in [n for n in review["notes"] if n["status"] == "PROPOSED"]:
+        decided = reviewer.post(
+            f"{_base(team)}/reviews/{review['id']}/notes/{proposed['id']}/decide",
+            json={"version": review["version"], "action": "DISMISS", "reason": "Seen."},
+        )
+        assert decided.status_code == 200, decided.text
+        review = decided.json()
+    assert review["blocking"] == [], review["blocking"]
+    refused = reviewer.post(
+        f"{_base(team)}/reviews/{review['id']}/sign-off",
+        json={"version": review["version"], "note": ""},
+    )
+    assert refused.status_code == 409, refused.text
+    assert "record that you re-performed the testing by hand" in refused.text, refused.text
+    assert client.get(f"{_base(team)}/reviews").json()[0]["status"] == "OPEN"
+    signed = reviewer.post(
+        f"{_base(team)}/reviews/{review['id']}/sign-off",
+        json={
+            "version": review["version"],
+            "note": "Re-performed the three items by hand against the tickets.",
+            "reperformed_by_hand": True,
+        },
+    )
+    assert signed.status_code == 200, signed.text
+
+
 def test_a_capped_reperformance_counts_and_names_every_item_due(
     migrated: Database, monkeypatch: pytest.MonkeyPatch
 ) -> None:

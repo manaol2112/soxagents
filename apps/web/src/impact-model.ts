@@ -157,7 +157,7 @@ export function adviceWords(item: ImpactAssessment): {
     };
   }
   return {
-    headline: `The agent recommends ${advice.decision === "VALID" ? "that the results stand (VALID)" : "re-performance (REPERFORM)"}`,
+    headline: `The agent recommends ${advice.decision === "VALID" ? "that the results stand" : "re-performance"}`,
     because: advice.rationale,
   };
 }
