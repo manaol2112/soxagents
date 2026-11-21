@@ -6,7 +6,9 @@ tests/test_criteria_history_activity.py builds each change: the planner writes t
 event), writes them again from an answer (a recorded reason), and a person saves them twice
 over the API (each event naming its kept version), the last with long criteria. The second
 attribute carries an old event: a person's change written before 20 November 2026, whose
-event names no version, so its History row shows without a comparison. Synthetic data only.
+event names no version, so its History row shows without a comparison. The third attribute's
+criteria are saved by a person calling for judgment, so its comparison shows a Judgment line the
+earlier criteria lack. Synthetic data only.
 """
 
 from typing import Any
@@ -42,6 +44,12 @@ LONG = (
     "the request approved",
 )
 
+JUDGED = (
+    "Each sampled privileged grant in the quarter",
+    "The reviewer judged the grant appropriate for the user's role.",
+    "The grant is not appropriate for the user's role.",
+)
+
 
 def _version(url: str, attribute: str) -> int:
     with connect(url) as connection:
@@ -52,7 +60,13 @@ def _version(url: str, attribute: str) -> int:
     return int(row[0])
 
 
-def _save(seed: Any, control: str, attribute: str, criteria: tuple[str, str, str]) -> None:
+def _save(
+    seed: Any,
+    control: str,
+    attribute: str,
+    criteria: tuple[str, str, str],
+    judgment: bool = False,
+) -> None:
     saved = seed.client.post(
         f"{seed.base()}/controls/{control}/master-plan/attributes/{attribute}/criteria",
         json={
@@ -60,7 +74,7 @@ def _save(seed: Any, control: str, attribute: str, criteria: tuple[str, str, str
             "condition": criteria[0],
             "pass_criteria": criteria[1],
             "fail_criteria": criteria[2],
-            "judgment_required": False,
+            "judgment_required": judgment,
         },
     )
     assert saved.status_code == 200, saved.text
@@ -93,14 +107,17 @@ def build(seed: Any) -> None:
     read = seed.client.get(f"{seed.base()}/controls/{control}/master-plan")
     assert read.status_code == 200, read.text
     attributes = read.json()["attributes"]
-    assert len(attributes) >= 2, f"{CONTROL} has {len(attributes)} attributes"
-    first, second = attributes[0]["id"], attributes[1]["id"]
+    assert len(attributes) >= 3, f"{CONTROL} has {len(attributes)} attributes"
+    first, second, third = (item["id"] for item in attributes[:3])
 
     _old_event(seed, second)
     _agent_writes(seed.database, first, AGENT_CRITERIA)
     _agent_writes(seed.database, first, FROM_ANSWER, cause="emergency changes")
     _save(seed, control, first, (FROM_ANSWER[0], PERSON_FIRST, FROM_ANSWER[2]))
     _save(seed, control, first, LONG)
+    # An uneven comparison: the new criteria call for judgment, the earlier did not.
+    _agent_writes(seed.database, third, AGENT_CRITERIA)
+    _save(seed, control, third, JUDGED, judgment=True)
 
     history = seed.client.get(f"{seed.base()}/controls/{control}/activity")
     assert history.status_code == 200, history.text
@@ -108,7 +125,8 @@ def build(seed: Any) -> None:
     opened = [row for row in rows if row["criteria"] is not None]
     plain = [row for row in rows if row["criteria"] is None and row["by"] == "person"]
     assert len(opened) >= 3 and plain, rows
-    assert opened[0]["criteria"]["new"]["pass_criteria"] == LONG[1], opened[0]
+    assert any(row["criteria"]["new"]["judgment_required"] is True for row in opened), opened
+    assert any(row["criteria"]["new"]["pass_criteria"] == LONG[1] for row in opened), opened
     seed.add(
         "criteria-history-attributes",
         seed.href(section="controls", control=control, step="attributes"),
