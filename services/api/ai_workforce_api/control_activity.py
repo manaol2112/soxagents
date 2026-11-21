@@ -488,9 +488,14 @@ def control_activity(
                 if isinstance(version, int) and not isinstance(version, bool)
                 else None
             )
+            # A save that changes only the objective, automatable or the phases of an
+            # agent's criteria still keeps a version (its origin becomes the person's), but
+            # its criteria text is the same before and after: the event names that version,
+            # which is then never shown as a row of its own, and opens to no comparison, as
+            # no criteria changed (review finding of 20 November 2026).
             if kept is not None:
                 linked.add(kept.id)
-                criteria = kept.change
+                criteria = None if kept.unchanged else kept.change
             detail = _criteria_detail(names.get(target, "") if target else "", criteria)
         else:
             detail = _detail(str(action), body)

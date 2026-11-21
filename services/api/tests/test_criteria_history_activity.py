@@ -240,3 +240,43 @@ def test_another_controls_and_another_engagements_changes_are_never_shown(
     assert read.status_code == 404
     path = f"/organizations/{team['org']}/projects/{team['project']}/controls/{control}/activity"
     assert stranger["owner"].get(path).status_code in (403, 404)
+
+
+def test_a_save_of_the_objective_alone_opens_to_no_comparison(migrated: Database) -> None:
+    """A person's save that changes only the objective of an agent's criteria still keeps a
+    version (the origin becomes the person's), with the same criteria text before and after.
+    Its event names that version: the row opens to no comparison, rather than to two
+    identical sets of criteria, and the version is not shown again as a row of its own
+    (review finding of 20 November 2026)."""
+    team, control, attribute = _set_up(migrated, "hist-objective")
+    before = len(_criteria_rows(_history(team, control)))
+    [version] = _rows(
+        migrated, "SELECT version FROM control_attributes WHERE id = %s", UUID(attribute["id"])
+    )
+    saved = team["owner"].post(
+        f"{_project(team)}/controls/{control}/master-plan/attributes/{attribute['id']}/criteria",
+        json={
+            "version": version[0],
+            "objective": "Access is granted only once the user's manager approves it.",
+            "condition": AGENT_CRITERIA[0],
+            "pass_criteria": AGENT_CRITERIA[1],
+            "fail_criteria": AGENT_CRITERIA[2],
+            "judgment_required": False,
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    [payload] = _rows(
+        migrated,
+        "SELECT payload FROM audit_events WHERE target_id = %s "
+        "AND action = 'control_attribute.criteria_set'",
+        UUID(attribute["id"]),
+    )
+    assert isinstance(payload[0]["criteria_version"], int), "the fixture keeps a version"
+    rows = _criteria_rows(_history(team, control))
+    assert len(rows) == before + 1
+    [person] = [row for row in rows if row["by"] == "person"]
+    assert person["criteria"] is None
+    assert not any(
+        row["criteria"] is not None and row["criteria"]["earlier"] == row["criteria"]["new"]
+        for row in rows
+    )
