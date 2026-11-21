@@ -142,6 +142,7 @@ contractual or regulatory requirement to version every change of input would ove
 | No known advisory in a locked dependency | `.github/workflows/security.yml` (`pnpm audit`, `pip-audit`), on lockfile changes and weekly; updates proposed by `.github/dependabot.yml` |
 | Every audit invariant is held by a critical-tier test, and every open part names its increment | `services/api/tests/test_audit_invariants.py` |
 | Every model entry point fails closed against the hostile model | `services/api/tests/test_model_contract.py` |
+| Every agent file names a known model alias and effort (§12) | `services/api/tests/test_agent_models.py` |
 
 ## 11. Fail closed
 
@@ -172,3 +173,73 @@ covered or verified item, a completed review, "nothing to add" or "nothing due".
   entry point joins that registry in the same change.
 - Reviewers ask of each new branch: what does it record when its input is empty, partial or
   malformed?
+
+## 12. Choosing the model and the effort
+
+Adopted 20 November 2026 (product owner: the model governance and tokenomics brief). The
+aim is the best quality-verified outcome at the lowest reasonable total effort: model use,
+time, coordination, review, debugging and rework together. Fewer tokens are not the goal,
+and nothing here changes a risk class, a test gate, a review or an approval.
+
+**Risk and model are separate decisions.** The risk class (§2) sets the safeguards. The
+model is chosen for the work itself. A High change keeps its design note, critical tests and
+independent review whichever model builds it, and a strong model never replaces a test.
+
+**Starting points.** These are heuristics for the shape of the work, not roles. Any of them
+moves when the evidence in "Learning" below says so.
+
+| Work | Start with | Why |
+| --- | --- | --- |
+| Mechanical: renames, moves, formatting, counts, status lookups, log summaries | No model: `rg`, `sed`, scripts, `make` | Deterministic tools are exact and cost nothing |
+| A search where only the conclusion is needed | `sonnet` (the Explore agent) | Reading and locating; the coordinator still checks what it acts on |
+| Well-specified, bounded implementation: Low or Medium, a UI change to an agreed design, tests for a written rule, a reproduced bug with a known cause | `sonnet` | Same result when the spec and acceptance criteria are complete |
+| Substantial or ambiguous work: multi-module changes, High-risk implementation, debugging without a known cause, planning and coordination | `opus` (the session default) | Holds more context and resolves ambiguity with less rework |
+| Independent review: G2 code review and the `ui-reviewer` | `opus` | The review must find what the author missed |
+| A consequential design decision with lasting effects, a problem where an `opus` attempt failed for lack of capability (not lack of context), or a review that did not converge after two rounds | `fable` | Its extra capability pays for itself only on the hardest problems |
+
+**Effort.** Start at the model's saved default: the owner's user settings keep `opus` at
+`medium` and `fable` at `high`. Lower it for mechanical or narrow work. Raise it for one call
+when the reasoning is hard: debugging, a High-risk review, an architecture choice. `max` is
+never a default. No limit on reasoning or output may cut work, tests or validation short.
+
+**Delegation.** Delegate only for parallel work, independence, context isolation or a
+specialist (§7, "Do not spend twice"). An agent may plan, build and test its own change.
+Independence is required only where §5 requires it. A brief states the objective and
+acceptance criteria, the files it owns, the context it needs (decisions taken, files
+already read, what was ruled out), the deliverable, the checks to run, and the model and
+effort chosen. Handoffs are summaries with file and line references, not log or code dumps.
+
+**Failure and escalation.** Before changing the model, find out why the attempt failed:
+missing requirement, wrong assumption, missing context, environment, or a real capability
+limit. Fix the cause with the smallest step. Escalate (`sonnet` to `opus` to `fable`) when
+the evidence shows the model is the limit, or when progress has stopped on a High-risk
+problem, not after a fixed number of retries. Never rerun the same failed attempt. The
+escalated agent receives the requirements, the work done, the failures with their logs and
+test output, the hypotheses and what is still uncertain, so it does not start over.
+
+**Fallback.** `fallbackModel` switches only for one turn and only on overload; it never
+switches on a usage limit, so none is configured. When a weekly usage limit refuses a call,
+the owner's standing rule applies: rerun the refused work on `fable` and tell the owner. A
+model the owner has chosen, in `/model`, `--model` or a request, is never replaced
+silently.
+
+**How it is applied.**
+
+- Policy: this section. It is guidance; nothing routes dynamically by itself.
+- Configuration: each `.claude/agents/*.md` names its `model` (an alias, so it follows
+  model releases), and the coordinator passes `model` and `effort` on each Agent or
+  workflow call. A per-call `model` wins over the agent file, so the fallback rule still
+  works.
+- Observation: `/usage` shows usage by model and by subagent. Each review blocker in the
+  defect log names the model that built the change, so rework can be compared by model.
+- Enforcement: `services/api/tests/test_agent_models.py` fails when an agent file names an
+  unknown model or effort. No check can force the choice of model per task.
+
+**Learning.** Change a starting point only on evidence from real work: review blockers and
+rework in the defect log, first-pass CI results, and usage by model. Similar work should be
+compared on the same kind of change. Do not run benchmarks, and do not experiment during
+critical delivery. Revisit this section when the models, Claude Code or that evidence
+changes. Baseline on 20 November 2026, from local transcripts: almost every delegated call
+ran on `opus` by inheritance (about 24,000 subagent and workflow messages on `opus`, about
+380 on `fable`, none on `sonnet`). No comparison between models exists yet, so `sonnet`
+starts with the bounded work above and its record decides how far it goes.
