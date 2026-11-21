@@ -94,3 +94,69 @@ describe("the test plan's figures fit their card (28 October 2026)", () => {
     assert.doesNotMatch(css, /repeat\(var\(--pr-count/);
   });
 });
+
+describe("an opened criteria change in the History (20 November 2026)", () => {
+  // Found in design review: the comparison opened inside the row's title column, a 160 px
+  // wide block at 390 beside the time, and the row's centred icon and time drifted down the
+  // opened row. The comparison is the row's own second line and the first line stays put.
+  const css = readFileSync("apps/web/app/control-plan.css", "utf8");
+  const view = readFileSync("apps/web/src/control-workspace.tsx", "utf8");
+
+  it("opens as a direct child of the row, not inside the title's column", () => {
+    const row = view.slice(
+      view.indexOf("function HistoryRow("),
+      view.indexOf("export function ControlHistory("),
+    );
+    const text = row.slice(row.indexOf('<div className="ph-text">'));
+    const textEnd = text.indexOf("</div>");
+    assert.doesNotMatch(text.slice(0, textEnd), /CriteriaChangePanel/);
+    assert.match(
+      row,
+      /<\/time>\s*\{open && item\.criteria !== null \? \(\s*<CriteriaChangePanel/,
+    );
+  });
+
+  it("spans under the title and the time, under the icon too on a phone", () => {
+    assert.match(
+      rule(css, ".ph-day li > .ph-change"),
+      /grid-row: 2;\s*grid-column: 3 \/ -1;/,
+    );
+    assert.match(
+      rule(phoneBlocks(css, 640), ".ph-day li > .ph-change"),
+      /grid-column: 2 \/ -1;/,
+    );
+  });
+
+  it("opens from a link-like button with no button shadow under its words", () => {
+    // Found in the browser: the global button's shadow showed as a faint bar under "Show the
+    // criteria" (and under every other .tas-link); the 32 px button height stays its target.
+    const list = readFileSync("apps/web/app/attribute-list.css", "utf8");
+    const link = rule(list, ".tas-link");
+    assert.match(link, /box-shadow: none;/);
+    assert.doesNotMatch(link, /height:/);
+    assert.match(view, /className="tas-link ph-open"/);
+  });
+
+  it("keeps every first-line item on the first line, each in its own column", () => {
+    // A set row with an automatic column is placed before the automatic items, so the time
+    // took the title's column and pushed the title off the row (found in the browser at 1440).
+    // Each item therefore names its row and its column.
+    const placed: [string, string][] = [
+      [".ph-day li > .ph-dot", "1 / 1"],
+      [".ph-day li > .ph-icon", "1 / 2"],
+      [".ph-day li > .ph-text", "1 / 3"],
+      [".ph-day li > time", "1 / 4"],
+    ];
+    for (const [selector, area] of placed) {
+      assert.match(rule(css, selector), new RegExp(`grid-area: ${area};`));
+    }
+    assert.match(
+      rule(css, ".ph-day li"),
+      /grid-template-columns: 36px minmax\(0, 1fr\) auto;/,
+    );
+    assert.match(
+      css,
+      /\.ph-day li \{\s*grid-template-columns: 12px 36px minmax\(0, 1fr\) auto;/,
+    );
+  });
+});

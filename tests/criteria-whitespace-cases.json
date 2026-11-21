@@ -1,0 +1,24 @@
+{
+  "about": "How the server folds the whitespace of saved criteria (master_plans._clean, Python's str.split) and an attribute's wording (control_context.line), checked on both sides: services/api/tests/test_master_plans.py and tests/attributes-review-model.test.ts (F2, 19 November 2026).",
+  "criteria": [
+    ["The request is approved.", "The request is approved."],
+    ["  The request\n is   approved. ", "The request is approved."],
+    ["The\trequest\r\nis approved.", "The request is approved."],
+    ["The\u00a0request\u2003is\u3000approved.", "The request is approved."],
+    ["The\u001crequest\u0085is approved.", "The request is approved."],
+    ["The\u2028request\u2029is\u202fapproved\u205f.", "The request is approved ."],
+    ["\ufeffThe request is approved.", "\ufeffThe request is approved."],
+    ["The \ufeff request", "The \ufeff request"],
+    ["\u000bThe\u000crequest", "The request"],
+    ["", ""],
+    [" \n\t ", ""]
+  ],
+  "wording": [
+    ["The request is approved", "The request is approved"],
+    ["  The request \n is approved ", "The request is approved"],
+    ["The\u000brequest", "Therequest"],
+    ["The\u001frequest is approved", "Therequest is approved"],
+    ["The\u0007 request", "The request"],
+    ["The\u00a0request", "The request"]
+  ]
+}

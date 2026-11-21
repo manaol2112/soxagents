@@ -31,6 +31,7 @@ import {
   type AttributeDefinition,
   acceptAllRows,
   acceptableRows,
+  acceptedRowActions,
   acceptItems,
   agentRan,
   attributeLetter,
@@ -91,6 +92,7 @@ import {
   type UnifiedState,
   unifiedRows,
   unifiedState,
+  wordingChanged,
 } from "./control-context-model";
 import { attributeAnchor, attributeFromHash } from "./design-points-model";
 import { planningHref } from "./planning-model";
@@ -800,7 +802,8 @@ function AttributeDialog({
   const attribute = state.mode === "add" ? null : state.attribute;
   const [text, setText] = useState(attribute?.text ?? "");
   const wording = text.trim();
-  const changed = wording !== (attribute?.text ?? "");
+  // As the server compares it: wording that reads the same is no change (F2).
+  const changed = wordingChanged(attribute?.text ?? "", text);
   const definition = attribute?.definition ?? null;
   const letter = state.mode === "add" ? "" : state.letter;
   const title =
@@ -1279,12 +1282,7 @@ export function AttributesPanel({
                 onContext={onContext}
                 label={`The agent's assumptions on ${name}`}
               />
-              <CriteriaTrail
-                ids={ids}
-                attributeId={item.id}
-                updatedFrom={item.criteriaUpdatedFrom}
-                versions={item.criteriaVersions}
-              />
+              <CriteriaTrail updatedFrom={item.criteriaUpdatedFrom} />
             </>
           ) : null}
           {open && item.definition !== null ? (
@@ -2053,6 +2051,10 @@ function EmbeddedAttributes({
     const bodyId = `${id}-${item.id}`;
     const offer = rowOffer(each, { held, lastOne });
     const acting = canAct && !running && !justAccepted;
+    // Accepted in this visit: quiet Edit and Remove stay beside "Accepted just now" (F1).
+    const quiet = justAccepted
+      ? acceptedRowActions(each, { canAct: canAct && !running, held, lastOne })
+      : { edit: false, remove: false };
     const asking = confirming === item.id;
     const origin = `${rowOriginLine(each)}${justAccepted ? ` · ${JUST_DECIDED.ACCEPTED}` : ""}`;
     // What the agent followed in the confirmed understanding and what it set aside: shown,
@@ -2073,12 +2075,7 @@ function EmbeddedAttributes({
             label={`The agent's assumptions on ${name}`}
             layout="row"
           />
-          <CriteriaTrail
-            ids={ids}
-            attributeId={item.id}
-            updatedFrom={item.criteriaUpdatedFrom}
-            versions={item.criteriaVersions}
-          />
+          <CriteriaTrail updatedFrom={item.criteriaUpdatedFrom} />
         </>
       );
     const criteria = item.criteria;
@@ -2117,9 +2114,34 @@ function EmbeddedAttributes({
     const acts = (
       criteriaForm: { edit: () => void; formId: string } | null,
     ) => {
-      if (!acting) {
-        return standardLink !== null || previousLink !== null ? (
+      if (!acting && !(asking && quiet.remove)) {
+        const edit = quiet.edit && criteriaForm !== null;
+        return edit ||
+          quiet.remove ||
+          standardLink !== null ||
+          previousLink !== null ? (
           <div className="tar-acts">
+            {edit ? (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={locked}
+                aria-controls={criteriaForm.formId}
+                onClick={criteriaForm.edit}
+              >
+                {stated ? "Edit" : "Write criteria"}
+              </button>
+            ) : null}
+            {quiet.remove ? (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={locked}
+                onClick={() => setConfirming(item.id)}
+              >
+                Remove
+              </button>
+            ) : null}
             <span className="tar-acts-gap" />
             {previousLink}
             {standardLink}

@@ -18,6 +18,10 @@ export const NEEDS_CONCLUSION = "Record a conclusion first.";
 export const NEEDS_CONCLUDED =
   "Not concluded is not signed: record the conclusion the records support.";
 export const NEEDS_SAVED = "Save or cancel the section you are editing first.";
+/** D4 (product owner, 19 November 2026): the conclusion section in the preparer's own
+ * words, saved after the conclusion was recorded, as the server's prepare requires. */
+export const NEEDS_OWN_WORDS =
+  "Write the conclusion section in your own words for the conclusion you recorded.";
 export const NEEDS_DRAFT_DONE = "Wait for the agent to finish drafting.";
 export const NEEDS_LATEST =
   "An earlier version is on screen: open the latest to sign it.";
@@ -43,6 +47,10 @@ export type SignOffFacts = {
   behind: boolean;
   /** The points not settled yet (section 3.9): the button waits while any. */
   points?: number;
+  /** The conclusion section is the preparer's own words for the conclusion recorded
+   * (D4); the button waits while it is not. Unknown (not given) adds nothing: the server
+   * refuses all the same. */
+  ownWords?: boolean;
 };
 
 /** Why the preparer cannot sign yet, each in one line, in the order to do them; empty
@@ -62,6 +70,8 @@ export function signOffProblems(facts: SignOffFacts): string[] {
     problems.push(NEEDS_CONCLUSION);
   } else if (facts.choice.kind === "NOT_CONCLUDED") {
     problems.push(NEEDS_CONCLUDED);
+  } else if (facts.ownWords === false) {
+    problems.push(NEEDS_OWN_WORDS);
   }
   if (facts.unsaved) {
     problems.push(NEEDS_SAVED);

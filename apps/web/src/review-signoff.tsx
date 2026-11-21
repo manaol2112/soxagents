@@ -12,8 +12,10 @@ import {
   designConclusionRefusal,
   exceptionLine,
   holdsBelow,
+  lapsedNext,
   outOfDateNext,
   parseDesignConclusionNotice,
+  preparedReviewWords,
   signableKind,
   standingKind,
   standingWords,
@@ -878,11 +880,7 @@ function ReviewRow({
       <div className="so-row">
         <h6 ref={heading} tabIndex={-1}>
           <b>Reviewed</b>{" "}
-          <span className="ps-who">
-            {conclusion.reviewFlow
-              ? "not sent for review"
-              : "not signed off yet"}
-          </span>
+          <span className="ps-who">{preparedReviewWords(conclusion)}</span>
         </h6>
         {signs || conclusion.canSign ? (
           reviewerForm(false)
@@ -896,7 +894,11 @@ function ReviewRow({
                 ))}
               </div>
             ) : null}
-            {outOfDate}
+            {stale ? (
+              <p className="so-line so-stale">
+                The sign-off no longer holds. {lapsedNext(conclusion)}
+              </p>
+            ) : null}
           </>
         )}
         {reading}

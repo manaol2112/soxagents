@@ -296,7 +296,50 @@ def record_design_choice(client: Any, root: str, control_id: object) -> dict[str
     found: dict[str, Any] = chosen.json()["choice"]
     # Preparing also needs every point of the workpaper settled (section 3.9).
     consider_design_points(client, root, control_id)
+    # And, since 19 November 2026 (D4), the conclusion section in the preparer's own words,
+    # saved after the conclusion was recorded. Old: the agent's or the records' text was
+    # prepared as it was. New: the server refuses that (PREPARE_OWN_WORDS), so the setup
+    # saves the section as a person would. The rule itself stays as it is.
+    conclude_in_own_words(client, root, control_id)
     return found
+
+
+DESIGN_CONCLUSION_TEXT = (
+    "Concluded by the preparer for the test setup, in their own words, on the conclusion "
+    "recorded for this control."
+)
+
+
+def conclude_in_own_words(
+    client: Any, root: str, control_id: object, text: str | None = None
+) -> dict[str, Any]:
+    """The preparer saves the design workpaper's conclusion section in their own words,
+    through the section's route, as preparing it needs (D4, product owner, 19 November
+    2026: the section is the preparer's own words, saved after the conclusion is recorded;
+    workpaper_service.conclusion_words_refusal). `root` is the engagement's path. Moves the
+    workpaper's version on, so the caller reads the workpaper again before preparing. The
+    workpaper's body as the route answers it. The default text is new on every save: a
+    later conclusion needs words written after it, and the same words saved again are not
+    a change of the section."""
+    from uuid import uuid4
+
+    if text is None:
+        text = f"{DESIGN_CONCLUSION_TEXT} Reference {uuid4().hex[:8]}."
+    listed = client.get(f"{root}/workpapers", params={"control_id": str(control_id)})
+    assert listed.status_code == 200, listed.text
+    paper = next(p for p in listed.json() if p["stage"] == "DESIGN")
+    texts = [s for s in paper["content"]["sections"] if s["kind"] == "text"]
+    section = next(
+        (s for s in texts if s["key"] == "design-conclusion"),
+        next(s for s in texts if "conclusion" in s["key"]),
+    )
+    saved = client.post(
+        f"{root}/workpapers/{paper['id']}/sections/{section['key']}",
+        json={"based_on": paper["current_version"], "text": text},
+    )
+    assert saved.status_code == 200, saved.text
+    body: dict[str, Any] = saved.json()
+    return body
 
 
 POINT_REASON = "Considered in the test setup: this point is not what the test covers."

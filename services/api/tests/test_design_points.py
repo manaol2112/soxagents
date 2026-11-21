@@ -142,6 +142,8 @@ class _Points(_Draft):
         )
 
     def prepare_answer(self) -> Any:
+        # Since 19 November 2026 (D4): the conclusion in the preparer's own words first.
+        self.own_words()
         paper = self.paper()
         return self.bench.owner.post(
             f"{self.bench.base}/workpapers/{paper['id']}/prepare",
@@ -380,6 +382,9 @@ def test_the_preparers_sign_off_waits_for_every_point(migrated: Database) -> Non
     # The refusals of section 3.7 come first.
     case.prepare_refused("record a conclusion first")
     case.chosen("EFFECTIVE")
+    # Since 19 November 2026 (D4): the conclusion section in the preparer's own words, a
+    # refusal of section 3.7 that comes before the points (old: none was needed here).
+    case.own_words()
     waiting = case.waiting()
     first = " ".join(waiting[0]["text"].split())
     expected = f"Settle the points first ({len(waiting)}): {first[:160].rstrip('.')}."

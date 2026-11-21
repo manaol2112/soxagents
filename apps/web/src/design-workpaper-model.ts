@@ -313,6 +313,10 @@ export type DesignWorkpaper = {
     proposedReasons: string[];
     /** The preparer's conclusion that stands, or null. */
     choice: ConclusionChoice | null;
+    /** The conclusion section is the preparer's own words, saved after the conclusion
+     * was recorded (D4, 19 November 2026): what preparing needs. True only where the
+     * server says so in as many words. */
+    inOwnWords: boolean;
   };
   /** The design and the implementation result (section 3.6); null where not sent. */
   design: ConclusionResult | null;
@@ -672,6 +676,7 @@ export function parseDesignWorkpaper(value: unknown): DesignWorkpaper | null {
       proposedConclusion: conclusionKindOf(conclusion.proposed_conclusion),
       proposedReasons: lines(conclusion.proposed_reasons, 12, 600),
       choice: conclusionChoiceOf(conclusion.choice),
+      inOwnWords: conclusion.in_own_words === true,
     },
     design: conclusionResultOf(value.design),
     implementation: conclusionResultOf(value.implementation),

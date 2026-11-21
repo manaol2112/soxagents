@@ -20,6 +20,7 @@ proposals, and none of them needs a process narrative.
 
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import replace
 from typing import Any, Literal
 from uuid import UUID
@@ -352,6 +353,47 @@ def _definition(library_key: str, key: str | None, text: str) -> DefinitionBody 
     return None if found is None else definition_body(found)
 
 
+def figures_known(
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    control_id: UUID,
+    sources: list[Source] | tuple[Source, ...] = (),
+) -> str:
+    """Where a figure or a citation in an agent's criteria may come from, normalised for
+    matching (evidence_planning._normal): the planner's own list (evidence_planning.
+    check_sources: the control's records, its confirmed understanding, the library's reviewed
+    definition and the occurrences the engagement's dates give), the sources the agent read
+    (the RCM record, the approved narrative and linked documents), and the criteria a person
+    stated or accepted. One rule for the planner, the attribute agent and the set reviewer
+    (I12; SOL defect 2, 19 November 2026). Built from that positive list, never from the
+    agent's own inputs: before, everything the agent was given counted, so criteria and
+    wording an agent wrote earlier, which no person accepted, sourced its next figure."""
+    from ai_workforce_api.evidence_planning import _normal as plain
+    from ai_workforce_api.evidence_planning import check_sources
+    from ai_workforce_api.evidence_plans import load_facts
+
+    owned = [
+        str(text)
+        for row in connection.execute(
+            "SELECT a.condition, a.pass_criteria, a.fail_criteria FROM control_attributes a "
+            "WHERE a.engagement_control_id = %s AND a.status = 'APPROVED' "
+            f"AND coalesce({CRITERIA_OWNED_SQL}, false)",
+            (control_id,),
+        ).fetchall()
+        for text in row
+        if text
+    ]
+    return " \n ".join(
+        part
+        for part in (
+            check_sources(load_facts(connection, project_id, control_id)),
+            plain(" \n ".join(source.text for source in sources if source.text)),
+            plain(" \n ".join(owned)),
+        )
+        if part
+    )
+
+
 def _approved(cursor: psycopg.Cursor[Any], control_id: UUID) -> list[tuple[UUID, str]]:
     return [
         (UUID(str(row[0])), str(row[1]))
@@ -427,9 +469,11 @@ def edit_attribute(
     attribute_id: UUID,
     actor: UUID,
     body: AttributeEdit,
-) -> None:
+) -> bool:
     """A person rewords an approved attribute: the old wording is retired and kept, the new
-    one takes its place.
+    one takes its place. Returns whether it changed: wording that reads the same once its
+    whitespace is folded (line, on both sides) changes nothing, and nothing follows it (F2,
+    19 November 2026; before, the stored side was compared raw).
 
     The criteria go with the wording (B1j, 16 November 2026: rewording an approved attribute
     dropped its criteria, even those a person wrote or accepted, and the agents then wrote
@@ -447,8 +491,8 @@ def edit_attribute(
         ).fetchone()
         if current is None or int(current[1]) != body.version:
             raise ContextState("attribute changed")
-        if text == str(current[2]):
-            return
+        if text == line(str(current[2]), 300):
+            return False
         others = [t for i, t in _approved(cursor, control_id) if i != attribute_id]
         if any(_normal(t) == _normal(text) for t in others):
             raise ContextState("attribute exists")
@@ -488,6 +532,7 @@ def edit_attribute(
             cursor, organization_id, project_id, actor, "attribute.edited", row[0],
             {"replaces": str(attribute_id)},
         )  # fmt: skip
+    return True
 
 
 def retire_attribute(
@@ -1211,9 +1256,17 @@ def generate(
         _left_by_reviewer(answer.attributes, proposals, understood) if reviewed else []
     )
     times = authority.source_times(connection, control_id, sources)
+    # Where a figure in the agent's criteria may come from (figures_known), read before the
+    # run writes anything.
+    known = figures_known(connection, project_id, control_id, sources)
     kept = 0
     duplicates = 0
     detailed = 0
+    # Criteria the agent wrote that were not kept, on any path (an addition, a change, a
+    # proposal drafted again, the detail of an attribute left as worded): a figure the
+    # records do not give, a link or a credential (refused_criteria). Counted apart from the
+    # duplicates, whose story is another.
+    refused = 0
     # What the run followed, what it left out or unraised and what it closed, for its audit
     # record.
     followed: list[dict[str, Any]] = []
@@ -1271,10 +1324,6 @@ def generate(
         # of the control already stands for (its definition_key) is that attribute again.
         held = _held_definitions(cursor, control_id)
         changed: set[str] = set()
-        # Everything the agent was given, for the figures a criterion may state.
-        from ai_workforce_api.evidence_planning import _normal as plain
-
-        known = plain(_json(package) + " " + source_blocks(sources))
         for item in proposals[:MAX_ATTRIBUTES]:
             text = line(item.text, 300)
             replaces = item.replaces.strip()
@@ -1318,8 +1367,13 @@ def generate(
                     replaces not in changed
                     and stated is not None
                     # The same checks as the reviewer's criteria: stated in full, no link
-                    # or credential, no figure or citation the agent was not given.
-                    and refused_criteria(stated, known) is None
+                    # or credential, no figure or citation the records do not give.
+                    and refused_criteria(stated, known) is not None
+                ):
+                    refused += 1
+                elif (
+                    replaces not in changed
+                    and stated is not None
                     and write_detail(
                         cursor, control_id, UUID(replaces), stated, ATTRIBUTE_AGENT_NAME
                     )
@@ -1360,11 +1414,24 @@ def generate(
             if cited is not None and cited.source not in (CONTROL_SOURCE, NARRATIVE_SOURCE):
                 document = UUID(cited.source)
             criteria = _criteria(item)
-            if item.action != "RETIRE" and criteria is None and not item.judgment_required:
+            # The same checks on every path an agent's criteria reach a proposal (an
+            # addition, a change in other words, a proposal drafted again): a figure or a
+            # citation the records do not give, a link or a credential leaves the criteria
+            # blank for a person (the product owner, 19 November 2026: an agent-invented
+            # figure leaves the criteria blank with "needs a person"). Its judgment goes too,
+            # so refused criteria never stand as judgment-only criteria to accept.
+            refusal = None if criteria is None else refused_criteria(criteria, known)
+            judged = item.judgment_required and refusal is None
+            if refusal is not None:
+                criteria = None
+                refused += 1
+                note = line(f"{note} The criteria need a person: the agent's were left out "
+                            f"because {refusal}.", 300)  # fmt: skip
+            elif item.action != "RETIRE" and criteria is None and not item.judgment_required:
                 note = line(f"{note} The criteria need a person: none a tester could apply "
                             "was stated.", 300)  # fmt: skip
             condition, passes, fails = criteria or ("", "", "")
-            judgment = None if item.action == "RETIRE" else item.judgment_required
+            judgment = None if item.action == "RETIRE" else judged
             again = earlier.get(
                 (item.action, "" if item.action == "ADD" else replaces, _normal(text))
             )
@@ -1377,7 +1444,7 @@ def generate(
                     (basis, "DOCUMENT" if document is not None else "AGENT", document,
                      "" if cited is None else cited.quote, note, condition, passes, fails,
                      judgment,
-                     "AGENT" if criteria is not None or item.judgment_required else None),
+                     "AGENT" if criteria is not None or judged else None),
                     record, writer,
                 )  # fmt: skip
                 seen.add(_normal(text))
@@ -1418,7 +1485,7 @@ def generate(
                     passes,
                     fails,
                     judgment,
-                    "AGENT" if criteria is not None or item.judgment_required else None,
+                    "AGENT" if criteria is not None or judged else None,
                     # Kept with the proposal it explains, with a mark of its words.
                     None
                     if record is None
@@ -1538,6 +1605,7 @@ def generate(
         proposed_payload: dict[str, Any] = {
             "proposals": kept, "reviewed": review_note == "", "fixes": fixes[:12],
             "duplicates_left_out": duplicates, "criteria_detailed": detailed,
+            "criteria_refused": refused,
         }  # fmt: skip
         if only:
             proposed_payload["only_attributes"] = list(only)
@@ -1601,6 +1669,12 @@ def generate(
         review_note = (
             f"The agent made the criteria of {detailed} attribute"
             f"{'' if detailed == 1 else 's'} more specific, to accept."
+        )
+    if refused and not review_note:
+        review_note = (
+            f"The criteria the agent wrote for {refused} attribute"
+            f"{'' if refused == 1 else 's'} stated a figure, a citation or a link the records "
+            "do not support, so they were left for a person to write."
         )
     if duplicates and not review_note:
         review_note = (
@@ -1977,6 +2051,29 @@ class _Reviewed(BaseModel):
     fixes: list[str] = []
 
 
+def reviewed_drafts(drafted: list[_Proposal]) -> Callable[[dict[str, Any]], _Reviewed]:
+    """The drafts reviewer's reading: its answer, only when it is a review of the drafts it
+    was given (I10, I11; FO-3, 19 November 2026). Before, an answer that returned fewer
+    drafts than given with no fix saying why (an empty answer the commonest) was read as a
+    review that left them out: the drafts were dropped, the earlier proposals superseded,
+    and the step said the agent found nothing to add. By counts only, never by wording; the
+    reason names numbers only, as it goes back to the model as its correction, and states a
+    fact with no instruction, so the reviewer's prompt (REVIEW_PROMPT_VERSION) is as it was.
+    Pure."""
+
+    def read(output: dict[str, Any]) -> _Reviewed:
+        reviewed = _Reviewed.model_validate(output)
+        fixes = [text for text in (line(item, 300) for item in reviewed.fixes) if text]
+        if len(reviewed.attributes) < len(drafted) and not fixes:
+            raise ValueError(
+                f"{len(reviewed.attributes)} of the {len(drafted)} drafted attributes were "
+                "returned and no fix gives a reason for those left out"
+            )
+        return reviewed
+
+    return read
+
+
 def _review(
     connection: psycopg.Connection[Any],
     provider: ModelProvider,
@@ -2020,7 +2117,7 @@ def _review(
         ),
         REVIEW_PROMPT_VERSION,
         {"control": str(control_id), "drafted": len(drafted)},
-        _Reviewed.model_validate,
+        reviewed_drafts(drafted),
     )
     unreviewed = "The reviewer agent did not finish, so the attributes are as drafted."
     reviewed = answered.value

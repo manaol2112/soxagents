@@ -16,7 +16,6 @@
 import type {
   Assumption,
   Attribute,
-  CriteriaVersion,
   QuestionPass,
   QuestionReview,
   ReviewHeld,
@@ -302,40 +301,6 @@ export function updatedFromLine(matter: string | undefined): string | null {
     return `Reopened for acceptance: you changed the assumption on ${reopened[1]}`;
   }
   return `Updated from your answer on ${said}`;
-}
-
-/** The fold over an attribute's earlier criteria; null when none is kept. */
-export function previousCriteriaLabel(
-  count: number | undefined,
-): string | null {
-  return count === undefined || count <= 0
-    ? null
-    : `Previous criteria (${count})`;
-}
-
-const WRITER_WORDS: Record<CriteriaVersion["writtenBy"]["kind"], string> = {
-  PERSON: "Written by",
-  AGENT: "Tailored by",
-  SEEDED: "Seeded by",
-  RULES: "Set by",
-};
-const WRITER_FALLBACK: Record<CriteriaVersion["writtenBy"]["kind"], string> = {
-  PERSON: "a person",
-  AGENT: "the agent",
-  SEEDED: "the demo data",
-  RULES: "the rules",
-};
-
-/** Who wrote an earlier version, when, and why: an agent's is never worded as a person's. */
-export function versionLine(
-  version: Pick<CriteriaVersion, "writtenBy" | "writtenAt" | "cause">,
-  timeZone?: string,
-): string {
-  const { kind, name } = version.writtenBy;
-  const by = `${WRITER_WORDS[kind]} ${name.trim() || WRITER_FALLBACK[kind]}`;
-  const when = whenWords(version.writtenAt, timeZone);
-  const cause = version.cause.trim();
-  return [by, when, cause].filter((part) => part !== "").join(" · ");
 }
 
 /** Said on the attributes line while a question is still being prepared (a challenge's, or

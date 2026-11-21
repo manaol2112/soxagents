@@ -138,8 +138,6 @@ export type Attribute = {
   assumptions?: Assumption[];
   /** The matter of the answer or assumption that last changed these criteria, or "". */
   criteriaUpdatedFrom?: string;
-  /** How many earlier versions of these criteria are kept (attribute_criteria_versions). */
-  criteriaVersions?: number;
   /** An OPEN conflict holds this attribute's acceptance until a person decides it (B1l point
    * 6): accepting it is refused, and "Accept all" leaves it out. Absent: not held. */
   heldByConflict?: boolean;
@@ -391,20 +389,6 @@ export type Assumption = {
   kind: AssumptionKind;
 };
 
-/** One earlier version of an attribute's criteria, kept on every change (B1j). */
-export type CriteriaVersion = {
-  version: number;
-  condition: string;
-  passCriteria: string;
-  failCriteria: string;
-  judgmentRequired: boolean;
-  origin: string;
-  writtenAt: string;
-  writtenBy: { kind: "PERSON" | "AGENT" | "SEEDED" | "RULES"; name: string };
-  /** What changed them ("Your answer on emergency changes"), or "". */
-  cause: string;
-};
-
 export type UnderstandingBasis = {
   summary: string;
   follows: {
@@ -592,6 +576,59 @@ export function criteriaState(criteria: AttributeCriteria): CriteriaState {
   return stated && (criteria.origin === "AGENT" || criteria.origin === "SEEDED")
     ? "TO_ACCEPT"
     : "MISSING";
+}
+
+// The whitespace the server folds (Python's str.split(): JavaScript's \s without U+FEFF,
+// with U+001C to U+001F and U+0085). One table of cases is checked on both sides
+// (tests/criteria-whitespace-cases.json), so Save is never offered for a change the server
+// reads as none.
+const SERVER_WHITESPACE =
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: the server's whitespace is matched on purpose
+  /[\t\n\v\f\r\x1c-\x1f \x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+/u;
+// The control characters the server drops from an attribute's wording before it folds its
+// whitespace (control_context.line).
+// biome-ignore lint/suspicious/noControlCharactersInRegex: the controls the server strips are matched on purpose
+const WORDING_CONTROLS = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/gu;
+
+/** A criteria text as the server stores it: its whitespace folded to single spaces and
+ * trimmed (master_plans._clean). Pure. */
+export function foldedCriteria(text: string): string {
+  return text
+    .split(SERVER_WHITESPACE)
+    .filter((part) => part !== "")
+    .join(" ");
+}
+
+/** An attribute's wording as the server compares it (control_context.line, 300 characters).
+ * Pure. */
+export function foldedWording(text: string): string {
+  return foldedCriteria(text.replace(WORDING_CONTROLS, "")).slice(0, 300);
+}
+
+/** Whether a criteria form says anything the saved criteria do not (F2, 19 November 2026):
+ * Save is offered only then, as the server writes nothing for an unchanged save. The texts
+ * are compared as the server stores them; judgment as it is, "not determined" (null) being
+ * no decision. Saving never stands for accepting: that is Accept's. Pure. */
+export function criteriaChanged(
+  saved: Pick<
+    AttributeCriteria,
+    "condition" | "passCriteria" | "failCriteria" | "judgmentRequired"
+  >,
+  form: { condition: string; pass_criteria: string; fail_criteria: string },
+  judgment: boolean | null,
+): boolean {
+  return (
+    foldedCriteria(form.condition) !== foldedCriteria(saved.condition) ||
+    foldedCriteria(form.pass_criteria) !== foldedCriteria(saved.passCriteria) ||
+    foldedCriteria(form.fail_criteria) !== foldedCriteria(saved.failCriteria) ||
+    judgment !== saved.judgmentRequired
+  );
+}
+
+/** Whether an attribute's new wording differs from its wording as the server compares it
+ * (F2): an edit that reads the same is not offered. Pure. */
+export function wordingChanged(before: string, after: string): boolean {
+  return foldedWording(after) !== foldedWording(before);
 }
 
 /** The approved attributes whose criteria a person can accept as they read. */
@@ -914,6 +951,22 @@ export type RowOffer = {
 
 /** Said in place of Remove on the control's last attribute. */
 export const KEEPS_ONE = "A control keeps at least one attribute.";
+
+/** What a row accepted in this visit still offers beside "Accepted just now" (F1, the
+ * product owner's follow-up of 19 November 2026; before, it offered nothing until the page
+ * was opened again): quiet Edit of its criteria and Remove (asked first), once the row read
+ * again is an approved attribute; never Accept again. Only what can succeed: no Edit while a
+ * conflict holds the attribute (its criteria cannot be saved then), no Remove of the last
+ * attribute, and nothing while the agents work or for a person who cannot act. Pure. */
+export function acceptedRowActions(
+  row: Pick<UnifiedRow, "kind">,
+  options: { canAct: boolean; held: boolean; lastOne: boolean },
+): { edit: boolean; remove: boolean } {
+  if (!options.canAct || row.kind !== "APPROVED") {
+    return { edit: false, remove: false };
+  }
+  return { edit: !options.held, remove: !options.lastOne };
+}
 
 export function rowOffer(
   row: UnifiedRow,
@@ -2678,64 +2731,6 @@ const assumptionsOf = (value: unknown, most: number): Assumption[] =>
     .filter((item): item is Assumption => item !== null)
     .slice(0, most);
 
-const WRITERS = ["PERSON", "AGENT", "SEEDED", "RULES"] as const;
-
-/** An attribute's earlier criteria (GET .../criteria-history), newest first; null when the
- * answer is not the history's shape. A version not shaped so is left out. */
-export function parseCriteriaHistory(value: unknown): CriteriaVersion[] | null {
-  if (!isRecord(value) || !Array.isArray(value.versions)) {
-    return null;
-  }
-  const versions: CriteriaVersion[] = [];
-  for (const item of value.versions) {
-    if (!isRecord(item)) {
-      continue;
-    }
-    const writer = item.written_by;
-    if (!isRecord(writer)) {
-      continue;
-    }
-    const kind = WRITERS.find((each) => each === writer.kind);
-    const version = item.version;
-    const writtenAt = timeOrNull(item.written_at);
-    if (
-      kind === undefined ||
-      typeof version !== "number" ||
-      !Number.isInteger(version) ||
-      writtenAt === null ||
-      typeof item.judgment_required !== "boolean"
-    ) {
-      continue;
-    }
-    versions.push({
-      version,
-      condition: str(item.condition),
-      passCriteria: str(item.pass_criteria),
-      failCriteria: str(item.fail_criteria),
-      judgmentRequired: item.judgment_required,
-      origin: str(item.origin),
-      writtenAt,
-      writtenBy: { kind, name: str(writer.name) },
-      cause: str(item.cause),
-    });
-  }
-  return versions.sort((a, b) => b.version - a.version);
-}
-
-/** Where an attribute's earlier criteria are read, or null when the ids are not all ids. */
-export function criteriaHistoryPath(fields: Fields): string | null {
-  const organizationId = text(fields, "organization_id");
-  const projectId = text(fields, "project_id");
-  const controlId = text(fields, "control_id");
-  const attributeId = text(fields, "attribute_id");
-  if (![organizationId, projectId, controlId, attributeId].every(isUuid)) {
-    return null;
-  }
-  return `/organizations/${organizationId}/projects/${projectId}/controls/${controlId}/attributes/${attributeId}/criteria-history`;
-}
-
-const isUuid = (value: string): boolean => UUID.test(value);
-
 function parseAttribute(item: Raw): Attribute {
   return {
     id: str(item.id),
@@ -2806,12 +2801,6 @@ function parseAttribute(item: Raw): Attribute {
     understandingBasis: parseBasis(item.understanding_basis),
     assumptions: assumptionsOf(item.assumptions, 10),
     criteriaUpdatedFrom: str(item.criteria_updated_from),
-    criteriaVersions:
-      typeof item.criteria_versions === "number" &&
-      Number.isInteger(item.criteria_versions) &&
-      item.criteria_versions > 0
-        ? item.criteria_versions
-        : 0,
     heldByConflict: item.held_by_conflict === true,
     code:
       typeof item.code === "string" && ATTRIBUTE_CODE.test(item.code)

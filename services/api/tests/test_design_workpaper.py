@@ -29,7 +29,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
-from support import Database
+from support import Database, conclude_in_own_words
 from test_assurance_engine2 import _all_met, _engine_2, _fact, _late, _said
 from test_assurance_forward_only import _as_engine_1
 from test_attribute_dispositions import (
@@ -83,7 +83,10 @@ KEYS = {
 }  # fmt: skip
 # What section 3.6 adds to the conclusion part: the records' proposed conclusion, its
 # reasons and the preparer's conclusion that stands (old expectation: none of them).
-ADDED_TO_CONCLUSION = ("proposed_conclusion", "proposed_reasons", "choice")
+# 19 November 2026 (D4): section 3.7 adds `in_own_words` to the conclusion part too; the
+# shape before 3.6 is compared without it, as without the other additions (old: the three
+# keys of 3.6 only).
+ADDED_TO_CONCLUSION = ("proposed_conclusion", "proposed_reasons", "choice", "in_own_words")
 
 
 def _before_3_6(conclusion: dict[str, Any]) -> dict[str, Any]:
@@ -396,12 +399,14 @@ def test_a_drafted_workpaper_and_an_engine_2_check_are_assembled_and_nothing_is_
     assert second["when"] == "2026-03-04 09:12"
 
     # Procedures: only what the records show was done.
-    assert len(body["procedures"]) == 3
-    inspected, walked, compared = body["procedures"]
+    # Rewritten 19 November 2026 (D4, product owner). Old: three procedures, the agent's
+    # drafted walkthrough among them ("Walked one instance ... 2 steps"). New: two; the
+    # agent's draft of the steps is not a walkthrough performed until a person records it.
+    # Why: an agent's observation is never written up as a procedure (invariant I12).
+    assert len(body["procedures"]) == 2
+    inspected, compared = body["procedures"]
     assert inspected.startswith("Inspected 2 files received for 1 request: “")
-    assert walked == (
-        "Walked one instance of the control through 2 steps, recorded in the walkthrough."
-    )
+    assert not any(p.startswith("Walked one instance") for p in body["procedures"])
     assert compared == (
         "Compared dates and values in code for attributes A and B: 2 comparisons made."
     )
@@ -676,6 +681,9 @@ def test_a_conclusion_is_signed_only_from_its_sign_off_record(migrated: Database
         f"{bench.base}/workpapers/{paper['id']}/prepare", json={"version": paper["version"]}
     )
     assert stale.status_code == 409, stale.text
+    # Since 19 November 2026 (D4): the preparer saves the conclusion section in their own
+    # words before preparing (old: the drafted text was prepared as it was).
+    conclude_in_own_words(bench.owner, bench.base, bench.control)
     [(current,)] = bench.rows("SELECT version FROM workpapers WHERE id = %s", UUID(paper["id"]))
     prepared = bench.owner.post(
         f"{bench.base}/workpapers/{paper['id']}/prepare", json={"version": current}
@@ -1069,10 +1077,13 @@ def test_the_drafter_is_given_the_results_and_the_tickmarks_and_a_reason_stays_d
         "SELECT recorded_at FROM attribute_dispositions WHERE attribute_id = %s", UUID(ids["C"])
     )
     cleaned = " ".join(hostile.split())
+    # Rewritten 19 November 2026 (D1, product owner). Old: B's "Evidence not available,
+    # accepted" was given to the drafter as closing the attribute (True). New: False: it
+    # settles the follow-up, never the attribute. Why: a scope limitation is not evidence.
     assert record["tickmarks"] == [
         {
             "attribute": "B", "tickmark": "Evidence not available, accepted",
-            "closes_the_attribute": True, "recorded_by": owner_name,
+            "closes_the_attribute": False, "recorded_by": owner_name,
             "recorded_on": view._day(recorded_at),
             "reason": cleaned[: view.DRAFTER_REASON], "relied_on": RELIED_ON,
         },

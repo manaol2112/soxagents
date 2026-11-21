@@ -20,6 +20,7 @@ import {
   makeupText,
   nextActionOf,
   parseActivity,
+  parseCriteriaChange,
   summaryMetrics,
   type WorkspaceInput,
   workpaperMakeup,
@@ -1351,6 +1352,76 @@ describe("the activity", () => {
       ["2"],
     );
     assert.equal(parseActivity("nope"), null);
+    assert.equal(items[0]?.criteria, null);
+  });
+
+  // The product owner, 20 November 2026: "remove the previous criteria link here and probably
+  // add that as part of the history that it was updated". A criteria change's row carries the
+  // earlier and the new criteria the server read from the kept versions; the page only reads
+  // them, and never makes one up.
+  it("reads a criteria change's earlier and new criteria, strictly", () => {
+    const earlier = {
+      condition: "",
+      pass_criteria: "The manager approved the request.",
+      fail_criteria: "No approval is recorded.",
+      judgment_required: null,
+    };
+    const change = {
+      attribute: "Attribute A1: The request was approved",
+      earlier,
+      new: { ...earlier, pass_criteria: "The manager approved it first." },
+      reason: "Updated from the answer on emergency changes",
+    };
+    const [item] =
+      parseActivity([
+        {
+          id: "4",
+          at: "2026-11-20T09:00:00Z",
+          by: "person",
+          actor: "Dana Lee",
+          category: "design",
+          action: "control_attribute.criteria_set",
+          title: "Test criteria updated",
+          detail: "Attribute A1: The request was approved",
+          criteria: change,
+        },
+      ]) ?? [];
+    assert.deepEqual(item?.criteria, {
+      attribute: "Attribute A1: The request was approved",
+      earlier: {
+        condition: "",
+        passCriteria: "The manager approved the request.",
+        failCriteria: "No approval is recorded.",
+        judgmentRequired: null,
+      },
+      new: {
+        condition: "",
+        passCriteria: "The manager approved it first.",
+        failCriteria: "No approval is recorded.",
+        judgmentRequired: null,
+      },
+      reason: "Updated from the answer on emergency changes",
+    });
+    // An event from before names no version: no comparison, never a guessed one.
+    assert.equal(parseCriteriaChange(null), null);
+    assert.equal(parseCriteriaChange(undefined), null);
+    // Not shaped as one: left out whole, never half-read.
+    assert.equal(parseCriteriaChange({ ...change, new: undefined }), null);
+    assert.equal(
+      parseCriteriaChange({
+        ...change,
+        earlier: { ...earlier, pass_criteria: 3 },
+      }),
+      null,
+    );
+    assert.equal(
+      parseCriteriaChange({
+        ...change,
+        earlier: { ...earlier, judgment_required: "yes" },
+      }),
+      null,
+    );
+    assert.equal(parseCriteriaChange({ ...change, reason: 7 })?.reason, "");
   });
 });
 

@@ -846,7 +846,69 @@ export type ActivityItem = {
   action: string;
   title: string;
   detail: string;
+  /** A change of an attribute's criteria: the earlier and the new criteria, as the server
+   * read them from the kept versions; null for any other row, and for a change whose earlier
+   * criteria no kept version records (product owner, 20 November 2026). */
+  criteria: CriteriaChange | null;
 };
+
+/** An attribute's criteria at one point of a change, as the History shows them. */
+export type CriteriaText = {
+  condition: string;
+  passCriteria: string;
+  failCriteria: string;
+  /** null: not determined. */
+  judgmentRequired: boolean | null;
+};
+
+export type CriteriaChange = {
+  attribute: string;
+  earlier: CriteriaText;
+  new: CriteriaText;
+  /** The recorded reason ("Updated from the answer on …"), or "". */
+  reason: string;
+};
+
+function criteriaTextOf(value: unknown): CriteriaText | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  const item = value as Record<string, unknown>;
+  const judgment = item.judgment_required;
+  if (
+    typeof item.condition !== "string" ||
+    typeof item.pass_criteria !== "string" ||
+    typeof item.fail_criteria !== "string" ||
+    !(judgment === null || typeof judgment === "boolean")
+  ) {
+    return null;
+  }
+  return {
+    condition: item.condition,
+    passCriteria: item.pass_criteria,
+    failCriteria: item.fail_criteria,
+    judgmentRequired: judgment,
+  };
+}
+
+/** A History row's criteria change; null when absent or not shaped as one, never guessed. */
+export function parseCriteriaChange(value: unknown): CriteriaChange | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  const item = value as Record<string, unknown>;
+  const earlier = criteriaTextOf(item.earlier);
+  const now = criteriaTextOf(item.new);
+  if (earlier === null || now === null) {
+    return null;
+  }
+  return {
+    attribute: typeof item.attribute === "string" ? item.attribute : "",
+    earlier,
+    new: now,
+    reason: typeof item.reason === "string" ? item.reason : "",
+  };
+}
 
 export const ACTIVITY_CATEGORY_LABELS: Record<ActivityCategory, string> = {
   design: "Design",
@@ -890,6 +952,7 @@ export function parseActivity(value: unknown): ActivityItem[] | null {
       action: str("action"),
       title: str("title"),
       detail: str("detail"),
+      criteria: parseCriteriaChange(item.criteria),
     });
   }
   return items;

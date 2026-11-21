@@ -96,8 +96,10 @@ class _Review(_Draft):
         version: int | None = None,
     ) -> Any:
         # Sign and send prepares the workpaper, which needs every point settled (section
-        # 3.9): the fixture's points are considered first.
+        # 3.9): the fixture's points are considered first; and, since 19 November 2026
+        # (D4), the conclusion section in the preparer's own words (own_words).
         self.settle_points()
+        self.own_words()
         sent: dict[str, Any] = {
             "workpaper_version": self.paper()["version"] if version is None else version,
             "reviewer_id": None if reviewer_id is None else str(reviewer_id),

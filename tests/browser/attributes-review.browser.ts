@@ -249,6 +249,28 @@ describe("Attributes: Review attributes", () => {
         );
       }
       assert.deepEqual(failures, []);
+      // F1 (19 November 2026): an accepted attribute, opened again, keeps quiet Edit and
+      // Remove beside "Accepted just now", never Accept. A decided row that left the set (a
+      // removal accepted) has no body and no actions.
+      const head = row.locator(".tar-head");
+      if ((await head.count()) === 1) {
+        await head.click();
+        await row.locator(".tar-acts").first().waitFor({ timeout: 30_000 });
+        assert.equal(
+          await row
+            .locator(".tar-acts button", { hasText: /^Accept$/ })
+            .count(),
+          0,
+          "the accepted row offers Accept again",
+        );
+        assert.equal(
+          await row
+            .locator(".tar-acts button.btn-ghost", { hasText: /^Remove$/ })
+            .count(),
+          1,
+          "the accepted row keeps no quiet Remove",
+        );
+      }
     } finally {
       await opened.context.close();
     }

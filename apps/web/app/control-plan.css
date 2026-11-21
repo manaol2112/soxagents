@@ -1340,6 +1340,70 @@ button.pp-count:disabled {
   border-color: var(--accent-border);
 }
 
+/* A criteria change, opened on request: the earlier and the new criteria side by side. */
+.ph-open {
+  justify-self: start;
+  font-size: var(--fs-xs);
+}
+
+/* The dot, the icon and the time stay level with the title when a change is opened, and the
+   change spans its own second line under the title and the time (under the icon on a phone).
+   Each first-line item names its column as well as its row: the grid places items with a set
+   row before the others, so a row alone would put the time in the title's column. */
+.ph-day li > .ph-dot {
+  grid-area: 1 / 1;
+}
+
+.ph-day li > .ph-icon {
+  grid-area: 1 / 2;
+}
+
+.ph-day li > .ph-text {
+  grid-area: 1 / 3;
+}
+
+.ph-day li > time {
+  grid-area: 1 / 4;
+}
+
+.ph-day li > .ph-change {
+  grid-row: 2;
+  grid-column: 3 / -1;
+}
+
+.ph-change {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.25rem;
+}
+
+.ph-change h5 {
+  margin: 0 0 0.3rem;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.ph-change .tc-rules > div {
+  grid-template-columns: 4.5rem minmax(0, 1fr);
+}
+
+@media (max-width: 640px) {
+  .ph-day li > .ph-change {
+    grid-column: 2 / -1;
+  }
+
+  .ph-change,
+  .ph-change .tc-rules > div {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ph-change .tc-rules > div {
+    gap: 0.1rem;
+  }
+}
+
 .ph-day time {
   font-size: var(--fs-xs);
   color: var(--text-secondary);

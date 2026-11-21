@@ -1,10 +1,20 @@
 """Completing, reopening, and deleting engagements (Milestone 8.14).
 
 Completed: a running engagement whose work is done. Every in-scope control (each system's
-instance) has a signed-off test and a signed-off independent review with none reopened,
-every deficiency is closed, every evidence request is received, closed, or cancelled, and
-no agent work is running. Completing cancels the agents' open tasks. A completed
-engagement is read-only; an owner or admin reopens it with a reason, which is kept.
+instance) is final as the register counts it (control_conclusions.concluded: its whole
+basis current, every required phase tested and independently reviewed, the review on the
+verdict the records propose), at least one control is in scope, every system in scope has
+a control in scope, every deficiency is closed, every evidence request is received,
+closed, or cancelled, and no agent work is running. Completing cancels the agents' open
+tasks. A completed engagement is read-only; an owner or admin reopens it with a reason,
+which is kept.
+
+FO-8 and C3 (D&I sign-off integrity, 19 November 2026). Before, completion checked only
+that signed test sheet and review rows existed: a control whose review no longer covered
+its testing, or whose D&I sign-off had lapsed, did not hold it, and an engagement with
+nothing in scope, or with a system none of whose controls was in scope, completed. Now
+completion reads finality, the one rule the register counts, and an empty scope is
+archived instead.
 
 Deleted: a draft that never launched. An owner or admin deletes it by typing its name.
 Its setup is removed; the project row stays as a hidden placeholder, because the audit
@@ -18,7 +28,7 @@ place (`register_closed_engagements`), except the lifecycle actions themselves.
 import re
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 from uuid import UUID
 
 import psycopg
@@ -117,7 +127,9 @@ class VersionMismatch(Exception):
 
 
 class OpenItem(BaseModel):
-    kind: Literal["TEST", "REVIEW", "DEFICIENCY", "REQUEST", "RUNNING"]
+    # SCOPE (C3, 19 November 2026): nothing is in scope, or a system in scope has no control
+    # in scope. Added to the body; the web parser knows it (engagement-lifecycle.ts).
+    kind: Literal["TEST", "REVIEW", "DEFICIENCY", "REQUEST", "RUNNING", "SCOPE"]
     label: str
     control_id: UUID | None = None
 
@@ -141,6 +153,11 @@ class CompletionBody(BaseModel):
     reopenings: list[ReopeningBody]
     # The engagement never launched, so an owner or admin may delete it.
     deletable: bool
+    # No control is in scope (C3), read from the controls: the engagement is archived, never
+    # completed (design review, 20 November 2026). Its open items then hold the
+    # NOTHING_IN_SCOPE item and never a system without controls, and still hold every
+    # deficiency, request and running task open, which the page goes on showing.
+    nothing_in_scope: bool = False
 
 
 class CompleteBody(BaseModel):
@@ -314,8 +331,7 @@ def complete_engagement(
             raise VersionMismatch()
         if status not in ("ACTIVE", "PAUSED"):
             raise LifecycleRefused("only a running engagement is completed")
-        total, _items = _open_work(cursor, project_id)
-        if total > 0:
+        if _open_work(cursor, project_id).total > 0:
             raise CompletionBlocked()
         cancelled = cursor.execute(
             """
@@ -523,33 +539,93 @@ def _work_on_record(cursor: psycopg.Cursor[Any], project_id: UUID) -> bool:
     return False
 
 
-def _open_work(cursor: psycopg.Cursor[Any], project_id: UUID) -> tuple[int, list[OpenItem]]:
+# C3 (19 November 2026): an engagement with nothing in scope has nothing tested, so it is
+# archived, never completed; a system in scope with no control in scope is taken out of
+# scope first (onboarding: remove the system from scope, with the reason).
+# Its words never claim nothing was tested: every control may be taken out of scope after
+# some were tested (code review, 20 November 2026).
+NOTHING_IN_SCOPE = "No control is in scope. Archive the engagement instead of completing it."
+SYSTEM_WITHOUT_CONTROLS = "no control in scope; mark the system out of scope with your reason"
+# A control not final with no reason given: only an unsigned control review leaves the
+# conclusion with nothing to say (control_conclusions.concluded).
+REVIEW_NOT_SIGNED = "Independent review not signed off"
+# Who resolves a reason a control is not final, by its typed kind (never its wording): a
+# reviewer (the review, and the impact assessment a reviewer decides), else the testing.
+_REVIEW_KINDS = ("REVIEW", "IMPACT")
+
+
+class OpenWork(NamedTuple):
+    """What holds completion: how many items, the first of them, and whether no control is
+    in scope, read from the controls themselves (never from an item's words)."""
+
+    total: int
+    items: list[OpenItem]
+    nothing_in_scope: bool
+
+
+def _open_work(cursor: psycopg.Cursor[Any], project_id: UUID) -> OpenWork:
+    # Imported here: design_workpaper imports this module, and these modules import it.
+    from ai_workforce_api.control_conclusions import engagement_conclusions
+    from ai_workforce_api.control_journey import finality_facts, leading_reason
+
     items: list[OpenItem] = []
-    for control_id, ref, application, tested, testing, reviewed, reviewing in cursor.execute(
+    controls = cursor.execute(
         """
-        SELECT c.id, c.control_ref, a.name,
-               EXISTS (SELECT 1 FROM test_sheets t
-                       WHERE t.engagement_control_id = c.id AND t.status = 'SIGNED_OFF'),
-               EXISTS (SELECT 1 FROM test_sheets t
-                       WHERE t.engagement_control_id = c.id AND t.status = 'OPEN'),
-               EXISTS (SELECT 1 FROM control_reviews r
-                       WHERE r.engagement_control_id = c.id AND r.status = 'SIGNED_OFF'),
-               EXISTS (SELECT 1 FROM control_reviews r
-                       WHERE r.engagement_control_id = c.id AND r.status = 'OPEN')
+        SELECT c.id, c.control_ref, a.name
         FROM engagement_controls c
         LEFT JOIN engagement_applications a ON a.id = c.engagement_application_id
         WHERE c.project_id = %s AND c.included
         ORDER BY c.control_ref, a.name NULLS FIRST
         """,
         (project_id,),
-    ).fetchall():
-        label = control_label(str(ref), None if application is None else str(application))
-        if not tested or testing:
-            items.append(OpenItem(kind="TEST", label=f"{label}: test not signed off",
+    ).fetchall()
+    if not controls:
+        items.append(OpenItem(kind="SCOPE", label=NOTHING_IN_SCOPE))
+    else:
+        # Every in-scope control final as the register counts it (FO-8): the same facts and
+        # the same rule, read once for the engagement. A control out of scope holds nothing.
+        included = {row[0] for row in controls}
+        facts = {
+            each: found
+            for each, found in finality_facts(cursor.connection, project_id).items()
+            if each in included
+        }
+        held = engagement_conclusions(cursor.connection, project_id, facts)
+        for control_id, ref, application in controls:
+            label = control_label(str(ref), None if application is None else str(application))
+            concluded = held.get(control_id)
+            if concluded is not None and concluded.is_final:
+                continue
+            reasons = () if concluded is None else concluded.reasons
+            if not reasons:
+                # Not final and nothing said why: never passed over.
+                items.append(OpenItem(kind="REVIEW", label=f"{label}: {REVIEW_NOT_SIGNED}",
+                                      control_id=control_id))  # fmt: skip
+                continue
+            reason = leading_reason(reasons)
+            kind: Literal["TEST", "REVIEW"] = "REVIEW" if reason.kind in _REVIEW_KINDS else "TEST"
+            items.append(OpenItem(kind=kind, label=f"{label}: {reason.text}",
                                   control_id=control_id))  # fmt: skip
-        elif not reviewed or reviewing:
-            items.append(OpenItem(kind="REVIEW", label=f"{label}: review not signed off",
-                                  control_id=control_id))  # fmt: skip
+    # A system in scope with no control in scope, only while some control is in scope:
+    # with nothing in scope the engagement is archived, so taking each system out of scope
+    # would lead nowhere (design review, 20 November 2026: before, the card said to archive
+    # and, below, to mark each system out of scope).
+    systems = (
+        cursor.execute(
+            """
+            SELECT a.name FROM engagement_applications a
+            WHERE a.project_id = %s AND a.out_of_scope_at IS NULL
+              AND NOT EXISTS (SELECT 1 FROM engagement_controls c
+                              WHERE c.engagement_application_id = a.id AND c.included)
+            ORDER BY a.name
+            """,
+            (project_id,),
+        ).fetchall()
+        if controls
+        else []
+    )
+    for (name,) in systems:
+        items.append(OpenItem(kind="SCOPE", label=f"{name}: {SYSTEM_WITHOUT_CONTROLS}"))
     for reference, title, control_id in cursor.execute(
         """
         SELECT reference, title, engagement_control_id FROM deficiencies
@@ -575,7 +651,7 @@ def _open_work(cursor: psycopg.Cursor[Any], project_id: UUID) -> tuple[int, list
         (project_id,),
     ).fetchall():
         items.append(OpenItem(kind="RUNNING", label=f"Agent still working: {title}"))
-    return len(items), items[:_OPEN_ITEMS_SHOWN]
+    return OpenWork(len(items), items[:_OPEN_ITEMS_SHOWN], nothing_in_scope=not controls)
 
 
 def _completion(
@@ -595,7 +671,7 @@ def _completion(
     if row is None:
         raise NotVisible()
     status, version, completed_at, completed_by, launched = row
-    total, items = _open_work(cursor, project_id) if launched else (0, [])
+    work = _open_work(cursor, project_id) if launched else OpenWork(0, [], False)
     reopenings = [
         ReopeningBody(reason=str(reason), reopened_by=str(name), reopened_at=at)
         for reason, name, at in cursor.execute(
@@ -610,13 +686,14 @@ def _completion(
     return CompletionBody(
         status=str(status),
         version=int(version),
-        can_complete=str(status) in ("ACTIVE", "PAUSED") and total == 0,
-        open_count=total,
-        open_items=items,
+        can_complete=str(status) in ("ACTIVE", "PAUSED") and work.total == 0,
+        open_count=work.total,
+        open_items=work.items,
         completed_at=completed_at,
         completed_by=str(completed_by),
         reopenings=reopenings,
         deletable=launched is not True and str(status) in ("DRAFT", "ARCHIVED"),
+        nothing_in_scope=work.nothing_in_scope,
     )
 
 

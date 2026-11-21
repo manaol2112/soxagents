@@ -4,6 +4,8 @@ import { describe, it } from "node:test";
 import {
   canCloseOut,
   closedNotice,
+  completionLead,
+  completionShown,
   detailsEditable,
   ENGAGEMENT_STATUSES,
   engagementPhase,
@@ -92,6 +94,7 @@ describe("completion state", () => {
         },
       ],
       deletable: false,
+      nothing_in_scope: false,
     });
     assert.ok(parsed !== null);
     assert.equal(parsed.openItems[0]?.controlId, "c1");
@@ -204,5 +207,158 @@ describe("close-out actions", () => {
       ),
       "setup-archived",
     );
+  });
+});
+
+describe("scope items on completion (C3, 19 November 2026)", () => {
+  const body = (items: unknown[]) => ({
+    status: "ACTIVE",
+    version: 3,
+    can_complete: false,
+    open_count: items.length,
+    open_items: items,
+    completed_at: null,
+    completed_by: "",
+    reopenings: [],
+    deletable: false,
+    nothing_in_scope: false,
+  });
+
+  it("reads a SCOPE item, with no control to link to", () => {
+    const parsed = parseCompletion(
+      body([
+        {
+          kind: "SCOPE",
+          label: "Workday: no control in scope; mark the system out of scope",
+          control_id: null,
+        },
+      ]),
+    );
+    assert.ok(parsed !== null);
+    assert.equal(parsed.openItems[0]?.kind, "SCOPE");
+    assert.equal(parsed.openItems[0]?.controlId, null);
+  });
+
+  it("still refuses the whole body for one kind it does not know", () => {
+    // The API and the web ship together: an unknown kind nulls the body rather than
+    // showing a partial list of what is open.
+    assert.equal(
+      parseCompletion(
+        body([
+          { kind: "SCOPE", label: "Nothing is in scope", control_id: null },
+          { kind: "SOMETHING", label: "x", control_id: null },
+        ]),
+      ),
+      null,
+    );
+  });
+});
+
+describe("the completion card's lead (design review, 20 November 2026)", () => {
+  it("with nothing in scope, says to archive, with no count", () => {
+    // Before: "2 items are still open. The engagement can be completed once they are
+    // done." above "Archive the engagement instead of completing it."
+    // Rewritten (code review, 20 November 2026). Old: "No control has been tested, so
+    // the engagement cannot be completed." New: "No control is in scope, so ...". Why:
+    // every control may be taken out of scope after some were tested, so the old words
+    // stated a fact the server never established.
+    const lead = completionLead({ nothingInScope: true, openCount: 1 });
+    assert.equal(lead.kind, "NOTHING_IN_SCOPE");
+    assert.equal(
+      `${lead.strong} ${lead.rest}`,
+      "Nothing is in scope. No control is in scope, so the engagement cannot be completed. Archive it instead.",
+    );
+    assert.ok(!/tested/.test(`${lead.strong} ${lead.rest}`));
+    // Other items still open are announced, never counted in the lead.
+    const two = completionLead({ nothingInScope: true, openCount: 2 });
+    assert.ok(two.rest.endsWith(" This item is still open:"));
+    const three = completionLead({ nothingInScope: true, openCount: 3 });
+    assert.ok(three.rest.endsWith(" These items are still open:"));
+    assert.ok(!/\d/.test(`${three.strong} ${three.rest}`));
+  });
+
+  it("with nothing in scope, hides only the scope item, never other open work", () => {
+    // Code review, 20 November 2026: before, the whole list was hidden, so a deficiency,
+    // a request with the client or a running task stood open with none of them shown.
+    const scope = {
+      kind: "SCOPE" as const,
+      label: "No control is in scope.",
+      controlId: null,
+    };
+    const request = {
+      kind: "REQUEST" as const,
+      label: "AC-01: evidence request sent",
+      controlId: "c1",
+    };
+    const deficiency = {
+      kind: "DEFICIENCY" as const,
+      label: "D-1 Access not removed: not closed",
+      controlId: null,
+    };
+    const running = {
+      kind: "RUNNING" as const,
+      label: "Agent still working: Draft memo",
+      controlId: null,
+    };
+    const shown = completionShown({
+      nothingInScope: true,
+      openCount: 9,
+      openItems: [scope, deficiency, request, running],
+    });
+    assert.deepEqual(shown.items, [deficiency, request, running]);
+    assert.equal(shown.more, 5);
+    // Only the scope item alone: nothing is listed.
+    assert.deepEqual(
+      completionShown({
+        nothingInScope: true,
+        openCount: 1,
+        openItems: [scope],
+      }),
+      { items: [], more: 0 },
+    );
+    // Something in scope: a system's SCOPE item is listed like any other.
+    const system = { ...scope, label: "Workday: no control in scope" };
+    assert.deepEqual(
+      completionShown({
+        nothingInScope: false,
+        openCount: 2,
+        openItems: [system, request],
+      }).items,
+      [system, request],
+    );
+  });
+
+  it("otherwise counts the open items, singular and plural agreeing", () => {
+    const one = completionLead({ nothingInScope: false, openCount: 1 });
+    assert.equal(
+      `${one.strong} ${one.rest}`,
+      "1 item is still open. The engagement can be completed once it is done.",
+    );
+    const two = completionLead({ nothingInScope: false, openCount: 2 });
+    assert.equal(
+      `${two.strong} ${two.rest}`,
+      "2 items are still open. The engagement can be completed once they are done.",
+    );
+  });
+
+  it("reads nothing_in_scope from the body, and refuses a body without it", () => {
+    const base = {
+      status: "ACTIVE",
+      version: 3,
+      can_complete: false,
+      open_count: 1,
+      open_items: [
+        { kind: "SCOPE", label: "No control is in scope", control_id: null },
+      ],
+      completed_at: null,
+      completed_by: "",
+      reopenings: [],
+      deletable: false,
+    };
+    assert.equal(
+      parseCompletion({ ...base, nothing_in_scope: true })?.nothingInScope,
+      true,
+    );
+    assert.equal(parseCompletion(base), null);
   });
 });

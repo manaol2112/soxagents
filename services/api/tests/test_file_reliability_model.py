@@ -30,12 +30,16 @@ from test_design_workpaper_model import (
     F1,
     F2,
     F3,
+    LOG,
     R1,
     R2,
     REQUESTS,
     RUN1,
+    TICKET,
     A,
     B,
+    C,
+    D,
     _check,
     _index,
     _item,
@@ -48,6 +52,8 @@ from ai_workforce_api import design_workpaper as view
 from ai_workforce_api import file_reliability as reliability
 from ai_workforce_api.design_points import points_of
 from ai_workforce_api.design_workpaper import (
+    AttributeRecord,
+    RequestRecord,
     attributes_of,
     decisions_applying,
     evidence_index,
@@ -379,14 +385,21 @@ def test_a_file_not_relied_on_takes_the_mark_away_and_is_a_point() -> None:
     checks = {R1: _check(_item(A, files=(F2,)), _item(B, files=(F1, F2)), review=review)}
     decisions = [_decided("NOT_RELIED_ON", F2)]
     readings = readings_of(checks[R1], decisions)
-    assert readings[A].not_relied and not readings[B].not_relied
+    # Rewritten 19 November 2026 (D3, product owner: a showing that rests in any part on a
+    # file not relied on does not count). Old: B, shown on F1 and F2 with F2 not relied on,
+    # was not discounted: SHOWN with an AGREED mark, and no point. New: B is discounted
+    # like A: SHOWN, no mark, and a point naming only the file not relied on (F2, "sap
+    # change log.txt"), never F1. Why: the readings judge an element on its files
+    # together, so the showing cannot be split between a relied and an excluded file.
+    assert readings[A].not_relied and readings[B].not_relied
     evidence = _index(checks=checks)
     shown, left = attributes_of(ATTRIBUTES, REQUESTS, checks, [], evidence, None, (), decisions)
     by_code = {a.code: a for a in shown}
-    # It reads as the check found it, never more shown and never agreed. What rests also on
-    # a file relied on, with nothing open about it, earns its mark from that file.
+    # It reads as the check found it, never more shown and never agreed, also where the
+    # showing rests in part on a file relied on.
     assert (by_code["A"].state, by_code["A"].tickmark) == ("SHOWN", "NONE")
-    assert (by_code["B"].state, by_code["B"].tickmark) == ("SHOWN", "AGREED")
+    assert (by_code["B"].state, by_code["B"].tickmark) == ("SHOWN", "NONE")
+    assert (by_code["A"].shown_by, by_code["B"].shown_by) == ("NOT_RELIED", "NOT_RELIED")
     plain, _ = attributes_of(ATTRIBUTES, REQUESTS, checks, [], evidence, None)
     assert [(a.state, a.basis) for a in plain] == [(a.state, a.basis) for a in shown]
     # Before the decision, the question on the log keeps every mark away.
@@ -398,9 +411,14 @@ def test_a_file_not_relied_on_takes_the_mark_away_and_is_a_point() -> None:
     # point: the evidence index says it on the file's line (below). Why: the product owner
     # removed the matters; each item is at its place.
     points = points_of(REQUESTS, checks, ATTRIBUTES, left, [], evidence, decisions)
+    # Rewritten (design review, 20 November 2026). Old: one point per attribute, "Attribute
+    # A rests on ..." and "Attribute B rests on ...", each with the same decision on the
+    # same file. New: one point for the file, naming both, under the last of them. Why:
+    # one decision about one file is one traceable grouped decision (Product and UX
+    # standards).
     assert [(p.kind, p.text, p.refs, p.place.at, p.place.attribute_id) for p in points] == [
-        ("NOT_RELIED", "Attribute A is shown only on a file not relied on: "
-         "“sap change log.txt”.", ["E2"], "ATTRIBUTE", A),
+        ("NOT_RELIED", "Attributes A and B rest on a file not relied on: "
+         "“sap change log.txt”.", ["E2"], "ATTRIBUTE", B),
     ]  # fmt: skip
     assert points[0].settle == ["RELIABILITY", "CONSIDER"]
     # In the evidence index, said so with the reason; another file is not.
@@ -411,6 +429,58 @@ def test_a_file_not_relied_on_takes_the_mark_away_and_is_a_point() -> None:
         ("E3", None),
     ]
     assert [e.not_relied_on for e in evidence_index(REQUESTS, checks, [])[0]] == [None] * 3
+
+
+def _not_relied(
+    on: dict[UUID, tuple[UUID, ...]],
+    excluded: tuple[UUID, ...] = (F2,),
+    attributes: list[AttributeRecord] | None = None,
+    requests: list[RequestRecord] | None = None,
+) -> list[Any]:
+    """The NOT_RELIED points where each attribute in `on` is shown on its files and the
+    files in `excluded` are not relied on."""
+    review = _unresolved(_said(F1), _said(F2, basis="NOT_SHOWN"))
+    checks = {R1: _check(*(_item(a, files=files) for a, files in on.items()), review=review)}
+    decisions = [_decided("NOT_RELIED_ON", file) for file in excluded]
+    attributes = attributes or ATTRIBUTES
+    requests = requests or REQUESTS
+    evidence = evidence_index(requests, checks, [])[0]
+    _shown, left = attributes_of(attributes, requests, checks, [], evidence, None, (), decisions)
+    points = points_of(requests, checks, attributes, left, [], evidence, decisions)
+    return [p for p in points if p.kind == "NOT_RELIED"]
+
+
+def test_a_grouped_not_relied_point_keeps_its_key_only_while_it_is_the_same() -> None:
+    """Section 3.9 (code review, 20 November 2026): one NOT_RELIED point for the files and
+    the attributes resting on them keeps its key on every read while both are the same,
+    and has a new key when an attribute joins or leaves the group or the files change.
+    The key's form changed with the grouping (design review, 20 November 2026), so a
+    consideration recorded on a former per-attribute point no longer matches: the point
+    shows again unsettled, which fails closed."""
+    [both] = _not_relied({A: (F2,), B: (F2,)})
+    [again] = _not_relied({A: (F2,), B: (F2,)})
+    assert again.key == both.key
+    # B leaves the group: it is shown on a file relied on.
+    [alone] = _not_relied({A: (F2,), B: (F1,)})
+    assert alone.text.startswith("Attribute A rests on a file not relied on")
+    assert alone.key != both.key
+    # The files change: both now rest on the ticket and the log, neither relied on.
+    [two_files] = _not_relied({A: (F1, F2), B: (F1, F2)}, excluded=(F1, F2))
+    assert "files not relied on" in two_files.text
+    assert len({both.key, alone.key, two_files.key}) == 3
+
+
+def test_a_grouped_not_relied_point_sits_under_the_last_attribute_it_names() -> None:
+    """Code review, 20 November 2026: the sentence names at most three attributes and then
+    how many more; before, the point sat under the last attribute of the group, which the
+    sentence left to "and 1 more"."""
+    every = frozenset({A, B, C, D})
+    requests = [RequestRecord(R1, "Walkthrough instance", (TICKET, LOG), every)]
+    [point] = _not_relied(
+        {A: (F2,), B: (F2,), C: (F2,), D: (F2,)}, attributes=ATTRIBUTES, requests=requests
+    )
+    assert point.text.startswith("Attributes A, B, C and 1 more rest on a file not relied on")
+    assert (point.place.at, point.place.attribute_id) == ("ATTRIBUTE", C)
 
 
 def test_an_established_report_carries_the_mark_the_procedure_and_its_index_line() -> None:

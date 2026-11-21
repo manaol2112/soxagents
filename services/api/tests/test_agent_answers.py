@@ -499,8 +499,13 @@ def test_the_shapes_of_itgc_ac_01_are_read_and_a_quote_the_records_lack_is_never
         return answer
 
     script.answers["planner"] = [planned(True), planned(False)]
-    # The reviewer of the set, its answer inside a wrapper.
-    script.answers["set-review"] = [{OUTPUT_TOOL: {"attributes": [], "findings": []}}]
+    # The reviewer of the set, its answer inside a wrapper. Rewritten 19 November 2026 (SOL
+    # defect 4). Old: an empty answer inside the wrapper. New: a verdict on each attribute
+    # inside it. Why: an empty review is now corrected and not used; this test is about the
+    # wrapper being read.
+    from set_review_answers import every_ok_from_prompt
+
+    script.answers["set-review"] = [lambda prompt: {OUTPUT_TOOL: every_ok_from_prompt(prompt)}]
     with connect(migrated.url) as connection:
         assert run_plan_through(connection, script, plan_id) == "DONE"
     # Every shape was read; only the planner's misquote needed a correction (a quote the
@@ -658,7 +663,13 @@ def test_a_part_that_fails_is_corrected_once_then_said_in_plain_words_until_an_a
         again_id = request_attributes_run(connection, team["project"], UUID(control), True)
         connection.commit()
         assert again_id == plan_id
-        assert run_plan_through(connection, _Script(migrated, team, control), plan_id) == "DONE"
+        # Rewritten 19 November 2026 (SOL defect 4): the set reviewer's answer is stated, a
+        # verdict on each attribute; the default empty one is now corrected and not used.
+        from set_review_answers import every_ok_from_prompt
+
+        used = _Script(migrated, team, control)
+        used.answers["set-review"] = [every_ok_from_prompt]
+        assert run_plan_through(connection, used, plan_id) == "DONE"
     context = _context(team, control)
     assert context["attributes_agent_notes"] == [] and context["attributes_failure_note"] == ""
 
@@ -959,3 +970,486 @@ def test_a_run_counts_every_reading_whose_answer_could_not_be_used() -> None:
         "Run again."
     )
     assert run_failure_note("3 policies proposed as evidence.", "Kept.", "Run again.") == ""
+
+
+# SOL attribute fixes (19 November 2026): a review covers what it was given (I10, I11), and
+# no figure the records do not give reaches proposed criteria (I12)
+
+
+def _review_stored(migrated: Database, control: str) -> dict[str, Any]:
+    stored: dict[str, Any] = _rows(
+        migrated,
+        "SELECT attribute_review FROM evidence_plans WHERE engagement_control_id = %s",
+        UUID(control),
+    )[0][0]
+    return stored
+
+
+def _set_review_outcomes(migrated: Database, control: str) -> list[str]:
+    return [
+        str(row[4]["validation"])
+        for row in _calls(migrated, control)
+        if row[0] == "attribute-set-review"
+    ]
+
+
+def _reviewed_events(migrated: Database, control: str) -> int:
+    count: int = _rows(
+        migrated,
+        "SELECT count(*) FROM audit_events WHERE action = 'attributes.reviewed' AND target_id = %s",
+        UUID(control),
+    )[0][0]
+    return count
+
+
+def _listed_ids(migrated: Database, control: str) -> list[str]:
+    return [
+        str(row[0])
+        for row in _rows(
+            migrated,
+            "SELECT id FROM control_attributes WHERE engagement_control_id = %s "
+            "AND status IN ('APPROVED', 'PROPOSED')",
+            UUID(control),
+        )
+    ]
+
+
+def _proposed_payload(migrated: Database, control: str) -> dict[str, Any]:
+    payload: dict[str, Any] = _rows(
+        migrated,
+        "SELECT payload FROM audit_events WHERE action = 'attribute.proposed' "
+        "AND target_id = %s ORDER BY created_at DESC LIMIT 1",
+        UUID(control),
+    )[0][0]
+    return payload
+
+
+def test_a_set_review_with_no_verdict_is_corrected_once_then_not_reviewed(
+    migrated: Database,
+) -> None:
+    """SOL defect 4. Old: an empty answer was stored REVIEWED, its call ACCEPTED, and the
+    audit read "0 concerns". New: it is corrected once with the ids it left out, then the
+    review is NOT_REVIEWED, recorded as unusable, with no attributes.reviewed event."""
+    team, control, _scheduler, client = _ready(migrated, "aa-cover-none")
+    _answer_required(migrated, team, control, client)
+    plan_id = _plan_run(migrated, control)[0]
+    script = _Script(migrated, team, control)
+    script.answers["set-review"] = [{"attributes": [], "findings": []}]
+    with connect(migrated.url) as connection:
+        assert run_plan_through(connection, script, plan_id) == "DONE"
+    assert script.calls.count("set-review") == 2
+    correction = script.prompts["set-review"][1].split("Your previous answer could not be used")[1]
+    ids = _listed_ids(migrated, control)
+    assert ids and all(key in correction for key in ids)
+    assert _review_stored(migrated, control)["status"] == "NOT_REVIEWED"
+    assert _set_review_outcomes(migrated, control) == ["REJECTED", "REJECTED"]
+    assert _reviewed_events(migrated, control) == 0
+    body = _context(team, control)["attributes"]
+    assert body["review_summary"]["status"] == "NOT_REVIEWED"
+
+
+def test_a_partial_set_review_is_corrected_and_then_marks_every_attribute(
+    migrated: Database,
+) -> None:
+    """SOL defect 4: a verdict on one attribute of several is corrected; the corrected
+    answer, with a verdict on each, is used and marks each."""
+    from set_review_answers import every_ok_from_prompt, given_of
+
+    team, control, _scheduler, client = _ready(migrated, "aa-cover-part")
+    _answer_required(migrated, team, control, client)
+    plan_id = _plan_run(migrated, control)[0]
+    script = _Script(migrated, team, control)
+
+    def one(prompt: str) -> dict[str, Any]:
+        first = given_of(prompt)["attributes"][0]
+        return {"attributes": [{"id": first["id"], "verdict": "OK", "note": "Fits."}],
+                "findings": []}  # fmt: skip
+
+    script.answers["set-review"] = [one, every_ok_from_prompt]
+    with connect(migrated.url) as connection:
+        assert run_plan_through(connection, script, plan_id) == "DONE"
+    assert script.calls.count("set-review") == 2
+    stored = _review_stored(migrated, control)
+    ids = _listed_ids(migrated, control)
+    assert len(ids) > 1
+    assert stored["status"] == "REVIEWED" and sorted(stored["items"]) == sorted(ids)
+    assert _set_review_outcomes(migrated, control) == ["REJECTED", "ACCEPTED"]
+    assert _reviewed_events(migrated, control) == 1
+
+
+def test_a_set_review_naming_only_unknown_ids_is_not_reviewed(migrated: Database) -> None:
+    """SOL defect 4: verdicts on ids the reviewer was not given cover nothing."""
+    team, control, _scheduler, client = _ready(migrated, "aa-cover-unknown")
+    _answer_required(migrated, team, control, client)
+    plan_id = _plan_run(migrated, control)[0]
+    script = _Script(migrated, team, control)
+    script.answers["set-review"] = [
+        {"attributes": [{"id": "A1", "verdict": "OK", "note": "Fits."}], "findings": []}
+    ]
+    with connect(migrated.url) as connection:
+        assert run_plan_through(connection, script, plan_id) == "DONE"
+    assert script.calls.count("set-review") == 2
+    assert _review_stored(migrated, control)["status"] == "NOT_REVIEWED"
+    assert _reviewed_events(migrated, control) == 0
+
+
+def test_a_revised_verdict_with_no_revision_is_a_concern(migrated: Database) -> None:
+    """FO-6. Old: REVISED with no criteria and no wording read OK. New: CONCERN, as does a
+    revision that returns the criteria as they read."""
+    from set_review_answers import given_of, with_every_verdict
+
+    team, control, _scheduler, client = _ready(migrated, "aa-revised-nothing")
+    _answer_required(migrated, team, control, client)
+    plan_id = _plan_run(migrated, control)[0]
+    script = _Script(migrated, team, control)
+    picked: list[str] = []
+
+    def revised(prompt: str) -> dict[str, Any]:
+        given = given_of(prompt)
+        writable = [item for item in given["attributes"] if "criteria" in item["may_revise"]]
+        assert len(writable) >= 2, "two attributes whose criteria an agent may revise"
+        empty, same = writable[0], writable[1]
+        picked[:] = [empty["id"], same["id"]]
+        return with_every_verdict(
+            {"attributes": [
+                {"id": empty["id"], "verdict": "REVISED", "note": "Tightened."},
+                {"id": same["id"], "verdict": "REVISED", "note": "Tightened.",
+                 "condition": same["criteria"]["condition"],
+                 "pass_criteria": same["criteria"]["pass_criteria"],
+                 "fail_criteria": same["criteria"]["fail_criteria"]},
+            ], "findings": []},
+            given,
+        )  # fmt: skip
+
+    script.answers["set-review"] = [revised]
+    with connect(migrated.url) as connection:
+        assert run_plan_through(connection, script, plan_id) == "DONE"
+    items = _review_stored(migrated, control)["items"]
+    assert [items[key]["verdict"] for key in picked] == ["CONCERN", "CONCERN"]
+    assert all("returned no change" in items[key]["note"] for key in picked)
+
+
+def test_an_empty_drafts_review_leaves_the_drafts_unreviewed_and_supersedes_nothing(
+    migrated: Database,
+) -> None:
+    """FO-3. Old: the drafts reviewer's empty answer dropped every draft, superseded the
+    earlier proposals and the step said nothing was found. New: it is corrected once, then
+    the drafts stand as drafted, marked not reviewed."""
+    from set_review_answers import every_ok_from_prompt
+
+    team, control, _scheduler, client = _ready(migrated, "aa-drafts-empty")
+    _answer_required(migrated, team, control, client)
+    plan_id = _plan_run(migrated, control)[0]
+    script = _Script(migrated, team, control)
+    script.answers["attributes"] = [{"attributes": [_proposal()], "issues": []}]
+    script.answers["draft-review"] = [{"attributes": [], "fixes": []}]
+    script.answers["set-review"] = [every_ok_from_prompt]
+    with connect(migrated.url) as connection:
+        assert run_plan_through(connection, script, plan_id) == "DONE"
+    assert script.calls.count("draft-review") == 2
+    assert "0 of the 1 drafted attributes" in script.prompts["draft-review"][1]
+    proposed = _rows(
+        migrated,
+        "SELECT text FROM control_attributes WHERE engagement_control_id = %s "
+        "AND status = 'PROPOSED'",
+        UUID(control),
+    )
+    assert proposed == [(ADDED,)]
+    payload = _proposed_payload(migrated, control)
+    assert payload["reviewed"] is False and payload["proposals"] == 1
+    assert "attribute-review" in [note["step"] for note in _notes(team, control)]
+
+
+def test_drafts_left_out_with_no_reason_are_not_a_review(migrated: Database) -> None:
+    """FO-3: two drafts, one returned and no fix says why: corrected, and then the drafts
+    stand as drafted. A draft left out with its fix is still a review (the reviewer's
+    decision, unchanged)."""
+    from set_review_answers import every_ok_from_prompt
+
+    other = "The access request names the role requested in ServiceNow"
+    team, control, _scheduler, client = _ready(migrated, "aa-drafts-part")
+    _answer_required(migrated, team, control, client)
+    plan_id = _plan_run(migrated, control)[0]
+    script = _Script(migrated, team, control)
+    script.answers["attributes"] = [{"attributes": [_proposal(), _proposal(other)], "issues": []}]
+    script.answers["draft-review"] = [
+        lambda prompt: {"attributes": _drafted(prompt)[:1], "fixes": []}
+    ]
+    script.answers["set-review"] = [every_ok_from_prompt]
+    with connect(migrated.url) as connection:
+        assert run_plan_through(connection, script, plan_id) == "DONE"
+    assert script.calls.count("draft-review") == 2
+    texts = {
+        row[0]
+        for row in _rows(
+            migrated,
+            "SELECT text FROM control_attributes WHERE engagement_control_id = %s "
+            "AND status = 'PROPOSED'",
+            UUID(control),
+        )
+    }
+    assert texts == {ADDED, other}
+    # With its fix, leaving one out is the reviewer's decision.
+    drafted = [
+        control_attributes._Proposal(**_proposal()),
+        control_attributes._Proposal(**_proposal(other)),
+    ]
+    reasoned = control_attributes.reviewed_drafts(drafted)(
+        {"attributes": [_proposal()], "fixes": ["The second repeats the first."]}
+    )
+    assert len(reasoned.attributes) == 1
+
+
+def _figured(text: str, figure: str, action: str = "ADD", replaces: str = "") -> dict[str, Any]:
+    return {
+        **_proposal(text), "action": action, "replaces": replaces,
+        "condition": "The ServiceNow access request is approved by the user's manager.",
+        "pass_criteria": f"The approval is recorded {figure} of the request in ServiceNow.",
+        "fail_criteria": "No approval is recorded, or it is recorded after that window.",
+    }  # fmt: skip
+
+
+def test_an_invented_figure_never_reaches_proposed_criteria_on_any_path(
+    migrated: Database,
+) -> None:
+    """SOL defect 2. Old: the check for an unsourced figure ran only on a change that kept
+    the approved wording, so "within 17 days" on an addition and "739 minutes" on a change
+    in other words were stored as proposed criteria. New: on every path (an addition, a
+    change, a proposal drafted again) the criteria are left blank, with their judgment, and
+    the proposal says the criteria need a person (owner decision, 19 November 2026)."""
+    from set_review_answers import every_ok_from_prompt
+
+    team, control, _scheduler, client = _ready(migrated, "aa-figure")
+    _answer_required(migrated, team, control, client)
+    plan_id = _plan_run(migrated, control)[0]
+    first = _rows(
+        migrated,
+        "SELECT id FROM control_attributes WHERE engagement_control_id = %s "
+        "AND status = 'APPROVED' ORDER BY position LIMIT 1",
+        UUID(control),
+    )[0][0]
+    reworded = "The manager approves the access request in ServiceNow before the grant"
+    script = _Script(migrated, team, control)
+    script.answers["attributes"] = [{"attributes": [
+        {**_figured(ADDED, "within 17 days"), "judgment_required": True},
+        _figured(reworded, "within 739 minutes", "CHANGE", str(first)),
+    ], "issues": []}]  # fmt: skip
+    script.answers["set-review"] = [every_ok_from_prompt]
+    with connect(migrated.url) as connection:
+        assert run_plan_through(connection, script, plan_id) == "DONE"
+    proposed = _rows(
+        migrated,
+        "SELECT text, condition, pass_criteria, fail_criteria, judgment_required, "
+        "criteria_origin, note FROM control_attributes WHERE engagement_control_id = %s "
+        "AND status = 'PROPOSED' ORDER BY text",
+        UUID(control),
+    )
+    assert sorted(row[0] for row in proposed) == sorted([ADDED, reworded])
+    for row in proposed:
+        assert row[1:6] == ("", "", "", False, None), row
+        assert "The criteria need a person" in row[6]
+    assert _proposed_payload(migrated, control)["criteria_refused"] == 2
+    # Drafted again in the same words, now with a figure: brought up to date, without it.
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE control_attributes SET condition = %s, pass_criteria = %s, "
+            "fail_criteria = %s, criteria_origin = 'AGENT' "
+            "WHERE engagement_control_id = %s AND text = %s AND status = 'PROPOSED'",
+            (
+                "The ServiceNow request has a business justification entered.",
+                "The justification field of the ServiceNow request is filled in.",
+                "The justification field of the ServiceNow request is empty.",
+                UUID(control), ADDED,
+            ),
+        )  # fmt: skip
+        connection.commit()
+    again = _Script(migrated, team, control)
+    again.answers["attributes"] = [
+        {"attributes": [_figured(ADDED, "within 17 days")], "issues": []}
+    ]
+    with connect(migrated.url) as connection:
+        kept, _note = control_attributes.generate(
+            connection, again, UUID(str(team["org"])), UUID(str(team["project"])),
+            UUID(control), team["owner_id"], {}, [],
+        )  # fmt: skip
+        connection.commit()
+    assert kept == 1
+    [row] = _rows(
+        migrated,
+        "SELECT condition, pass_criteria, fail_criteria, criteria_origin, note "
+        "FROM control_attributes WHERE engagement_control_id = %s AND status = 'PROPOSED' "
+        "AND text = %s",
+        UUID(control), ADDED,
+    )  # fmt: skip
+    assert row[:4] == ("", "", "", None) and "The criteria need a person" in row[4]
+
+
+def test_the_set_reviewers_ok_does_not_vouch_for_an_unsourced_figure(migrated: Database) -> None:
+    """SOL defect 2: an OK on an agent's criteria no person accepted, stating a figure the
+    records do not give (criteria written before this fix), is a concern; an OK on a
+    person's criteria with a figure stands."""
+    from set_review_answers import every_ok_from_prompt
+
+    team, control, _scheduler, client = _ready(migrated, "aa-ok-figure")
+    _answer_required(migrated, team, control, client)
+    plan_id = _plan_run(migrated, control)[0]
+    with connect(migrated.url) as connection:
+        assert run_plan_through(connection, _Script(migrated, team, control), plan_id) == "DONE"
+    agent, person = (
+        UUID(str(row[0]))
+        for row in _rows(
+            migrated,
+            "SELECT id FROM control_attributes WHERE engagement_control_id = %s "
+            "AND status = 'APPROVED' ORDER BY position LIMIT 2",
+            UUID(control),
+        )
+    )
+    with connect(migrated.url) as connection:
+        # Two figures: a person's criteria are a source, so the agent's must not repeat it.
+        for key, origin, days in ((agent, "AGENT", 17), (person, "PERSON", 23)):
+            connection.execute(
+                "UPDATE control_attributes SET condition = %s, pass_criteria = %s, "
+                "fail_criteria = %s, judgment_required = false, criteria_origin = %s, "
+                "criteria_accepted_at = NULL WHERE id = %s",
+                (
+                    "The ServiceNow request is approved by the manager.",
+                    f"The approval is recorded within {days} days of the request.",
+                    "No approval is recorded within that window.",
+                    origin, key,
+                ),
+            )  # fmt: skip
+        connection.commit()
+    script = _Script(migrated, team, control)
+    script.answers["set-review"] = [every_ok_from_prompt]
+    with connect(migrated.url) as connection:
+        assert attribute_review.review_set(
+            connection, script, UUID(str(team["org"])), UUID(str(team["project"])),
+            UUID(control), team["owner_id"],
+        ) == ""  # fmt: skip
+    items = _review_stored(migrated, control)["items"]
+    assert items[str(agent)]["verdict"] == "CONCERN"
+    assert "figure" in items[str(agent)]["note"]
+    assert items[str(person)]["verdict"] == "OK"
+
+
+def _pending_setup(migrated: Database, slug: str) -> tuple[dict[str, Any], str, UUID]:
+    team, control, _scheduler, client = _ready(migrated, slug)
+    approve_control_plan(migrated, control)
+    _answer_required(migrated, team, control, client)
+    plan_id = _plan_run(migrated, control)[0]
+    return team, control, plan_id
+
+
+def test_the_set_reviewer_is_given_the_pending_criteria_and_its_verdict_holds_after_accept(
+    migrated: Database,
+) -> None:
+    """SOL defect 3. Old: on an approved plan the reviewer read the attributes' standing
+    criteria, none of those the pending revision proposes, and after Accept its marks were
+    gone while the summary still read REVIEWED. New: it is given the pending criteria in
+    place of the standing ones, its verdict is on them, and it holds after Accept."""
+    from set_review_answers import every_ok, given_of, with_every_verdict
+
+    team, control, plan_id = _pending_setup(migrated, "aa-pending-review")
+    seen: list[dict[str, Any]] = []
+
+    def review(prompt: str) -> dict[str, Any]:
+        given = given_of(prompt)
+        seen.append(given)
+        pending = [item for item in given["attributes"] if "pending_criteria" in item]
+        if not pending:
+            return every_ok(given)
+        return with_every_verdict(
+            {"attributes": [{"id": pending[0]["id"], "verdict": "CONCERN",
+                             "note": "The pending criteria name no system."}],
+             "findings": []},
+            given,
+        )  # fmt: skip
+
+    script = _Script(migrated, team, control)
+    script.answers["set-review"] = [review]
+    with connect(migrated.url) as connection:
+        assert run_plan_through(connection, script, plan_id) == "DONE"
+    context = _context(team, control)
+    waiting = [item["attribute_id"] for item in context["attributes_pending_criteria"]]
+    assert waiting
+    with_pending = [item for item in seen[-1]["attributes"] if "pending_criteria" in item]
+    assert sorted(item["id"] for item in with_pending) == sorted(waiting)
+    assert all(item["pending_criteria"]["condition"] for item in with_pending)
+    summary = context["attributes"]["review_summary"]
+    # Before Accept the concern on the pending criteria is counted and shown on its row, so
+    # the person sees it before accepting (review finding of 20 November 2026; before, it
+    # was counted while no row showed it until after the Accept).
+    assert summary["status"] == "REVIEWED" and summary["concerns"] == 1
+    before = {item["id"]: item for item in context["attributes"]["approved"]}
+    assert before[with_pending[0]["id"]]["review"] is not None, "no verdict on the row"
+    assert before[with_pending[0]["id"]]["review"]["verdict"] == "CONCERN"
+    assert "no system" in before[with_pending[0]["id"]]["review"]["note"]
+    version = team["owner"].get(f"{_path(team, control)}/evidence-plan").json()["version"]
+    accepted = team["owner"].post(
+        f"{_path(team, control)}/evidence-plan/pending-revision",
+        json={"version": version, "decision": "ACCEPT"},
+    )
+    assert accepted.status_code == 200, accepted.text
+    body = _context(team, control)["attributes"]
+    rows = {item["id"]: item for item in body["approved"]}
+    assert all(rows[key]["review"] is not None for key in waiting)
+    assert rows[with_pending[0]["id"]]["review"]["verdict"] == "CONCERN"
+    assert body["review_summary"]["status"] == "REVIEWED"
+    assert body["review_summary"]["concerns"] == 1
+
+
+def test_a_pending_revision_changed_after_the_review_reads_not_reviewed(
+    migrated: Database,
+) -> None:
+    """SOL defect 3: a review stands for the pending criteria it read; changed after it, it
+    is not a review of what a person decides on."""
+    from set_review_answers import every_ok_from_prompt
+
+    team, control, plan_id = _pending_setup(migrated, "aa-pending-changed")
+    script = _Script(migrated, team, control)
+    script.answers["set-review"] = [every_ok_from_prompt]
+    with connect(migrated.url) as connection:
+        assert run_plan_through(connection, script, plan_id) == "DONE"
+    body = _context(team, control)["attributes"]
+    assert body["review_summary"]["status"] == "REVIEWED"
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE evidence_plans SET pending_revision = jsonb_set(pending_revision, "
+            "'{criteria,0,pass_criteria}', to_jsonb(%s::text)) WHERE engagement_control_id = %s",
+            ("Another pass criterion stated later.", UUID(control)),
+        )
+        connection.commit()
+    body = _context(team, control)["attributes"]
+    assert body["review_summary"]["status"] == "NOT_REVIEWED"
+    assert body["review_summary"]["note"] == attribute_review.CHANGED_SINCE
+
+
+def test_an_agents_criteria_written_after_the_review_read_not_reviewed(
+    migrated: Database,
+) -> None:
+    """R9 of the SOL attribute fixes: the summary reads REVIEWED only while every attribute
+    an agent wrote has a verdict on its words as they read. Old: a later agent write (here
+    the planner's criteria outside the reviewed pass) left the summary REVIEWED with the
+    marks gone."""
+    from set_review_answers import every_ok_from_prompt
+
+    team, control, _scheduler, client = _ready(migrated, "aa-written-after")
+    _answer_required(migrated, team, control, client)
+    plan_id = _plan_run(migrated, control)[0]
+    script = _Script(migrated, team, control)
+    script.answers["set-review"] = [every_ok_from_prompt]
+    with connect(migrated.url) as connection:
+        assert run_plan_through(connection, script, plan_id) == "DONE"
+    assert _context(team, control)["attributes"]["review_summary"]["status"] == "REVIEWED"
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE control_attributes SET pass_criteria = pass_criteria || ' Written later.' "
+            "WHERE id = (SELECT id FROM control_attributes WHERE engagement_control_id = %s "
+            "AND status = 'APPROVED' AND criteria_origin = 'AGENT' "
+            "AND criteria_accepted_at IS NULL ORDER BY position LIMIT 1)",
+            (UUID(control),),
+        )
+        connection.commit()
+    summary = _context(team, control)["attributes"]["review_summary"]
+    assert summary["status"] == "NOT_REVIEWED"
+    assert summary["note"] == attribute_review.CHANGED_SINCE
