@@ -29,7 +29,8 @@ of this database only).
                       failure banner, no "Re-perform", and the reviewer lane not stopped
 - oe-review-failed-full  a re-performance that gave up after an earlier full one (3 of 3):
                       the header, the round's reviews and the review queue hold
-                      "Re-performance did not finish", never "Ready to sign off"
+                      "Re-performance did not finish", never "Ready to sign off", and
+                      the sign-off asks for the record by hand
 """
 
 from typing import Any
@@ -314,7 +315,8 @@ def _more_review_states(seed: Any) -> None:
         connection.commit()
     review = client.get(f"{seed.base(team)}/reviews").json()[0]
     assert review["reperformance"]["failed"] is True, review["reperformance"]
-    assert review["attestation_needed"] is False, review
+    # The failed attempt holds the sign-off for the record by hand (needs_attestation).
+    assert review["attestation_needed"] is True, review
     _add_review(seed, "oe-review-failed-full", team, control, review)
 
 
