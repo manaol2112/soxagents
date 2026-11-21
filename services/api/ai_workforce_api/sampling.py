@@ -11,9 +11,10 @@ same file. A person approves the selection and can replace items with a reason.
 import random
 import re
 import secrets
+import unicodedata
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Literal
+from typing import Literal, overload
 
 from ai_workforce_api.evidence_extraction import Table
 
@@ -50,6 +51,9 @@ class PopulationCheck:
     check: str
     result: CheckResult
     detail: str
+    # Typed (19 November 2026): the population leaves nothing to sample, so it blocks the
+    # testing; before, readiness read "no data rows" in the detail's wording.
+    blocks: bool = False
 
 
 @dataclass(frozen=True)
@@ -106,11 +110,19 @@ def parse_date(text: str, order: SlashOrder = "mdy") -> date | None:
         return None
 
 
-def slash_order(values: list[str]) -> SlashOrder:
+@overload
+def slash_order(values: list[str]) -> SlashOrder: ...
+@overload
+def slash_order(values: list[str], *, strict: Literal[True]) -> SlashOrder | None: ...
+def slash_order(values: list[str], *, strict: bool = False) -> SlashOrder | None:
     """Whether a column writes its slashed dates day first. A part over 12 can only be the
     day, so the column is read in the order most of those values show, consistently for
     every row: 05/01/2027 in a column that also holds 25/01/2027 is 5 January, not 1 May
-    (bug hunt, 9 November 2026). With nothing to tell, month first, as before."""
+    (bug hunt, 9 November 2026). With nothing to tell, month first, as before.
+
+    `strict` (item 5, 19 November 2026): None when the column cannot tell (no value with a
+    part over 12) or tells both ways, for a reader that must not guess: a comparison, and
+    the period check of a column whose slashed dates are ambiguous."""
     day_first = month_first = 0
     for value in values:
         match = _US.match(value.strip())
@@ -121,7 +133,39 @@ def slash_order(values: list[str]) -> SlashOrder:
             day_first += 1
         elif second > 12 >= first:
             month_first += 1
+    if strict:
+        if bool(day_first) == bool(month_first):
+            return None
+        return "dmy" if day_first else "mdy"
     return "dmy" if day_first > month_first else "mdy"
+
+
+def ambiguous_slashed(value: str) -> bool:
+    """Whether a slashed date reads as two different days by its order: both of its first
+    parts are 12 or under and they differ (03/04/2027 is 4 March or 3 April)."""
+    match = _US.match(value.strip())
+    if match is None:
+        return False
+    first, second = int(match.group(1)), int(match.group(2))
+    return first <= 12 and second <= 12 and first != second
+
+
+# A value's tokens, in any script: runs of letters and digits, with the joiners an
+# identifier keeps inside it (FO-17 class, 19 November 2026; before, ASCII only, so
+# "Иван Петров" had no tokens and "Müller" read as "m" and "ller").
+VALUE_TOKEN = re.compile(r"[^\W_][\w.@\\-]*")
+
+
+def normal_value(value: str) -> str:
+    """A value as it is compared: folded, its words joined by one space, a "Last, First"
+    name turned round, and stray punctuation at the ends dropped. One reading for the
+    sample traces and the testing comparisons; "" when nothing is left to compare."""
+    text = unicodedata.normalize("NFKC", value).casefold().strip()
+    parts = [part.strip() for part in text.split(",")]
+    if len(parts) == 2 and all(re.fullmatch(r"[^\W\d_]+(?: [^\W\d_]+)*", p) for p in parts):
+        text = f"{parts[1]} {parts[0]}"
+    tokens = [token.strip("._-@\\") for token in VALUE_TOKEN.findall(text)]
+    return " ".join(token for token in tokens if token)
 
 
 def column_order(table: Table, index: int) -> SlashOrder:
@@ -191,7 +235,9 @@ def build_frame(
     checks: list[PopulationCheck] = []
     count = len(table.rows)
     if count == 0:
-        checks.append(PopulationCheck("rows", "ISSUE", "The population has no data rows."))
+        checks.append(
+            PopulationCheck("rows", "ISSUE", "The population has no data rows.", blocks=True)
+        )
         return Frame(key, when, tuple(checks), (), 0)
     frame = list(range(count))
     excluded = 0
@@ -211,11 +257,13 @@ def build_frame(
                 "sampling frame; confirm the rows are in the period.",
             )
         else:
+            # FO-19 (19 November 2026): a period not checked is an issue for a person, not
+            # information; before, readiness read it as "the population's checks passed".
             period = PopulationCheck(
                 "period",
-                "INFO",
+                "ISSUE",
                 "No date column was found, so the period could not be checked. Every row "
-                "is in the sampling frame.",
+                "is in the sampling frame; confirm the rows are in the period.",
             )
     elif period_end is None and window is None:
         period = PopulationCheck("period", "INFO", "The engagement has no period end yet.")
@@ -236,8 +284,19 @@ def build_frame(
             if found
             else f"'{name}' has no dates"
         )
-        result: CheckResult = "ISSUE" if outside or unreadable else "OK"
+        # A column whose slashed dates are ambiguous and cannot tell its own order is
+        # read month first, a guess a person confirms (item 5, audit invariant I12).
+        values = [row[when] for row in table.rows if when < len(row)]
+        guessed = slash_order(values, strict=True) is None and any(
+            ambiguous_slashed(value) for value in values
+        )
+        result: CheckResult = "ISSUE" if outside or unreadable or guessed else "OK"
         detail = f"{span}. The period is {start.isoformat()} to {end.isoformat()}."
+        if guessed:
+            detail += (
+                f" '{name}' does not show whether its dates are written day or month first; "
+                "they were read month first. Confirm the order."
+            )
         if outside:
             plural = "s" if len(outside) != 1 else ""
             detail += f" {len(outside)} row{plural} outside it are left out of the frame."

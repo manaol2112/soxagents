@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from ai_workforce_api.console_citations import find_quote, location_of
+from ai_workforce_api.console_citations import find_quote, location_of, negated_span
 from ai_workforce_api.inbound import clean_line
 
 MAX_CITATIONS = 4
@@ -81,8 +81,14 @@ def _box(value: Any) -> dict[str, float] | None:
     return {"x": round(x, 4), "y": round(y, 4), "w": round(w, 4), "h": round(h, 4)}
 
 
-def check_citations(raw: Any, files: tuple[CitedFile, ...]) -> list[dict[str, Any]]:
-    """The tester's citations for one result, kept only where they check out."""
+def check_citations(
+    raw: Any, files: tuple[CitedFile, ...], *, supports: bool = True
+) -> list[dict[str, Any]]:
+    """The tester's citations for one result, kept only where they check out. `supports`
+    says the citations are to show something holds (a pass, an element shown): then a
+    quote that carries its own negation shows the opposite and is not found. Only an
+    exception's citations (supports=False) keep the file's own negated words. The default
+    fails closed (review N-a, 20 November 2026)."""
     if not isinstance(raw, list):
         return []
     kept: list[dict[str, Any]] = []
@@ -96,6 +102,15 @@ def check_citations(raw: Any, files: tuple[CitedFile, ...]) -> list[dict[str, An
         cited = files[index]
         quote = str(item.get("quote") or "")[:QUOTE_LENGTH]
         span = find_quote(cited.text, quote) if quote.strip() else None
+        # A passage the words just before it negate misquotes the file: "approved by the
+        # line manager" of "not approved by the line manager" (review B3, 20 November
+        # 2026; before, it was kept as found). A quote that carries its own negation is
+        # the file's own words and is kept only where the citation does not support the
+        # result (an exception's): "was not approved by the line manager" never supports a
+        # pass or a shown element (review N-a, 20 November 2026; before, it was kept as
+        # found for any result).
+        if span is not None and negated_span(cited.text, span[0], span[1] if supports else span[0]):
+            span = None
         box = _box(item.get("box")) if cited.seen_as_image else None
         if span is None and box is None:
             continue

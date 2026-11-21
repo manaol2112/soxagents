@@ -372,3 +372,31 @@ describe("test sheet model", () => {
     assert.equal(parseSheetNotice("logged"), null);
   });
 });
+
+describe("a person's not applicable (decision D1, 19 November 2026)", () => {
+  it("needs a reason of at least 10 characters before it posts", () => {
+    const fields = {
+      organization_id: org,
+      project_id: project,
+      sheet_id: sheet,
+      intent: "override",
+      version: "4",
+      item_id: item,
+      index: "0",
+      result: "NOT_APPLICABLE",
+    };
+    assert.deepEqual(sheetWrite({ ...fields, reason: " Not used. " }), {
+      error: "invalid",
+    });
+    const posted = sheetWrite({
+      ...fields,
+      reason: "No change was made to the system in the period.",
+    });
+    assert.ok(!("error" in posted));
+    assert.equal(posted.body.result, "NOT_APPLICABLE");
+    // A pass keeps the shorter minimum: only not applicable needs the reason.
+    assert.ok(
+      !("error" in sheetWrite({ ...fields, result: "PASS", reason: "Seen." })),
+    );
+  });
+});

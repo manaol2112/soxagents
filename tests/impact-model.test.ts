@@ -87,7 +87,7 @@ describe("plan-revision impact assessments", () => {
     );
     assert.equal(
       adviceWords(item).headline,
-      "The agent recommends that the results stand (VALID)",
+      "The agent recommends that the results stand",
     );
     const [unknown] =
       parseImpact([

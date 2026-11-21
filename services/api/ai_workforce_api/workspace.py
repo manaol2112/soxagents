@@ -1574,7 +1574,7 @@ def _strongest(current: RunState, status: Any) -> RunState:
 def agent_runs(connection: psycopg.Connection[Any], project_id: UUID) -> dict[UUID, AgentRuns]:
     """Each control's agents at work, from the run records: evidence analyses of its
     files, its open test sheets, its workpapers, and its independent review."""
-    from ai_workforce_api.control_reviews import REPERFORM_FAILED
+    from ai_workforce_api.control_reviews import reperformances_of
     from ai_workforce_api.workpaper_service import DRAFT_FAILED
 
     runs: dict[UUID, AgentRuns] = {}
@@ -1613,14 +1613,21 @@ def agent_runs(connection: psycopg.Connection[Any], project_id: UUID) -> dict[UU
         found.drafting = _strongest(found.drafting, status)
         if status == "IDLE" and note == DRAFT_FAILED and "drafting" not in found.stopped:
             found.stopped.append("drafting")
-    for control_id, status, note in connection.execute(
-        "SELECT engagement_control_id, reperform_status, reperform_note FROM control_reviews "
+    reviews = connection.execute(
+        "SELECT engagement_control_id, reperform_status, id FROM control_reviews "
         "WHERE project_id = %s AND status = 'OPEN'",
         (project_id,),
-    ).fetchall():
+    ).fetchall()
+    # A stopped review is read from its typed record (S5, 20 November 2026), never from
+    # its note's wording (REPERFORM_FAILED).
+    records = reperformances_of(
+        connection, [UUID(str(row[2])) for row in reviews if row[1] == "IDLE"]
+    )
+    for control_id, status, review_id in reviews:
         found = of(control_id)
         found.reviewing = _strongest(found.reviewing, status)
-        if status == "IDLE" and note == REPERFORM_FAILED:
+        record = records.get(UUID(str(review_id)))
+        if record is not None and record.failed and "reviewing" not in found.stopped:
             found.stopped.append("reviewing")
     return runs
 

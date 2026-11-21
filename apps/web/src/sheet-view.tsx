@@ -4,6 +4,7 @@ import type { Automation } from "./execution-model";
 import { formatDate } from "./format";
 import { PanelClose } from "./panel-close";
 import {
+  NOT_APPLICABLE_REASON_MIN,
   RESULT_LABELS,
   RESULT_MARKS,
   RESULTS,
@@ -765,6 +766,11 @@ function Cell({
                 placeholder="What you saw in the evidence"
               />
             </label>
+            <p className="form-hint">
+              Not applicable needs a reason of at least{" "}
+              {NOT_APPLICABLE_REASON_MIN} characters; missing evidence is not a
+              reason.
+            </p>
             <button type="submit" className="btn-sm">
               Save result
             </button>

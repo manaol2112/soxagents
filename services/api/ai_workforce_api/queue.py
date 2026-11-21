@@ -745,10 +745,14 @@ def _reviews(
     refs: dict[UUID, str],
     automated: bool,
 ) -> list[QueueItem]:
-    from ai_workforce_api.control_reviews import REPERFORM_FAILED
+    from ai_workforce_api.control_reviews import (
+        REPERFORM_FAILED,
+        reperformances_of,
+        signs_after_run,
+    )
 
     found: list[QueueItem] = []
-    for row in connection.execute(
+    rows = connection.execute(
         """
         SELECT r.id, r.engagement_control_id, r.test_round_id, t.kind, r.reperform_status,
                r.reperformed_at,
@@ -766,8 +770,13 @@ def _reviews(
         ORDER BY r.created_at
         """.replace("{units}", operating_units("c")),
         (project_id,),
-    ).fetchall():
+    ).fetchall()
+    # Each resting review's run, from its typed record (S5, 20 November 2026): before, a
+    # stopped run was read from the note's wording, and only before a first re-performance.
+    records = reperformances_of(connection, [UUID(str(row[0])) for row in rows if row[4] == "IDLE"])
+    for row in rows:
         control_id = UUID(str(row[1]))
+        record = records.get(UUID(str(row[0])))
         proposed, open_, responded = int(row[6]), int(row[7]), int(row[8])
         round_kind = None if row[3] is None else str(row[3])
         label = control_label(
@@ -792,9 +801,9 @@ def _reviews(
             bucket, held = _agent_turn(automated)
             upcoming = bucket == "UPCOMING"
             ready = False
-        elif row[5] is None and str(row[12]) == REPERFORM_FAILED:
+        elif record is not None and record.failed:
             title, reason, role = (
-                "Re-perform the testing for the review again",
+                "Re-perform the testing again",
                 REPERFORM_FAILED,
                 "REVIEWER",
             )
@@ -821,10 +830,28 @@ def _reviews(
                 "REVIEWER",
             )
             ready = True
-        elif row[5] is not None:
+        elif row[5] is not None and signs_after_run(
+            connection, project_id, control_id, round_kind is not None, record
+        ):
             title, reason, role = (
                 f"Sign off the review of {what}",
                 "Every note is cleared.",
+                "REVIEWER",
+            )
+            ready = True
+        elif row[5] is not None and record is not None:
+            # The run left items the agent did not re-perform: the review signs only over a
+            # second run, or the reviewer's record of re-performing them by hand (FO-1).
+            title, reason, role = (
+                f"Re-perform the testing for the review of {what}",
+                (
+                    f"The reviewer agent re-performed {record.done} of {record.due} "
+                    f"item{'' if record.due == 1 else 's'}"
+                    if record.known
+                    else "The reviewer agent's re-performance has no record of the items it "
+                    "re-performed"
+                )
+                + "; re-perform again, or sign off with a record of re-performing them by hand.",
                 "REVIEWER",
             )
             ready = True

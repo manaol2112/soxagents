@@ -278,12 +278,15 @@ def check_review(output: dict[str, Any], context: ReviewContext) -> Review:
                 expected=_clean(test.expected, 300),
                 note=_clean(test.note, 300),
             )
+    # Every check is the agent's own answer (FO-22, 19 November 2026): an answer that
+    # leaves one out is rejected, and a person reviews the screenshot. Before, a missing
+    # check was filled in as unclear, "Not assessed".
+    left_out = [key for key in CHECKS if key not in checks]
+    if left_out:
+        raise ValueError(f"answer leaves out the {', '.join(left_out)} check")
     follow_up = _clean_message(answer.follow_up)
     return Review(
-        checks=[
-            checks.get(key, Check(check=key, result="UNCLEAR", note="Not assessed."))
-            for key in CHECKS
-        ],
+        checks=[checks[key] for key in CHECKS],
         attributes=[
             tests.get(
                 index,
@@ -330,9 +333,16 @@ def unable_review(context: ReviewContext, reason: str, *, unreadable: bool) -> R
 
 
 def proposed(review: Review) -> Conclusion:
-    """The conclusion follows from the results. A model never sets it."""
+    """The conclusion follows from the results. A model never sets it. A screenshot whose
+    system or period is unclear cannot conclude either way (decision D9, product owner,
+    19 November 2026): before, it concluded no exception when every attribute passed."""
     issues = {check.check for check in review.checks if check.result == "ISSUE"}
-    if issues & {"legibility", "applicability"} or not review.attributes:
+    unclear = {check.check for check in review.checks if check.result == "UNCLEAR"}
+    if (
+        issues & {"legibility", "applicability"}
+        or unclear & {"system", "date_period"}
+        or not review.attributes
+    ):
         return "CANNOT_CONCLUDE"
     if any(test.result == "EXCEPTION" for test in review.attributes):
         return "EXCEPTION"

@@ -873,6 +873,48 @@ def test_prior_year_answers_for_many_controls_take_every_plan_in_id_order_first(
     assert sorted(outcome["result"], key=str) == sorted([later, control], key=str)
 
 
+def test_a_finished_re_performance_takes_the_review_before_its_notes(
+    migrated: Database,
+) -> None:
+    """FO-2 (19 November 2026). Before, control_reviews._finish withdrew the review's notes
+    before it took the review row, the reverse of every person's path (_locked, then
+    _locked_note), so a run finishing while a reviewer cleared a note could deadlock. Now it
+    takes the review first: while a person holds the review, the finishing run waits holding
+    none of the review's notes."""
+    from test_control_reviews import _claimed, _prepared_control
+    from test_testing_engine import _base
+
+    from ai_workforce_api.control_reviews import RunRecord, _finish, run_reperformance
+
+    team, client, _sheet, _file = _prepared_control(migrated, "lock-review-notes", "LOG")
+    base = _base(team)
+    review_id = UUID(client.get(f"{base}/reviews").json()[0]["id"])
+    with connect(migrated.url) as connection:
+        assert run_reperformance(connection, None, review_id) == "DONE"
+        started = _claimed(connection, review_id)
+    holder = psycopg.connect(migrated.url)
+    holder.execute("SELECT id FROM control_reviews WHERE id = %s FOR UPDATE", (review_id,))
+
+    def finish() -> bool:
+        with connect(migrated.url) as connection:
+            return _finish(
+                connection, review_id, 1, "RULES", "", None, [],
+                started_at=started, run=RunRecord(rules_ran=True, due=()),
+            )  # fmt: skip
+
+    thread, outcome = _in_thread(finish)
+    try:
+        _blocked_by(migrated.url, holder.info.backend_pid)
+        assert _free(
+            migrated.url, "SELECT id FROM review_notes WHERE control_review_id = %s", review_id
+        ), "the finishing run holds none of the review's notes while it waits"
+    finally:
+        holder.rollback()
+        thread.join(60)
+        holder.close()
+    assert outcome == {"result": True}
+
+
 def test_the_set_review_takes_the_plan_before_any_attribute(migrated: Database) -> None:
     """R10 of the SOL attribute fixes (19 November 2026): a person's save of criteria takes
     the plan and then the attribute (master_plans.set_criteria); the set reviewer's

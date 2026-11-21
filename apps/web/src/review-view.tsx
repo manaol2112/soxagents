@@ -2,17 +2,21 @@ import { AutoRefresh } from "./auto-refresh";
 import { type Automation, executionOf } from "./execution-model";
 import { formatDate } from "./format";
 import {
+  ATTESTATION_MIN,
   type ControlReview,
   NOTE_STATUS_LABEL,
   type NoteSeverity,
   openNotes,
   REVIEW_NOTICES,
-  REVIEW_OUTSTANDING,
   REVIEW_REOPEN_ANCHOR,
   type ReviewNote,
   type ReviewNotice,
-  runFailureLine as reperformFailureLine,
+  reperformedWords,
+  reviewBanner,
+  reviewDifferences,
+  reviewPill,
   SEVERITY_LABEL,
+  signOffAsk,
   TARGET_LABEL,
 } from "./review-model";
 import type { TestSheet } from "./sheet-model";
@@ -93,6 +97,17 @@ export function ReviewTab({
     );
   }
   const waiting = openNotes(review);
+  const banner = reviewBanner(review);
+  const pill = reviewPill(review, {
+    waiting: waiting.length,
+    outstanding,
+    unavailable:
+      review.reperforming &&
+      executionOf({ agent: "reviewer", run: review.reperformState, automation })
+        .state === "UNAVAILABLE",
+  });
+  // What the sign-off form asks: the record by hand, nothing (it waits for a run), or a note.
+  const ask = signOffAsk(review);
   const relaxed = !review.independenceRequired;
   const decides = canAct && review.viewerIsReviewer && review.status === "OPEN";
   // The preparer of this work adds notes and answers them; another reviewer decides them.
@@ -128,11 +143,14 @@ export function ReviewTab({
                 ? "The reviewer agent is re-performing the testing"
                 : review.reperformedAt === null
                   ? "Not re-performed yet"
-                  : `Re-performed ${formatDate(review.reperformedAt)} · ${
-                      review.reperformSource === "MODEL"
-                        ? "the reviewer agent re-performed each result"
-                        : "standard checks only"
-                    }`}
+                  : // The run's typed record says what was re-performed, in the
+                    // reviewer lane's words (one source), never "each result" over a
+                    // run that re-performed part of the items or none.
+                    `${reperformedWords(
+                      review.reperformance,
+                      review.reperformSource,
+                      reviewDifferences(review.notes),
+                    )} · ${formatDate(review.reperformedAt)}`}
             {waiting.length > 0
               ? ` · ${waiting.length} note${waiting.length === 1 ? "" : "s"} open`
               : review.notes.length > 0
@@ -140,35 +158,11 @@ export function ReviewTab({
                 : ""}
           </p>
         </div>
-        <span
-          className={`pill pill-dot ${
-            review.status === "SIGNED_OFF"
-              ? outstanding
-                ? "tone-warning"
-                : "tone-success"
-              : waiting.length > 0
-                ? "tone-warning"
-                : ""
-          }`}
-        >
+        <span className={`pill pill-dot ${pill.tone}`}>
           {review.reperforming ? (
             <span className="spinner small" aria-hidden="true" />
           ) : null}
-          {review.status === "SIGNED_OFF"
-            ? outstanding
-              ? REVIEW_OUTSTANDING
-              : "Reviewed"
-            : review.reperforming
-              ? executionOf({
-                  agent: "reviewer",
-                  run: review.reperformState,
-                  automation,
-                }).state === "UNAVAILABLE"
-                ? "Re-performance queued · automation unavailable"
-                : "Re-performing"
-              : waiting.length > 0
-                ? "Notes open"
-                : "Ready to sign off"}
+          {pill.words}
         </span>
       </header>
       {notice !== null ? (
@@ -185,12 +179,10 @@ export function ReviewTab({
           {REVIEW_NOTICES[notice]}
         </Banner>
       ) : null}
-      {reperformFailureLine(review) !== null ? (
-        // The re-performance ended without a usable answer: said as a warning, with
-        // "Re-perform" below, never as information.
-        <Banner tone="warning">{reperformFailureLine(review)}</Banner>
-      ) : review.reperformNote !== "" ? (
-        <Banner tone="info">{review.reperformNote}</Banner>
+      {banner !== null ? (
+        // Decided once in the model (reviewBanner): a failure as a warning, with
+        // "Re-perform" below, never as information, and none over a signed review.
+        <Banner tone={banner.tone}>{banner.text}</Banner>
       ) : null}
       <div className="card-body review-body">
         <dl className="review-facts">
@@ -534,15 +526,49 @@ export function ReviewTab({
                 className="review-signoff"
               >
                 <Hidden ids={ids} review={review} intent="sign-off" />
+                {ask === "ATTEST" ? (
+                  // The person's own attestation, in a check row of its own: the run's
+                  // facts are the banner's and the header's, never mixed in here. Never
+                  // offered while the sign-off waits for a run (ask WAIT: a design signed
+                  // off as not effective, where nothing was tested to re-perform by hand).
+                  <label className="check-row">
+                    <input
+                      type="checkbox"
+                      name="reperformed_by_hand"
+                      required
+                    />
+                    <span>
+                      I re-performed the remaining items by hand; the note says
+                      what.
+                    </span>
+                  </label>
+                ) : null}
                 <input
                   name="text"
                   maxLength={1000}
-                  placeholder="Sign-off note (optional)"
+                  required={ask === "ATTEST"}
+                  minLength={ask === "ATTEST" ? ATTESTATION_MIN : undefined}
+                  placeholder={
+                    ask === "ATTEST"
+                      ? "What you re-performed by hand"
+                      : "Sign-off note (optional)"
+                  }
+                  aria-describedby={
+                    ask === "ATTEST" ? `review-attest-${review.id}` : undefined
+                  }
                 />
+                {ask === "ATTEST" ? (
+                  // The note's rule, visible before submit at every width (a placeholder
+                  // is cut on a phone); minLength enforces it.
+                  <p className="form-hint" id={`review-attest-${review.id}`}>
+                    At least {ATTESTATION_MIN} characters: the items and what
+                    you checked.
+                  </p>
+                ) : null}
                 <button
                   type="submit"
                   className="btn-sm"
-                  disabled={review.blocking.length > 0}
+                  disabled={review.blocking.length > 0 || ask === "WAIT"}
                 >
                   Sign off the review
                 </button>

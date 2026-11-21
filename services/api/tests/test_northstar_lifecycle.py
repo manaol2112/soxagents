@@ -476,7 +476,7 @@ def test_samples_come_from_the_populations_and_results_cite_the_files(demo: dict
     items = _rows(
         url,
         """
-        SELECT c.control_ref, i.label, i.results, i.source
+        SELECT c.control_ref, i.label, i.results, i.source, i.overrides
         FROM test_items i JOIN test_sheets s ON s.id = i.test_sheet_id
         JOIN engagement_controls c ON c.id = s.engagement_control_id
         WHERE s.project_id = %s AND s.test_round_id IS NULL
@@ -484,6 +484,19 @@ def test_samples_come_from_the_populations_and_results_cite_the_files(demo: dict
         project_id,
     )
     assert items and all(item[3] == "SEEDED" for item in items)
+    # Every not applicable the tester agent proposed is confirmed by a person, with a reason
+    # of ten characters or more (D1, audit invariant I7): the agent's alone reads REVIEW.
+    confirmed = 0
+    for _ref, _label, results, _, overrides in items:
+        by_index = {entry["index"]: entry for entry in overrides}
+        for result in results:
+            if result["result"] == "NOT_APPLICABLE":
+                entry = by_index.get(result["index"])
+                assert entry is not None, (_ref, _label, result)
+                assert entry["result"] == "NOT_APPLICABLE" and len(entry["reason"]) >= 10
+                assert entry["by"] == str(morgan)
+                confirmed += 1
+    assert confirmed > 0
     texts = {
         str(row[0]): str(row[1])
         for row in _rows(
@@ -493,7 +506,7 @@ def test_samples_come_from_the_populations_and_results_cite_the_files(demo: dict
         )
     }
     cited = 0
-    for _ref, _label, results, _ in items:
+    for _ref, _label, results, _, _overrides in items:
         for result in results:
             if result["result"] in ("PASS", "EXCEPTION"):
                 assert result["citations"], (_ref, _label, result)
@@ -507,7 +520,7 @@ def test_samples_come_from_the_populations_and_results_cite_the_files(demo: dict
     # The planted exceptions are the items the files condemn, and only those.
     exceptions = {
         (str(ref), str(label))
-        for ref, label, results, _ in items
+        for ref, label, results, _, _overrides in items
         if any(r["result"] == "EXCEPTION" for r in results)
     }
     assert exceptions == {

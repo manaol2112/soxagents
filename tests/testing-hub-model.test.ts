@@ -458,4 +458,57 @@ describe("the Testing destination", () => {
       review: 3,
     });
   });
+
+  it("holds a review whose re-performance needs the reviewer's record by hand", () => {
+    // Before (design review, 20 November 2026): "Ready to sign off" in success tone over
+    // a partial or failed re-performance; the header pill and the round's reviews held it.
+    const stages = reviewRows({
+      reviews: [
+        review({
+          id: "rv-partial",
+          controlRef: "ITGC-AC-01",
+          attestationNeeded: true,
+          reperformance: { failed: false } as NonNullable<
+            ControlReview["reperformance"]
+          >,
+        }),
+        review({
+          id: "rv-failed",
+          controlId: "c2",
+          controlRef: "ITGC-AC-02",
+          attestationNeeded: true,
+          reperformance: { failed: true } as NonNullable<
+            ControlReview["reperformance"]
+          >,
+        }),
+        review({
+          id: "rv-full",
+          controlId: "c3",
+          controlRef: "ITGC-AC-03",
+          attestationNeeded: false,
+        }),
+        // Code review, 20 November 2026: a last attempt that gave up after a full run
+        // read "Ready to sign off" in success tone (attestationNeeded false) while the
+        // server's run_lets_sign held the queue's sign-off; it holds here too now.
+        review({
+          id: "rv-full-failed",
+          controlId: "c4",
+          controlRef: "ITGC-AC-04",
+          attestationNeeded: false,
+          reperformance: { failed: true } as NonNullable<
+            ControlReview["reperformance"]
+          >,
+        }),
+      ],
+      queue: null,
+      organizationId: ORG,
+      projectId: PROJECT,
+    }).map((row) => [row.controlRef, row.stage, row.tone]);
+    assert.deepEqual(stages, [
+      ["ITGC-AC-01", "Re-perform needed", "warning"],
+      ["ITGC-AC-02", "Re-performance did not finish", "warning"],
+      ["ITGC-AC-03", "Ready to sign off", "success"],
+      ["ITGC-AC-04", "Re-performance did not finish", "warning"],
+    ]);
+  });
 });

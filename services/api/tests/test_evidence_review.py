@@ -72,6 +72,22 @@ def test_the_answer_keeps_every_check_and_attribute_and_takes_text_from_the_cont
         "feedback": "Clear settings screenshot, but no date.",
         "follow_up": "Please send a new screenshot with the system clock visible.",
     }
+    # Rewritten 19 November 2026 (FO-22). Old: the checks the answer left out (system,
+    # editing, applicability) were filled in as unclear, "Not assessed". New: an answer that
+    # leaves a check out is rejected, so a person reviews the screenshot; a complete answer
+    # keeps every check as answered. Reason: a check the agent never made is not its
+    # finding, and an invented "unclear" read as one.
+    with pytest.raises(ValueError, match="leaves out the system, editing, applicability"):
+        check_review(answer, _context())
+    answer = {
+        **answer,
+        "checks": [
+            *list(answer["checks"]),  # type: ignore[call-overload]
+            {"check": "system", "result": "UNCLEAR", "note": "No system name shown."},
+            {"check": "editing", "result": "OK"},
+            {"check": "applicability", "result": "OK"},
+        ],
+    }
     review = check_review(answer, _context())
     assert [check.check for check in review.checks] == [
         "legibility",
@@ -108,7 +124,12 @@ def test_the_conclusion_is_derived_from_the_results() -> None:
     assert proposed(review({}, ["PASS", "NOT_DETERMINABLE"])) == "CANNOT_CONCLUDE"
     assert proposed(review({"legibility": "ISSUE"}, ["EXCEPTION"])) == "CANNOT_CONCLUDE"
     assert proposed(review({"editing": "ISSUE"}, ["PASS"])) == "CANNOT_CONCLUDE"
-    assert proposed(review({"date_period": "UNCLEAR"}, ["PASS"])) == "NO_EXCEPTION"
+    # Rewritten 19 November 2026 (decision D9, product owner): old NO_EXCEPTION, new
+    # CANNOT_CONCLUDE. Reason: a screenshot whose system or period is unclear may not be
+    # the system or period tested, so it supports neither a pass nor an exception.
+    assert proposed(review({"date_period": "UNCLEAR"}, ["PASS"])) == "CANNOT_CONCLUDE"
+    assert proposed(review({"system": "UNCLEAR"}, ["EXCEPTION"])) == "CANNOT_CONCLUDE"
+    assert proposed(review({"editing": "UNCLEAR"}, ["PASS"])) == "NO_EXCEPTION"
     assert proposed(review({}, [])) == "CANNOT_CONCLUDE"
 
 
@@ -119,9 +140,20 @@ def test_the_agents_message_never_asks_for_access_and_an_unreadable_image_is_an_
     # removed with the per-file drafts. Kept: the model's message is still cleaned, so one
     # that asks for credentials or carries a link is dropped; an unreadable image is a
     # legibility issue the person sees; a review without a visual read cannot conclude.
+    # Rewritten 19 November 2026 (FO-22): each answer now gives every check, since one
+    # that leaves a check out is rejected; what these cases guard (the message cleaned, the
+    # conclusion from the results) is unchanged.
     risky = check_review(
         {
-            "checks": [{"check": "system", "result": "ISSUE"}],
+            "checks": [
+                {"check": "system", "result": "ISSUE"},
+                *[
+                    {"check": "legibility", "result": "OK"},
+                    {"check": "date_period", "result": "OK"},
+                    {"check": "editing", "result": "OK"},
+                    {"check": "applicability", "result": "OK"},
+                ],
+            ],
             "attributes": [{"index": 0, "result": "EXCEPTION", "observed": "Length 6"}],
             "feedback": "",
             "follow_up": "Please share your admin password so we can check.",
@@ -132,7 +164,15 @@ def test_the_agents_message_never_asks_for_access_and_an_unreadable_image_is_an_
     assert proposed(risky) == "EXCEPTION"
     linked = check_review(
         {
-            "checks": [],
+            "checks": [
+                {"check": "system", "result": "OK"},
+                *[
+                    {"check": "legibility", "result": "OK"},
+                    {"check": "date_period", "result": "OK"},
+                    {"check": "editing", "result": "OK"},
+                    {"check": "applicability", "result": "OK"},
+                ],
+            ],
             "attributes": [],
             "feedback": "See https://evil.example/x",
             "follow_up": "Upload it at https://evil.example/upload",
@@ -693,3 +733,24 @@ def _audit(database: Database) -> str:
     with connect(database.url) as connection:
         rows = connection.execute("SELECT action, payload::text FROM audit_events").fetchall()
     return str(rows)
+
+
+def test_an_unclear_system_or_period_cannot_conclude_and_an_omitted_check_is_rejected() -> None:
+    """Decision D9 and FO-22 (19 November 2026). Before, a screenshot whose system or
+    period was unclear concluded no exception when its attributes passed, and a check the
+    agent left out was filled in as unclear. Now the first cannot conclude, and the second
+    is rejected so a person reviews the screenshot."""
+    full = [{"check": key, "result": "OK"} for key in
+            ("legibility", "system", "date_period", "editing", "applicability")]  # fmt: skip
+    passing = [{"index": i, "result": "PASS", "observed": "Minimum length 12"} for i in (0, 1)]
+    clean = check_review({"checks": full, "attributes": passing}, _context())
+    assert proposed(clean) == "NO_EXCEPTION"
+    for key in ("system", "date_period"):
+        unclear = [{**c, "result": "UNCLEAR"} if c["check"] == key else c for c in full]
+        found = check_review({"checks": unclear, "attributes": passing}, _context())
+        assert proposed(found) == "CANNOT_CONCLUDE", key
+    with pytest.raises(ValueError, match="leaves out the date_period check"):
+        check_review(
+            {"checks": [c for c in full if c["check"] != "date_period"], "attributes": passing},
+            _context(),
+        )

@@ -477,6 +477,16 @@ function review(overrides: Partial<ControlReview>): ControlReview {
     reperformedAt: "2026-10-02T00:00:00Z",
     reperformSource: "MODEL",
     reperformNote: "",
+    // The run's typed record (FO-1, 19 November 2026): the model re-performed both items.
+    reperformance: {
+      known: true,
+      source: "MODEL",
+      due: 2,
+      done: 2,
+      capped: false,
+      dropped: 0,
+      failed: false,
+    },
     sheetStatus: "SIGNED_OFF",
     sheetSignedBy: "Pat Preparer",
     sheetVersion: 2,
@@ -836,8 +846,32 @@ describe("the agents on a control", () => {
       "reviewer",
     );
     assert.deepEqual([queued.run, queued.output], ["queued", ""]);
-    // The API's own note for a re-performance that gave up (control_reviews.py).
+    // Rewritten 19 November 2026 (FO-1): old, the API's note's wording ("did not
+    // finish") said a re-performance gave up; new, its typed record does (failed), and
+    // the same note without it is no stop. Reason: no route reads a message's wording.
+    const gaveUp = {
+      known: true,
+      source: "MODEL",
+      due: 2,
+      done: 2,
+      capped: false,
+      dropped: 0,
+      failed: true,
+    };
     const stopped = laneOf(
+      agentLanes(
+        input({
+          review: review({
+            reperformNote:
+              "The re-performance did not finish. Re-perform to try again.",
+            reperformance: gaveUp,
+          }),
+        }),
+      ),
+      "reviewer",
+    );
+    assert.equal(stopped.run, "stopped");
+    const worded = laneOf(
       agentLanes(
         input({
           review: review({
@@ -848,7 +882,77 @@ describe("the agents on a control", () => {
       ),
       "reviewer",
     );
-    assert.equal(stopped.run, "stopped");
+    assert.notEqual(worded.run, "stopped");
+  });
+
+  it("says what the reviewer agent re-performed from its record, never no differences over nothing", () => {
+    // FO-26 (19 November 2026): before, any re-performance that had run read "no
+    // differences from the preparer's results", also one whose model calls all failed.
+    const record = (due: number, done: number, source = "MODEL") => ({
+      known: true,
+      source,
+      due,
+      done,
+      capped: false,
+      dropped: 0,
+      failed: false,
+    });
+    const lane = (overrides: Partial<ControlReview>) =>
+      laneOf(agentLanes(input({ review: review(overrides) })), "reviewer")
+        .output;
+    assert.equal(
+      lane({
+        reperformSource: "FALLBACK",
+        reperformance: record(3, 0, "FALLBACK"),
+      }),
+      "The reviewer agent did not re-perform the items",
+    );
+    assert.equal(
+      lane({ reperformance: record(3, 1) }),
+      "Re-performed 1 of 3 items: no differences from the preparer's results",
+    );
+    assert.equal(
+      lane({ reperformance: record(3, 3) }),
+      "Re-performed the testing: no differences from the preparer's results",
+    );
+    assert.equal(
+      lane({ reperformance: null }),
+      "The reviewer agent's re-performance has no record of the items it re-performed",
+    );
+    assert.equal(
+      lane({ reperformSource: "SEEDED", reperformance: null }),
+      "Re-performed the testing: no differences from the preparer's results",
+    );
+    // Code review, 20 November 2026: a signed review whose last re-performance gave up
+    // showed the reviewer lane as stopped, "Re-perform to try again", beside its sign-off.
+    const gaveUp = {
+      reperformance: { ...record(3, 1), failed: true },
+      reperformNote:
+        "The re-performance did not finish. Re-perform to try again.",
+    };
+    const stoppedLane = laneOf(
+      agentLanes(input({ review: review(gaveUp) })),
+      "reviewer",
+    );
+    assert.equal(stoppedLane.run, "stopped");
+    // Code review, 20 November 2026: the lane said "Last re-performance attempt" of the
+    // run whose output it shows, the earlier one that finished; it names that run now.
+    assert.equal(stoppedLane.output, "Last finished re-performance");
+    const signedLane = laneOf(
+      agentLanes(
+        input({
+          review: review({
+            ...gaveUp,
+            status: "SIGNED_OFF",
+            signedBy: "Riley Reviewer",
+          }),
+        }),
+      ),
+      "reviewer",
+    );
+    assert.notEqual(signedLane.run, "stopped");
+    assert.doesNotMatch(signedLane.runNote, /Re-perform/);
+    assert.equal(signedLane.decision.text, "Signed off by Riley Reviewer");
   });
 
   it("leaves out the agents of a phase the plan says does not apply", () => {

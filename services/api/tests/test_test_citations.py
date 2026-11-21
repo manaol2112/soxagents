@@ -145,3 +145,52 @@ def _upload_bytes(
     assert added.status_code == 200, added.text
     file_id: str = added.json()["file_id"]
     return file_id
+
+
+def test_a_citation_the_file_negates_is_not_found() -> None:
+    """Review B3 (audit invariants I6, I10; 20 November 2026). Before, "approved by the
+    line manager" of "Access was not approved by the line manager" was kept as a found
+    citation and could support a pass. Now a passage the words just before it negate is
+    not found; the file's own negated words, quoted whole, are kept."""
+    cited = (CitedFile(uuid4(), "ticket.txt", "Access was not approved by the line manager.\n"
+                       "Change 43 approved by the line manager.", False),)  # fmt: skip
+    # Dated note (review N-a, 20 November 2026): old, the call had no `supports` and the
+    # whole negated quote was kept for any result; new, it is kept for an exception's
+    # citations (supports=False) and not found where it would support a result (the
+    # default); why, "was not approved" never shows an approval. The assertion is kept.
+    assert check_citations([{"file": 0, "quote": "was not approved by the line manager"}],
+                           cited, supports=False)[0]["found"] is True  # fmt: skip
+    kept = check_citations([{"file": 0, "quote": "approved by the line manager"}], cited)
+    # find_quote locates the first occurrence, the negated one: it is not kept.
+    assert kept == []
+    later = check_citations([{"file": 0, "quote": "Change 43 approved by the line manager"}],
+                            cited)  # fmt: skip
+    assert later[0]["found"] is True
+
+
+def test_a_quote_that_carries_its_own_negation_never_supports_a_pass() -> None:
+    """Review N-a (audit invariants I6, I10; 20 November 2026). Before, a pass citing "was
+    not approved by the line manager" kept the citation as found and stood on it. Now a
+    supporting citation (a pass, the default) whose own words are negated is not found and
+    the pass is unable to tell; an exception keeps the same quote as its support."""
+    text = "Access was not approved by the line manager.\n"
+    cited = (CitedFile(uuid4(), "ticket.txt", text, False),)
+    quote = {"file": 0, "quote": "was not approved by the line manager"}
+    assert check_citations([quote], cited) == []
+    assert check_citations([quote], cited, supports=True) == []
+    files = (ItemFile("ticket.txt", "other", text, None, uuid4(), False),)
+    results = check_results(
+        {"results": [
+            {"index": 0, "result": "PASS", "note": "Approved by the line manager.",
+             "citations": [quote]},
+            {"index": 1, "result": "EXCEPTION", "note": "The access was not approved.",
+             "citations": [quote]},
+        ]},
+        2,
+        files,
+    )  # fmt: skip
+    assert results[0]["citations"] == []
+    from ai_workforce_api.testing_engine import supported
+
+    assert supported(results, files)[0]["result"] == "UNABLE"
+    assert results[1]["citations"][0]["found"] is True

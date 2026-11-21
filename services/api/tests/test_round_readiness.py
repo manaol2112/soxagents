@@ -4,7 +4,7 @@ the approved testing prerequisites; roll-forward after interim signed off effect
 gates refuse sampling and testing until then, and say why."""
 
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from support import Database
@@ -173,3 +173,38 @@ def test_a_roll_forward_round_reads_its_readiness(migrated: Database) -> None:
         "SIGNED_OFF",
         "REVIEWED",
     )
+
+
+def test_after_interim_sign_off_unsettled_criteria_still_hold_testing() -> None:
+    """FO-10 (audit invariant I1, 19 November 2026). Before, once the interim testing was
+    signed off (READY_FOR_REVIEW, CONCLUDED), a blocked plan, criteria, process or conflicts
+    check no longer held testing, so a round was sampled and tested over it; and the
+    waiting line said "Testing waits: concluded." Now such a check holds testing in every
+    state, and the line names the check."""
+    from uuid import uuid4
+
+    from ai_workforce_api.readiness import Blocker, CheckBody, ReadinessBody
+
+    blocked = CheckBody(
+        key="criteria",
+        title="Testing criteria",
+        status="BLOCKED",
+        summary="",
+        blockers=[Blocker(detail="Attribute A has no criteria.", why="", resolve="")],
+    )
+    waiting = Blocker(detail="Waiting for evidence.", why="", resolve="")
+    evidence = CheckBody(
+        key="evidence", title="Evidence", status="BLOCKED", summary="", blockers=[waiting]
+    )
+    states: tuple[tuple[Literal["READY_FOR_REVIEW", "CONCLUDED"], str], ...] = (
+        ("READY_FOR_REVIEW", "Ready for review"),
+        ("CONCLUDED", "Concluded"),
+    )
+    for state, label in states:
+        held = ReadinessBody(control_id=uuid4(), state=state, label=label, classifications=[],
+                             process_required=False, checks=[evidence, blocked])  # fmt: skip
+        assert held.blocking is True
+        assert held.first_blocker() == "Attribute A has no criteria."
+        assert held.waits_for() == "testing criteria"
+        clear = held.model_copy(update={"checks": [evidence]})
+        assert clear.blocking is False

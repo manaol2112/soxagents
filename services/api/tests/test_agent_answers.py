@@ -742,7 +742,14 @@ def test_each_record_says_what_failed_what_was_kept_and_what_to_do() -> None:
         evidence_wizard.read_failure_note("FAILED", "The file could not be read."),
         pbc_drafting.draft_failure_note("FAILED", None, ""),
         workpaper_service.draft_failure_note("IDLE", workpaper_service.DRAFT_FAILED, None),
-        control_reviews.reperform_failure_note("IDLE", None, control_reviews.REPERFORM_FAILED),
+        # Rewritten 19 November 2026 (FO-1): old, the note's wording (REPERFORM_FAILED) told
+        # a re-performance that gave up; new, the run's typed record does. Same sentence.
+        control_reviews.reperform_failure_note(
+            "IDLE",
+            None,
+            control_reviews.REPERFORM_FAILED,
+            control_reviews.ReperformanceBody(failed=True),
+        ),  # fmt: skip
         console.failure_note("AGENT", "FAILED", "The model did not answer in time.", False, True),
     ]
     for sentence in said:

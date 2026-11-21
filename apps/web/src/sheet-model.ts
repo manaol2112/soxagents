@@ -32,6 +32,8 @@ export const RESULTS: readonly Result[] = [
   "REVIEW",
   "NOT_APPLICABLE",
 ];
+/** The shortest reason a person gives for not applicable (test_sheets.MIN_NOT_APPLICABLE_REASON). */
+export const NOT_APPLICABLE_REASON_MIN = 10;
 export const RESULT_LABELS: Record<Result, string> = {
   PASS: "Pass",
   EXCEPTION: "Exception",
@@ -539,6 +541,10 @@ export function sheetWrite(fields: Record<string, string>): SheetWrite {
       !/^\d{1,2}$/.test(index) ||
       chosen === undefined ||
       reason.length < 3 ||
+      // A person's not applicable says why (decision D1, 19 November 2026), as the
+      // server's OverrideBody checks it.
+      (chosen === "NOT_APPLICABLE" &&
+        reason.replace(/\s+/g, " ").length < NOT_APPLICABLE_REASON_MIN) ||
       reason.length > 500 ||
       !text(reason)
     ) {

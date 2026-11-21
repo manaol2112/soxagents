@@ -30,7 +30,11 @@ from test_workpapers import _tested_control
 from ai_workforce_api.authorization import Principal, PrincipalKind
 from ai_workforce_api.console import _inbox
 from ai_workforce_api.control_instances import control_label
-from ai_workforce_api.control_reviews import REPERFORM_FAILED, run_reperformance
+from ai_workforce_api.control_reviews import (
+    REPERFORM_FAILED,
+    fail_reperformance,
+    run_reperformance,
+)
 from ai_workforce_api.db import connect
 from ai_workforce_api.evidence_analysis import run_analysis
 from ai_workforce_api.queue import NO_WORKER, queue
@@ -253,21 +257,48 @@ def test_queued_agent_work_is_upcoming_with_a_worker_and_blocked_without(
     assert kinds == ["request-draft", "review"]
     # The re-performance that did not finish is a stopped execution, the reviewer's
     # to start again, under the same item.
+    # Rewritten 20 November 2026 (S5). Old: the review rested with the note's wording
+    # (REPERFORM_FAILED) and no earlier re-performance, and the queue read the wording. New:
+    # the wording alone is no stop; a run that gives up (fail_reperformance, its typed
+    # `review.reperform_failed` event) is, after an earlier re-performance too, where the
+    # queue said "Sign off the review" or listed its notes. Reason: no reader routes on a
+    # note's wording (FO-1); a review whose last run stopped is not ready to sign.
+    reviewer = _session(migrated, team["reviewer_id"])
+    key = f"review:{review['id']}"
     with connect(migrated.url) as connection:
         connection.execute(
-            """
-            UPDATE control_reviews SET reperform_status = 'IDLE', reperformed_at = NULL,
-                   reperform_note = %s WHERE id = %s
-            """,
+            "UPDATE control_reviews SET reperform_status = 'IDLE', reperform_note = %s "
+            "WHERE id = %s",
             (REPERFORM_FAILED, review["id"]),
         )
         connection.commit()
-    reviewer = _session(migrated, team["reviewer_id"])
-    key = f"review:{review['id']}"
+    [worded] = [i for i in _queue(reviewer, team)["items"] if i["id"] == key]
+    assert worded["obligation"] == "CONTROL_REVIEW"
+    assert worded["title"] == "Re-perform the testing for the review"
+    with connect(migrated.url) as connection:
+        connection.execute(
+            "UPDATE control_reviews SET reperform_status = 'PENDING' WHERE id = %s",
+            (review["id"],),
+        )
+        connection.commit()
+        assert run_reperformance(connection, None, UUID(review["id"])) == "DONE"
+        connection.execute(
+            "UPDATE control_reviews SET reperform_status = 'PENDING' WHERE id = %s",
+            (review["id"],),
+        )
+        connection.commit()
+        fail_reperformance(connection, UUID(review["id"]))
+        connection.commit()
+        reperformed = connection.execute(
+            "SELECT reperformed_at FROM control_reviews WHERE id = %s", (review["id"],)
+        ).fetchone()
+    assert reperformed is not None and reperformed[0] is not None
     [again] = [i for i in _queue(reviewer, team)["items"] if i["id"] == key]
-    assert again["title"] == "Re-perform the testing for the review again"
+    assert again["title"] == "Re-perform the testing again"
     assert again["obligation"] == "REPERFORMANCE_STOPPED" and again["bucket"] == "MINE"
     assert again["reason"] == REPERFORM_FAILED
+    [row] = [r for r in _controls(reviewer, team) if r["id"] == control]
+    assert row["agents"]["stopped"] == ["reviewing"]
     # The inbox lists what waits on a person: with a worker the queued re-performance
     # is upcoming and not in it; the test app has no worker, so over the API the same
     # item is blocked and the inbox says what holds it.

@@ -358,3 +358,113 @@ def test_a_trace_that_cannot_judge_the_removal_is_never_ready() -> None:
         o.title for o in body.observations
     ]
     assert body.ready is False
+
+
+def test_a_population_whose_period_cannot_be_checked_is_an_issue() -> None:
+    """FO-19 and item 5 (audit invariant I12, 19 November 2026). Before, a population with
+    no date column read "No date column was found" as information, so readiness said its
+    checks passed; and a column of ambiguous slashed dates (03/04/2027) was read month first
+    without a word. Now both are issues a person looks at; a column whose own values tell
+    the order is read as before."""
+    from ai_workforce_api.evidence_extraction import Table
+    from ai_workforce_api.sampling import build_frame, slash_order
+
+    def frame(columns: tuple[str, ...], rows: list[list[str]]) -> Any:
+        table = Table("Sheet1", columns, tuple(tuple(row) for row in rows), "")
+        return next(c for c in build_frame(table, date(2027, 12, 31), "EVENT_DRIVEN").checks
+                    if c.check == "period")  # fmt: skip
+
+    undated = frame(("User ID", "Name"), [["u1", "A"], ["u2", "B"]])
+    assert undated.result == "ISSUE" and "No date column was found" in undated.detail
+    guessed = frame(("User ID", "Date granted"), [["u1", "03/04/2027"], ["u2", "05/06/2027"]])
+    assert guessed.result == "ISSUE" and "day or month first" in guessed.detail
+    told = frame(("User ID", "Date granted"), [["u1", "03/04/2027"], ["u2", "25/06/2027"]])
+    assert told.result == "OK"
+    assert slash_order(["03/04/2027"], strict=True) is None
+    assert slash_order(["03/04/2027", "25/04/2027", "04/25/2027"], strict=True) is None
+    assert slash_order(["03/04/2027", "25/04/2027"], strict=True) == "dmy"
+
+
+def test_names_in_any_script_are_compared_as_themselves() -> None:
+    """Critic 17 (19 November 2026). Before, a trace's values kept only a to z and 0 to 9,
+    so "Иван Петров" had no tokens and "Müller" read as "m ller"; now every script is kept,
+    for the traces and the testing comparisons alike (sampling.normal_value)."""
+    from ai_workforce_api.sample_traces import normal
+
+    assert normal("Иван Петров") == "иван петров"
+    assert normal("Müller, Hans") == "hans müller"
+    assert normal("J.Smith@corp.example") == "j.smith@corp.example"
+    assert normal("Иван Петров") != normal("Пётр Иванов")
+
+
+def test_trace_dates_follow_the_listings_own_order() -> None:
+    """FO-17 (audit invariant I12, 19 November 2026). Before, a trace read every slashed
+    date month first, so 03/04/2027 in a day-first listing timed a removal a month off.
+    Now each listing column is read in the order its own values show; a column that cannot
+    tell leaves the date unread and asks a person to confirm the format, and a prose date
+    that could be either way is not read."""
+    from ai_workforce_api.sample_traces import (
+        listing_orders,
+        row_dates,
+        text_dates,
+        unplaced_dates,
+    )
+
+    columns = ["User", "Termination date", "Disabled date"]
+    rows = [["u1", "03/04/2027", "05/04/2027"], ["u2", "25/04/2027", "26/04/2027"]]
+    orders = listing_orders(columns, rows)
+    assert orders == {1: "dmy", 2: "dmy"}
+    assert [(role, when) for _label, when, role in row_dates(columns, rows[0], orders)] == [
+        ("EVENT", date(2027, 4, 3)),
+        ("REMOVAL", date(2027, 4, 5)),
+    ]
+    alone = [["u1", "03/04/2027", "05/04/2027"]]
+    unknown = listing_orders(columns, alone)
+    assert unknown == {}
+    assert row_dates(columns, alone[0], unknown) == []
+    assert unplaced_dates(columns, alone[0], unknown) == [
+        ("Termination date", "03/04/2027"),
+        ("Disabled date", "05/04/2027"),
+    ]
+    assert text_dates("Termination date: 03/04/2027") == []
+    assert [when for _l, when, _r in text_dates("Termination date: 2027-04-03")] == [
+        date(2027, 4, 3)
+    ]
+
+
+def test_a_trace_with_a_date_it_cannot_place_is_not_ready() -> None:
+    """FO-16 (audit invariant I12, 19 November 2026). Before, a trace with a time limit
+    stated and no removal date said nothing: a combined listing whose termination row had no
+    disable date, or a trace with neither date, could be ready as traced within the limit.
+    Now a stated limit with no removal to time against it is a point to settle; and a
+    "Term Date" column names the event, an expiry the removal."""
+    from ai_workforce_api.sample_traces import (
+        DateBody,
+        EventBody,
+        TraceBody,
+        TraceFileBody,
+        _timing,
+        row_dates,
+    )
+
+    termination = date(2027, 3, 12)
+    listing = TraceFileBody(
+        file_id=uuid4(), file_name="hr and ad.csv", listing=True, state="FOUND",
+        dates=[DateBody(label="Termination date", date=termination, role="EVENT")],
+    )  # fmt: skip
+    body = TraceBody(
+        requirement_id=uuid4(), status="CONFIRMED", noun="person", limit_days=5,
+        event=EventBody(label="Termination date", date=termination, file_name="hr and ad.csv"),
+        files=[listing],
+    )  # fmt: skip
+    [point] = _timing(body, "Demo User 1")
+    assert point.kind == "NOT_TRACED" and point.title == "No removal date for Demo User 1"
+    neither = body.model_copy(update={"event": None, "files": [listing.model_copy(
+        update={"dates": []})]})  # fmt: skip
+    [none] = _timing(neither, "Demo User 1")
+    assert "the date of the event that required it" in none.question
+    # Without a limit stated, nothing is timed, as before.
+    assert _timing(body.model_copy(update={"limit_days": None}), "Demo User 1") == []
+    roles = [role for _l, _d, role in row_dates(
+        ["Term Date", "Account expires"], ["2027-03-12", "2027-03-14"])]  # fmt: skip
+    assert roles == ["EVENT", "REMOVAL"]

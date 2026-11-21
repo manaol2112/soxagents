@@ -53,6 +53,7 @@ from ai_workforce_api.model_providers import live_model, provider_for
 from ai_workforce_api.models import ModelImage, ModelProvider, ModelRequest
 from ai_workforce_api.prompt_data import neutral
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor, record_outcome
+from ai_workforce_api.sampling import SlashOrder
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.test_citations import (
     CITATION_SCHEMA,
@@ -60,7 +61,7 @@ from ai_workforce_api.test_citations import (
     check_citations,
     is_image_name,
 )
-from ai_workforce_api.testing_checks import CHECKS_SCHEMA, instruction_guard
+from ai_workforce_api.testing_checks import CHECKS_SCHEMA, date_orders, instruction_guard
 from ai_workforce_api.testing_checks import apply as apply_checks
 from ai_workforce_api.testing_checks import evaluate as evaluate_checks
 from ai_workforce_api.walkthrough_answers import for_agents as walkthrough_for_agents
@@ -134,16 +135,31 @@ class ItemView:
 
 
 def final_results(
-    attributes: int, results: list[dict[str, Any]], overrides: list[dict[str, Any]]
+    attributes: int,
+    results: list[dict[str, Any]],
+    overrides: list[dict[str, Any]],
+    *,
+    confirm_not_applicable: bool = False,
 ) -> tuple[Result | None, ...]:
-    """Per attribute: a person's override, else the tester's proposal, else nothing."""
+    """Per attribute: a person's override, else the tester's proposal, else nothing.
+
+    With `confirm_not_applicable` (an open sheet), the tester's not applicable is a
+    proposal a person confirms (decision D1, product owner, 19 November 2026; audit
+    invariant I7): until a person overrides it with a reason, its final is REVIEW, so the
+    sheet cannot conclude on it. Before, an agent's not applicable concluded the attribute.
+    A signed sheet keeps what was signed; a review raises the unconfirmed ones instead
+    (control_reviews.rules_findings)."""
     proposed: dict[int, Result] = {}
     for item in results:
         try:
             parsed = AttributeResult.model_validate(item)
         except ValidationError:
             continue
-        proposed[parsed.index] = parsed.result
+        proposed[parsed.index] = (
+            "REVIEW"
+            if confirm_not_applicable and parsed.result == "NOT_APPLICABLE"
+            else parsed.result
+        )
     for item in overrides:
         try:
             parsed_override = Override.model_validate(item)
@@ -154,8 +170,9 @@ def final_results(
 
 
 def conclusion(items: list[ItemView]) -> Conclusion:
-    """Zero tolerance. Incomplete until every item is tested and every result decided."""
-    if not items:
+    """Zero tolerance. Incomplete until every item is tested and every result decided,
+    and while any item has no attribute to test (FO-21)."""
+    if not items or any(not item.final for item in items):
         return "INCOMPLETE"
     finals = [result for item in items for result in item.final]
     if any(result == "EXCEPTION" for result in finals):
@@ -479,7 +496,70 @@ def tailored_criteria(
     return found
 
 
-def prompt_for(context: ItemContext) -> str:
+@dataclass(frozen=True)
+class TestingBasis:
+    """What a tester and a re-performer judge an item against, built once for both (item 8,
+    19 November 2026; audit invariant I11): each attribute's library definition, the
+    criteria a person owns for it, the control's design and the walkthrough's confirmed
+    answers. Before, the re-performer was given none of these, so it re-performed against a
+    different standard from the one the tester applied. Neither the mapped passages nor an
+    agent's screenshot review is part of it: the re-performer reads the files alone."""
+
+    definitions: tuple[dict[str, Any] | None, ...]
+    tailored: tuple[dict[str, Any] | None, ...]
+    design: dict[str, Any] | None
+    walkthrough: tuple[dict[str, str], ...]
+
+
+def testing_basis(
+    connection: psycopg.Connection[Any], control_id: UUID, attributes: tuple[str, ...]
+) -> TestingBasis:
+    return TestingBasis(
+        definitions=tuple(
+            None if found is None else definition_prompt(found)
+            for found in sheet_definitions(connection, control_id, list(attributes))
+        ),
+        tailored=tuple(tailored_criteria(connection, control_id, list(attributes))),
+        design=design_prompt(design_for(connection, control_id)),
+        walkthrough=tuple(
+            {"question": question, "answer": answer}
+            for question, answer in walkthrough_for_agents(connection, control_id)
+        ),
+    )
+
+
+def basis_inputs(
+    connection: psycopg.Connection[Any],
+    control_id: UUID,
+    attributes: tuple[str, ...],
+    tailored: tuple[dict[str, Any] | None, ...],
+) -> dict[str, Any]:
+    """The basis an item was judged against, for its model call's record (ST-1; decision
+    D2): each attribute's identity and the hash of the owned criteria given for it, and the
+    hash of them all. The tester's and the re-performer's calls record the same (I13)."""
+    given = list(tailored or (None,) * len(attributes))
+    return {
+        "criteria_sha256": _sha(given),
+        "attribute_basis": [
+            {"key": key, "criteria_sha256": _sha(found)}
+            for key, found in zip(
+                attribute_keys(connection, control_id, attributes), given, strict=True
+            )
+        ],
+    }
+
+
+# What the prompt asks of the model: a tester tests, a re-performer re-performs. Typed, so
+# a rewording of the tester's prompt never leaves the re-performer told to "Test" (critic
+# 8, 19 November 2026; before, the reviewer replaced the tester's first sentence).
+PromptRole = Literal["TEST", "REPERFORM"]
+_ASK: dict[str, str] = {
+    "TEST": "Test this item against each attribute.",
+    "REPERFORM": "Re-perform the test of this item against each attribute.",
+}
+
+
+def prompt_for(context: ItemContext, role: PromptRole = "TEST") -> str:
     facts = {
         "control": {
             "ref": context.control_ref,
@@ -521,7 +601,11 @@ def prompt_for(context: ItemContext) -> str:
                 "index": index,
                 "name": item.file_name[:200],
                 "kind": item.kind,
-                "screenshot_review": item.review,
+                # The review's findings only, as before; a person's decision on it is
+                # what from_reviews reads, never the tester's prompt.
+                "screenshot_review": None
+                if item.review is None
+                else {key: item.review.get(key) for key in ("checks", "attributes")},
                 "shown_as_image": item.seen_as_image,
             }
             for index, item in enumerate(context.files)
@@ -554,7 +638,7 @@ def prompt_for(context: ItemContext) -> str:
         else ""
     )
     return (
-        "Test this item against each attribute.\n\n"
+        f"{_ASK[role]}\n\n"
         f"{context_block}"
         f"{images}"
         f"<control_and_item>\n{neutral(json.dumps(facts, ensure_ascii=False, indent=1))}\n"
@@ -568,10 +652,12 @@ def check_results(
     attributes: int,
     files: tuple[ItemFile, ...] = (),
     detail: tuple[tuple[str, str], ...] = (),
+    orders: dict[str, SlashOrder] | None = None,
 ) -> list[dict[str, Any]]:
     """One result per attribute. A missing or repeated index is unable to tell.
 
-    Each result keeps only the citations that check out against its files.
+    Each result keeps only the citations that check out against its files. `orders` are
+    the population columns' date orders over the sheet's sampled rows (date_orders).
     """
     raw = output.get("results")
     if not isinstance(raw, list):
@@ -598,7 +684,9 @@ def check_results(
         if parsed.index < attributes and parsed.index not in by_index:
             by_index[parsed.index] = parsed
             if len(cited) == len(files):
-                citations[parsed.index] = check_citations(data.get("citations"), cited)
+                citations[parsed.index] = check_citations(
+                    data.get("citations"), cited, supports=parsed.result != "EXCEPTION"
+                )
             extra[parsed.index] = {
                 key: _clean(str(data.get(key) or ""), 400)
                 for key in ("observed", "expected", "limitations")
@@ -627,12 +715,17 @@ def check_results(
             "limitations": more.get("limitations", ""),
             "citations": citations.get(index, []),
         }
+        if found is None:
+            # Typed, so a reader never routes on the note (UH-4, 19 November 2026).
+            result["rule"] = "OMITTED"
         # Not applicable without a reason could hide an exception: a person decides (M3d).
         if result["result"] == "NOT_APPLICABLE" and not substantive(str(result["note"])):
             reason = _clean(f"{UNEXPLAINED_NOT_APPLICABLE} {result['note']}", 400)
             result = {**result, "result": "REVIEW", "note": reason}
         # Objective comparisons are evaluated here from verified values (testing_checks).
-        checked.append(apply_checks(result, evaluate_checks(more.get("raw_checks"), texts, detail)))
+        checked.append(
+            apply_checks(result, evaluate_checks(more.get("raw_checks"), texts, detail, orders))
+        )
     return checked
 
 
@@ -710,32 +803,56 @@ def _exception_stands(item: dict[str, Any]) -> dict[str, Any]:
 def from_reviews(
     files: tuple[ItemFile, ...], attributes: tuple[str, ...] | list[str]
 ) -> list[dict[str, Any]] | None:
-    """A control tested once from screenshots reuses their first-pass review, if complete.
-    Each review answer is matched to an attribute by the wording it was reviewed against,
-    never by its position (ST-1): one the review did not answer as worded now, or an answer
-    to a wording no longer approved, leaves the item to the tester or a person."""
+    """A control tested once from screenshots reuses their review, once a person decided
+    it (item 17 with D9 and FO-22, 19 November 2026). Each review answer is matched to an
+    attribute by the wording it was reviewed against, never by its position (ST-1): one the
+    review did not answer as worded now, or an answer to a wording no longer approved,
+    leaves the item to the tester or a person.
+
+    A review stands in only as a person decided it: none undecided, none the person
+    concluded cannot conclude (None: the item is unable). An attribute passes only where the
+    person concluded no exception, the review passed it, no check is an issue, and the
+    system and period are shown (or the person overrode the review, with a reason); any
+    other answer, an exception included, goes to a person (REVIEW), since the review cites
+    no passage. Before, the agent's undecided review stood in, its exception stood even
+    when a person overrode it, and an unclear system or period still passed."""
     if not files or any(item.review is None for item in files):
         return None
     wanted = {" ".join(text[:300].lower().split()): index for index, text in enumerate(attributes)}
     found: dict[int, dict[str, Any]] = {}
     for item in files:
-        for test in (item.review or {}).get("attributes", []):
+        review = item.review or {}
+        decision = review.get("decision")
+        concluded = review.get("conclusion")
+        if decision not in ("ACCEPTED", "OVERRIDDEN") or concluded not in (
+            "NO_EXCEPTION",
+            "EXCEPTION",
+        ):
+            return None
+        checks = {
+            str(check.get("check")): str(check.get("result"))
+            for check in review.get("checks", [])
+            if isinstance(check, dict)
+        }
+        shown = decision == "OVERRIDDEN" or all(
+            checks.get(key) == "OK" for key in ("system", "date_period")
+        )
+        clean = concluded == "NO_EXCEPTION" and shown and "ISSUE" not in checks.values()
+        for test in review.get("attributes", []):
             if not isinstance(test, dict) or not isinstance(test.get("attribute"), str):
                 return None
             index = wanted.get(" ".join(str(test["attribute"])[:300].lower().split()))
             if index is None:
                 return None
-            result: Result = {"PASS": "PASS", "EXCEPTION": "EXCEPTION"}.get(
-                str(test.get("result")), "UNABLE"
-            )  # type: ignore[assignment]
-            # An exception in any screenshot stands; otherwise the first answer.
-            if index not in found or result == "EXCEPTION":
+            result: Result = "PASS" if clean and test.get("result") == "PASS" else "REVIEW"
+            # A result for a person in any screenshot stands; otherwise the first answer.
+            if index not in found or result == "REVIEW":
                 note = str(test.get("observed") or test.get("note") or "")
                 found[index] = {
                     "index": index,
                     "result": result,
                     "note": _clean(f"{item.file_name}: {note}", 400),
-                }
+                } | ({} if result == "PASS" else {"rule": "SCREENSHOT_REVIEW"})
     if len(found) < len(attributes):
         return None
     return [found[index] for index in range(len(attributes))]
@@ -1085,11 +1202,32 @@ class TooManyAttributes(Exception):
         )
 
 
+NO_ATTRIBUTES = "the control has no approved test attributes: approve its attributes first"
+
+
 def _attributes(value: Any) -> list[str]:
-    attributes = [clean_line(str(item), 300) for item in (value or []) if str(item).strip()]
+    """The control's approved test attributes, never invented (FO-21, 19 November 2026):
+    none gives none, and a placeholder that only restates the control ("The control
+    operated as described", the RCM import's default; library_matching.PLACEHOLDER) is no
+    attribute. Before, an empty list became "The control operated as described", which a
+    tester could pass and a sheet conclude on."""
+    from ai_workforce_api.library_matching import PLACEHOLDER
+
+    attributes = [
+        clean_line(str(item), 300)
+        for item in (value or [])
+        if str(item).strip() and not PLACEHOLDER.match(str(item))
+    ]
     if len(attributes) > MAX_ATTRIBUTES:
         raise TooManyAttributes(len(attributes))
-    return attributes or ["The control operated as described"]
+    return attributes
+
+
+def _has_attributes(value: Any) -> bool:
+    try:
+        return bool(_attributes(value))
+    except TooManyAttributes:
+        return True
 
 
 # The basis open sheets are tested against (ST-1, product owner, 19 November 2026)
@@ -1672,6 +1810,10 @@ def run_sheet(
         from ai_workforce_api.round_readiness import round_waiting_reason
 
         waiting = round_waiting_reason(connection, project_id, round_id)
+    # A sheet with no attribute to test calls no model (FO-21): every answer would be
+    # rejected, and the item re-billed on every run.
+    if not waiting and not _has_attributes(claimed[5]):
+        waiting = NO_ATTRIBUTES
     with transaction(connection) as cursor:
         cursor.execute(
             "UPDATE test_sheets SET waiting_note = %s WHERE id = %s", (waiting[:500], sheet_id)
@@ -1940,7 +2082,8 @@ def _test_item(
     rows = connection.execute(
         """
         SELECT f.file_name, coalesce(a.confirmed_kind, a.classification ->> 'kind', 'other'),
-               a.extracted_text, v.checks, v.attributes, f.id, f.content_sha256
+               a.extracted_text, v.checks, v.attributes, f.id, f.content_sha256,
+               v.decision, v.conclusion
         FROM test_item_files t
         JOIN evidence_files f ON f.id = t.evidence_file_id
         JOIN evidence_analyses a ON a.evidence_file_id = f.id
@@ -1968,7 +2111,16 @@ def _test_item(
             file_name=str(row[0]),
             kind=str(row[1]),
             text=str(row[2] or ""),
-            review=None if row[4] is None else {"checks": row[3] or [], "attributes": row[4] or []},
+            # The screenshot review, and a person's decision on it (FO-22): what
+            # from_reviews may stand on.
+            review=None
+            if row[4] is None
+            else {
+                "checks": row[3] or [],
+                "attributes": row[4] or [],
+                "decision": row[7],
+                "conclusion": row[8],
+            },
             file_id=row[5],
             seen_as_image=row[5] in shown,
         )
@@ -1987,6 +2139,7 @@ def _test_item(
             source = "REVIEW"
     if results is None and caller is not None:
         loaded = load_context(connection, project_id, control_id)
+        basis = testing_basis(connection, control_id, attributes)
         context = ItemContext(
             control_ref=loaded.control_ref,
             title=loaded.title,
@@ -2003,18 +2156,12 @@ def _test_item(
             ),
             test_of_one=method == "TEST_OF_ONE",
             files=files,
-            definitions=tuple(
-                None if found is None else definition_prompt(found)
-                for found in sheet_definitions(connection, control_id, list(attributes))
-            ),
-            tailored=tuple(tailored_criteria(connection, control_id, list(attributes))),
-            design=design_prompt(design_for(connection, control_id)),
+            definitions=basis.definitions,
+            tailored=basis.tailored,
+            design=basis.design,
             passages=mapped_passages(connection, project_id, control_id, files),
             required=plan_evidence(connection, UUID(str(item[3])), control_id, attributes),
-            walkthrough=tuple(
-                {"question": question, "answer": answer}
-                for question, answer in walkthrough_for_agents(connection, control_id)
-            ),
+            walkthrough=basis.walkthrough,
         )
         inputs["mapping_context"] = len(context.passages)
         # How many walkthrough answers the tester read as context, for the reviewer's trace.
@@ -2032,14 +2179,7 @@ def _test_item(
         # The basis tested, per attribute (ST-1; decision D2, no migration): each one's
         # identity and the hash of the owned criteria the tester was given for it, and the
         # hash of them all. A later change of either is a superseded basis (stale_basis).
-        tailored = list(context.tailored or (None,) * len(attributes))
-        inputs["criteria_sha256"] = _sha(tailored)
-        inputs["attribute_basis"] = [
-            {"key": key, "criteria_sha256": _sha(found)}
-            for key, found in zip(
-                attribute_keys(connection, control_id, attributes), tailored, strict=True
-            )
-        ]
+        inputs |= basis_inputs(connection, control_id, attributes, context.tailored)
         call = caller.generate(
             ModelRequest(
                 operation="generate",
@@ -2065,8 +2205,21 @@ def _test_item(
         call_id = call.call_id
         if call.readable and call.raw.output is not None:
             try:
+                # The population columns' date orders, over the sheet's sampled rows.
+                orders = date_orders(
+                    [
+                        (str(entry.get("column", "")), str(entry.get("value", "")))
+                        for entry in (row[0] if isinstance(row[0], list) else [])
+                        if isinstance(entry, dict)
+                    ]
+                    for row in connection.execute(
+                        "SELECT detail FROM test_items WHERE test_sheet_id = %s", (item[3],)
+                    ).fetchall()
+                )
                 results = supported(
-                    check_results(call.raw.output, len(attributes), files, context.item_detail),
+                    check_results(
+                        call.raw.output, len(attributes), files, context.item_detail, orders
+                    ),
                     files,
                 )
                 source = "MODEL"
@@ -2243,15 +2396,23 @@ def plan_evidence(
 ) -> tuple[tuple[dict[str, str], ...], ...]:
     """The approved evidence plan's requirements for each attribute (M3d): the
     requirements of the sheet's phase (roll-forward for a roll-forward round, interim
-    otherwise) that name the attribute, with their necessity. Waived ones are left out.
-    Empty when the control has no approved plan."""
+    otherwise) that name the attribute, with their necessity. Waived and removed ones are
+    left out, and so is an addition a pending change proposes (as evidence_assurance reads
+    the links). Empty when the control has no approved plan.
+
+    A requirement follows its attribute by the attribute's id (item 16, 19 November 2026):
+    the links of evidence_requirement_attributes to the attribute or any wording it
+    replaced; the requirement's own list of wordings, compared as normal wording, stays for
+    one without links. Before, only the exact wording was matched, so a reworded attribute
+    lost its REQUIRED evidence, and removed or unapproved requirements were given."""
     found = connection.execute(
         """
-        SELECT r.title, r.necessity, r.attributes, r.description
+        SELECT r.id, r.title, r.necessity, r.attributes, r.description
         FROM evidence_requirements r
         JOIN evidence_plans p ON p.id = r.plan_id
         WHERE r.engagement_control_id = %s AND p.approved_revision IS NOT NULL
-          AND r.status <> 'WAIVED'
+          AND r.status NOT IN ('WAIVED', 'REMOVED')
+          AND NOT coalesce((r.pending_change ->> 'add')::boolean, false)
           AND r.phase = (SELECT CASE WHEN t.kind = 'ROLLFORWARD' THEN 'ROLLFORWARD'
                                      ELSE 'INTERIM' END
                          FROM test_sheets s LEFT JOIN test_rounds t ON t.id = s.test_round_id
@@ -2260,18 +2421,50 @@ def plan_evidence(
         """,
         (control_id, sheet_id),
     ).fetchall()
+    keys = attribute_keys(connection, control_id, attributes)
+    ids = [key for key in keys if not key.startswith("text:")]
+    # Each attribute and the attributes it replaced, then the requirements linked to any.
+    linked: dict[str, set[str]] = {}
+    if ids:
+        for attribute_id, requirement_id in connection.execute(
+            """
+            WITH RECURSIVE chain(start_id, id) AS (
+                SELECT a.id, a.id FROM control_attributes a WHERE a.id::text = ANY(%s)
+                UNION
+                SELECT c.start_id, a.replaces_id FROM chain c
+                JOIN control_attributes a ON a.id = c.id WHERE a.replaces_id IS NOT NULL
+            )
+            SELECT c.start_id::text, l.requirement_id::text FROM chain c
+            JOIN evidence_requirement_attributes l ON l.attribute_id = c.id
+            WHERE l.engagement_control_id = %s
+            """,
+            (ids, control_id),
+        ).fetchall():
+            linked.setdefault(str(attribute_id), set()).add(str(requirement_id))
+    with_links = {requirement for found_ids in linked.values() for requirement in found_ids}
+
+    def wanted(attribute: str, key: str, row: tuple[Any, ...]) -> bool:
+        if str(row[0]) in linked.get(key, set()):
+            return True
+        named = row[3]
+        return (
+            str(row[0]) not in with_links
+            and isinstance(named, list)
+            and normal_wording(attribute) in {normal_wording(str(text)) for text in named}
+        )
+
     return tuple(
         tuple(
             {
-                "evidence": str(title)[:200],
-                "necessity": str(necessity),
+                "evidence": str(row[1])[:200],
+                "necessity": str(row[2]),
                 # A lean item lists every detail a sample must show (27 October 2026).
-                "what_counts": " ".join(str(description or "").split())[:1500],
+                "what_counts": " ".join(str(row[4] or "").split())[:1500],
             }
-            for title, necessity, named, description in found
-            if isinstance(named, list) and attribute in named
+            for row in found
+            if wanted(attribute, key, row)
         )
-        for attribute in attributes
+        for attribute, key in zip(attributes, keys, strict=True)
     )
 
 

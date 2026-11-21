@@ -27,13 +27,21 @@ Nothing here reads a file other than the item's own, and nothing here calls a mo
 """
 
 import re
+import unicodedata
+from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import datetime
 from typing import Any, Literal
 
-from ai_workforce_api.console_citations import find_quote
+from ai_workforce_api.console_citations import find_quote, negated_span
 from ai_workforce_api.inbound import clean_line
-from ai_workforce_api.sampling import parse_date
+from ai_workforce_api.sampling import (
+    SlashOrder,
+    ambiguous_slashed,
+    normal_value,
+    parse_date,
+    slash_order,
+)
 
 Kind = Literal["on_or_before", "equal", "different", "at_most"]
 KINDS: tuple[Kind, ...] = ("on_or_before", "equal", "different", "at_most")
@@ -65,9 +73,9 @@ CHECKS_SCHEMA: dict[str, Any] = {
         "additionalProperties": False,
     },
 }
-_TIME = re.compile(r"(\d{1,2}):(\d{2})")
-_SEPARATORS = re.compile(r"[^0-9a-z]")
-_NUMBER = re.compile(r"^-?[0-9][0-9,\s]*(\.[0-9]+)?$")
+_TIME = re.compile(r"(\d{1,2}):(\d{2})(?::\d{2})?\s*([AaPp][Mm])?")
+_NUMBER = re.compile(r"^-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$")
+_DATE_SHAPED = re.compile(r"\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}")
 # A side is one atomic value (M3c closure). A list ("Elena Rossi; Marcus Lee") is split on
 # these separators only, so a value such as "Sales and Marketing" is never split.
 _LIST = re.compile(r"\s*[;|]\s*")
@@ -135,6 +143,9 @@ class Side:
     # The atomic values the side holds: one, or several when the model gave a list (each
     # verified on its own; see _compare for when a list can be compared at all).
     values: tuple[str, ...] = ()
+    # The population row's column the value is in, when it is one column (for its date
+    # order); None for a value quoted from a file.
+    column: str | None = None
 
 
 @dataclass(frozen=True)
@@ -159,13 +170,31 @@ class Check:
         }  # fmt: skip
 
 
+def date_orders(details: Iterable[Iterable[tuple[str, str]]]) -> dict[str, SlashOrder]:
+    """Each population column's day and month order where its values show it, and only
+    then (slash_order, strict): read over every sampled row of the sheet."""
+    by_column: dict[str, list[str]] = {}
+    for detail in details:
+        for column, value in detail:
+            by_column.setdefault(column, []).append(value)
+    found: dict[str, SlashOrder] = {}
+    for column, values in by_column.items():
+        order = slash_order(values, strict=True)
+        if order is not None:
+            found[column] = order
+    return found
+
+
 def evaluate(
     raw: Any,
     texts: list[tuple[str, str]],
     detail: tuple[tuple[str, str], ...],
+    orders: dict[str, SlashOrder] | None = None,
 ) -> list[Check]:
     """The tester's proposed comparisons, verified and evaluated. `texts` is each item
-    file's (name, stored text), by index; `detail` is the item's population row."""
+    file's (name, stored text), by index; `detail` is the item's population row; `orders`
+    the population columns' date orders (date_orders), without which an ambiguous slashed
+    date is not read."""
     if not isinstance(raw, list):
         return []
     found: list[Check] = []
@@ -176,7 +205,7 @@ def evaluate(
         right = _side(entry.get("right"), texts, detail)
         if left is None or right is None:
             continue
-        holds, why = _compare(entry["kind"], left, right)
+        holds, why = _compare(entry["kind"], left, right, orders)
         found.append(Check(entry["kind"], left, right, holds, why))
         if len(found) >= MAX_CHECKS:
             break
@@ -187,6 +216,24 @@ def apply(result: dict[str, Any], checks: list[Check]) -> dict[str, Any]:
     """The result after the rule checks: never moved up, moved down when a verified check
     contradicts a pass or a pass rests on a value the evidence does not hold."""
     updated = {**result, "checks": [check.as_json() for check in checks]}
+    # A not applicable whose own comparison does not hold goes to a person, never to a
+    # rule-decided exception (19 November 2026): the tester said the attribute does not
+    # apply, so the values compared may be placeholders. Before, it stood unchanged.
+    if result.get("result") == "NOT_APPLICABLE":
+        failed_na = [check for check in checks if check.holds is False]
+        if failed_na:
+            return {
+                **updated,
+                "result": "REVIEW",
+                "note": clean_line(
+                    f"A rule check of the values does not hold: {failed_na[0].why} The "
+                    f"tester's not applicable goes to a person. {result.get('note', '')}",
+                    400,
+                ),
+                "decided_by_rule": True,
+                "rule": "NA_CHECK",
+            }
+        return updated
     if result.get("result") != "PASS":
         return updated
     failed = [check for check in checks if check.holds is False]
@@ -316,18 +363,29 @@ def _side(
         hits = [population_match(atom, label, detail) for atom in values]
         found = all(hit is not None for hit in hits)
         where = ", ".join(str(hit) for hit in hits if hit)
+        columns = {str(c) for c, _v in detail}
+        named = hits[0].removesuffix(" (token)") if len(hits) == 1 and hits[0] else None
         return Side(label, value, index, quote, found,
-                    f"population row, {where}" if where else "population row", values)  # fmt: skip
+                    f"population row, {where}" if where else "population row", values,
+                    named if named in columns else None)  # fmt: skip
     if not 0 <= index < len(texts):
         return None
     name, text = texts[index]
     span = find_quote(text, quote) if quote.strip() else None
-    # Every value of the side is in the quoted passage, each on its own.
-    verified = span is not None and all(_contains(text[span[0] : span[1]], atom) for atom in values)
+    # Every value of the side is in the quoted passage, each on its own, and the passage
+    # is not negated: "not approved by Elena Rossi" names no approver (review B3, 20
+    # November 2026; before, a negated passage verified the side).
+    verified = (
+        span is not None
+        and all(_contains(text[span[0] : span[1]], atom) for atom in values)
+        and not negated_span(text, span[0], span[1])
+    )
     return Side(label, value, index, quote, verified, name, values)
 
 
-_TOKEN = re.compile(r"[a-z0-9]+(?:[-_./][a-z0-9]+)*")
+# Letters and digits in any script, joined by - _ . or / (item 5, 19 November 2026;
+# before, a to z and 0 to 9 only, so a non-Latin value had no tokens).
+_TOKEN = re.compile(r"[^\W_]+(?:[-_./][^\W_]+)*")
 
 
 def population_match(value: str, label: str, detail: tuple[tuple[str, str], ...]) -> str | None:
@@ -377,7 +435,9 @@ def _same_label(column: str, label: str) -> bool:
     return bool(label.strip()) and _tokens(column) == _tokens(label)
 
 
-def _compare(kind: Kind, left: Side, right: Side) -> tuple[bool | None, str]:
+def _compare(
+    kind: Kind, left: Side, right: Side, orders: dict[str, SlashOrder] | None = None
+) -> tuple[bool | None, str]:
     if not (left.verified and right.verified):
         return None, "A side is not in the evidence."
     if len(left.values) > 1 or len(right.values) > 1:
@@ -385,31 +445,46 @@ def _compare(kind: Kind, left: Side, right: Side) -> tuple[bool | None, str]:
         # value that must differ from each of the others; anything else is ambiguous.
         if kind != "different":
             return None, "A side holds more than one value, so the comparison is ambiguous."
-        clash = next(
-            ((a, b) for a in left.values for b in right.values if _identifier(a) == _identifier(b)),
-            None,
-        )
+        pairs = [
+            (a, b, _same(a, b, left, right, orders)) for a in left.values for b in right.values
+        ]
+        if any(same is None for _a, _b, same in pairs):
+            return None, "Two of the values cannot be told the same or different."
+        clash = next(((a, b) for a, b, same in pairs if same), None)
         if clash is not None:
             return False, f"{left.label} {clash[0]} matches {right.label} {clash[1]}."
         return True, f"{left.label} {left.value} differs from each of {right.label} {right.value}."
     if kind == "on_or_before":
-        a, b = _moment(left.value), _moment(right.value)
+        a, b = (
+            _moment(left.value, _order(left, orders)),
+            _moment(right.value, _order(right, orders)),
+        )
         if a is None or b is None:
-            return None, "A value is not a date."
-        holds = a <= b
+            return None, "A value is not a date, or its day and month order is unknown."
+        gap = _unresolved(a, b)
+        if gap is not None:
+            return None, gap
+        if a.at.date() == b.at.date() and not (a.timed and b.timed):
+            return None, "Both values are on the same day and a time is not given for both."
+        holds = a.at <= b.at
         return holds, (
             f"{left.label} {left.value} is {'on or before' if holds else 'after'} "
             f"{right.label} {right.value}."
         )
     if kind in ("equal", "different"):
-        same = _identifier(left.value) == _identifier(right.value)
+        same = _same(left.value, right.value, left, right, orders)
+        if same is None:
+            return None, (
+                f"{left.label} {left.value} and {right.label} {right.value} cannot be told "
+                "the same or different."
+            )
         holds = same if kind == "equal" else not same
         relation = "matches" if same else "does not match"
         return holds, f"{left.label} {left.value} {relation} {right.label} {right.value}."
     x, y = _number(left.value), _number(right.value)
-    if x is None or y is None:
-        return None, "A value is not a number."
-    holds = x <= y
+    if x is None or y is None or x[1] != y[1]:
+        return None, "A value is not a number, or the two are in different units."
+    holds = x[0] <= y[0]
     relation = "within" if holds else "over"
     return holds, f"{left.label} {left.value} is {relation} {right.label} {right.value}."
 
@@ -423,36 +498,163 @@ def _expected(check: Check) -> str:
     }[check.kind]
 
 
-def _moment(value: str) -> datetime | None:
+@dataclass(frozen=True)
+class _Moment:
+    at: datetime
+    # Whether the value states a time; a date alone is the whole day.
+    timed: bool
+
+
+def _unresolved(a: _Moment, b: _Moment) -> str | None:
+    """Why two moments cannot be told the same or apart, or None when they can (item 5
+    with FO-18, 19 November 2026): one with a time zone and one without, or two different
+    offsets; or the same day where only one states a time (a date alone is the whole
+    day). Every comparison of two dates goes through here (review B1, 20 November 2026:
+    before, only on or before did, so equal and different read "2027-03-15" against
+    "2027-03-15T10:00", and an aware time against a naive one, as not the same)."""
+    if (a.at.tzinfo is None) != (b.at.tzinfo is None) or (
+        a.at.tzinfo is not None and a.at.utcoffset() != b.at.utcoffset()
+    ):
+        return "The two times are in different or unstated time zones."
+    if a.at.date() == b.at.date() and a.timed != b.timed:
+        return "Both values are on the same day and a time is not given for both."
+    return None
+
+
+def _order(side: Side, orders: dict[str, SlashOrder] | None) -> SlashOrder | None:
+    """The day and month order of a side's slashed date: known only for a value of the
+    population row, from its own column's values (slash_order, strict); never guessed for
+    a value quoted from a file (item 5, 19 November 2026)."""
+    if side.file != POPULATION_ROW or not orders or side.column is None:
+        return None
+    return orders.get(side.column)
+
+
+def _moment(value: str, order: SlashOrder | None = None) -> _Moment | None:
+    """A date, and its time when the value states one (item 5 with FO-18, 19 November
+    2026). An ISO value with T, Z or an offset is read whole; a time keeps its AM or PM; a
+    slashed date whose day and month could be either way is unread unless its order is
+    known. Before, "2027-03-15T10:00" read as 23:59, "10:00 PM" as 10:00, and 03/04/2027
+    as 4 March whatever the source."""
     text = value.strip()
-    day: date | None = parse_date(text.split(" ")[0].split("T")[0]) or parse_date(text)
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00").replace("z", "+00:00"))
+    except ValueError:
+        parsed = None
+    if parsed is not None:
+        return _Moment(parsed, bool(re.search(r"\d[T ]\d", text)))
+    head = text.split(" ")[0]
+    if ambiguous_slashed(head) and order is None:
+        return None
+    day = parse_date(head, order or "mdy") or parse_date(text, order or "mdy")
     if day is None:
         return None
-    time = _TIME.search(text[len(text.split(" ")[0]) :]) if " " in text or "T" in text else None
+    rest = text[len(head) :]
+    time = _TIME.search(rest)
     if time is None:
-        return datetime(day.year, day.month, day.day, 23, 59)
-    return datetime(day.year, day.month, day.day, int(time.group(1)), int(time.group(2)))
+        return _Moment(datetime(day.year, day.month, day.day), False)
+    hour, minute = int(time.group(1)), int(time.group(2))
+    half = (time.group(3) or "").lower()
+    if half:
+        if not 1 <= hour <= 12:
+            return None
+        hour = hour % 12 + (12 if half == "pm" else 0)
+    if hour > 23 or minute > 59:
+        return None
+    return _Moment(datetime(day.year, day.month, day.day, hour, minute), True)
+
+
+def _strict(value: str) -> str:
+    """A value folded for comparison, in any script (NFKC, case folded, spaces collapsed)."""
+    return " ".join(unicodedata.normalize("NFKC", value).casefold().split())
 
 
 def _identifier(value: str) -> str:
-    flat = _SEPARATORS.sub("", value.lower())
-    return re.sub(r"(?<=[a-z])0+(?=\d)", "", flat)
+    """A value's letters and digits only, in any script: what is left after its separators
+    are dropped. Before, only a to z and 0 to 9 were kept, so two non-Latin names both read
+    as "" and matched (item 5, 19 November 2026)."""
+    return "".join(ch for ch in _strict(value) if ch.isalnum())
 
 
-def _number(value: str) -> float | None:
-    text = value.strip().rstrip("%").strip()
+def _one_token(value: str) -> bool:
+    """One token with no space in it: it may be an account or an ID, so it is never told
+    apart from a display name (review B2, 20 November 2026: before, only a token with a
+    digit, a dot or an underscore was, so "jsmith" read as different from "John Smith"
+    and a segregation-of-duties check passed)."""
+    text = _strict(value)
+    return bool(text) and " " not in text
+
+
+def _name_shaped(value: str) -> bool:
+    """Two or more words of letters: a person's display name."""
+    words = normal_value(value).split(" ")
+    return len(words) >= 2 and all(word.isalpha() for word in words)
+
+
+def _same(
+    a: str, b: str, left: Side, right: Side, orders: dict[str, SlashOrder] | None
+) -> bool | None:
+    """Whether two values are the same, or None when that cannot be told (item 5 with
+    FO-18, 19 November 2026). Dates compare as dates and numbers as numbers; names compare
+    after their words are folded and a "Last, First" name is turned round; values that
+    differ only by separators or zero padding ("j.smith" and "jsmith", "EMP001" and
+    "EMP1"), an empty value, and an account against a display name are left open. Before,
+    every separator and leading zero was dropped, so "1.5" matched "15" and "j.smith"
+    matched "j_smith"; and a date written two ways did not match."""
+    if not _identifier(a) or not _identifier(b):
+        return None
+    if _strict(a) == _strict(b):
+        return True
+    moments = _moment(a, _order(left, orders)), _moment(b, _order(right, orders))
+    if _DATE_SHAPED.search(a) or _DATE_SHAPED.search(b):
+        if moments[0] is None or moments[1] is None:
+            return None
+        if _unresolved(moments[0], moments[1]) is not None:
+            return None
+        return moments[0].at == moments[1].at
+    numbers = _number(a), _number(b)
+    if numbers[0] is not None and numbers[1] is not None:
+        # Numbers in different units are not told apart (review B1, 20 November 2026:
+        # before, "100%" and "100" read as different).
+        if numbers[0][1] != numbers[1][1]:
+            return None
+        return numbers[0][0] == numbers[1][0]
+    if normal_value(a) and normal_value(a) == normal_value(b):
+        return True
+    if (_one_token(a) and _name_shaped(b)) or (_name_shaped(a) and _one_token(b)):
+        return None
+    padded = re.compile(r"(?<=[^\W\d_])0+(?=\d)")
+    if padded.sub("", _identifier(a)) == padded.sub("", _identifier(b)):
+        return None
+    return False
+
+
+def _number(value: str) -> tuple[float, str] | None:
+    """A number and its unit (a percent sign, or none). Grouping commas only in groups of
+    three, so "1,5" and "1.234,5" are unread rather than read as 15 and 1234.5 (item 5)."""
+    text = value.strip()
+    unit = ""
+    if text.endswith("%"):
+        unit, text = "%", text[:-1].strip()
     if not _NUMBER.match(text):
         return None
-    return float(text.replace(",", "").replace(" ", ""))
+    return float(text.replace(",", "")), unit
 
 
 def _contains(quote: str, value: str) -> bool:
-    return _squash(value) in _squash(quote)
+    """Whether the quoted passage holds the value as a whole-token run (item 5): "Lee" is
+    not in "Ashlee", "jsmith" not in "jsmith2", "2027-03-1" not in "2027-03-15"."""
+    wanted = _tokens(value)
+    return bool(wanted) and _runs(_tokens(quote), wanted) > 0
 
 
 def _same_text(cell: str, value: str) -> bool:
-    return _squash(cell) == _squash(value) or _identifier(cell) == _identifier(value)
+    return bool(_identifier(value)) and _strict(cell) == _strict(value)
 
 
 def _squash(text: str) -> str:
-    return " ".join(text.lower().replace("‐", "-").replace("–", "-").split())
+    return " ".join(
+        unicodedata.normalize("NFKC", text).casefold().replace("‐", "-").replace("–", "-").split()
+    )

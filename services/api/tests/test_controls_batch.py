@@ -12,7 +12,7 @@ from test_evidence_intake import _client, _Scheduler
 from test_execution import _add_project_member, _add_user
 from test_outbound import migrated
 
-from ai_workforce_api.control_reviews import REPERFORM_FAILED
+from ai_workforce_api.control_reviews import REPERFORM_FAILED, fail_reperformance
 from ai_workforce_api.db import connect, transaction
 from ai_workforce_api.workpaper_service import DRAFT_FAILED, ensure
 
@@ -154,13 +154,35 @@ def test_each_control_says_what_its_agents_are_doing(migrated: Database) -> None
             "WHERE engagement_control_id = %s AND stage = 'EFFECTIVENESS'",
             (DRAFT_FAILED, control_id),
         )
+        # Rewritten 20 November 2026 (S5). Old: the review was inserted resting with the
+        # note's wording (REPERFORM_FAILED), which the register read as stopped. New: the run
+        # gives up through fail_reperformance, which records the typed
+        # `review.reperform_failed` event the register reads. Reason: no reader routes on a
+        # note's wording (FO-1); the assertion, a stopped review reads stopped, is unchanged.
+        review = connection.execute(
+            """
+            INSERT INTO control_reviews (organization_id, project_id, engagement_control_id,
+                                         opened_by, status, reperform_status)
+            VALUES (%s, %s, %s, %s, 'OPEN', 'PENDING') RETURNING id
+            """,
+            (org, team["project"], control_id, team["owner_id"]),
+        ).fetchone()
+        assert review is not None
+        fail_reperformance(connection, review[0])
+        # The note's wording alone, on another control's resting review, is not a stop.
+        other = connection.execute(
+            "SELECT id FROM engagement_controls WHERE project_id = %s AND id <> %s "
+            "ORDER BY id LIMIT 1",
+            (team["project"], control_id),
+        ).fetchone()
+        assert other is not None
         connection.execute(
             """
             INSERT INTO control_reviews (organization_id, project_id, engagement_control_id,
                                          opened_by, status, reperform_status, reperform_note)
             VALUES (%s, %s, %s, %s, 'OPEN', 'IDLE', %s)
             """,
-            (org, team["project"], control_id, team["owner_id"], REPERFORM_FAILED),
+            (org, team["project"], other[0], team["owner_id"], REPERFORM_FAILED),
         )
         app = connection.execute(
             "SELECT engagement_application_id FROM engagement_controls WHERE id = %s",
@@ -185,6 +207,7 @@ def test_each_control_says_what_its_agents_are_doing(migrated: Database) -> None
     }
     if app is not None and app[0] is not None:
         assert (row["application_layer"], row["application_hosting"]) == ("DATABASE", "SAAS")
+    assert rows[str(other[0])]["agents"]["stopped"] == []
     # A control nothing runs on says so.
-    quiet = next(r for c, r in rows.items() if c != str(control_id))
+    quiet = next(r for c, r in rows.items() if c not in (str(control_id), str(other[0])))
     assert quiet["agents"]["testing"] == "IDLE" and quiet["agents"]["stopped"] == []

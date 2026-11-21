@@ -393,11 +393,14 @@ def test_a_crashed_run_resumes_without_a_duplicate_or_partial_result(
     real_check = testing_engine.check_results
     seen = {"n": 0}
 
-    def crashing(output: Any, count: int, files: Any = (), detail: Any = ()) -> Any:
+    # Takes the date orders too since 20 November 2026 (item 5): check_results' new argument.
+    def crashing(
+        output: Any, count: int, files: Any = (), detail: Any = (), orders: Any = None
+    ) -> Any:
         seen["n"] += 1
         if seen["n"] == 2:
             raise RuntimeError("the worker died after the model answered")
-        return real_check(output, count, files, detail)
+        return real_check(output, count, files, detail, orders)
 
     monkeypatch.setattr(testing_engine, "check_results", crashing)
     with connect(migrated.url) as connection:

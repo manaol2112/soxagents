@@ -9,35 +9,78 @@ import {
   type RunState,
 } from "./run-state.ts";
 
-// The server's note on a re-performance that gave up (control_reviews.REPERFORM_FAILED),
-// read where it sends no failure sentence of its own.
-const REPERFORM_GAVE_UP = /\bdid not finish\b/i;
-
 /** The review's one sentence when the agent's re-performance ended without a usable
- * answer, or null while it works or when it finished: why (the server's failure sentence,
- * else its note), that the testing stands as the preparer left it, and "Re-perform", the
- * step's action beside it. */
+ * answer, or null while it works, when it finished, or once the review is signed off: why
+ * (the server's failure sentence, else its note), that the testing stands as the preparer
+ * left it, and "Re-perform", the step's action beside it. A signed review is not a failure
+ * to act on (the server says no failure note over it either, reperform_failure_note):
+ * decided here from the typed status for every reader, the review's banner and the
+ * reviewer lane (code review, 20 November 2026; before, a signed review whose last
+ * re-performance gave up still said "Re-perform to try again" beside "Reviewed"). */
 export function runFailureLine(
   review: Pick<
     ControlReview,
-    "reperforming" | "reperformState" | "reperformNote" | "failureNote"
+    | "status"
+    | "reperforming"
+    | "reperformState"
+    | "reperformNote"
+    | "failureNote"
+    | "reperformance"
   >,
   failureNote: string = review.failureNote ?? "",
 ): string | null {
-  if (review.reperforming || review.reperformState !== "IDLE") {
+  if (
+    review.status === "SIGNED_OFF" ||
+    review.reperforming ||
+    review.reperformState !== "IDLE"
+  ) {
     return null;
   }
   const said = plainNote(failureNote);
   if (said !== "") {
     return said;
   }
-  if (!REPERFORM_GAVE_UP.test(review.reperformNote)) {
+  // The typed record says a re-performance gave up (control_reviews.fail_reperformance,
+  // FO-1, 19 November 2026); before, the note's wording was matched.
+  if (review.reperformance?.failed !== true) {
     return null;
   }
   return (
     plainNote(review.reperformNote) ||
     "The re-performance did not finish, so the testing stands as the preparer left it. Re-perform to try again."
   );
+}
+
+/** The one banner the review card shows about the agent's re-performance, or null: the
+ * failure line as a warning while there is a failure to act on (runFailureLine), else the
+ * run's own note as information, never a note from a run that gave up. A failed run's note
+ * ("Re-perform to try again") is a failure, not information, so it is not shown over a
+ * signed review or while the agent re-performs again. Decided here from the typed status
+ * and record for every reader (code review, 20 November 2026; before, the view showed the
+ * raw note on its own condition, so a signed review over a failed run said "Re-perform to
+ * try again" as information beside "Reviewed"). */
+export type ReviewBanner = { tone: "warning" | "info"; text: string };
+
+export function reviewBanner(
+  review: Pick<
+    ControlReview,
+    | "status"
+    | "reperforming"
+    | "reperformState"
+    | "reperformNote"
+    | "failureNote"
+    | "reperformance"
+  >,
+): ReviewBanner | null {
+  const failure = runFailureLine(review);
+  if (failure !== null) {
+    return { tone: "warning", text: failure };
+  }
+  if (review.reperformance?.failed === true) {
+    return null;
+  }
+  const note = plainNote(review.reperformNote);
+  return note === "" ? null : { tone: "info", text: note };
 }
 
 export type NoteSeverity = "MUST_FIX" | "SHOULD_FIX" | "OBSERVATION";
@@ -92,6 +135,195 @@ export type ReviewNote = {
   version: number;
 };
 
+/** The reviewer agent's last re-performance as its run recorded it (FO-1, UH-9): the
+ * items due on the sheet it read, those it re-performed, whether it stopped at its cap,
+ * notes past the note limit, and whether a later attempt gave up. `known` is false for a
+ * review re-performed before the record was kept. */
+export type Reperformance = {
+  known: boolean;
+  source: string | null;
+  due: number;
+  done: number;
+  capped: boolean;
+  dropped: number;
+  failed: boolean;
+};
+
+export function parseReperformance(value: unknown): Reperformance | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const count = (entry: unknown) =>
+    typeof entry === "number" && Number.isInteger(entry) && entry >= 0
+      ? entry
+      : 0;
+  return {
+    known: value.known === true,
+    source: typeof value.source === "string" ? value.source : null,
+    due: count(value.due),
+    done: count(value.done),
+    capped: value.capped === true,
+    dropped: count(value.dropped),
+    failed: value.failed === true,
+  };
+}
+
+/** What the reviewer agent's re-performance did, said once from its typed record
+ * (FO-26, 19 November 2026): nothing, part of the items, or all of them with or without
+ * differences. Before, "no differences" was said whenever a re-performance had run, also
+ * when the model re-performed nothing. */
+export function reperformedWords(
+  record: Reperformance | null | undefined,
+  source: ControlReview["reperformSource"],
+  differences: number,
+): string {
+  const found =
+    differences === 0
+      ? "no differences from the preparer's results"
+      : `${differences} difference${differences === 1 ? "" : "s"} from the preparer's results`;
+  if (source === "SEEDED") {
+    return `Re-performed the testing: ${found}`;
+  }
+  if (record === null || record === undefined || !record.known) {
+    return "The reviewer agent's re-performance has no record of the items it re-performed";
+  }
+  // The last attempt gave up (fail_reperformance): never the earlier run's count (code
+  // review, 20 November 2026; before, "Re-performed 1 of 3 items" stood above "The
+  // re-performance did not finish"). The run's date (reperformedAt) is the last one that
+  // finished, written only when a run finishes, so the words name that run and the pill
+  // and the banner say a later attempt did not finish (code review, 20 November 2026;
+  // before, "Last re-performance attempt · <date>" gave the failed attempt the earlier
+  // run's date).
+  if (record.failed) {
+    return "Last finished re-performance";
+  }
+  if (record.due === 0) {
+    return "No tested item with evidence to re-perform";
+  }
+  if (record.done === 0) {
+    // The banner's words (control_reviews.not_reperformed): "the items", one word for
+    // one meaning (design review, 20 November 2026; before, "the testing").
+    return "The reviewer agent did not re-perform the items";
+  }
+  if (record.done < record.due) {
+    return `Re-performed ${record.done} of ${record.due} items: ${found}`;
+  }
+  return `Re-performed the testing: ${found}`;
+}
+
+/** The result notes where the reviewer agent's result differs from the preparer's and
+ * still stands: the differences `reperformedWords` counts. One count for the review's
+ * header and the reviewer lane. */
+export function reviewDifferences(notes: readonly ReviewNote[]): number {
+  return notes.filter(
+    (note) =>
+      note.targetKind === "RESULT" &&
+      note.reviewerResult !== null &&
+      note.status !== "DISMISSED" &&
+      note.status !== "WITHDRAWN",
+  ).length;
+}
+
+/** What an open review's sign-off waits for from the last re-performance, as the server
+ * types it (control_reviews.signoff_hold; product owner, 20 November 2026): nothing; the
+ * reviewer's record of a re-performance by hand (the tested branch); or a run that
+ * finishes, with no record by hand to offer (a failed attempt on a design signed off as
+ * not effective, where nothing was tested). */
+export type SignOffHold = "NONE" | "ATTESTATION" | "RUN";
+
+export function parseSignOffHold(value: unknown): SignOffHold {
+  return value === "ATTESTATION" || value === "RUN" ? value : "NONE";
+}
+
+/** What an open review's sign-off still waits for from the re-performance, from the
+ * server's typed `attestationNeeded` and `signoffHold` and the run record (design review,
+ * 20 November 2026): before, the pill said "Ready to sign off" over a partial or failed
+ * re-performance. A last attempt that gave up holds it on either branch, whatever the
+ * earlier run did, as the server's run_lets_sign withholds "Sign off the review" from the
+ * queue (code review, 20 November 2026). Null when the re-performance holds nothing. On
+ * the tested branch the form then asks for the record by hand (attestationNeeded); on a
+ * design signed off as not effective it waits for a run that finishes (signoffHold RUN,
+ * signOffAsk). The run's own words are the banner's and the header's
+ * (`reperformedWords`), so the sign-off form does not repeat them. */
+export function reperformHold(
+  review: Pick<
+    ControlReview,
+    "attestationNeeded" | "reperformance" | "signoffHold"
+  >,
+): string | null {
+  if (review.reperformance?.failed === true || review.signoffHold === "RUN") {
+    return "Re-performance did not finish";
+  }
+  return review.attestationNeeded === true ||
+    review.signoffHold === "ATTESTATION"
+    ? "Re-perform needed"
+    : null;
+}
+
+/** What the sign-off form asks of the reviewer: ATTEST, the record of a re-performance
+ * by hand (a checkbox and a note of at least ATTESTATION_MIN characters); WAIT, nothing it
+ * can give: the sign-off waits for a re-performance that finishes, as the review's
+ * blocking reason says, and offers no record by hand (product owner, 20 November 2026:
+ * on a design signed off as not effective nothing was tested, so none could be true);
+ * NOTE, an optional note. */
+export function signOffAsk(
+  review: Pick<
+    ControlReview,
+    "attestationNeeded" | "reperformance" | "signoffHold"
+  >,
+): "ATTEST" | "WAIT" | "NOTE" {
+  if (
+    review.attestationNeeded === true ||
+    review.signoffHold === "ATTESTATION"
+  ) {
+    return "ATTEST";
+  }
+  return review.signoffHold === "RUN" || review.reperformance?.failed === true
+    ? "WAIT"
+    : "NOTE";
+}
+
+/** The review header's pill: its words and tone, from the review's typed state. */
+export function reviewPill(
+  review: Pick<
+    ControlReview,
+    | "status"
+    | "reperforming"
+    | "attestationNeeded"
+    | "reperformance"
+    | "signoffHold"
+  >,
+  {
+    waiting,
+    outstanding,
+    unavailable,
+  }: { waiting: number; outstanding: boolean; unavailable: boolean },
+): { words: string; tone: "" | "tone-warning" | "tone-success" } {
+  if (review.status === "SIGNED_OFF") {
+    return outstanding
+      ? { words: REVIEW_OUTSTANDING, tone: "tone-warning" }
+      : { words: "Reviewed", tone: "tone-success" };
+  }
+  if (review.reperforming) {
+    return {
+      words: unavailable
+        ? "Re-performance queued · automation unavailable"
+        : "Re-performing",
+      tone: waiting > 0 ? "tone-warning" : "",
+    };
+  }
+  if (waiting > 0) {
+    return { words: "Notes open", tone: "tone-warning" };
+  }
+  const hold = reperformHold(review);
+  return hold === null
+    ? { words: "Ready to sign off", tone: "" }
+    : { words: hold, tone: "tone-warning" };
+}
+
+/** The shortest sign-off note over a re-performance by hand (control_reviews.MIN_ATTESTATION). */
+export const ATTESTATION_MIN = 10;
+
 export type ControlReview = {
   id: string;
   controlId: string;
@@ -108,12 +340,18 @@ export type ControlReview = {
   reperforming: boolean;
   reperformState: RunState;
   reperformedAt: string | null;
-  /** FALLBACK: the rules' checks stand; the model did not re-perform the items. */
+  /** FALLBACK: the rules' checks stand; the reviewer agent did not re-perform the items. */
   reperformSource: "MODEL" | "RULES" | "FALLBACK" | "SEEDED" | null;
   reperformNote: string;
   /** The server's failure sentence for a re-performance that ended without a usable
    * answer (run-failure.ts); absent otherwise. */
   failureNote?: string;
+  /** The last re-performance's typed record, or null when the server sent none. */
+  reperformance?: Reperformance | null;
+  /** Signing needs the reviewer's record of a re-performance by hand (FO-1). */
+  attestationNeeded?: boolean;
+  /** What the sign-off waits for from the last re-performance (signoff_hold). */
+  signoffHold?: SignOffHold;
   cancelState?: CancelState;
   sheetStatus: string | null;
   sheetSignedBy: string | null;
@@ -267,6 +505,9 @@ export function parseReviews(value: unknown): ControlReview[] | null {
       ...(failureNoteOf(item) !== ""
         ? { failureNote: failureNoteOf(item) }
         : {}),
+      reperformance: parseReperformance(item.reperformance),
+      attestationNeeded: item.attestation_needed === true,
+      signoffHold: parseSignOffHold(item.signoff_hold),
       cancelState: parseCancelState(item.cancel_state),
       sheetStatus: maybe(item.sheet_status),
       sheetSignedBy: maybe(item.sheet_signed_by),
@@ -548,10 +789,18 @@ export function reviewWrite(fields: Record<string, string>): ReviewWrite {
     if (!plain(text, 1000)) {
       return { error: "invalid" };
     }
+    // A sign-off over a re-performance by hand says what was re-performed (FO-1): at
+    // least ATTESTATION_MIN characters, as the server's sign-off checks.
+    const byHand = fields.reperformed_by_hand === "on";
+    if (byHand && text.length < ATTESTATION_MIN) {
+      return { error: "invalid" };
+    }
     return {
       intent,
       path: `${base}/sign-off`,
-      body: { version, note: text },
+      body: byHand
+        ? { version, note: text, reperformed_by_hand: true }
+        : { version, note: text },
       controlId,
     };
   }

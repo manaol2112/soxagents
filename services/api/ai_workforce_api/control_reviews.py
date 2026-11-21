@@ -24,7 +24,7 @@ contradicts itself), so a tester's pass it cannot endorse becomes a proposed not
 
 import copy
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal, Protocol
@@ -36,7 +36,6 @@ from psycopg.types.json import Json
 from pydantic import BaseModel, Field
 
 from ai_workforce_api import independence
-from ai_workforce_api.agent_answers import plain_problem
 from ai_workforce_api.agent_runs import (
     CancelState,
     RunState,
@@ -70,20 +69,27 @@ from ai_workforce_api.models import ModelImage, ModelProvider, ModelRequest
 from ai_workforce_api.provenance import AgentCaller, Job, agent_actor, record_outcome
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.test_citations import CITATION_SCHEMA, CitedFile, check_citations
+from ai_workforce_api.test_sheets import ItemBody, SheetBody, SheetState, _sheet, reopen_work
 from ai_workforce_api.test_sheets import ReopenBody as SheetReopenBody
-from ai_workforce_api.test_sheets import SheetBody, SheetState, _sheet, reopen_work
-from ai_workforce_api.testing_checks import instruction_guard, line_of, untrusted_kind
+from ai_workforce_api.testing_checks import (
+    date_orders,
+    instruction_guard,
+    line_of,
+    untrusted_kind,
+)
 from ai_workforce_api.testing_engine import (
     MAX_IMAGES,
     TEST_SCHEMA,
     ImageLoader,
     ItemContext,
     ItemFile,
+    basis_inputs,
     check_results,
     outcome_of,
     plan_evidence,
     prompt_for,
     stored_image,
+    testing_basis,
 )
 
 logger = logging.getLogger(__name__)
@@ -288,40 +294,270 @@ def open_reperformances(connection: psycopg.Connection[Any]) -> list[UUID]:
 
 # What a re-performance that gave up says; the register reads it as a stopped agent.
 REPERFORM_FAILED = "The re-performance did not finish. Re-perform to try again."
-# How a re-performance the model did only in part says so, after "<failed> of <total>".
-PARTLY_REPERFORMED = "items could not be re-performed by the model."
+# The most item labels a partial re-performance's note names before "and N more".
+NAMED_ITEMS = 3
+
+
+def _named(failed: Sequence[str]) -> str:
+    """The items named for a person, in label order (not the order the run tried them,
+    weakest first): at most NAMED_ITEMS, then "and N more"."""
+    shown = sorted(failed)[:NAMED_ITEMS]
+    more = len(failed) - len(shown)
+    if more > 0:
+        return f"{', '.join(shown)} and {more} more"
+    if len(shown) == 1:
+        return shown[0]
+    return f"{', '.join(shown[:-1])} and {shown[-1]}"
+
+
+def partly_reperformed(done: int, failed: Sequence[str]) -> str:
+    """How a re-performance the reviewer agent did only in part says so, for a person
+    (design review, 20 November 2026): how many of the items due it re-performed and
+    which stand as the preparer left them. `failed` is every due item it did not
+    re-perform: the ones whose call failed and, on a capped run, the ones past
+    MAX_REVIEWED_ITEMS it never tried, so the count is of the items due, as the header's
+    (code review, 20 November 2026; before, only the items tried were counted and named).
+    The agent is "the reviewer agent", never "the reviewer" (the person) or "the model";
+    the check's reason stays on the call's outcome. Before: "2 of 3 items could not be
+    re-performed by the model. The reviewer could not finish u0002: the answer broke a
+    rule its work is checked against." """
+    verb = "stands" if len(failed) == 1 else "stand"
+    return (
+        f"The reviewer agent re-performed {done} of {done + len(failed)} items. "
+        f"{_named(failed)} {verb} as the preparer left {'it' if len(failed) == 1 else 'them'}."
+    )
+
+
+def not_reperformed(failed: Sequence[str]) -> str:
+    """How a re-performance whose every model call failed (FALLBACK) says so, for a person
+    (design review, 20 November 2026), worded like partly_reperformed: every item due,
+    tried or past the cap, stands as the preparer left it. The check's reason stays on the
+    call's outcome. Before: "The reviewer agent could not finish u0002: the answer broke a
+    rule its work is checked against. The reviewer agent did not re-perform the items; the
+    rules' checks stand on their own." It named one item when none was re-performed, in a
+    check's internal words."""
+    if len(failed) == 1:
+        return (
+            f"The reviewer agent did not re-perform the item. "
+            f"{failed[0]} stands as the preparer left it."
+        )
+    return (
+        f"The reviewer agent did not re-perform any of the {len(failed)} items. "
+        f"{_named(failed)} stand as the preparer left them."
+    )
+
+
 # The reviewer's prompt version, recorded on every call (Milestone 3a).
-REVIEWER_PROMPT_VERSION = "independent-reviewer/6"
+# /7 (19 November 2026, item 8): the re-performer reads the tester's definitions, owned
+# criteria, design and walkthrough, and is asked to re-perform by a typed role.
+REVIEWER_PROMPT_VERSION = "independent-reviewer/7"
+
+
+class ReperformanceBody(BaseModel):
+    """What the reviewer agent's last re-performance did, from its typed record (FO-1,
+    UH-9; 19 November 2026), never from its note's wording: `known` False for a review
+    re-performed before the record was kept (or never), `due` the TESTED items with files on
+    the sheet it read, `done` those the model re-performed with an accepted answer, `capped`
+    when the run stopped at MAX_REVIEWED_ITEMS, `dropped` the notes past MAX_NOTES not
+    recorded, and `failed` when the last attempt gave up (fail_reperformance)."""
+
+    known: bool = False
+    source: str | None = None
+    due: int = 0
+    done: int = 0
+    capped: bool = False
+    dropped: int = 0
+    failed: bool = False
+
+    def fully_reperformed(self) -> bool:
+        """Whether the agent re-performed every item due: the demo's seeded re-performance
+        (labelled simulated) counts as complete."""
+        if self.source == "SEEDED":
+            return True
+        return self.known and self.source == "MODEL" and self.done >= self.due > 0
+
+
+# What an open review's sign-off waits for from the reviewer agent's last re-performance
+# (product owner, 20 November 2026): NONE, nothing; ATTESTATION, the reviewer's record of a
+# re-performance by hand (needs_attestation); RUN, a re-performance that finishes, with no
+# record by hand to offer (waits_for_run).
+SignOffHold = Literal["NONE", "ATTESTATION", "RUN"]
+
+
+def signoff_hold(tested_branch: bool, record: ReperformanceBody) -> SignOffHold:
+    """What the review's sign-off waits for from its last re-performance, one rule for the
+    review body, sign_off, run_lets_sign and the queue (product owner, 20 November 2026).
+
+    On the tested branch (not a design signed off as not effective), the review signs only
+    with the reviewer's record of a re-performance by hand (FO-1) when the agent did not
+    re-perform every item due, when it has no record (re-performed before one was kept: fail
+    closed), or when the last attempt gave up (fail_reperformance) whatever an earlier run
+    did; a new run that finishes clears it too.
+
+    On the untested branch (a design signed off as not effective, nothing tested), a last
+    attempt that gave up holds the sign-off until a re-performance finishes: there is
+    nothing tested to re-perform by hand, so no record by hand is offered and none can be
+    false. Before (code review, 20 November 2026), the failure was read before the branch
+    and asked there for a record by hand of testing that never existed."""
+    if not tested_branch:
+        return "RUN" if record.failed else "NONE"
+    if record.failed:
+        return "ATTESTATION"
+    if record.known and record.due == 0:
+        return "NONE"
+    return "NONE" if record.fully_reperformed() else "ATTESTATION"
+
+
+def needs_attestation(tested_branch: bool, record: ReperformanceBody) -> bool:
+    """Whether the review signs only with the reviewer's record of a re-performance by hand
+    (signoff_hold ATTESTATION): only ever on the tested branch."""
+    return signoff_hold(tested_branch, record) == "ATTESTATION"
+
+
+def waits_for_run(tested_branch: bool, record: ReperformanceBody) -> bool:
+    """Whether the review signs only after a re-performance that finishes (signoff_hold RUN):
+    a failed attempt on the untested branch, where nothing can be re-performed by hand."""
+    return signoff_hold(tested_branch, record) == "RUN"
+
+
+# The review's reason, on the untested branch, while a failed attempt holds the sign-off.
+RUN_DID_NOT_FINISH = "the last re-performance did not finish: re-perform to try again"
+
+
+def reperformance_of(connection: psycopg.Connection[Any], review_id: UUID) -> ReperformanceBody:
+    """The review's last re-performance as its run recorded it (_finish), and whether a
+    later attempt gave up (fail_reperformance) without recording one."""
+    return reperformances_of(connection, [review_id]).get(review_id, ReperformanceBody())
+
+
+def reperformances_of(
+    connection: psycopg.Connection[Any], review_ids: Sequence[UUID]
+) -> dict[UUID, ReperformanceBody]:
+    """reperformance_of for several reviews in one query: what the queue and the register
+    route on (S5, 20 November 2026), never the note's wording (REPERFORM_FAILED)."""
+    if not review_ids:
+        return {}
+    events: dict[UUID, list[tuple[Any, Any]]] = {}
+    for target_id, action, payload in connection.execute(
+        """
+        SELECT target_id, action, payload FROM (
+            SELECT target_id, action, payload,
+                   row_number() OVER (PARTITION BY target_id
+                                      ORDER BY created_at DESC, id DESC) AS n
+            FROM audit_events
+            WHERE target_type = 'control_review' AND target_id = ANY(%s)
+              AND action IN ('review.reperformed', 'review.reperform_failed')
+        ) latest
+        WHERE n <= 2 ORDER BY target_id, n
+        """,
+        (list(review_ids),),
+    ).fetchall():
+        events.setdefault(UUID(str(target_id)), []).append((action, payload))
+    return {review_id: _record_of(events.get(review_id, [])) for review_id in review_ids}
+
+
+def run_lets_sign(record: ReperformanceBody, tested_branch: bool) -> bool:
+    """Whether the reviewer agent's last run leaves the review to sign as it is: its sign-off
+    waits for nothing (signoff_hold NONE: no record by hand, no run that finishes; a failed
+    attempt holds it on either branch). The queue and the register say "Sign off the
+    review" only then (S5, 20 November 2026); before, they said it after any run with a
+    date."""
+    return signoff_hold(tested_branch, record) == "NONE"
+
+
+def signs_after_run(
+    connection: psycopg.Connection[Any],
+    project_id: UUID,
+    control_id: Any,
+    round_review: bool,
+    record: ReperformanceBody | None,
+) -> bool:
+    """run_lets_sign for one review, reading its branch only where it decides (a full run
+    signs on either): a round's review is on the tested branch; a control's own review is
+    not when its design is signed off as not effective, where nothing was tested (as
+    _review reads it). No record read (the review is not resting) decides nothing here."""
+    if record is None or run_lets_sign(record, True):
+        return True
+    if record.failed or round_review:
+        return False
+    from ai_workforce_api.design_conclusions import design_verdict
+
+    design = design_verdict(connection, project_id, UUID(str(control_id)))
+    return run_lets_sign(record, design != "NOT_EFFECTIVE")
+
+
+def _record_of(rows: Sequence[tuple[Any, Any]]) -> ReperformanceBody:
+    """The record from a review's last two re-performance events, newest first."""
+    failed = bool(rows) and rows[0][0] == "review.reperform_failed"
+    recorded = next(
+        (dict(row[1]) for row in rows if row[0] == "review.reperformed" and row[1]), None
+    )
+    if recorded is None:
+        return ReperformanceBody(failed=failed)
+    due = recorded.get("due")
+    return ReperformanceBody(
+        known=isinstance(due, list),
+        source=None if recorded.get("source") is None else str(recorded["source"]),
+        due=len(due) if isinstance(due, list) else 0,
+        done=len(recorded.get("reperformed") or []),
+        capped=bool(recorded.get("capped")),
+        dropped=int(recorded.get("dropped") or 0),
+        failed=failed,
+    )
 
 
 def fail_reperformance(connection: psycopg.Connection[Any], review_id: UUID) -> None:
+    """A re-performance that gave up: the review keeps its notes and its last record, and a
+    typed `review.reperform_failed` event says so (FO-1), so no reader routes on the note."""
     with transaction(connection) as cursor:
-        cursor.execute(
+        row = cursor.execute(
             "UPDATE control_reviews SET reperform_status = 'IDLE', lease_until = NULL, "
-            "reperform_note = %s WHERE id = %s AND reperform_status IN ('PENDING', 'WORKING')",
+            "reperform_note = %s WHERE id = %s AND reperform_status IN ('PENDING', 'WORKING') "
+            "RETURNING organization_id, project_id",
             (REPERFORM_FAILED, review_id),
-        )
+        ).fetchone()
+        if row is not None:
+            _audit(
+                cursor, UUID(str(row[0])), UUID(str(row[1])), None, review_id,
+                "review.reperform_failed", {},
+            )  # fmt: skip
 
 
-def reperform_failure_note(status: str, source: str | None, note: str) -> str:
+def reperform_failure_note(
+    status: str,
+    source: str | None,
+    note: str,
+    record: ReperformanceBody,
+    signed: bool = False,
+    tested_branch: bool = True,
+) -> str:
     """The reviewer agent's last re-performance, said for a person when it gave no usable
-    answer: one that gave up (REPERFORM_FAILED) changed nothing; one whose every model call
-    failed (FALLBACK) left the rules' checks; one the model did only in part (MODEL with
-    PARTLY_REPERFORMED) kept the items it did."""
-    if status in ("PENDING", "WORKING") or not note:
+    answer: one that gave up changed nothing; one whose every model call failed (FALLBACK)
+    left the rules' checks; one the model did only in part (MODEL, fewer re-performed than
+    due) kept the items it did. Read from the typed record (FO-1, 19 November 2026); before,
+    from the note's wording (REPERFORM_FAILED, the partial note). The agent is "the reviewer
+    agent", never "the model" (design review, 20 November 2026). A signed review is not a
+    failure to act on: its sign-off recorded the rest by hand, so "Re-perform to try again"
+    is not said over it (before, it was, beside "Reviewed"). On the untested branch (a design
+    signed off as not effective) nothing was tested, so no re-performance by hand is offered
+    (signoff_hold RUN; product owner, 20 November 2026)."""
+    if signed or status in ("PENDING", "WORKING") or not note:
         return ""
-    if note == REPERFORM_FAILED:
+    if record.failed and not tested_branch:
+        return f"{note} The notes are kept as they were."
+    if record.failed:
+        # One sentence per idea, no semicolon (design review, 20 November 2026).
         return (
-            f"{note} The review's notes stay as they were; you can also re-perform the "
-            "testing by hand."
+            f"{note.removesuffix(' Re-perform to try again.')} Re-perform to try again, or "
+            "re-perform the testing by hand. The notes are kept as they were."
         )
+    # Both notes name the items that stand (not_reperformed, partly_reperformed), so the
+    # next actions say "them" (design review, 20 November 2026; before, "the items").
     if source == "FALLBACK":
-        return f"{note} Re-perform to try the model again, or re-perform the items by hand."
-    if source == "MODEL" and PARTLY_REPERFORMED in note:
-        return (
-            f"{note} The items it re-performed stand; re-perform to try the rest again, or "
-            "re-perform them by hand."
-        )
+        return f"{note} Re-perform to try again, or re-perform them by hand."
+    # A capped run re-performed the first MAX_REVIEWED_ITEMS by design; its note says so.
+    if source == "MODEL" and record.known and record.done < min(record.due, MAX_REVIEWED_ITEMS):
+        return f"{note} Re-perform to try again, or re-perform them by hand."
     return ""
 
 
@@ -411,6 +647,25 @@ def rules_findings(
                     "SHOULD_FIX",
                     f"{item.label}: attribute(s) {letters} passed without a cited passage. "
                     "Test again so the result cites the evidence, or cite it by hand.",
+                )
+            )
+        # A signed sheet keeps what was signed, so an agent's not applicable no person
+        # confirmed before decision D1 (19 November 2026) is raised for the reviewer to
+        # decide, never rewritten on the signed record (testing_engine.final_results).
+        unconfirmed = [
+            cell.index
+            for cell in item.cells
+            if cell.final == "NOT_APPLICABLE" and cell.overridden_by is None
+        ]
+        if unconfirmed:
+            letters = ", ".join(_letter(index) for index in unconfirmed)
+            findings.append(
+                Finding(
+                    "RESULT",
+                    {"item_id": str(item.id), "indexes": unconfirmed, "rule": "UNCONFIRMED_NA"},
+                    "MUST_FIX",
+                    f"{item.label}: attribute(s) {letters} rest on the tester's not applicable, "
+                    "which no person confirmed. Confirm it with a reason, or test it.",
                 )
             )
         for cell in item.cells:
@@ -522,7 +777,18 @@ _DISAGREEMENTS: dict[tuple[str, str], tuple[Severity, str]] = {
         "SHOULD_FIX",
         "the reviewer found the attribute does not apply",
     ),
-    ("NOT_APPLICABLE", "PASS"): ("OBSERVATION", "the reviewer found the attribute applies"),
+    # Item 4 (19 November 2026): a reviewer who finds an attribute the tester left out
+    # applies is a should-fix (before, an observation), and a reviewer who cannot conclude
+    # on a result the tester decided (not applicable or an exception) disagrees with it;
+    # before, these pairs were silently dropped. Severities proposed, not set by the owner.
+    ("NOT_APPLICABLE", "PASS"): ("SHOULD_FIX", "the reviewer found the attribute applies"),
+    ("NOT_APPLICABLE", "UNABLE"): ("SHOULD_FIX", "the reviewer found the evidence insufficient"),
+    ("NOT_APPLICABLE", "REVIEW"): (
+        "SHOULD_FIX",
+        "the reviewer found it needs a person's judgment",
+    ),
+    ("EXCEPTION", "UNABLE"): ("SHOULD_FIX", "the reviewer found the evidence insufficient"),
+    ("EXCEPTION", "REVIEW"): ("SHOULD_FIX", "the reviewer found it needs a person's judgment"),
     ("NOT_APPLICABLE", "EXCEPTION"): ("MUST_FIX", "the reviewer found an exception"),
     ("UNABLE", "EXCEPTION"): ("MUST_FIX", "the reviewer found an exception"),
     ("REVIEW", "EXCEPTION"): ("MUST_FIX", "the reviewer found an exception"),
@@ -545,6 +811,12 @@ def disagreements(
         if found is None:
             continue
         severity, why = found
+        # The reason follows the typed rule that set the reviewer's result, never its note:
+        # an attribute the reviewer left out is said as such (UH-4).
+        if entry.get("rule") == "OMITTED":
+            why = "the reviewer gave no result for it"
+        elif entry.get("rule") == "ELEMENT_GAP":
+            why = "the reviewer could not show each element the attribute requires"
         findings.append(
             Finding(
                 "RESULT",
@@ -600,7 +872,7 @@ def endorsed(
             verified = (
                 status == "SHOWN"
                 and len(cited) == len(files)
-                and bool(check_citations([citation], cited))
+                and bool(check_citations([citation], cited, supports=True))
                 and not _untrusted_passage(citation, files)
             )
             elements.append({
@@ -614,7 +886,7 @@ def endorsed(
             if not elements:
                 result = {**result, "result": "UNABLE",
                           "note": clean_line(f"{UNENDORSED_PASS} {result['note']}", 400),
-                          "decided_by_rule": True}  # fmt: skip
+                          "decided_by_rule": True, "rule": "ELEMENT_GAP"}  # fmt: skip
             elif gap is not None:
                 why = (
                     f"The re-performance finds that {gap['element']} "
@@ -624,7 +896,7 @@ def endorsed(
                 result = {**result,
                           "result": "REVIEW" if gap["status"] == "CONTRADICTED" else "UNABLE",
                           "note": clean_line(f"{why} {result['note']}", 400),
-                          "decided_by_rule": True}  # fmt: skip
+                          "decided_by_rule": True, "rule": "ELEMENT_GAP"}  # fmt: skip
         checked_results.append(result)
     return checked_results
 
@@ -639,6 +911,34 @@ def _untrusted_passage(citation: dict[str, Any], files: tuple[ItemFile, ...]) ->
     quote = str(citation.get("quote") or "")
     span = find_quote(text, quote) if text and quote.strip() else None
     return span is not None and untrusted_kind(line_of(text, span)) is not None
+
+
+def _weakness(item: ItemBody) -> int:
+    """How thinly an item's results rest on the evidence, for the order of re-performance
+    (critic 8, 19 November 2026): a person's override, a final not applicable, a pass on at
+    most one citation or on a box alone, and a result a rule check changed each count."""
+    score = 0
+    for cell in item.cells:
+        if cell.overridden_by is not None:
+            score += 1
+        if cell.final == "NOT_APPLICABLE":
+            score += 1
+        if cell.final == "PASS" and (
+            len(cell.citations) <= 1
+            or any(not str(c.get("quote") or "").strip() for c in cell.citations)
+        ):
+            score += 1
+        if any(check.get("holds") is False for check in cell.checks):
+            score += 1
+    return score
+
+
+def reperform_order(items: list[ItemBody]) -> list[ItemBody]:
+    """The items a re-performance is due for (each TESTED item with files), the weakest
+    supported first and otherwise in sheet order, so a capped run re-performs the riskiest
+    items (critic 8). Before, the first MAX_REVIEWED_ITEMS in sheet order."""
+    due = [item for item in items if item.state == "TESTED" and item.files]
+    return sorted(due, key=lambda item: -_weakness(item))
 
 
 def run_reperformance(
@@ -664,7 +964,7 @@ def run_reperformance(
               AND (reperform_status = 'PENDING'
                    OR (reperform_status = 'WORKING' AND lease_until < clock_timestamp()))
             RETURNING organization_id, project_id, engagement_control_id, opened_by,
-                      test_round_id
+                      test_round_id, reperform_started_at
             """,
             (LEASE_MINUTES, review_id, MAX_ATTEMPTS),
         ).fetchone()
@@ -672,6 +972,8 @@ def run_reperformance(
             hold_claim(cursor, "control_reviews", "id", review_id, "reperform_status")
     if claimed is None:
         return "SKIPPED"
+    # The run's own claim: _finish records only while the review is still this run's.
+    started_at = claimed[5]
     organization_id, project_id, control_id, requester = (
         UUID(str(claimed[0])),
         UUID(str(claimed[1])),
@@ -685,7 +987,11 @@ def run_reperformance(
         (project_id, control_id, claimed[4]),
     ).fetchone()
     if sheet_row is None:
-        _finish(connection, review_id, None, "RULES", "The testing is not signed off.", None, [])
+        # No rules ran and no item was read: every earlier note stays as it was (FO-2).
+        _finish(
+            connection, review_id, None, "RULES", "The testing is not signed off.", None, [],
+            started_at=started_at, run=RunRecord(rules_ran=False, due=None),
+        )  # fmt: skip
         return "DONE"
     sheet = _sheet(connection, project_id, UUID(str(sheet_row[0])))
     loaded = load_context(connection, project_id, control_id)
@@ -729,18 +1035,32 @@ def run_reperformance(
             cancelled=lambda: cancel_requested(connection, "review", review_id),
         )
     model_items = 0
-    failed_items = 0
-    last_failure = ""
+    failed_items: list[str] = []
+    # Every TESTED item with files is due (FO-1): the record says how many were
+    # re-performed of them, never only of the capped part.
+    ordered = reperform_order(sheet.items)
+    due = tuple(item.id for item in ordered)
+    # The population columns' date orders, read as the tester read them (date_orders).
+    orders = date_orders(
+        [(entry["column"], entry["value"]) for entry in item.detail] for item in sheet.items
+    )
+    reperformed: set[UUID] = set()
+    capped_line = (
+        f"The {MAX_REVIEWED_ITEMS} items with the weakest support were re-performed first, "
+        f"of {len(ordered)}."
+    )
     if caller is None:
         note = "No model is configured, so the reviewer re-performs the testing by hand."
     else:
         shown_images = ocr_choice(connection, organization_id) == "MODEL"
+        # The tester's basis, built by the tester's own builder (item 8).
+        attributes = tuple(sheet.attributes)
+        basis = testing_basis(connection, control_id, attributes)
+        basis_record = basis_inputs(connection, control_id, attributes, basis.tailored)
         reviewed_items = 0
-        for item in sheet.items:
-            if item.state != "TESTED" or not item.files:
-                continue
+        for item in ordered:
             if reviewed_items >= MAX_REVIEWED_ITEMS:
-                note = f"The first {MAX_REVIEWED_ITEMS} items were re-performed."
+                note = capped_line
                 break
             if caller.cancelled():
                 finish_cancelled(
@@ -761,9 +1081,8 @@ def run_reperformance(
                 activity=loaded.activity,
                 frequency=loaded.frequency_label or loaded.frequency,
                 nature=loaded.nature_label or loaded.nature,
-                period=f"ending {loaded.period_end.isoformat()}"
-                if loaded.period_end is not None
-                else "",
+                # The period as the tester reads it (item 8); before, "ending <date>".
+                period=loaded.period,
                 attributes=tuple(sheet.attributes),
                 item_label=item.label,
                 item_detail=tuple((entry["column"], entry["value"]) for entry in item.detail),
@@ -771,15 +1090,19 @@ def run_reperformance(
                 files=tuple(file for file, _data in files),
                 # The same approved plan the tester worked to (M3d).
                 required=plan_evidence(connection, sheet.id, control_id, tuple(sheet.attributes)),
+                # The same definitions, owned criteria, design and walkthrough the tester
+                # judged against (item 8, 19 November 2026; testing_engine.testing_basis).
+                # Never the mapped passages or an agent's screenshot review: the
+                # re-performer reads the files alone. Before, it had none of the four.
+                definitions=basis.definitions,
+                tailored=basis.tailored,
+                design=basis.design,
+                walkthrough=basis.walkthrough,
             )
             call = caller.generate(
                 ModelRequest(
                     operation="generate",
-                    prompt=prompt_for(context).replace(
-                        "Test this item against each attribute.",
-                        "Re-perform the test of this item against each attribute.",
-                        1,
-                    ),
+                    prompt=prompt_for(context, "REPERFORM"),
                     output_schema=REVIEW_SCHEMA,
                     allowed_tool_ids=(),
                     timeout_seconds=120,
@@ -795,6 +1118,8 @@ def run_reperformance(
                     "sheet": {"id": str(sheet.id), "version": sheet.version},
                     "item": str(item.id),
                     "files": [str(f.file_id) for f, _d in files if f.file_id is not None],
+                    # The basis re-performed, recorded as the tester's is (I13).
+                    **basis_record,
                 },
             )
             # A cancellation asked for while the model answered: the answer is not used.
@@ -818,6 +1143,7 @@ def run_reperformance(
                                 len(sheet.attributes),
                                 item_files,
                                 tuple((entry["column"], entry["value"]) for entry in item.detail),
+                                orders,
                             ),
                             {str(f.file_id): f.text for f, _d in files if f.file_id is not None},
                         ),
@@ -825,16 +1151,14 @@ def run_reperformance(
                         item_files,
                     )
                 except ValueError as error:
-                    failed_items += 1
-                    # Plain words for the person; the check's words stay on the outcome.
-                    last_failure = (
-                        f"The reviewer could not finish {item.label}: {plain_problem(str(error))}."
-                    )
+                    failed_items.append(item.label)
+                    # The check's words stay on the outcome, never in the person's note.
                     record_outcome(
                         connection, call_id, {"validation": "REJECTED", "reason": str(error)}
                     )
                     continue
                 model_items += 1
+                reperformed.add(item.id)
                 raised = disagreements(
                     item.id, item.label, [cell.final for cell in item.cells], reviewed
                 )
@@ -855,21 +1179,35 @@ def run_reperformance(
                     ]},
                 )  # fmt: skip
             else:
-                failed_items += 1
-                last_failure = call.note
+                failed_items.append(item.label)
                 record_outcome(
                     connection, call_id, {"validation": "NOT_USED", "reason": call.status}
                 )
         # The rules' checks always stand. The model's work is MODEL only where it
         # re-performed at least one item; when every call failed, the record says the
         # rules stood in (FALLBACK) and names the failure, never the model's work.
+        # What stands is every due item not re-performed: a failed call's and, on a
+        # capped run, each one past the cap (code review, 20 November 2026; before, only
+        # the failed ones, counted of the items tried, over the header's count of due).
+        standing = [item.label for item in ordered if item.id not in reperformed]
+        # A capped run's note says which items it took first; "tried", since some failed.
+        tried_first = (
+            f" It tried the {MAX_REVIEWED_ITEMS} items with the weakest support first."
+            if len(ordered) > MAX_REVIEWED_ITEMS
+            else ""
+        )
         if model_items:
             source = "MODEL"
             if failed_items:
-                note = f"{failed_items} of {model_items + failed_items} {PARTLY_REPERFORMED} {last_failure}"  # noqa: E501
+                # Said for the person (design review, 20 November 2026): what the
+                # reviewer agent did and which items stand as the preparer left them;
+                # the check's reason stays on the call's outcome, not in this line.
+                note = partly_reperformed(model_items, standing) + tried_first
         elif failed_items:
             source = "FALLBACK"
-            note = f"{last_failure} The model did not re-perform the items; the rules' checks stand on their own."  # noqa: E501
+            # Said for the person like the partial note (design review, 20 November
+            # 2026): every item it tried, by name; each call's reason is on its outcome.
+            note = not_reperformed(standing) + tried_first
     _finish(
         connection,
         review_id,
@@ -879,6 +1217,13 @@ def run_reperformance(
         call_id,
         findings,
         None if caller is None else caller.job.agent_instance_id,
+        started_at=started_at,
+        run=RunRecord(
+            rules_ran=True,
+            due=due,
+            reperformed=frozenset(reperformed),
+            capped=len(due) > MAX_REVIEWED_ITEMS and caller is not None,
+        ),
     )
     return "DONE"
 
@@ -955,6 +1300,36 @@ def _workpaper_facts(
     return tuple(facts)
 
 
+# The order notes are kept in when more are raised than a review records (MAX_NOTES): the
+# most severe first, so a cap never drops a must-fix ahead of an observation.
+_SEVERITY_ORDER: dict[str, int] = {"MUST_FIX": 0, "SHOULD_FIX": 1, "OBSERVATION": 2}
+
+
+@dataclass(frozen=True)
+class RunRecord:
+    """What one re-performance did, in typed fields (FO-1, FO-2; 19 November 2026): whether
+    the rules' checks ran (so their earlier notes are raised again or not), the items due
+    (each TESTED item with files on the sheet re-performed, in the order re-performed; None
+    when no sheet was read), and the items the model re-performed with an accepted answer.
+    _finish keeps it on the run's `review.reperformed` audit event, the record the review's
+    gate and sign-off read (reperformance_of)."""
+
+    rules_ran: bool
+    due: tuple[UUID, ...] | None
+    reperformed: frozenset[UUID] = frozenset()
+    capped: bool = False
+
+
+def _note_source(target: dict[str, Any]) -> str:
+    """Whether an agent note came from the rules' checks or from the model's re-performance
+    of an item: the typed `source` the note carries, else (notes raised before 19 November
+    2026) a re-performance note is the one that records the reviewer's own result."""
+    source = target.get("source")
+    if source in ("RULES", "REPERFORMANCE"):
+        return str(source)
+    return "REPERFORMANCE" if "reviewer_result" in target else "RULES"
+
+
 def _finish(
     connection: psycopg.Connection[Any],
     review_id: UUID,
@@ -964,32 +1339,25 @@ def _finish(
     call_id: UUID | None,
     findings: list[Finding],
     agent_instance_id: UUID | None = None,
-) -> None:
+    *,
+    started_at: datetime | None = None,
+    run: RunRecord | None = None,
+) -> bool:
+    """Record a re-performance, only if this run still holds the review's claim. The claim
+    is taken first (the review row, then its notes: the order every person's path takes,
+    _locked then _locked_note), and checks the run's own start, so a run that lost its lease
+    to another, or was cancelled, changes nothing (FO-2, 19 November 2026). Before, the notes
+    were withdrawn and written before the claim was checked, in the reverse lock order.
+
+    A run withdraws only the agent notes it raises again (FO-2): the rules' notes when the
+    rules ran, a re-performance note when the model re-performed its item in this run, or
+    when its item is no longer due (left the sheet or no longer tested) or was tested again
+    since the note was raised. Before, every proposed agent note was withdrawn on every run,
+    so a must-fix no person decided disappeared on a run the model did not finish. `run`
+    None (the demo's seeded re-performance) withdraws nothing. Returns whether it recorded."""
+    record = run if run is not None else RunRecord(rules_ran=False, due=None)
     with transaction(connection) as cursor:
-        # The agent's earlier proposals are superseded by this re-performance.
-        cursor.execute(
-            "UPDATE review_notes SET status = 'WITHDRAWN', version = version + 1 "
-            "WHERE control_review_id = %s AND raised_by = 'AGENT' AND status = 'PROPOSED'",
-            (review_id,),
-        )
-        scope = cursor.execute(
-            "SELECT organization_id, project_id FROM control_reviews WHERE id = %s",
-            (review_id,),
-        ).fetchone()
-        if scope is None:
-            return
-        for finding in findings[:MAX_NOTES]:
-            _insert_note(
-                cursor,
-                UUID(str(scope[0])),
-                UUID(str(scope[1])),
-                review_id,
-                finding,
-                "AGENT",
-                None,
-                "PROPOSED",
-            )
-        cursor.execute(
+        claimed = cursor.execute(
             """
             UPDATE control_reviews
             SET reperform_status = CASE WHEN reperform_requested_at > reperform_started_at
@@ -998,19 +1366,98 @@ def _finish(
                 reperform_source = %s, reperform_note = %s, reperform_call_id = %s,
                 sheet_version_reviewed = %s, version = version + 1
             WHERE id = %s AND reperform_status = 'WORKING'
+              AND reperform_started_at IS NOT DISTINCT FROM %s
+            RETURNING organization_id, project_id
             """,
-            (source, note[:500], call_id, sheet_version, review_id),
+            (source, note[:500], call_id, sheet_version, review_id, started_at),
+        ).fetchone()
+        if claimed is None:
+            return False
+        organization_id, project_id = UUID(str(claimed[0])), UUID(str(claimed[1]))
+        earlier = cursor.execute(
+            "SELECT id, target, raised_at FROM review_notes "
+            "WHERE control_review_id = %s AND raised_by = 'AGENT' AND status = 'PROPOSED' "
+            "ORDER BY id FOR UPDATE",
+            (review_id,),
+        ).fetchall()
+        item_ids = sorted(
+            {
+                str(row[1].get("item_id"))
+                for row in earlier
+                if isinstance(row[1], dict) and _note_source(row[1]) == "REPERFORMANCE"
+            }
         )
+        tested_at: dict[str, Any] = {}
+        if item_ids:
+            tested_at = {
+                str(row[0]): row[1]
+                for row in cursor.execute(
+                    "SELECT id::text, tested_at FROM test_items WHERE id::text = ANY(%s)",
+                    (item_ids,),
+                ).fetchall()
+            }
+        due = None if record.due is None else {str(item) for item in record.due}
+        reperformed = {str(item) for item in record.reperformed}
+        withdrawn: list[UUID] = []
+        for note_id, raw, raised_at in earlier:
+            target: dict[str, Any] = raw if isinstance(raw, dict) else {}
+            if _note_source(target) == "RULES":
+                if record.rules_ran:
+                    withdrawn.append(UUID(str(note_id)))
+                continue
+            item = str(target.get("item_id"))
+            retested = tested_at.get(item)
+            if (
+                item in reperformed
+                or (due is not None and item not in due)
+                or (retested is not None and raised_at is not None and retested > raised_at)
+            ):
+                withdrawn.append(UUID(str(note_id)))
+        if withdrawn:
+            cursor.execute(
+                "UPDATE review_notes SET status = 'WITHDRAWN', version = version + 1 "
+                "WHERE id = ANY(%s)",
+                (withdrawn,),
+            )
+        ranked = sorted(findings, key=lambda f: _SEVERITY_ORDER.get(f.severity, 3))
+        recorded = ranked[:MAX_NOTES]
+        for finding in recorded:
+            stored = Finding(
+                finding.target_kind,
+                {
+                    **finding.target,
+                    "source": "REPERFORMANCE" if "reviewer_result" in finding.target else "RULES",
+                    "sheet_version": sheet_version,
+                },
+                finding.severity,
+                finding.text,
+            )
+            _insert_note(
+                cursor, organization_id, project_id, review_id, stored, "AGENT", None, "PROPOSED"
+            )
         _audit(
             cursor,
-            UUID(str(scope[0])),
-            UUID(str(scope[1])),
+            organization_id,
+            project_id,
             None,
             review_id,
             "review.reperformed",
-            {"source": source, "notes": min(len(findings), MAX_NOTES)},
+            {
+                "source": source,
+                "notes": len(recorded),
+                "withdrawn": len(withdrawn),
+                "kept": len(earlier) - len(withdrawn),
+                # Notes past the cap are not recorded; any drop holds the sign-off (FO-2).
+                "dropped": len(findings) - len(recorded),
+                "rules_ran": record.rules_ran,
+                "sheet_version": sheet_version,
+                "due": None if record.due is None else [str(item) for item in record.due],
+                "reperformed": sorted(reperformed),
+                "capped": record.capped,
+            },
             agent_instance_id,
         )
+    return True
 
 
 def _insert_note(
@@ -1102,6 +1549,14 @@ class ReviewBody(BaseModel):
     # was kept, and what to do next; "" when it succeeded, runs, was cancelled, or no
     # model ran.
     failure_note: str = ""
+    # The last re-performance's typed record: items due and re-performed (FO-1, UH-9).
+    reperformance: ReperformanceBody = ReperformanceBody()
+    # Whether signing needs the reviewer's record that they re-performed the testing by
+    # hand: the agent did not re-perform every item due on the tested branch (FO-1).
+    attestation_needed: bool = False
+    # What the sign-off waits for from the last re-performance (signoff_hold): RUN only on
+    # the untested branch, where a failed attempt waits for a run that finishes.
+    signoff_hold: SignOffHold = "NONE"
     cancel_state: CancelState = "NONE"
     sheet_status: str | None
     sheet_signed_by: str | None
@@ -1196,6 +1651,9 @@ def _review(
         (project_id, control_id),
     ).fetchall()
     notes = _notes(connection, review_id)
+    record = reperformance_of(connection, review_id)
+    # Only the tested branch re-performs items: a design not effective tested nothing.
+    tested_branch = False
     counts = {
         status: sum(1 for note in notes if note.status == status)
         for status in ("PROPOSED", "OPEN", "RESPONDED", "CLEARED", "DISMISSED")
@@ -1210,7 +1668,24 @@ def _review(
     from ai_workforce_api.evidence_plans import gate_reason
     from ai_workforce_api.readiness import unassessed_signoffs
 
-    planned = gate_reason(connection, control_id, None)
+    # The control's own review rests on its D&I conclusion (B0/B3, 8 November 2026). A design
+    # signed off as not effective is reviewed without OE: nothing was tested to re-perform.
+    design = None
+    if row[15] is None:
+        from ai_workforce_api.design_conclusions import design_verdict
+
+        design = design_verdict(connection, project_id, control_id)
+    # FO-11 (19 November 2026): the gate reads the phase tested, so its attributes are
+    # settled too (none proposed, no conflict open); before, no phase was passed and only
+    # the plan's approval was read. A review of a design not effective tested no phase.
+    tested_phase = (
+        None
+        if design == "NOT_EFFECTIVE"
+        else "ROLLFORWARD"
+        if row[16] == "ROLLFORWARD"
+        else "INTERIM"
+    )
+    planned = gate_reason(connection, control_id, tested_phase)
     if planned is not None:
         blocking.append(planned)
     predating = (
@@ -1225,13 +1700,6 @@ def _review(
             f"{predating} signed-off result{' awaits' if predating == 1 else 's await'} "
             "a reviewer's impact decision"
         )
-    # The control's own review rests on its D&I conclusion (B0/B3, 8 November 2026). A design
-    # signed off as not effective is reviewed without OE: nothing was tested to re-perform.
-    design = None
-    if row[15] is None:
-        from ai_workforce_api.design_conclusions import design_verdict
-
-        design = design_verdict(connection, project_id, control_id)
     if design == "NOT_EFFECTIVE":
         pass
     else:
@@ -1250,10 +1718,19 @@ def _review(
             blocking.append("the effectiveness workpaper is not prepared")
         if row[5] != "IDLE":
             blocking.append("the reviewer agent is still re-performing the testing")
-        elif row[6] is None:
+        elif row[6] is None or row[9] is None:
+            # A run that read no signed sheet re-performed nothing (FO-1, 19 November 2026):
+            # before, a missing reviewed version skipped the version check.
             blocking.append("the testing has not been re-performed")
-        elif sheet is not None and row[9] is not None and int(sheet[2]) != int(row[9]):
+        elif sheet is not None and int(sheet[2]) != int(row[9]):
             blocking.append("the testing changed since it was re-performed")
+        elif record.dropped:
+            # Notes past the cap were not recorded: the review cannot show what it covers.
+            blocking.append(
+                f"{_count(record.dropped, 'reviewer agent note')} over the limit of "
+                f"{MAX_NOTES} {'was' if record.dropped == 1 else 'were'} not recorded"
+            )
+        tested_branch = True
     if row[15] is None:
         # Each deficiency's severity is rated by a person before the review signs off.
         from ai_workforce_api.control_conclusions import unrated
@@ -1276,6 +1753,27 @@ def _review(
                 f"{waiting_changes} deficiency change{'' if waiting_changes == 1 else 's'} "
                 "waiting for the reviewer's decision"
             )
+    # A prepared workpaper's urgent review notes hold the review as they hold its own
+    # sign-off (item 19, 19 November 2026); before, only the review's own notes held it.
+    from ai_workforce_api import workpaper_review_notes
+
+    for paper in papers:
+        if paper[2] == "PREPARED":
+            held = workpaper_review_notes.signoff_refusal(
+                workpaper_review_notes.urgent_open(connection, UUID(str(paper[0])))
+            )
+            if held is not None:
+                blocking.append(f"{str(paper[1]).lower()} workpaper: {held}")
+    hold = signoff_hold(tested_branch, record)
+    if hold == "RUN":
+        # The untested branch's failed attempt holds the sign-off until a run finishes, the
+        # one it may be running now included; no record by hand is offered there (product
+        # owner, 20 November 2026).
+        blocking.append(
+            RUN_DID_NOT_FINISH
+            if row[5] == "IDLE"
+            else "the reviewer agent is still re-performing the testing"
+        )
     waiting = counts["PROPOSED"] + counts["OPEN"] + counts["RESPONDED"]
     if waiting:
         blocking.append(f"{_count(waiting, 'note')} not cleared yet")
@@ -1292,8 +1790,16 @@ def _review(
         reperform_source=None if row[7] is None else str(row[7]),
         reperform_note=str(row[8]),
         failure_note=reperform_failure_note(
-            str(row[5]), None if row[7] is None else str(row[7]), str(row[8])
+            str(row[5]),
+            None if row[7] is None else str(row[7]),
+            str(row[8]),
+            record,
+            signed=row[4] == "SIGNED_OFF",
+            tested_branch=tested_branch,
         ),
+        reperformance=record,
+        attestation_needed=hold == "ATTESTATION",
+        signoff_hold=hold,
         cancel_state=cancel_state(row[5], row[18], row[19], row[8]),
         sheet_status=None if sheet is None else str(sheet[0]),
         sheet_signed_by=None if sheet is None or sheet[1] is None else str(sheet[1]),
@@ -1390,6 +1896,30 @@ def _review_states(
     states: dict[UUID, tuple[ReviewStatus, ReviewLeft]] = {}
     key = "r.test_round_id" if by_round else "r.engagement_control_id"
     scope = "r.test_round_id IS NOT NULL" if by_round else "r.test_round_id IS NULL"
+    rows = connection.execute(
+        f"""
+            SELECT {key}, r.status, r.reperform_status, r.reperformed_at,
+                   count(*) FILTER (WHERE n.status = 'PROPOSED'),
+                   count(*) FILTER (WHERE n.status = 'OPEN'),
+                   count(*) FILTER (WHERE n.status = 'RESPONDED'),
+                   r.id, r.engagement_control_id
+            FROM control_reviews r
+            LEFT JOIN review_notes n ON n.control_review_id = r.id
+            WHERE r.project_id = %s AND {scope}
+            GROUP BY r.id
+            """,
+        (project_id,),
+    ).fetchall()
+    # Only an open review that would otherwise sign needs its run's record.
+    records = reperformances_of(
+        connection,
+        [
+            UUID(str(row[7]))
+            for row in rows
+            if row[1] != "SIGNED_OFF" and row[2] == "IDLE" and not any(row[4:7])
+            and row[3] is not None
+        ],
+    )  # fmt: skip
     for (
         control_id,
         status,
@@ -1398,19 +1928,12 @@ def _review_states(
         proposed,
         open_,
         responded,
-    ) in connection.execute(
-        f"""
-            SELECT {key}, r.status, r.reperform_status, r.reperformed_at,
-                   count(*) FILTER (WHERE n.status = 'PROPOSED'),
-                   count(*) FILTER (WHERE n.status = 'OPEN'),
-                   count(*) FILTER (WHERE n.status = 'RESPONDED')
-            FROM control_reviews r
-            LEFT JOIN review_notes n ON n.control_review_id = r.id
-            WHERE r.project_id = %s AND {scope}
-            GROUP BY r.id
-            """,
-        (project_id,),
-    ).fetchall():
+        review_id,
+        review_control,
+    ) in rows:
+        signable = signs_after_run(
+            connection, project_id, review_control, by_round, records.get(UUID(str(review_id)))
+        )
         left: ReviewLeft = (
             "SIGNED"
             if status == "SIGNED_OFF"
@@ -1423,7 +1946,7 @@ def _review_states(
             else "CLEAR"
             if responded
             else "SIGN"
-            if reperformed_at is not None
+            if reperformed_at is not None and signable
             else "REPERFORM"
         )
         states[UUID(str(control_id))] = (
@@ -1564,6 +2087,14 @@ class NoteClear(BaseModel):
 class SignOffBody(BaseModel):
     version: int = Field(ge=1)
     note: str = Field(default="", max_length=1000)
+    # The reviewer's record that they re-performed the testing by hand, needed when the
+    # agent did not re-perform every item due (FO-1, 19 November 2026); the note then says
+    # what they re-performed.
+    reperformed_by_hand: bool = False
+
+
+# How long the note of a sign-off over a re-performance by hand is, at least.
+MIN_ATTESTATION = 10
 
 
 class ReopenBody(BaseModel):
@@ -2242,6 +2773,34 @@ def _sign_off(
                 "you signed off the testing or prepared a workpaper; "
                 "another reviewer must sign off the review"
             )
+        # The review signs only over a full re-performance by the agent, or one the
+        # reviewer records doing by hand (FO-1 with UH-9, 19 November 2026). Before, it
+        # signed over a run whose model calls failed, the rules alone, or a part.
+        record = current.reperformance
+        by_hand = current.attestation_needed
+        attestation = clean_line(body.note, 1000)
+        if by_hand:
+            if not body.reperformed_by_hand:
+                # The failed attempt is the reason when there is one, never the earlier
+                # run's count (code review, 20 November 2026; before, "re-performed 3 of 3
+                # items" was said over a later attempt that did not finish).
+                raise ReviewState(
+                    (
+                        "the last re-performance did not finish"
+                        if record.failed
+                        else f"the reviewer agent re-performed {record.done} of "
+                        f"{_count(record.due, 'item')}"
+                        if record.known
+                        else "the reviewer agent's re-performance has no record of the "
+                        "items it re-performed"
+                    )
+                    + ": re-perform again, or record that you re-performed the testing by hand"
+                )
+            if len(attestation) < MIN_ATTESTATION:
+                raise ReviewState(
+                    "say in the sign-off note what you re-performed by hand "
+                    f"(at least {MIN_ATTESTATION} characters)"
+                )
         if current.test_round_id is not None:
             from ai_workforce_api.test_rounds import round_reviewed
 
@@ -2272,6 +2831,17 @@ def _sign_off(
             ],
             "sheet_id": None if current.sheet_id is None else str(current.sheet_id),
             "sheet_version": current.sheet_version,
+            # What the agent re-performed, and the reviewer's record of the rest (UH-9).
+            "reperformance": {
+                "source": record.source,
+                "known": record.known,
+                "items_due": record.due,
+                "items_reperformed": record.done,
+                "capped": record.capped,
+                "by_hand": by_hand,
+                "by": str(principal.id) if by_hand else None,
+                "attestation": attestation if by_hand else "",
+            },
             "test_round_id": None if current.test_round_id is None else str(current.test_round_id),
             "workpapers": [
                 {"id": str(row[0]), "stage": str(row[1]), "version": row[2]}

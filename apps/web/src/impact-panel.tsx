@@ -182,7 +182,7 @@ function Assessment({
                   checked={decision === "VALID"}
                   onChange={() => setDecision("VALID")}
                 />
-                The results stand under the revised plan (VALID)
+                The results stand under the revised plan
               </label>
               <label>
                 <input
@@ -192,8 +192,7 @@ function Assessment({
                   checked={decision === "REPERFORM"}
                   onChange={() => setDecision("REPERFORM")}
                 />
-                Re-perform the testing (REPERFORM): the sheet and its review
-                reopen
+                Re-perform the testing: the sheet and its review reopen
               </label>
             </fieldset>
             <label className="cw-impact-rationale">

@@ -16,7 +16,7 @@ from uuid import UUID
 import psycopg
 from fastapi import FastAPI, HTTPException, Request
 from psycopg.types.json import Json
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ai_workforce_api.after_commit import after_commit, committed
 from ai_workforce_api.agent_runs import CancelState, RunState, cancel_state, run_state
@@ -30,12 +30,14 @@ from ai_workforce_api.authorization import (
     authorize,
 )
 from ai_workforce_api.db import transaction
+from ai_workforce_api.evidence_planning import _MISSING_AS_REASON
 from ai_workforce_api.evidence_plans import refresh_decisions
 from ai_workforce_api.inbound import clean_line, clean_text
 from ai_workforce_api.settings import Settings
 from ai_workforce_api.test_rounds import round_signed_off, start_rollforward
 from ai_workforce_api.testing_engine import (
     FAILED_NOTE,
+    NO_ATTRIBUTES,
     RESULTS,
     Conclusion,
     ItemView,
@@ -157,6 +159,10 @@ class VersionBody(BaseModel):
     version: int = Field(ge=1)
 
 
+# How long a person's reason for confirming not applicable is, at least (D1).
+MIN_NOT_APPLICABLE_REASON = 10
+
+
 class OverrideBody(BaseModel):
     version: int = Field(ge=1)
     index: int = Field(ge=0, lt=12)
@@ -170,6 +176,24 @@ class OverrideBody(BaseModel):
         if len(cleaned) < 3:
             raise ValueError("a reason is required")
         return cleaned
+
+    @model_validator(mode="after")
+    def not_applicable_reason(self) -> OverrideBody:
+        """A person's not applicable says why, in at least 10 characters, and missing
+        evidence is never the reason (decision D1, product owner, 19 November 2026): the
+        evidence planner's own rule for a phase not applicable (evidence_planning), reused."""
+        if self.result == "NOT_APPLICABLE":
+            if len(self.reason) < MIN_NOT_APPLICABLE_REASON:
+                raise ValueError(
+                    "say why the attribute does not apply, in at least "
+                    f"{MIN_NOT_APPLICABLE_REASON} characters"
+                )
+            if _MISSING_AS_REASON.search(self.reason):
+                raise ValueError(
+                    "missing evidence is not a reason an attribute does not apply: "
+                    "mark it insufficient evidence, or request the evidence"
+                )
+        return self
 
 
 class LinkBody(BaseModel):
@@ -531,7 +555,13 @@ def override_work(item_id: UUID, body: OverrideBody) -> Work:
             principal.id,
             sheet[0],
             "testing.result_overridden",
-            {"item_id": str(item_id), "index": body.index, "result": body.result},
+            # The person's reason, kept with the decision it explains (D1, 19 November 2026).
+            {
+                "item_id": str(item_id),
+                "index": body.index,
+                "result": body.result,
+                "reason": body.reason,
+            },
         )
         return False
 
@@ -551,7 +581,20 @@ def sign_off_work(body: SignOffBody) -> Work:
         # current revision (master_plans.py).
         from ai_workforce_api.evidence_plans import gate_reason
 
-        blocked = gate_reason(cursor.connection, sheet[3], None)
+        # FO-11 (19 November 2026): the phase tested, so the gate also reads that its
+        # attributes are settled (none proposed, no conflict open); before, None was passed
+        # and a sheet signed off over an agent's attribute proposal no person decided.
+        round_kind = cursor.execute(
+            "SELECT t.kind FROM test_sheets s LEFT JOIN test_rounds t ON t.id = s.test_round_id "
+            "WHERE s.id = %s",
+            (sheet[0],),
+        ).fetchone()
+        phase = (
+            "ROLLFORWARD"
+            if round_kind is not None and round_kind[0] == "ROLLFORWARD"
+            else "INTERIM"
+        )
+        blocked = gate_reason(cursor.connection, sheet[3], phase)
         if blocked is not None:
             raise SheetState(blocked)
         from ai_workforce_api.design_conclusions import oe_gate_reason
@@ -816,7 +859,10 @@ def _sheet(connection: psycopg.Connection[Any], project_id: UUID, sheet_id: UUID
             # Tested, but against attributes or criteria that changed since: not tested.
             tested = False
             out_of_date += 1
-        finals = final_results(len(attributes), results, overrides)
+        # An agent's not applicable waits for a person on an open sheet (D1).
+        finals = final_results(
+            len(attributes), results, overrides, confirm_not_applicable=row[5] == "OPEN"
+        )
         views.append(ItemView(has_evidence=bool(files), tested=tested, final=finals))
         by_result = {entry.get("index"): entry for entry in results if isinstance(entry, dict)}
         by_override = {entry.get("index"): entry for entry in overrides if isinstance(entry, dict)}
@@ -900,6 +946,9 @@ def _sheet(connection: psycopg.Connection[Any], project_id: UUID, sheet_id: UUID
         "out_of_date": out_of_date,
     }
     blocking: list[str] = []
+    if not attributes:
+        # No attribute is invented for a control without approved ones (FO-21).
+        blocking.append(NO_ATTRIBUTES)
     if basis is not None and basis.too_many is not None:
         blocking.append(basis.too_many)
         proposed = "INCOMPLETE"
