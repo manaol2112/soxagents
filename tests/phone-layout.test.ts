@@ -125,12 +125,38 @@ describe("an opened criteria change in the History (20 November 2026)", () => {
       rule(phoneBlocks(css, 640), ".ph-day li > .ph-change"),
       /grid-column: 2 \/ -1;/,
     );
+  });
+
+  it("opens from a link-like button with no button shadow under its words", () => {
+    // Found in the browser: the global button's shadow showed as a faint bar under "Show the
+    // criteria" (and under every other .tas-link); the 32 px button height stays its target.
+    const list = readFileSync("apps/web/app/attribute-list.css", "utf8");
+    const link = rule(list, ".tas-link");
+    assert.match(link, /box-shadow: none;/);
+    assert.doesNotMatch(link, /height:/);
+    assert.match(view, /className="tas-link ph-open"/);
+  });
+
+  it("keeps every first-line item on the first line, each in its own column", () => {
+    // A set row with an automatic column is placed before the automatic items, so the time
+    // took the title's column and pushed the title off the row (found in the browser at 1440).
+    // Each item therefore names its row and its column.
+    const placed: [string, string][] = [
+      [".ph-day li > .ph-dot", "1 / 1"],
+      [".ph-day li > .ph-icon", "1 / 2"],
+      [".ph-day li > .ph-text", "1 / 3"],
+      [".ph-day li > time", "1 / 4"],
+    ];
+    for (const [selector, area] of placed) {
+      assert.match(rule(css, selector), new RegExp(`grid-area: ${area};`));
+    }
     assert.match(
-      rule(
-        css,
-        ".ph-day li > .ph-dot,\n.ph-day li > .ph-icon,\n.ph-day li > time",
-      ),
-      /grid-row: 1;/,
+      rule(css, ".ph-day li"),
+      /grid-template-columns: 36px minmax\(0, 1fr\) auto;/,
+    );
+    assert.match(
+      css,
+      /\.ph-day li \{\s*grid-template-columns: 12px 36px minmax\(0, 1fr\) auto;/,
     );
   });
 });

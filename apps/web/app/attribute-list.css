@@ -1488,6 +1488,8 @@ button.tar-head:focus-visible:not(:disabled) {
   font-size: var(--fs-sm);
 }
 
+/* A link-like button: it drops the button's fill, border and shadow (the shadow showed as a
+   faint bar under the words) and keeps the button's 32 px height as its target. */
 .tas-link {
   padding: 0;
   color: var(--text-secondary);
@@ -1496,6 +1498,7 @@ button.tar-head:focus-visible:not(:disabled) {
   text-underline-offset: 2px;
   background: none;
   border: 0;
+  box-shadow: none;
   cursor: pointer;
   transition: color 120ms ease;
 }

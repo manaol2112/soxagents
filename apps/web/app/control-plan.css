@@ -1343,16 +1343,27 @@ button.pp-count:disabled {
 /* A criteria change, opened on request: the earlier and the new criteria side by side. */
 .ph-open {
   justify-self: start;
-  padding-block: 4px;
   font-size: var(--fs-xs);
 }
 
 /* The dot, the icon and the time stay level with the title when a change is opened, and the
-   change spans its own second line under the title and the time (under the icon on a phone). */
-.ph-day li > .ph-dot,
-.ph-day li > .ph-icon,
+   change spans its own second line under the title and the time (under the icon on a phone).
+   Each first-line item names its column as well as its row: the grid places items with a set
+   row before the others, so a row alone would put the time in the title's column. */
+.ph-day li > .ph-dot {
+  grid-area: 1 / 1;
+}
+
+.ph-day li > .ph-icon {
+  grid-area: 1 / 2;
+}
+
+.ph-day li > .ph-text {
+  grid-area: 1 / 3;
+}
+
 .ph-day li > time {
-  grid-row: 1;
+  grid-area: 1 / 4;
 }
 
 .ph-day li > .ph-change {
