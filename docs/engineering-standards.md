@@ -142,7 +142,7 @@ contractual or regulatory requirement to version every change of input would ove
 | No known advisory in a locked dependency | `.github/workflows/security.yml` (`pnpm audit`, `pip-audit`), on lockfile changes and weekly; updates proposed by `.github/dependabot.yml` |
 | Every audit invariant is held by a critical-tier test, and every open part names its increment | `services/api/tests/test_audit_invariants.py` |
 | Every model entry point fails closed against the hostile model | `services/api/tests/test_model_contract.py` |
-| Every agent file names a known model alias and effort (§12) | `services/api/tests/test_agent_models.py` |
+| Every agent file names a known model alias, and any effort it sets is a known level (§12) | `services/api/tests/test_agent_models.py` |
 
 ## 11. Fail closed
 
@@ -191,11 +191,11 @@ moves when the evidence in "Learning" below says so.
 | Work | Start with | Why |
 | --- | --- | --- |
 | Mechanical: renames, moves, formatting, counts, status lookups, log summaries | No model: `rg`, `sed`, scripts, `make` | Deterministic tools are exact and cost nothing |
-| A search where only the conclusion is needed | `sonnet` (the Explore agent) | Reading and locating; the coordinator still checks what it acts on |
+| A search where only the conclusion is needed | `sonnet`, passed as `model` on the Explore call | Reading and locating; the coordinator still checks what it acts on |
 | Well-specified, bounded implementation: Low or Medium, a UI change to an agreed design, tests for a written rule, a reproduced bug with a known cause | `sonnet` | Same result when the spec and acceptance criteria are complete |
 | Substantial or ambiguous work: multi-module changes, High-risk implementation, debugging without a known cause, planning and coordination | `opus` (the session default) | Holds more context and resolves ambiguity with less rework |
 | Independent review: G2 code review and the `ui-reviewer` | `opus` | The review must find what the author missed |
-| A consequential design decision with lasting effects, a problem where an `opus` attempt failed for lack of capability (not lack of context), or a review that did not converge after two rounds | `fable` | Its extra capability pays for itself only on the hardest problems |
+| A consequential design decision with lasting effects, a problem where an `opus` attempt failed for lack of capability (not lack of context), or a review that §5 stops for not converging, when re-planning shows the model is the limit | `fable` | Its extra capability pays for itself only on the hardest problems |
 
 **Effort.** Start at the model's saved default: the owner's user settings keep `opus` at
 `medium` and `fable` at `high`. Lower it for mechanical or narrow work. Raise it for one call
@@ -230,8 +230,10 @@ silently.
   model releases), and the coordinator passes `model` and `effort` on each Agent or
   workflow call. A per-call `model` wins over the agent file, so the fallback rule still
   works.
-- Observation: `/usage` shows usage by model and by subagent. Each review blocker in the
-  defect log names the model that built the change, so rework can be compared by model.
+- Observation: `/usage` shows usage by model and by subagent. From 20 November 2026, the
+  Description cell of each review-blocker row in `private/defect-log.md` ends with
+  `(built on <model>)`, so rework can be compared by model; the log keeps the five
+  columns `scripts/delivery_stats.py` reads. Rows before that date carry no model.
 - Enforcement: `services/api/tests/test_agent_models.py` fails when an agent file names an
   unknown model or effort. No check can force the choice of model per task.
 

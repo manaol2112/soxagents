@@ -32,7 +32,7 @@ def _frontmatter(path: Path) -> dict[str, str]:
 
 
 def _agent_files() -> list[Path]:
-    return sorted(AGENTS.glob("*.md"))
+    return sorted(AGENTS.rglob("*.md"))
 
 
 def test_the_guard_reads_the_agent_files() -> None:
