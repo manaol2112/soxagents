@@ -16,7 +16,7 @@ from ai_workforce_api.console import run_turn
 from ai_workforce_api.console_tools import BY_NAME, TOOLS, parse
 from ai_workforce_api.controls import LIBRARY
 from ai_workforce_api.db import connect
-from ai_workforce_api.models import ChatReply, ChatTool, ModelProviderError, ToolCall
+from ai_workforce_api.models import ChatReply, ChatTool, ModelCutOff, ModelProviderError, ToolCall
 from ai_workforce_api.settings import Settings
 
 _ = migrated
@@ -467,6 +467,30 @@ def test_a_busy_model_is_tried_again_before_the_turn_gives_up(
     assert waits == []
     rejected_note = _thread(client, team)["messages"][-1]["note"]
     assert rejected_note == "The model could not take the request."
+
+
+def test_a_reply_cut_off_at_the_limit_is_no_answer_and_says_so(
+    migrated: Database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """21 November 2026 (D-N0-1): a chat reply that stopped at the output limit was shown and
+    recorded as a whole answer. It is now refused: the turn fails without a retry (more
+    room, not another try, is the remedy), the person reads that it was cut off, and the
+    call is recorded as a cut-off answer."""
+    waits: list[float] = []
+    monkeypatch.setattr(console, "pause", waits.append)
+    team, client, _request = _sent_engagement_request(migrated, "cutoff", "ITGC-AC-01")
+    asked = _ask(client, team, "Summarise ITGC-AC-01.")
+    with connect(migrated.url) as connection:
+        assert _turn(connection, migrated, _Script([ModelCutOff()]), asked) == "FAILED"
+        recorded = connection.execute(
+            "SELECT status, error FROM model_calls WHERE project_id = %s "
+            "AND operation = 'propose_tools' ORDER BY created_at DESC LIMIT 1",
+            (team["project"],),
+        ).fetchone()
+    assert waits == []
+    note = _thread(client, team)["messages"][-1]["note"]
+    assert note == "The model's answer was cut off before it finished."
+    assert recorded == ("MALFORMED", "answer was cut off at the output limit")
 
 
 def test_a_failed_answer_can_be_retried_in_place(

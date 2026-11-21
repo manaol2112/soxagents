@@ -52,12 +52,14 @@ from ai_workforce_api.model_providers import (
     tier_config,
 )
 from ai_workforce_api.models import (
+    DEFAULT_OUTPUT_TOKENS,
     ChatProvider,
     ChatReply,
     ChatTool,
     ModelBudgetExceeded,
     ModelCancelled,
     ModelConfig,
+    ModelCutOff,
     ModelProvider,
     ModelProviderError,
     ModelRateLimit,
@@ -161,7 +163,7 @@ def config_for(settings: Settings | None, tier: ModelTier) -> ModelConfig:
 def estimate_micros(config: ModelConfig, request: ModelRequest) -> int:
     """The most a call can cost: the prompt and system text, the images, and the full
     output allowance."""
-    output = request.max_tokens or (8192 if request.images else 4096)
+    output = request.max_tokens or DEFAULT_OUTPUT_TOKENS
     inputs = (
         estimate_tokens(request.prompt)
         + estimate_tokens(request.system)
@@ -379,7 +381,9 @@ class AgentCaller:
         nothing = ModelRaw(None, (), 0, 0)
         inputs = {"messages": len(messages), "tools": len(tools)}
         estimate = cost_micros(
-            self.config, estimate_tokens(system) + estimate_tokens(transcript), 4096
+            self.config,
+            estimate_tokens(system) + estimate_tokens(transcript),
+            DEFAULT_OUTPUT_TOKENS,
         )
         refusal = self._over_budget(estimate)
         reservation: UUID | None = None
@@ -407,9 +411,13 @@ class AgentCaller:
                 "ModelTimeout": "TIMEOUT",
                 "ModelRateLimit": "RATE_LIMITED",
                 "ModelCancelled": "CANCELLED",
+                # The same status and words as a cut-off generation (models.outcome).
+                "ModelCutOff": "MALFORMED",
             }.get(type(error).__name__, "MODEL_ERROR")
             detail = (
-                f"provider error (status {error.status})"
+                "answer was cut off at the output limit"
+                if isinstance(error, ModelCutOff)
+                else f"provider error (status {error.status})"
                 if isinstance(error, ModelProviderError) and error.status
                 else status.lower().replace("_", " ")
             )

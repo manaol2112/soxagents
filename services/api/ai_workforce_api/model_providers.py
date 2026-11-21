@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from typing import Any
 
 from ai_workforce_api.models import (
+    DEFAULT_OUTPUT_TOKENS,
     OUTPUT_TOOL,
     ChatProvider,
     ChatReply,
@@ -18,6 +19,7 @@ from ai_workforce_api.models import (
     LocalModelProvider,
     ModelCancelled,
     ModelConfig,
+    ModelCutOff,
     ModelProvider,
     ModelProviderError,
     ModelRateLimit,
@@ -224,7 +226,7 @@ class AnthropicModelProvider:
             "description": "Record the result in the required format.",
             "input_schema": request.output_schema,
         }
-        max_tokens = request.max_tokens or (8192 if request.images else 4096)
+        max_tokens = request.max_tokens or DEFAULT_OUTPUT_TOKENS
         # Every reply is billed, not only the last: a paused search turn takes up to three
         # replies, and an attempt with search that fails is followed by one without it.
         # Before, only the last reply's tokens were recorded and budgeted (bug hunt,
@@ -359,7 +361,7 @@ class AnthropicModelProvider:
     ) -> dict[str, Any]:
         return {
             "model": self._model,
-            "max_tokens": 4096,
+            "max_tokens": DEFAULT_OUTPUT_TOKENS,
             "system": system,
             "messages": [_anthropic_message(item) for item in messages],
             "tools": [
@@ -375,9 +377,14 @@ class AnthropicModelProvider:
 
 
 def _chat_reply(message: Any) -> ChatReply:
-    """The model's message as a provider-neutral reply: its text and its tool calls."""
+    """The model's message as a provider-neutral reply: its text and its tool calls. A
+    reply cut off at the output limit is refused: its text stops part way and a tool call
+    in it may be incomplete (before 21 November 2026 it was kept as a whole answer)."""
     from anthropic.types import TextBlock, ToolUseBlock
 
+    if getattr(message, "stop_reason", "") == "max_tokens":
+        logger.info("chat answer cut off at max_tokens; not used")
+        raise ModelCutOff()
     text: list[str] = []
     calls: list[ToolCall] = []
     for block in message.content:
@@ -470,7 +477,7 @@ def call_note(status: str) -> str:
         "TIMEOUT": "The model did not answer in time.",
         "RATE_LIMITED": "The model was rate limited.",
         "MODEL_ERROR": "The model could not be used. Check the model configuration and key.",
-        "MALFORMED": "The model's answer was not in the required format.",
+        "MALFORMED": "The model's answer was incomplete or not in the required format.",
         "CANCELLED": "The model call was cancelled.",
         "BUDGET_EXCEEDED": "The model budget is exhausted, so the call was not made.",
     }

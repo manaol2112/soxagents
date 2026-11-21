@@ -56,6 +56,7 @@ from ai_workforce_api.models import (
     ChatProvider,
     ModelBudgetExceeded,
     ModelCancelled,
+    ModelCutOff,
     ModelProviderError,
     ModelRateLimit,
     ModelTimeout,
@@ -360,6 +361,8 @@ def run_turn(
                     if busy
                     else "The model took too long to answer."
                     if isinstance(error, ModelTimeout)
+                    else "The model's answer was cut off before it finished."
+                    if isinstance(error, ModelCutOff)
                     else "The model could not take the request."
                 )
                 if delay is None or not busy:

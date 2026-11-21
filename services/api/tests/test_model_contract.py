@@ -281,6 +281,9 @@ ENTRY_POINTS: dict[str, Entry] = {
         # tool it calls is only proposed, never run (console.py, _handle).
         (Checked(f"{T}test_console.py::test_routine_tools_run_and_sensitive_ones_wait_for_the_"
                  "person"), (B.UNKNOWN_IDS,)),
+        # A reply cut off at the output limit is refused and said as cut off (21 Nov 2026).
+        (Checked(f"{T}test_console.py::test_a_reply_cut_off_at_the_limit_is_no_answer_and_"
+                 "says_so"), (B.CUT_OFF,)),
     )),
 }  # fmt: skip
 # Not an entry point, each with the reason.
