@@ -421,13 +421,22 @@ class AgentCaller:
                 if isinstance(error, ModelProviderError) and error.status
                 else status.lower().replace("_", " ")
             )
+            # A cut-off reply was written and billed: it is recorded and counted at the
+            # usage the provider reported, like a cut-off generation.
+            spent = (
+                ModelRaw(None, (), error.input_tokens, error.output_tokens, stopped="max_tokens")
+                if isinstance(error, ModelCutOff)
+                else nothing
+            )
+            cost = cost_micros(self.config, spent.input_tokens, spent.output_tokens)
+            self.spent += cost
             call_id = self._record(
-                status, nothing, request, prompt_version, attempt, duration, detail, inputs,
+                status, spent, request, prompt_version, attempt, duration, detail, inputs,
                 operation="propose_tools",
             )  # fmt: skip
             # A failed turn may still have cost tokens the provider did not report: the
             # reservation settles at its worst case, never below what was used.
-            settle_call(self._connection, reservation, call_id, estimate)
+            settle_call(self._connection, reservation, call_id, max(cost, estimate))
             raise
         duration = int((time.perf_counter() - started) * 1000)
         raw = ModelRaw(
@@ -555,7 +564,9 @@ def call_config(config: ModelConfig, tier: str | None, request: ModelRequest) ->
         "model": config.model_name,
         "tier": tier,
         "operation": request.operation,
-        "max_tokens": request.max_tokens,
+        # The allowance sent: 0 stands for DEFAULT_OUTPUT_TOKENS, whose figure has changed
+        # (4,096 before 21 November 2026), so the record names it.
+        "max_tokens": request.max_tokens or DEFAULT_OUTPUT_TOKENS,
         "timeout_seconds": request.timeout_seconds,
         "output_schema_sha256": sha256_text(json.dumps(request.output_schema, sort_keys=True)),
         "allowed_tool_ids": list(request.allowed_tool_ids),

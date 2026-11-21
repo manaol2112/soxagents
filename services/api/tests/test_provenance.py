@@ -29,6 +29,7 @@ from ai_workforce_api.model_providers import (
 )
 from ai_workforce_api.models import (
     ModelConfig,
+    ModelCutOff,
     ModelProviderError,
     ModelRateLimit,
     ModelRequest,
@@ -449,6 +450,35 @@ def test_a_cancellation_is_honoured_before_the_call(migrated: Database) -> None:
         assert (call.status, provider.requests) == ("CANCELLED", [])
         assert _error(connection, call.call_id) == "cancelled before the call"
         assert call.note == "The model call was cancelled."
+
+
+def test_a_cut_off_chat_reply_is_recorded_and_counted_at_what_it_cost(
+    migrated: Database,
+) -> None:
+    """A chat reply cut off at the output limit was written and billed (21 November 2026,
+    G2 of D-N0-1): it is refused, but recorded with the provider's usage and its cost, and
+    counted in the job's spend, as a cut-off generation is."""
+
+    class _CutOff:
+        def converse(self, *_args: Any) -> Any:
+            raise ModelCutOff(100, 16_000)
+
+    seeded, project_id, _owner = _ready(migrated, "chat-cutoff", "")
+    org, owner_id = seeded["organization_id"], seeded["user_id"]
+    with connect(migrated.url) as connection:
+        job = Job("console-lead", "console_message", uuid4(), org, project_id, owner_id)
+        caller = AgentCaller(connection, _CutOff(), job, config=SONNET)
+        hello = [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+        with pytest.raises(ModelCutOff):
+            caller.chat(_CutOff(), "Be brief.", hello, (), 30)
+        row = connection.execute(
+            "SELECT status, input_tokens, output_tokens, cost_micros FROM model_calls "
+            "WHERE job_id = %s",
+            (job.job_id,),
+        ).fetchone()
+    cost = cost_micros(SONNET, 100, 16_000)
+    assert cost > 0 and tuple(row or ()) == ("MALFORMED", 100, 16_000, cost)
+    assert caller.spent == cost
 
 
 def _ready(database: Database, slug: str, key: str) -> tuple[dict[str, Any], UUID, Any]:

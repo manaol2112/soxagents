@@ -404,7 +404,8 @@ def run_turn(
         _finish(
             connection,
             message_id,
-            "I could not reach the model, so nothing was done. Retry when you are ready.",
+            "I did not get an answer from the model, so nothing was done. Retry when you are "
+            "ready.",
             [],
             note,
             "FAILED",

@@ -129,10 +129,13 @@ class ModelProviderError(Exception):
 class ModelCutOff(ModelProviderError):
     """The chat answer was cut off at the output limit: what arrived is partial and is not
     an answer (21 November 2026). A generation's cut-off is told by ModelRaw.stopped
-    instead; a chat reply has no schema to fail, so it is refused here."""
+    instead; a chat reply has no schema to fail, so it is refused here. It carries the
+    usage the provider reported, so the call is recorded and counted at what it cost."""
 
-    def __init__(self) -> None:
+    def __init__(self, input_tokens: int = 0, output_tokens: int = 0) -> None:
         super().__init__()
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
 
 
 @dataclass(frozen=True)

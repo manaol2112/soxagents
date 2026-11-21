@@ -140,11 +140,13 @@ def test_a_chat_reply_cut_off_at_the_limit_is_refused(
     provider = AnthropicModelProvider("k", "")
     vendor.stop_reason = "max_tokens"
     shown: list[str] = []
-    with provider.metered(), pytest.raises(ModelCutOff):
+    with provider.metered(), pytest.raises(ModelCutOff) as refused:
         if streaming:
             provider.converse_streaming("Be brief.", HELLO, (), 30, shown.append)
         else:
             provider.converse("Be brief.", HELLO, (), 30)
+    # What the provider reported it used, so the call is counted at its cost.
+    assert (refused.value.input_tokens, refused.value.output_tokens) == (10, 5)
     # A cut-off is a provider failure that is not worth the same call again.
     assert not ModelCutOff().transient
 

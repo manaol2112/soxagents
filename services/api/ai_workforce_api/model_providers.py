@@ -384,7 +384,7 @@ def _chat_reply(message: Any) -> ChatReply:
 
     if getattr(message, "stop_reason", "") == "max_tokens":
         logger.info("chat answer cut off at max_tokens; not used")
-        raise ModelCutOff()
+        raise ModelCutOff(message.usage.input_tokens, message.usage.output_tokens)
     text: list[str] = []
     calls: list[ToolCall] = []
     for block in message.content:

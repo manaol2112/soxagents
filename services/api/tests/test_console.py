@@ -481,16 +481,20 @@ def test_a_reply_cut_off_at_the_limit_is_no_answer_and_says_so(
     team, client, _request = _sent_engagement_request(migrated, "cutoff", "ITGC-AC-01")
     asked = _ask(client, team, "Summarise ITGC-AC-01.")
     with connect(migrated.url) as connection:
-        assert _turn(connection, migrated, _Script([ModelCutOff()]), asked) == "FAILED"
+        cut_off = _Script([ModelCutOff(100, 16_000)])
+        assert _turn(connection, migrated, cut_off, asked) == "FAILED"
         recorded = connection.execute(
-            "SELECT status, error FROM model_calls WHERE project_id = %s "
+            "SELECT status, error, input_tokens, output_tokens, config->>'max_tokens' "
+            "FROM model_calls WHERE project_id = %s "
             "AND operation = 'propose_tools' ORDER BY created_at DESC LIMIT 1",
             (team["project"],),
         ).fetchone()
     assert waits == []
     note = _thread(client, team)["messages"][-1]["note"]
     assert note == "The model's answer was cut off before it finished."
-    assert recorded == ("MALFORMED", "answer was cut off at the output limit")
+    # Recorded at what it used (the provider reported it), with the allowance it was sent;
+    # its priced cost is checked in test_provenance (this caller's model is unpriced).
+    assert recorded == ("MALFORMED", "answer was cut off at the output limit", 100, 16_000, "16000")
 
 
 def test_a_failed_answer_can_be_retried_in_place(
