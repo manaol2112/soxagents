@@ -94,3 +94,43 @@ describe("the test plan's figures fit their card (28 October 2026)", () => {
     assert.doesNotMatch(css, /repeat\(var\(--pr-count/);
   });
 });
+
+describe("an opened criteria change in the History (20 November 2026)", () => {
+  // Found in design review: the comparison opened inside the row's title column, a 160 px
+  // wide block at 390 beside the time, and the row's centred icon and time drifted down the
+  // opened row. The comparison is the row's own second line and the first line stays put.
+  const css = readFileSync("apps/web/app/control-plan.css", "utf8");
+  const view = readFileSync("apps/web/src/control-workspace.tsx", "utf8");
+
+  it("opens as a direct child of the row, not inside the title's column", () => {
+    const row = view.slice(
+      view.indexOf("function HistoryRow("),
+      view.indexOf("export function ControlHistory("),
+    );
+    const text = row.slice(row.indexOf('<div className="ph-text">'));
+    const textEnd = text.indexOf("</div>");
+    assert.doesNotMatch(text.slice(0, textEnd), /CriteriaChangePanel/);
+    assert.match(
+      row,
+      /<\/time>\s*\{open && item\.criteria !== null \? \(\s*<CriteriaChangePanel/,
+    );
+  });
+
+  it("spans under the title and the time, under the icon too on a phone", () => {
+    assert.match(
+      rule(css, ".ph-day li > .ph-change"),
+      /grid-row: 2;\s*grid-column: 3 \/ -1;/,
+    );
+    assert.match(
+      rule(phoneBlocks(css, 640), ".ph-day li > .ph-change"),
+      /grid-column: 2 \/ -1;/,
+    );
+    assert.match(
+      rule(
+        css,
+        ".ph-day li > .ph-dot,\n.ph-day li > .ph-icon,\n.ph-day li > time",
+      ),
+      /grid-row: 1;/,
+    );
+  });
+});

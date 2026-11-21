@@ -276,8 +276,14 @@ describe("the assumption on the attribute", () => {
     const history = read("src/control-workspace.tsx");
     assert.match(
       history,
-      /\{item\.criteria !== null \? \(\s*<CriteriaChangeFold change=\{item\.criteria\} \/>/,
+      /\{open && item\.criteria !== null \? \(\s*<CriteriaChangePanel id=\{panel\} change=\{item\.criteria\} \/>/,
     );
+    // Worded as the Attributes step words its criteria: "Passes" and "Fails" are the rule,
+    // never "Passed" and "Failed", which on a test plan read as a test result (design review,
+    // 20 November 2026).
+    assert.match(history, /<dt>Passes<\/dt>/);
+    assert.match(history, /<dt>Fails<\/dt>/);
+    assert.doesNotMatch(history, /<dt>(Passed|Failed)<\/dt>/);
     // Opened on request, announced as a disclosure, with both criteria.
     assert.match(history, /aria-expanded=\{open\}\s*aria-controls=\{panel\}/);
     assert.match(
