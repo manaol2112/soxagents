@@ -1,12 +1,14 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 
 import {
   ACTIVITY_CATEGORY_LABELS,
   type ActivityCategory,
   type ActivityItem,
   type Approach,
+  type CriteriaChange,
+  type CriteriaText,
   filterActivity,
 } from "./control-workspace-model";
 import {
@@ -265,6 +267,64 @@ export function ActivityTimeline({
   );
 }
 
+/** An attribute's criteria at one point of a change, as the Attributes step words them. */
+function CriteriaRules({
+  title,
+  criteria,
+}: {
+  title: string;
+  criteria: CriteriaText;
+}) {
+  return (
+    <section>
+      <h5>{title}</h5>
+      <dl className="tc-rules">
+        {criteria.condition !== "" ? (
+          <div>
+            <dt>Tested</dt>
+            <dd>{criteria.condition}</dd>
+          </div>
+        ) : null}
+        <div className="is-pass">
+          <dt>Passes</dt>
+          <dd>{criteria.passCriteria || "Not stated"}</dd>
+        </div>
+        <div className="is-fail">
+          <dt>Fails</dt>
+          <dd>{criteria.failCriteria || "Not stated"}</dd>
+        </div>
+        {criteria.judgmentRequired === true ? (
+          <div>
+            <dt>Judgment</dt>
+            <dd>Professional judgment required</dd>
+          </div>
+        ) : null}
+      </dl>
+    </section>
+  );
+}
+
+/**
+ * A change of an attribute's criteria, opened on request to the earlier and the new criteria
+ * (product owner, 20 November 2026: the attribute row's "Previous criteria" moved here). The
+ * server reads both from the kept versions; this only shows them. The panel is the row's own
+ * second line, spanning under the title and the time, never squeezed into the title's column.
+ */
+function CriteriaChangePanel({
+  id,
+  change,
+}: {
+  id: string;
+  change: CriteriaChange;
+}) {
+  return (
+    <div className="tas-history ph-change" id={id}>
+      <CriteriaRules title="Earlier criteria" criteria={change.earlier} />
+      <CriteriaRules title="New criteria" criteria={change.new} />
+    </div>
+  );
+}
+
 const HISTORY_ICON: Record<ActivityCategory, IconName> = {
   design: "layers",
   planning: "file",
@@ -276,6 +336,48 @@ const HISTORY_ICON: Record<ActivityCategory, IconName> = {
   workflow: "plus",
   error: "risk",
 };
+
+/** One History row: its icon, title and time on the first line; a criteria change opens below. */
+function HistoryRow({ item, who }: { item: ActivityItem; who: string }) {
+  const [open, setOpen] = useState(false);
+  const panel = useId();
+  return (
+    <li className={`is-${item.by}`}>
+      <span className="ph-dot" aria-hidden="true" />
+      <span
+        className={`ph-icon is-${item.by === "agent" ? "agent" : item.category}`}
+        aria-hidden="true"
+      >
+        <UiIcon
+          name={item.by === "agent" ? "sparkles" : HISTORY_ICON[item.category]}
+          size={15}
+        />
+      </span>
+      <div className="ph-text">
+        <p>
+          <strong>{item.title}</strong>
+          <span className={`ph-who is-${item.by}`}>{who}</span>
+        </p>
+        {item.detail !== "" ? <small>{item.detail}</small> : null}
+        {item.criteria !== null ? (
+          <button
+            type="button"
+            className="tas-link ph-open"
+            aria-expanded={open}
+            aria-controls={panel}
+            onClick={() => setOpen((was) => !was)}
+          >
+            {open ? "Hide the criteria" : "Show the criteria"}
+          </button>
+        ) : null}
+      </div>
+      <time dateTime={item.at}>{TIME.format(new Date(item.at))}</time>
+      {open && item.criteria !== null ? (
+        <CriteriaChangePanel id={panel} change={item.criteria} />
+      ) : null}
+    </li>
+  );
+}
 
 /**
  * The control's history in its Plan step (decided by the product owner on 26 October
@@ -370,34 +472,7 @@ export function ControlHistory({
             <h4>{day}</h4>
             <ol>
               {list.map((item) => (
-                <li key={item.id} className={`is-${item.by}`}>
-                  <span className="ph-dot" aria-hidden="true" />
-                  <span
-                    className={`ph-icon is-${item.by === "agent" ? "agent" : item.category}`}
-                    aria-hidden="true"
-                  >
-                    <UiIcon
-                      name={
-                        item.by === "agent"
-                          ? "sparkles"
-                          : HISTORY_ICON[item.category]
-                      }
-                      size={15}
-                    />
-                  </span>
-                  <div className="ph-text">
-                    <p>
-                      <strong>{item.title}</strong>
-                      <span className={`ph-who is-${item.by}`}>
-                        {who(item)}
-                      </span>
-                    </p>
-                    {item.detail !== "" ? <small>{item.detail}</small> : null}
-                  </div>
-                  <time dateTime={item.at}>
-                    {TIME.format(new Date(item.at))}
-                  </time>
-                </li>
+                <HistoryRow key={item.id} item={item} who={who(item)} />
               ))}
             </ol>
           </section>

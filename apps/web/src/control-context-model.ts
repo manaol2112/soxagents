@@ -138,8 +138,6 @@ export type Attribute = {
   assumptions?: Assumption[];
   /** The matter of the answer or assumption that last changed these criteria, or "". */
   criteriaUpdatedFrom?: string;
-  /** How many earlier versions of these criteria are kept (attribute_criteria_versions). */
-  criteriaVersions?: number;
   /** An OPEN conflict holds this attribute's acceptance until a person decides it (B1l point
    * 6): accepting it is refused, and "Accept all" leaves it out. Absent: not held. */
   heldByConflict?: boolean;
@@ -389,20 +387,6 @@ export type Assumption = {
    * right" reads "The confirmed understanding stands", naming no fact: the record names only
    * the decision (decided by the product owner after the review of B1k). */
   kind: AssumptionKind;
-};
-
-/** One earlier version of an attribute's criteria, kept on every change (B1j). */
-export type CriteriaVersion = {
-  version: number;
-  condition: string;
-  passCriteria: string;
-  failCriteria: string;
-  judgmentRequired: boolean;
-  origin: string;
-  writtenAt: string;
-  writtenBy: { kind: "PERSON" | "AGENT" | "SEEDED" | "RULES"; name: string };
-  /** What changed them ("Your answer on emergency changes"), or "". */
-  cause: string;
 };
 
 export type UnderstandingBasis = {
@@ -2747,64 +2731,6 @@ const assumptionsOf = (value: unknown, most: number): Assumption[] =>
     .filter((item): item is Assumption => item !== null)
     .slice(0, most);
 
-const WRITERS = ["PERSON", "AGENT", "SEEDED", "RULES"] as const;
-
-/** An attribute's earlier criteria (GET .../criteria-history), newest first; null when the
- * answer is not the history's shape. A version not shaped so is left out. */
-export function parseCriteriaHistory(value: unknown): CriteriaVersion[] | null {
-  if (!isRecord(value) || !Array.isArray(value.versions)) {
-    return null;
-  }
-  const versions: CriteriaVersion[] = [];
-  for (const item of value.versions) {
-    if (!isRecord(item)) {
-      continue;
-    }
-    const writer = item.written_by;
-    if (!isRecord(writer)) {
-      continue;
-    }
-    const kind = WRITERS.find((each) => each === writer.kind);
-    const version = item.version;
-    const writtenAt = timeOrNull(item.written_at);
-    if (
-      kind === undefined ||
-      typeof version !== "number" ||
-      !Number.isInteger(version) ||
-      writtenAt === null ||
-      typeof item.judgment_required !== "boolean"
-    ) {
-      continue;
-    }
-    versions.push({
-      version,
-      condition: str(item.condition),
-      passCriteria: str(item.pass_criteria),
-      failCriteria: str(item.fail_criteria),
-      judgmentRequired: item.judgment_required,
-      origin: str(item.origin),
-      writtenAt,
-      writtenBy: { kind, name: str(writer.name) },
-      cause: str(item.cause),
-    });
-  }
-  return versions.sort((a, b) => b.version - a.version);
-}
-
-/** Where an attribute's earlier criteria are read, or null when the ids are not all ids. */
-export function criteriaHistoryPath(fields: Fields): string | null {
-  const organizationId = text(fields, "organization_id");
-  const projectId = text(fields, "project_id");
-  const controlId = text(fields, "control_id");
-  const attributeId = text(fields, "attribute_id");
-  if (![organizationId, projectId, controlId, attributeId].every(isUuid)) {
-    return null;
-  }
-  return `/organizations/${organizationId}/projects/${projectId}/controls/${controlId}/attributes/${attributeId}/criteria-history`;
-}
-
-const isUuid = (value: string): boolean => UUID.test(value);
-
 function parseAttribute(item: Raw): Attribute {
   return {
     id: str(item.id),
@@ -2875,12 +2801,6 @@ function parseAttribute(item: Raw): Attribute {
     understandingBasis: parseBasis(item.understanding_basis),
     assumptions: assumptionsOf(item.assumptions, 10),
     criteriaUpdatedFrom: str(item.criteria_updated_from),
-    criteriaVersions:
-      typeof item.criteria_versions === "number" &&
-      Number.isInteger(item.criteria_versions) &&
-      item.criteria_versions > 0
-        ? item.criteria_versions
-        : 0,
     heldByConflict: item.held_by_conflict === true,
     code:
       typeof item.code === "string" && ATTRIBUTE_CODE.test(item.code)

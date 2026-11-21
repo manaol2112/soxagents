@@ -1,6 +1,10 @@
 """A control's activity (the control record's Activity view): every audit event about the
 control or its records, newest first, said in words, and whether an agent, a person, or
-the workspace itself did it. Read from audit_events only, so it is the audit trail."""
+the workspace itself did it. Read from audit_events, so it is the audit trail, and from the
+criteria versions the database keeps (attribute_criteria_versions, written only by its
+trigger and never changed): a change of an attribute's criteria opens on request to the
+earlier and the new criteria, and an agent's change, which no audit event records, is shown
+from its kept version (product owner, 20 November 2026)."""
 
 from datetime import datetime
 from typing import Any, Literal
@@ -11,6 +15,12 @@ from pydantic import BaseModel
 
 from ai_workforce_api import attribute_dispositions, file_reliability
 from ai_workforce_api.authorization import Action, NotVisible, Principal, authorize
+from ai_workforce_api.criteria_history import (
+    CriteriaChange,
+    KeptChange,
+    attribute_names,
+    kept_changes,
+)
 
 Category = Literal[
     "design", "planning", "evidence", "testing", "review", "findings", "approval",
@@ -28,6 +38,10 @@ class ActivityItem(BaseModel):
     action: str
     title: str
     detail: str = ""
+    # A change of an attribute's criteria: the earlier and the new criteria, shown when the
+    # row is opened; None for any other row, and for a change whose earlier criteria no kept
+    # version records (an event from before 20 November 2026 names none).
+    criteria: CriteriaChange | None = None
 
 
 # Output that only an agent produces, even when a person asked for it: the tester's
@@ -110,6 +124,10 @@ _TITLES: dict[str, tuple[Category, str]] = {
     "attribute.added": ("design", "Test attribute added"),
     "attribute.edited": ("design", "Test attribute changed"),
     "attribute.retired": ("design", "Test attribute removed"),
+    # A person's criteria (master_plans.set_criteria), and an agent's (CRITERIA_CHANGED: no
+    # audit event records it; its kept version does).
+    "control_attribute.criteria_set": ("design", "Test criteria updated"),
+    "control_attribute.criteria_written": ("design", "Test criteria updated"),
     "process.built": ("design", "Process understanding drafted"),
     "process.saved": ("design", "Process understanding saved"),
     "process.confirmed": ("design", "Process understanding confirmed"),
@@ -238,6 +256,45 @@ def _recorded(
     return said
 
 
+# The action of a History row read from a kept version, not from an audit event: an agent's
+# or the rules' change of an attribute's criteria.
+CRITERIA_CHANGED = "control_attribute.criteria_written"
+CRITERIA_SET = "control_attribute.criteria_set"
+
+
+def _criteria_detail(name: str, change: CriteriaChange | None) -> str:
+    """The line under a criteria change's title: the attribute, and the recorded reason."""
+    return " · ".join(part for part in (name, change.reason if change else "") if part)
+
+
+def _kept_items(changes: list[KeptChange], linked: set[UUID]) -> list[ActivityItem]:
+    """The changes no audit event records, as History rows: each kept version not linked to
+    a person's criteria_set event, written by an agent, the rules or the demo. A person's
+    change always has its event; one from before 20 November 2026 names no version, so its
+    row shows without the comparison rather than twice. A version kept only because the
+    acceptance ended (the criteria unchanged) is attribute.criteria_reopened's, not a
+    change."""
+    items: list[ActivityItem] = []
+    for kept in changes:
+        if kept.id in linked or kept.unchanged or kept.person is not None:
+            continue
+        agent = kept.written_by.kind == "AGENT" or kept.written_by.name != ""
+        items.append(
+            ActivityItem(
+                id=kept.id,
+                at=kept.at,
+                by="agent" if agent else "workspace",
+                actor=(kept.written_by.name or "Agent") if agent else "Workspace",
+                category="design",
+                action=CRITERIA_CHANGED,
+                title=_TITLES[CRITERIA_CHANGED][1],
+                detail=_criteria_detail(kept.change.attribute, kept.change),
+                criteria=kept.change,
+            )
+        )
+    return items
+
+
 def _title(action: str) -> tuple[Category, str]:
     known = _TITLES.get(action)
     if known is not None:
@@ -340,7 +397,7 @@ def control_activity(
     }
     rows = connection.execute(
         """
-        SELECT e.id, e.occurred_at, e.action, e.payload, u.display_name, d.name
+        SELECT e.id, e.occurred_at, e.action, e.payload, u.display_name, d.name, e.target_id
         FROM audit_events e
         LEFT JOIN users u ON u.id = e.actor_user_id
         LEFT JOIN agent_instances i ON i.id = e.actor_agent_instance_id
@@ -405,13 +462,41 @@ def control_activity(
                 ).fetchall()
             }
 
-    for event_id, at, action, payload, person, agent_name in rows:
+    # The criteria changes the kept versions record, by attribute row and version: a
+    # person's event names its version (criteria_version); the rest are shown from them.
+    changes = kept_changes(connection, project_id, control_id)
+    by_version = {(kept.attribute_id, kept.version): kept for kept in changes}
+    names = (
+        attribute_names(connection, control_id)
+        if any(str(row[2]) == CRITERIA_SET for row in rows)
+        else {}
+    )
+    linked: set[UUID] = set()
+
+    for event_id, at, action, payload, person, agent_name, target in rows:
         category, title = _title(str(action))
         body = payload if isinstance(payload, dict) else {}
         named = body.get("agent")
         by: By
+        criteria: CriteriaChange | None = None
         if str(action) in _TICKMARK_EVENTS | _RELIABILITY_EVENTS:
             detail = _recorded(str(action), body, letters, files, people)
+        elif str(action) == CRITERIA_SET:
+            version = body.get("criteria_version")
+            kept = (
+                by_version.get((target, version))
+                if isinstance(version, int) and not isinstance(version, bool)
+                else None
+            )
+            # A save that changes only the objective, automatable or the phases of an
+            # agent's criteria still keeps a version (its origin becomes the person's), but
+            # its criteria text is the same before and after: the event names that version,
+            # which is then never shown as a row of its own, and opens to no comparison, as
+            # no criteria changed (review finding of 20 November 2026).
+            if kept is not None:
+                linked.add(kept.id)
+                criteria = None if kept.unchanged else kept.change
+            detail = _criteria_detail(names.get(target, "") if target else "", criteria)
         else:
             detail = _detail(str(action), body)
         if agent_name is not None or isinstance(named, str) or str(action) in AGENT_OUTPUT:
@@ -439,6 +524,14 @@ def control_activity(
                 action=str(action),
                 title=title,
                 detail=detail,
+                criteria=criteria,
             )
         )
-    return items
+    # Where the trail is cut at the limit, a kept change older than its last row would skip
+    # the events between: only the changes within the rows read are shown.
+    oldest = rows[-1][1] if len(rows) >= limit else None
+    items.extend(
+        item for item in _kept_items(changes, linked) if oldest is None or item.at >= oldest
+    )
+    items.sort(key=lambda item: (item.at, str(item.id)), reverse=True)
+    return items[:limit]

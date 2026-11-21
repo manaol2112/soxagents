@@ -6,10 +6,8 @@ import {
   assumptionProblem,
   assumptionTextProblem,
   contextWrite,
-  criteriaHistoryPath,
   parseAssumption,
   parseContext,
-  parseCriteriaHistory,
 } from "../apps/web/src/control-context-model.ts";
 import {
   type WorkflowInput,
@@ -31,14 +29,12 @@ import {
   decidedLine,
   offersAttributes,
   openAssumptions,
-  previousCriteriaLabel,
   raisedChip,
   readsAgain,
   readyOnceComplete,
   rulesOpen,
   understandingEnd,
   updatedFromLine,
-  versionLine,
   whenWords,
 } from "../apps/web/src/understanding-once-model.ts";
 
@@ -112,7 +108,15 @@ describe("the context's B1j fields, read strictly", () => {
       name: "Dana Lee",
     });
     assert.equal(attribute?.criteriaUpdatedFrom, "emergency changes");
-    assert.equal(attribute?.criteriaVersions, 2);
+    // Rewritten 20 November 2026 (product owner: "remove the previous criteria link here and
+    // probably add that as part of the history that it was updated"). Old: the attribute kept
+    // a count of its earlier criteria (criteriaVersions) for its "Previous criteria (n)" fold.
+    // New: the fold is gone and the earlier criteria open from the control's History
+    // (control-workspace-model parseCriteriaChange), so the page reads no count.
+    assert.equal(
+      attribute !== undefined && "criteriaVersions" in attribute,
+      false,
+    );
   });
 
   it("reads a body from before B1j as saying nothing of it", () => {
@@ -126,10 +130,9 @@ describe("the context's B1j fields, read strictly", () => {
     });
     assert.deepEqual(bare?.approved[0]?.assumptions, []);
     assert.equal(bare?.approved[0]?.criteriaUpdatedFrom, "");
-    assert.equal(bare?.approved[0]?.criteriaVersions, 0);
   });
 
-  it("never reads an unknown pass, a time that is none, or a negative count as one", () => {
+  it("never reads an unknown pass or a time that is none as one", () => {
     const context = parseContext({
       control_id: CONTROL,
       understanding_completed_at: "yesterday",
@@ -143,8 +146,10 @@ describe("the context's B1j fields, read strictly", () => {
     });
     assert.equal(context?.understandingCompletedAt, null);
     assert.equal(context?.questionPass, null);
-    assert.equal(context?.approved[0]?.criteriaVersions, 0);
-    assert.equal(context?.approved[1]?.criteriaVersions, 0);
+    // Rewritten 20 November 2026: the count's own checks (a negative or fractional
+    // criteria_versions read as 0) went with the count (see above); the body's count is
+    // ignored.
+    assert.equal(context?.approved.length, 2);
   });
 
   it("leaves out an assumption not shaped as one, never guessing", () => {
@@ -274,58 +279,6 @@ describe("the assumption decisions and the criteria history, as the routes take 
     assert.match(assumptionTextProblem("x".repeat(1001)) ?? "", /1,000/);
   });
 
-  it("reads an attribute's earlier criteria from its own path, newest first", () => {
-    assert.equal(
-      criteriaHistoryPath({ ...IDS, attribute_id: ATTRIBUTE }),
-      `${BASE}/attributes/${ATTRIBUTE}/criteria-history`,
-    );
-    assert.equal(criteriaHistoryPath({ ...IDS, attribute_id: "a1" }), null);
-    assert.equal(
-      criteriaHistoryPath({
-        ...IDS,
-        control_id: "../x",
-        attribute_id: ATTRIBUTE,
-      }),
-      null,
-    );
-    const versions = parseCriteriaHistory({
-      versions: [
-        {
-          version: 1,
-          condition: "",
-          pass_criteria: "A record exists.",
-          fail_criteria: "None exists.",
-          judgment_required: false,
-          origin: "AGENT",
-          written_at: "2026-11-16T16:01:00Z",
-          written_by: { kind: "AGENT", name: "" },
-          cause: "",
-        },
-        {
-          version: 2,
-          condition: "Each patch",
-          pass_criteria: "The record names the patch and hosts.",
-          fail_criteria: "It names another patch.",
-          judgment_required: false,
-          origin: "AGENT",
-          written_at: "2026-11-16T16:12:00Z",
-          written_by: { kind: "AGENT", name: "" },
-          cause: "Your answer on emergency changes",
-        },
-        // Not a version: left out.
-        { version: "3", written_by: { kind: "AGENT" } },
-        { version: 4, judgment_required: false, written_at: "x" },
-      ],
-    });
-    assert.deepEqual(
-      versions?.map((item) => item.version),
-      [2, 1],
-    );
-    assert.equal(versions?.[0]?.cause, "Your answer on emergency changes");
-    assert.equal(parseCriteriaHistory({ versions: "none" }), null);
-    assert.equal(parseCriteriaHistory(null), null);
-  });
-
   it("says a refusal in the server's one sentence, or in the page's own words", () => {
     assert.equal(assumptionProblem(200), null);
     assert.equal(
@@ -402,7 +355,7 @@ describe("an assumption's words: the agent's until a person decides", () => {
     assert.deepEqual(openAssumptions(undefined), []);
   });
 
-  it("counts the box, names where the criteria came from, and the earlier versions", () => {
+  it("counts the box and names where the criteria came from", () => {
     assert.equal(
       characterCount("  twelve chars  ", 1000),
       "12 of 1,000 characters",
@@ -413,38 +366,6 @@ describe("an assumption's words: the agent's until a person decides", () => {
     );
     assert.equal(updatedFromLine(""), null);
     assert.equal(updatedFromLine(undefined), null);
-    assert.equal(previousCriteriaLabel(2), "Previous criteria (2)");
-    assert.equal(previousCriteriaLabel(0), null);
-    assert.equal(previousCriteriaLabel(undefined), null);
-  });
-
-  it("says who wrote an earlier version: an agent's never as a person's", () => {
-    const at = "2026-11-16T16:01:00Z";
-    assert.equal(
-      versionLine(
-        { writtenBy: { kind: "AGENT", name: "" }, writtenAt: at, cause: "" },
-        "UTC",
-      ),
-      "Tailored by the agent · Nov 16, 4:01 PM",
-    );
-    assert.equal(
-      versionLine(
-        {
-          writtenBy: { kind: "PERSON", name: "Dana Lee" },
-          writtenAt: at,
-          cause: "Your answer on emergency changes",
-        },
-        "UTC",
-      ),
-      "Written by Dana Lee · Nov 16, 4:01 PM · Your answer on emergency changes",
-    );
-    assert.equal(
-      versionLine(
-        { writtenBy: { kind: "SEEDED", name: "" }, writtenAt: at, cause: "" },
-        "UTC",
-      ),
-      "Seeded by the demo data · Nov 16, 4:01 PM",
-    );
   });
 });
 
